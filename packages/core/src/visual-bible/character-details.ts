@@ -21,14 +21,70 @@ const SCENE_BOUND_DETAIL =
 const EXPRESSION_SHAPED_MARK =
   /\b(?:smile|grin)(?:-shaped)? (?:scar|tattoo|birthmark|lines?)\b|\b(?:scar|tattoo|birthmark) (?:shaped like|in the shape of) (?:a )?(?:smile|grin)\b/i;
 
+/**
+ * What the SCENE is doing to someone, mistaken for what they look like.
+ *
+ * "The iridescent purple of the broth reflects in her eyes", "her silhouette is highlighted by neon
+ * light" — true of one shot, in one room, under one light, and recorded as a permanent fact about a
+ * person. Then injected into every later picture, where it drags that scene's lighting into a
+ * daylight street. This is the class the Visual Bible must never hold: the bible is what someone
+ * looks like independent of any scene, and lighting belongs to the scene prompt, which is written
+ * fresh for every image and is exactly where "light reflecting in her eyes" is worth saying.
+ */
+const SCENE_LIGHTING_DETAIL =
+  /\b(?:reflect(?:s|ed|ing)?|refract(?:s|ed|ing)?|lit(?: by| from)?|illuminat(?:es|ed|ing)|highlighted|silhouett?e(?:d)?|backlit|underlit|bathed in|washed in|glow(?:s|ing) (?:in|on|against)|catch(?:es|ing) the light|cast(?:s|ing)? (?:a )?shadows?|shadowed by|haloed|rim light|neon light|firelight|lamplight|candlelight|moonlight|sunlight)\b/i;
+
+/**
+ * Gaze, expression, and bearing — the mood of a moment written as a feature.
+ *
+ * "Intense gaze", "a look of quiet intensity", "intense hunger in her gaze", "moves with grace":
+ * none of these is a physical characteristic, all of them arrive attached to one beat, and
+ * accumulated across a book they crowd out the hair and eye colour that can actually be drawn. The
+ * eyes THEMSELVES are physical ("wide, grey"); what the eyes are DOING is not.
+ */
+const EXPRESSION_OR_BEARING_DETAIL =
+  /\b(?:gazes?|gazing|stares?|staring|glares?|glaring|glance[sd]?|expressions?|intensity|demeano(?:u)?r|bearing|aura|presence|air of|look of|hunger|longing|sorrow|melancholy|determination|confiden(?:ce|t)|moves? with|movements? are|walks? with|carries? (?:her|him|them)self|holds? (?:her|him|them)self|posture of)\b/i;
+
+/**
+ * Prose wrappers the extractor writes when it forgets it is filling a field rather than describing a
+ * person to a reader: "possesses soft features", "has a whirring cybernetic eye", "Her hair is red".
+ *
+ * Removed rather than rejected — the detail inside is real and drawable, it is only wrapped. It also
+ * makes duplicate detection work: "possesses soft features and pouty lips" and "has a look of quiet
+ * intensity and pouty lips" share nothing until the wrappers come off.
+ */
+const PROSE_WRAPPER =
+  /^(?:(?:s?he|they|his|her|their|the (?:character|figure|man|woman))\s+)?(?:is |are |was |were |has |have |possesses |possessing |displays |shows |bears |sports |features |appears (?:to be )?)+(?:an?\s+|the\s+)?/i;
+
 export function isTransientCharacterDetail(value: string): boolean {
   const detail = value.trim();
+  if (!detail) return false;
+  // Lighting and bearing are never durable — no "permanently" makes a reflection a feature of a
+  // face, so these are not subject to the DURABLE_EXPRESSION escape hatch that expressions get.
+  if (SCENE_LIGHTING_DETAIL.test(detail) || EXPRESSION_OR_BEARING_DETAIL.test(detail)) return true;
   return (
-    !!detail &&
     TRANSIENT_CHARACTER_DETAIL.test(detail) &&
     (!DURABLE_EXPRESSION.test(detail) || SCENE_BOUND_DETAIL.test(detail)) &&
     !EXPRESSION_SHAPED_MARK.test(detail)
   );
+}
+
+/**
+ * A whole sentence about one feature — "Her hair is auburn", "His eyes are grey".
+ *
+ * Turned around rather than trimmed: dropping the wrapper would leave a bare "auburn" that has lost
+ * the thing it describes, which is the loose-adjective problem `anchorField` exists to prevent. The
+ * noun is kept and the complement moved in front of it, giving the noun phrase the field wanted.
+ */
+const FEATURE_SENTENCE = /^(?:her|his|their|its|the)\s+([\p{L}-]+)\s+(?:is|are|was|were)\s+(.+)$/iu;
+
+/** A stored value reduced to the noun phrase it was meant to be. PURE. */
+export function unwrapAppearancePhrase(value: string): string {
+  const plain = value.trim().replace(/\s*[.!]+$/, "").trim();
+  const sentence = plain.match(FEATURE_SENTENCE);
+  if (sentence) return `${sentence[2]!.trim()} ${sentence[1]!.trim()}`.replace(/\s+/g, " ");
+  const bare = plain.replace(PROSE_WRAPPER, "").trim();
+  return bare || plain;
 }
 
 /**
@@ -38,13 +94,11 @@ export function isTransientCharacterDetail(value: string): boolean {
  */
 export function stripTransientCharacterDetails(value: string): string {
   const detail = value.trim();
-  if (!isTransientCharacterDetail(detail)) return detail;
-
-  return detail
-    .split(/\s*(?:;|\r?\n|,\s+)\s*/)
-    .map((part) => part.trim())
-    .filter((part) => part && !isTransientCharacterDetail(part))
-    .join(", ");
+  if (!detail) return "";
+  const clauses = detail.split(/\s*(?:;|\r?\n|,\s+)\s*/).map((p) => p.trim()).filter(Boolean);
+  const kept = clauses.filter((p) => !isTransientCharacterDetail(p)).map(unwrapAppearancePhrase).filter(Boolean);
+  if (kept.length === clauses.length && kept.every((p, i) => p === clauses[i])) return detail;
+  return kept.join(", ");
 }
 
 /**
@@ -73,7 +127,7 @@ const COMPARATIVE_CLAUSE =
  * loose trait has to earn it.
  */
 const VISUAL_VOCABULARY =
-  /\b(?:hairs?|beards?|moustaches?|mustaches?|braids?|plaits?|ponytails?|buns?|locs|dreadlocks?|afro|bald|shaved|buzzcut|stubble|sideburns|curls?|fringe|bangs|topknot|undercut|mohawk|heads?|faces?|jaw|chin|cheeks?|brows?|nose|lips?|mouth|teeth|ears?|eyes?|gaze|pupils?|glasses|spectacles|patch|scars?|tattoos?|birthmarks?|freckles?|marks?|burns?|skin|complexion|tanned?|pale|olive|ebony|bronze|freckled|tall|short|slender|slim|lean|stocky|burly|broad|wiry|petite|muscular|athletic|plump|gaunt|frail|build|frame|shoulders?|chest|waist|hips?|arms?|hands?|legs?|feet|posture|limp|prosthetic|cybernetic|wings?|horns?|tail|scales?|fur|feathers?|claws?|coats?|cloaks?|robes?|gowns?|dress(?:es)?|shirts?|tunics?|trousers?|leathers?|armou?r|uniforms?|boots?|gloves?|hats?|hoods?|masks?|jewell?ery|rings?|necklaces?|earrings?|piercings?|black|white|grey|gray|brown|blonde?|red|auburn|ginger|silver|golden|blue|green|hazel|amber|violet|copper|crimson|scarlet|teal|years old|middle[- ]aged|elderly|young|teenage|adolescent|child|eyed|haired|skinned|shouldered|armed|legged|handed|faced|bodied|limbed|footed|nosed|lipped|chinned|browed|bearded|whiskered|scarred|tattooed|pierced|maned|winged|horned|tailed|clawed|feathered|furred|hooded|cloaked|robed|uniformed|armou?red|booted|gloved|bespectacled|one[- ]eyed|missing an? \w+)\b/i;
+  /\b(?:hairs?|beards?|moustaches?|mustaches?|braids?|plaits?|ponytails?|buns?|locs|dreadlocks?|afro|bald|shaved|buzzcut|stubble|sideburns|curls?|fringe|bangs|topknot|undercut|mohawk|heads?|faces?|jaw|chin|cheeks?|brows?|nose|lips?|mouth|teeth|ears?|eyes?|pupils?|glasses|spectacles|patch|scars?|tattoos?|birthmarks?|freckles?|marks?|burns?|skin|complexion|tanned?|pale|olive|ebony|bronze|freckled|tall|short|slender|slim|lean|stocky|burly|broad|wiry|petite|muscular|athletic|plump|gaunt|frail|build|frame|shoulders?|chest|waist|hips?|arms?|hands?|legs?|feet|posture|limp|prosthetic|cybernetic|wings?|horns?|tail|scales?|fur|feathers?|claws?|coats?|cloaks?|robes?|gowns?|dress(?:es)?|shirts?|tunics?|trousers?|leathers?|armou?r|uniforms?|boots?|gloves?|hats?|hoods?|masks?|jewell?ery|rings?|necklaces?|earrings?|piercings?|black|white|grey|gray|brown|blonde?|red|auburn|ginger|silver|golden|blue|green|hazel|amber|violet|copper|crimson|scarlet|teal|years old|middle[- ]aged|elderly|young|teenage|adolescent|child|eyed|haired|skinned|shouldered|armed|legged|handed|faced|bodied|limbed|footed|nosed|lipped|chinned|browed|bearded|whiskered|scarred|tattooed|pierced|maned|winged|horned|tailed|clawed|feathered|furred|hooded|cloaked|robed|uniformed|armou?red|booted|gloved|bespectacled|one[- ]eyed|missing an? \w+)\b/i;
 
 /** True for a value that says nothing at all — the extractor's stand-in for "I don't know". */
 export function isPlaceholderDetail(value: string): boolean {

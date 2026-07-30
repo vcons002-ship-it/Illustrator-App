@@ -357,6 +357,64 @@ describe("describeCharacterIdentity", () => {
     expect(out).not.toMatch(/vicious|bully|cowardly|sadistic|cadet|Colonel/i);
   });
 
+  it("keeps the SCENE's lighting out of a permanent description — the reported Lyra case", () => {
+    // "The purple broth reflects in her eyes" is a fact about one bowl in one room. Recorded as
+    // identity it was dragged into every later picture of her, including a daylight street.
+    const c = character({
+      name: "Lyra",
+      appearance: {
+        ...emptyAppearance(),
+        gender: "female",
+        eyes: "wide, expectant",
+        build: "petite",
+        notes:
+          "The iridescent purple of the broth reflects in her eyes.; possesses soft features and " +
+          "pouty lips; Her silhouette is highlighted by neon light; moves with grace.; has a look of " +
+          "quiet intensity and pouty lips",
+      },
+      persistentTraits: ["intense gaze", "intense hunger in her gaze"],
+    });
+    expect(describeCharacterIdentity(c)).toBe("female, wide, expectant eyes, petite, soft features and pouty lips");
+  });
+
+  it("says a feature ONCE even when two chapters worded it differently", () => {
+    // Containment missed this pair, so the eye arrived at double weight — and a feature at double
+    // weight in a crowded prompt is what put Sato's eye on Nico.
+    const c = character({
+      name: "Sato",
+      appearance: {
+        ...emptyAppearance(),
+        gender: "male",
+        distinguishingMarks: "cybernetic eye that whirs as it focuses",
+        notes: "weathered man; has a whirring cybernetic eye",
+      },
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toBe("male, cybernetic eye that whirs as it focuses");
+    expect(out.match(/cybernetic/g)).toHaveLength(1);
+  });
+
+  it("does NOT merge two real facts that merely share a body part or an adjective", () => {
+    // Both halves of the same-feature test matter: the part alone would fuse two different eyes,
+    // the adjective alone would fuse hair with skin.
+    const eyes = character({
+      name: "A",
+      appearance: { ...emptyAppearance(), eyes: "grey", distinguishingMarks: "one blind eye" },
+    });
+    expect(describeCharacterIdentity(eyes)).toContain("grey eyes");
+    expect(describeCharacterIdentity(eyes)).toContain("one blind eye");
+    const dark = character({ name: "B", appearance: { ...emptyAppearance(), hair: "dark", skinTone: "dark" } });
+    expect(describeCharacterIdentity(dark)).toBe("dark hair, dark skin");
+  });
+
+  it("unwraps prose the extractor writes instead of a field value", () => {
+    const c = character({
+      name: "C",
+      appearance: { ...emptyAppearance(), hair: "Her hair is auburn.", build: "possesses a lean frame" },
+    });
+    expect(describeCharacterIdentity(c)).toBe("auburn hair, lean frame");
+  });
+
   it("does not inject legacy momentary expressions or poses into every image", () => {
     const c = character({
       name: "Alex",
