@@ -91,6 +91,7 @@ import {
   roleplayStoryTurnPrompt,
   parseStoryOpening,
   storyStartBeats,
+  naturalStoryProse,
   SYNOPSIS_REFRESH_EVERY,
   MAX_SYNOPSIS_CHARS,
   seedStarterSkills,
@@ -268,7 +269,7 @@ interface StorySessionState {
   /** The story workflow: "roleplay" (reader steers a character, the assistant voices everyone) or
    * "direct" (reader directs, the assistant narrates). Drives the writing prompt. */
   mode: "direct" | "roleplay";
-  /** Roleplay only: the played character NAMES for narration labels (me = reader, you = assistant). */
+  /** Roleplay only: the played character NAMES for authorship boundaries (me = reader, you = assistant). */
   play?: { me?: string; you?: string };
   /** Rolling "story so far" synopsis, refreshed every N beats and fed back to the writer. */
   synopsis?: string;
@@ -3704,7 +3705,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             // still opens with the complete transcript via storyStartBeats below.
           }
         }
-        const initialBeats = storyStartBeats(opening, call.soFar);
+        const initialBeats = storyStartBeats(opening, call.soFar, {
+          mode: isRoleplay ? "roleplay" : "direct",
+        });
         const id = `story-${storyCounter++}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         story = {
           bookId: id,
@@ -3758,7 +3761,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         if (!story || !engine || currentBook?.kind !== "story") {
           throw new Error("no story is open — start one with start_story first");
         }
-        story.beats.push(call.text);
+        const beat = story.mode === "roleplay" ? naturalStoryProse(call.text) : call.text.trim();
+        if (!beat) throw new Error("the story beat contained no narrative prose");
+        story.beats.push(beat);
         // Cadence: decide whether THIS beat auto-illustrates.
         let illustrate = true;
         if (story.cadence.mode === "manual") illustrate = false;

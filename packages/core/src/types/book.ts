@@ -82,7 +82,7 @@ export interface BookSource {
     roleplay?: { playedCharacterNames: string[] };
     /** The story workflow: "roleplay" (reader steers a character) or "direct" (reader directs). */
     mode?: "direct" | "roleplay";
-    /** Roleplay only: the played character NAMES (me = reader, you = assistant) for narration labels. */
+    /** Roleplay only: the played character NAMES (me = reader, you = assistant) for authorship boundaries. */
     play?: { me?: string; you?: string };
     /** Rolling "story so far" synopsis (plot/relationships/threads), refreshed every N beats and fed
      * back to the writer so continuity survives chat-history trimming on long stories. */
