@@ -172,6 +172,62 @@ describe("the loader is reachable", () => {
   });
 });
 
+describe("deferring documentation never changes a fact", () => {
+  // The reported failure: the assistant was CERTAIN Google wasn't connected. It was connected — the
+  // host sets canGoogle from real credentials — but the gate switched the flag off because the set
+  // wasn't loaded, and the "off" branch was a statement about the READER'S ACCOUNT, not about which
+  // manual was in front of the model. So the prompt said, in capitals, that a linked account was not
+  // linked. A capability may be deferred; a fact may not.
+  const connected = { ...FULL, canGoogle: true, loadedToolsets: [] };
+
+  it("does not tell the model Google is disconnected while it is connected", () => {
+    const lean = build(connected);
+    expect(lean).not.toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(lean).toMatch(/GOOGLE IS CONNECTED/);
+  });
+
+  it("still says so plainly when Google really is not connected", () => {
+    const lean = build({ loadedToolsets: [] }); // FULL has no canGoogle
+    expect(lean).toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(lean).not.toMatch(/GOOGLE IS CONNECTED/);
+  });
+
+  it("does not offer to load a toolset the reader never connected", () => {
+    // The mirror image of the same bug: an absent flag read as "no opinion" put google in the index
+    // of things it could do, so the model could equally have promised mail it had no way to reach.
+    expect(build({ loadedToolsets: [] })).not.toContain("- google —");
+    expect(build(connected)).toContain("- google —");
+  });
+
+  it("does not tell the model it cannot run code when the reader allowed it", () => {
+    const lean = build({ loadedToolsets: [] }); // FULL has canRunCommands
+    expect(lean).not.toMatch(/YOU CANNOT SAVE FILES OR RUN CODE/);
+    expect(lean).toMatch(/YOU CAN SAVE FILES AND RUN CODE/);
+  });
+
+  it("still says so when commands genuinely aren't allowed", () => {
+    const phone = buildBuddySystemPrompt({
+      persona: "default", library: [], canRunCommands: false, loadedToolsets: [],
+    } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
+    expect(phone).toMatch(/YOU CANNOT SAVE FILES OR RUN CODE/);
+  });
+
+  it("gives a fully-equipped machine a different prompt from a bare one", () => {
+    // The blunt version of all of the above: before the fix these were byte-identical, so nothing in
+    // the prompt distinguished a desktop with everything connected from a phone with nothing.
+    const equipped = build({ ...connected, canMarkets: true, canTaskTools: true, canSubAgents: true });
+    const bare = buildBuddySystemPrompt({
+      persona: "default", library: [], loadedToolsets: [],
+    } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
+    expect(equipped).not.toBe(bare);
+  });
+
+  it("changes nothing about the facts for a caller that hasn't opted in", () => {
+    expect(build({ canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(build()).toMatch(/GOOGLE IS NOT CONNECTED/);
+  });
+});
+
 describe("toolsetDoc", () => {
   it("is exactly the text the prompt would have carried", () => {
     // Derived by diffing two real builds, so it cannot drift from the prompt.

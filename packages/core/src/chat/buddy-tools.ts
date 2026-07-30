@@ -4,7 +4,7 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
 import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
-import { TOOLSETS, TOOLSET_IDS, isToolAvailable, toolsetIndexBlock } from "./toolsets.js";
+import { TOOLSETS, TOOLSET_IDS, isToolAvailable, toolsetAvailable, toolsetIndexBlock } from "./toolsets.js";
 import { formatExtraction } from "../files/document-extraction.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
@@ -743,7 +743,7 @@ const MAX_READ_FILE_CHARS = 60_000;
  * coding manual would advertise something that cannot work. Read from the caller's raw flags, before
  * on-demand gating turns them off. PURE. */
 function availableToolsets(raw: Record<string, unknown>): string[] {
-  return TOOLSETS.filter((t) => t.flags.some((f) => raw[f] !== false)).map((t) => t.id);
+  return TOOLSETS.filter((t) => toolsetAvailable(t, raw)).map((t) => t.id);
 }
 
 /** Every capability a toolset owns, off unless that toolset is loaded. Absent `loadedToolsets` keeps
@@ -1054,6 +1054,11 @@ export function buildBuddySystemPrompt(raw: {
       "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first. " +
       "NEVER say a file was saved or a command/script RAN until write_file / run_command actually " +
       "RETURNS a result — do not narrate success in advance or claim an output you didn't receive.\n"
+    : raw.canRunCommands
+    ? // Allowed, merely not documented yet — same rule as Google: a deferred manual is not a missing
+      // ability, and the model must not tell the reader it can't do something it can.
+      'YOU CAN SAVE FILES AND RUN CODE here — load the "coding" toolset for how, then do it. Do not tell ' +
+      "the reader you're unable to.\n"
     : "YOU CANNOT SAVE FILES OR RUN CODE in this chat — you have no file-writing or command-running " +
       "tool in your toolkit here (the reader hasn't turned the ability on). If the reader asks you to " +
       "SAVE a file, RUN python/code, or EXECUTE a command, do NOT pretend you did it and do NOT claim " +
@@ -1161,9 +1166,15 @@ export function buildBuddySystemPrompt(raw: {
         : "Before you CREATE an event or task, confirm the details (title, date/time) with the reader in plain words — " +
           "don't write to their calendar/list on a vague request; ask if anything's ambiguous. You only read and create " +
           "— you cannot send email or delete anything.\n")
-    : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
-      // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
-      "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
+    : raw.canGoogle
+      ? // CONNECTED, but the details are merely deferred this turn. Saying nothing was not safe: the
+        // "not connected" branch below then fired on a gated flag and told the reader, in capitals,
+        // that their linked account was not linked. Deferring documentation must never change a FACT.
+        'GOOGLE IS CONNECTED (Gmail, Calendar, Google Tasks) — say so if asked. Load the "google" toolset ' +
+        "for the tools to read or write them; never claim you checked before you actually have.\n"
+      : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
+        // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
+        "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
       "reader's email, calendar, or Google to-dos (there are no gmail_search / list_events / list_tasks tools right " +
       "now). NEVER say or imply you checked them, and NEVER invent emails, events, or to-dos. If the reader asks about " +
       'their mail, schedule, or Google tasks, tell them plainly that Google isn\'t connected and offer to connect it — ' +

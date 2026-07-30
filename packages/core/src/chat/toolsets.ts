@@ -164,6 +164,23 @@ export const TOOLSETS: readonly Toolset[] = [
   },
 ];
 
+/**
+ * Whether the ENVIRONMENT can offer this toolset at all — a fact about the reader's machine and
+ * accounts, decided before anything is loaded.
+ *
+ * `undefined` is the case that matters. For a flag that predates on-demand loading, the host adds it
+ * only when the capability is real — `canGoogle` appears when Google is actually connected — so an
+ * absent flag means absent, and listing it would offer to read mail from an account nobody linked.
+ * For a flag this scheme INVENTED (`newFlags`), the block it gates used to be unconditional, so an
+ * absent flag means it was always on. Same word, opposite meaning; the registry knows which is which.
+ * PURE.
+ */
+export function toolsetAvailable(set: Toolset, flags: Readonly<Record<string, unknown>>): boolean {
+  return set.flags.some((f) =>
+    flags[f] === undefined ? set.newFlags?.includes(f) === true : flags[f] !== false,
+  );
+}
+
 /** Every toolset id, for validating a `load_toolset` argument. */
 export const TOOLSET_IDS: readonly string[] = TOOLSETS.map((t) => t.id);
 
