@@ -88,6 +88,36 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Descriptions stopped dragging everything about a person into the picture** — a character's entry
+  accumulates across a whole book, and all of it was being handed to the image model. One reported
+  prompt described a man as "male, blond hair, arctic blue; icy-blue; evil; glacial blue eyes, stocky,
+  monstrous frame; thick chest; unspecified, vicious, bully, hostile, aggressive, cowardly, cruel,
+  malicious, antagonistic, sadistic, vengeful" — eleven personality words and three separate attempts
+  at one eye colour, competing with the hair colour for the model's attention. Four things now come
+  out on the way to a picture. **Personality and biography**: "vicious", "cowardly", "top cadet of his
+  year", "son of the disgraced Colonel" cannot be drawn, so they stay in the bible and out of the
+  prompt, while anything that names something visible ("a long scar across the jaw") still travels.
+  **Re-wordings of one feature**: each chapter that re-describes someone's eyes used to append its own
+  version, so the prompt asked for three eye colours at once; the first and most-established wording
+  is now the answer. Genuinely separate features — two scars, two marks — all still count.
+  **Placeholders**: "unspecified" was being passed on as a thing to draw. **Comparisons to other
+  people**: "as tall as Sawyer and built as Dain" is undrawable and, worse, puts other characters'
+  names inside this person's description, which is how features leaked between people in the first
+  place. That example dropped from 231 characters to 58, saying more.
+- **The number of people in a picture is an actual number** — the count added last time said
+  "several" far too often, because it counted everyone *present* rather than everyone in the shot: on
+  a book page that's everyone the page names, including people merely remembered or talked about, and
+  in a story it's everyone in the room. Both routinely reached five or six for a two-person scene. It
+  now uses the cast the storyboard recorded for that specific illustration when there is one, so the
+  number is usually small and exact. Real headcounts are also stated up to six rather than three — a
+  number biases the picture toward it even when the model doesn't land it exactly, whereas "several"
+  aims at nothing and tells you nothing when you open the full prompt. Above six it says "a crowd",
+  which is honest.
+- **Captions read like captions** — with the full prompt available behind its own expander, the
+  caption no longer has to double as one. The renderer's instructions come out of it: the subject
+  count that opens the prompt, the wardrobe note, the "part 2 of this sequence" cue, and the tracked-
+  cast continuity clause. What's left is the scene, and the exact text sent to the model is still one
+  click away, unchanged.
 - **Pictures are told how many people to draw** — nothing in a prompt ever said how many bodies a
   scene contains, so the image model worked it out from how many person-shaped phrases it could find,
   and a description that referred to someone more than once read as more than one person. That is

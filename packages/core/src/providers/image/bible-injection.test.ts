@@ -5,6 +5,7 @@ import {
   describeCharacterIdentity,
   describeLocation,
   describeOutfit,
+  castSubjects,
   displayCaption,
   expandPrompt,
   findBibleTermsInText,
@@ -209,6 +210,33 @@ describe("findBibleTermsInText", () => {
   });
 });
 
+describe("castSubjects (who the beat says is in the shot)", () => {
+  const bible = () =>
+    bibleWith({
+      characters: [
+        character({ name: "Lyra", aliases: ["Ghost Broker"] }),
+        character({ name: "Nico" }),
+      ],
+    });
+
+  it("resolves a nickname and a real name to ONE person", () => {
+    // Counting these as two is exactly the duplicate the subject count exists to prevent.
+    const out = castSubjects([{ name: "Lyra" }, { name: "Ghost Broker" }, { name: "Nico" }], bible());
+    expect(out.map((s) => s.name)).toEqual(["Lyra", "Nico"]);
+  });
+
+  it("keeps a name the bible doesn't know — the beat still says they're in the shot", () => {
+    const out = castSubjects([{ name: "Nico" }, { name: "A bartender" }], bible());
+    expect(out.map((s) => s.name)).toEqual(["Nico", "A bartender"]);
+  });
+
+  it("is empty when the beat declares no cast, so the caller falls back to who is present", () => {
+    expect(castSubjects(undefined, bible())).toEqual([]);
+    expect(castSubjects([], bible())).toEqual([]);
+    expect(castSubjects([{ name: "  " }], bible())).toEqual([]);
+  });
+});
+
 describe("describeCharacterIdentity", () => {
   it("uses identity fields (no outfit) and falls back to persistentTraits", () => {
     const c = character({
@@ -248,6 +276,85 @@ describe("describeCharacterIdentity", () => {
     expect(out).toContain("green eyes");
     expect(out).toContain("broad-shouldered");
     expect(out).toContain("auburn hair");
+  });
+
+  it("keeps ONE answer for a single-attribute field, not every wording it accumulated", () => {
+    // Each chapter that re-describes the eyes appends its own wording, so the field ends up as
+    // three attempts at one pair of eyes. Injected whole, the prompt asks for three eye colours.
+    const c = character({
+      name: "Jack",
+      appearance: {
+        ...emptyAppearance(),
+        hair: "spiky-blond; light-blond",
+        eyes: "arctic blue; icy-blue; glacial blue",
+        build: "stocky, monstrous frame; thick chest",
+      },
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toBe("spiky-blond hair, arctic blue eyes, stocky, monstrous frame");
+    expect(out).not.toContain("icy-blue");
+    expect(out).not.toContain("thick chest");
+  });
+
+  it("keeps EVERY entry of a list field — two marks are two features, not two wordings", () => {
+    const c = character({
+      name: "Liam",
+      appearance: {
+        ...emptyAppearance(),
+        distinguishingMarks: "sprawling rebellion relic beginning at his wrist; dimple",
+      },
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toContain("rebellion relic");
+    expect(out).toContain("dimple");
+  });
+
+  it("drops the extractor's placeholders instead of asking for them", () => {
+    // "unspecified skin" is a thing a model will try to draw.
+    const c = character({
+      name: "Jack",
+      appearance: { ...emptyAppearance(), hair: "blond", skinTone: "unspecified", notes: "unknown" },
+      persistentTraits: ["not specified"],
+    });
+    expect(describeCharacterIdentity(c)).toBe("blond hair");
+  });
+
+  it("drops comparisons to other people — undrawable, and they smuggle in other names", () => {
+    // A name inside a descriptor is a name the model will find a face for; this is the exact
+    // mechanism behind the feature-bleed we keep chasing.
+    const c = character({
+      name: "Liam",
+      appearance: {
+        ...emptyAppearance(),
+        height: "tall, a head taller than most others",
+        build: "massive, as tall as Sawyer and built as Dain",
+      },
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toBe("tall, massive");
+    expect(out).not.toContain("Sawyer");
+    expect(out).not.toContain("Dain");
+  });
+
+  it("keeps personality and biography OUT of the picture, and looks IN", () => {
+    // The reported prompt: eleven personality adjectives and a biography, competing with one hair
+    // colour for the model's attention. None of it can be drawn.
+    const c = character({
+      name: "Jack",
+      appearance: { ...emptyAppearance(), gender: "male", hair: "blond" },
+      persistentTraits: [
+        "vicious",
+        "bully",
+        "cowardly",
+        "sadistic",
+        "top cadet of his year",
+        "son of the disgraced Colonel Isaac Mairi",
+        "a long scar across the jaw",
+      ],
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toBe("male, blond hair, a long scar across the jaw");
+    expect(out).not.toMatch(/vicious|bully|cowardly|sadistic|cadet|Colonel/i);
   });
 
   it("does not inject legacy momentary expressions or poses into every image", () => {
@@ -339,6 +446,28 @@ describe("displayCaption", () => {
   it("keeps multi-paragraph scene prose, dropping only scaffolding", () => {
     const full = "First beat.\n\nSecond beat.\n\nStyle: watercolor";
     expect(displayCaption(full)).toBe("First beat.\n\nSecond beat.");
+  });
+
+  it("drops the inline directives too — the count, wardrobe, beat cue and continuity clause", () => {
+    // These were the ones a paragraph filter couldn't reach, so the caption opened with a renderer
+    // instruction. Safe to drop because the exact text sent to the model is one disclosure away.
+    const full =
+      "Exactly two people in focus. Jack stabs Liam mid-air. (Wardrobe: Jack in flight leathers.) " +
+      "(Part 2 of this scene's sequence — depict a LATER beat of the same moment.) " +
+      "Scene continuity: featuring Jack, Liam at Mountain Peaks.";
+    expect(displayCaption(full)).toBe("Jack stabs Liam mid-air.");
+  });
+
+  it("capitalises what is left when the count sentence was the opening", () => {
+    expect(displayCaption("A crowd of people in focus. the squad forms up on the ridge.")).toBe(
+      "The squad forms up on the ridge.",
+    );
+  });
+
+  it("leaves a scene that merely mentions focus alone", () => {
+    // "in focus" is only a directive as the generated opening sentence, not as prose.
+    const prose = "A shallow depth of field keeps her hands in focus. Rain outside.";
+    expect(displayCaption(prose)).toBe(prose);
   });
 
   it("falls back to the input when stripping would leave nothing", () => {

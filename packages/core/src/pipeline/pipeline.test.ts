@@ -996,6 +996,37 @@ describe("RenderPipeline subject count reaches the provider", () => {
     expect(await renderWith({})).toContain("Exactly two people in focus. Sato and Mara at the counter");
   });
 
+  it("counts the beat's DECLARED cast, not everyone the page names", async () => {
+    // The page names both, but the storyboard says only Sato is in this shot. Counting "present"
+    // is what made the count read "several" for two-person scenes.
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    book.pages[0]!.paragraphs[0]!.text = "Sato and Mara at the counter.";
+    const bible = twoHanderBible();
+    bible.storyboard = [
+      {
+        chapterIndex: 0,
+        summary: "",
+        keyMoment: "",
+        location: "",
+        locationChange: "",
+        keyEvents: [{ pageRange: [0, 0], imagePrompt: { text: "Sato alone at the counter" }, cast: [{ name: "Sato" }] }],
+      },
+    ];
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    expect(lastPrompt()).toContain("Exactly one person in focus.");
+    expect(lastPrompt()).not.toContain("two people");
+  });
+
   it("is skipped for a comic PAGE, where the count would be read per panel", async () => {
     // 4–6 panels each showing the cast is exactly the case where "exactly two people" is wrong.
     const prompt = await renderWith({ style: "comic", drawAsComicPage: true });
@@ -1045,18 +1076,31 @@ describe("countSceneSubjects (how many bodies to draw)", () => {
     );
   });
 
-  it("drops the number past three, where diffusion counting is noise", () => {
+  it("still states a real headcount at four and five", () => {
+    // "Five people" biases the composition toward five even when it lands on four. "Several" gives
+    // the model nothing to aim at and tells the reader nothing when they open the full prompt.
+    const four = [mara, cass, drake, { name: "Rell" }];
+    expect(countSceneSubjects("The squad forms up.", four, [])).toBe(
+      "Exactly four people in focus. The squad forms up.",
+    );
+    expect(countSceneSubjects("A gathering.", [...four, { name: "Toll" }], [{ name: "Sgaeyl" }])).toBe(
+      "Exactly five people and one creature in focus. A gathering.",
+    );
+  });
+
+  it("drops the number once the figure has stopped being a headcount", () => {
     // An ignored instruction is harmless; a wrong one that is half-obeyed is worse than silence.
-    const out = countSceneSubjects("The squad forms up.", [mara, cass, drake, { name: "Rell" }], []);
-    expect(out).toBe("Several people in focus. The squad forms up.");
+    const crowd = Array.from({ length: 7 }, (_, i) => ({ name: `Extra${i}` }));
+    const out = countSceneSubjects("The hall fills.", crowd, []);
+    expect(out).toBe("A crowd of people in focus. The hall fills.");
     expect(out).not.toContain("Exactly");
-    expect(out).not.toContain("four");
+    expect(out).not.toContain("seven");
   });
 
   it("never claims 'exactly' when either group had to go soft", () => {
-    const many = [mara, cass, drake, { name: "Rell" }, { name: "Toll" }];
-    expect(countSceneSubjects("A gathering.", many, [{ name: "Sgaeyl" }])).toBe(
-      "Several people and one creature in focus. A gathering.",
+    const crowd = Array.from({ length: 9 }, (_, i) => ({ name: `Extra${i}` }));
+    expect(countSceneSubjects("A gathering.", crowd, [{ name: "Sgaeyl" }])).toBe(
+      "A crowd of people and one creature in focus. A gathering.",
     );
   });
 

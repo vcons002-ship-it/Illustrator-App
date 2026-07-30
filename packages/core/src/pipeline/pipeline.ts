@@ -14,7 +14,7 @@ import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { actionTextForImage } from "../visual-bible/story-image-text.js";
-import { appendSceneWardrobe, describeCharacterIdentity, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
+import { appendSceneWardrobe, castSubjects, describeCharacterIdentity, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { castRegions as buildCastRegions } from "../providers/image/regional-conditioning.js";
 import { unitSeed } from "./unit-seed.js";
 import { getImageStyle } from "../providers/catalog.js";
@@ -380,7 +380,12 @@ export class RenderPipeline {
       // How many subjects to draw, stated up front (see countSceneSubjects). Skipped for a comic
       // PAGE: the count would be read per panel, and a page of 4–6 panels each showing the cast is
       // exactly the case where "exactly two people" is the wrong instruction.
-      const sceneBase = comicPage ? wardrobed : countSceneSubjects(wardrobed, present, presentCreatures);
+      // Count the beat's DECLARED cast when it has one — who is in the shot, not who is in the room
+      // (see castSubjects). `present` is the fallback for beats with no recorded cast.
+      const declaredCast = castSubjects(keyEvent?.cast, bible);
+      const sceneBase = comicPage
+        ? wardrobed
+        : countSceneSubjects(wardrobed, declaredCast.length ? declaredCast : present, presentCreatures);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       // The beat's location rides along so a place named after a character can't be read as that
@@ -643,9 +648,14 @@ export function nameActiveScene(
  * - It constrains the SUBJECTS, not the population of the frame. A scene set in a packed bar or a
  *   formation of riders must not be emptied because the bible knows two people by name, so the
  *   count is about who is in focus and the background is left to the scene description.
- * - It stops asserting a number it can't be believed on. Diffusion counting is reliable at one to
- *   three and noise above that, so past {@link MAX_EXACT_SUBJECTS} it says "several" and no number.
- *   An ignored instruction is harmless; a wrong one that is half-obeyed is worse than silence.
+ * - It counts who the beat DECLARES is in the shot, when it declares anyone — see
+ *   {@link castSubjects}. Counting whoever is "present" instead described a crowd that isn't there:
+ *   a page scan returns everyone the page NAMES, a story beat's tracked cast is everyone in the
+ *   ROOM, and both routinely run to five or six people for a two-person shot. That is what made the
+ *   count read "several" so often, and a count that is usually vague is a count that does nothing.
+ * - It stops asserting a number it can't be believed on. Past {@link MAX_EXACT_SUBJECTS} it says
+ *   "a crowd" and no number: an ignored instruction is harmless, but a wrong one that is
+ *   half-obeyed is worse than silence.
  *
  * Pure; returns the prompt unchanged when the bible knows of no subject in this frame.
  */
@@ -668,14 +678,23 @@ export function countSceneSubjects(
   return `${lead} in focus. ${prompt}`;
 }
 
-/** Above this many of a kind, a count is noise to a diffusion model — say "several" instead. */
-const MAX_EXACT_SUBJECTS = 3;
+/**
+ * The largest count worth stating.
+ *
+ * Six, not three. The earlier bound came from what a diffusion model can reliably OBEY, and three is
+ * about right for that — but obedience isn't the only thing a number buys. "Five people" biases the
+ * composition toward five even when it lands on four, whereas "several people" gives the model
+ * nothing at all to aim at and tells the reader nothing when they open the full prompt. So the
+ * number is stated wherever it is plausibly a real headcount, and withheld only where the figure has
+ * stopped being a headcount and become a crowd.
+ */
+const MAX_EXACT_SUBJECTS = 6;
 
 /** Small numbers as WORDS: a text encoder binds "two" to a quantity far better than "2". */
-const NUMBER_WORDS = ["zero", "one", "two", "three"] as const;
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six"] as const;
 
 function subjectCount(n: number, singular: string, plural: string): string {
-  if (n > MAX_EXACT_SUBJECTS) return `several ${plural}`;
+  if (n > MAX_EXACT_SUBJECTS) return `a crowd of ${plural}`;
   return `${NUMBER_WORDS[n]} ${n === 1 ? singular : plural}`;
 }
 
