@@ -7,6 +7,64 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **It can read a document that doesn't fit — a contract, a manual, a whole report** — ask it to find
+  every deadline in a three-hundred-page file and it now works through the entire thing section by
+  section and comes back with the answers, each with the line it was found on. The document never
+  enters the conversation, so its size costs nothing: what comes back is a list of findings, not three
+  hundred pages. Crucially the app drives the reading, not the assistant — it can't lose its place,
+  because it was never keeping it; each section is a fresh question with a short reminder of what has
+  already been found, so the same recurring item isn't reported twenty times. This is the same method
+  the app uses to read a novel into its Visual Bible, pointed at your own documents.
+- **It knows which way to read** — plain reading is still there and still right for a small file, for
+  one section you already know you want, and before any edit (an edit has to match text it has
+  actually seen). Sweeping is for "find every X in here". They work together: sweep to find where
+  something is, then read those exact lines to see it in context. If you ask it to sweep a file small
+  enough to just read, it says so and reads it instead of grinding through sections for no reason.
+- **A partial answer says it's partial** — if a section can't be read, it's retried, and if it still
+  fails the result names the lines that are missing rather than quietly returning nine findings where
+  there were ten. Stopping mid-way keeps what it found, and asking again picks up where it left off
+  instead of starting over.
+- **Reading on works whichever way the assistant asks** — a file read past the first page could be
+  requested one way and not the other, depending on how the assistant phrased the call. Both ways
+  understand "start at line N" now.
+- **Reading a big file works a window at a time, and it can turn the page** — this is how a large
+  document gets read without losing everything else: one read returns a chunk and says which line it
+  stopped at, so the assistant reads, takes what it needs, and reads on. That was already how the
+  underlying tool worked, but two things stopped it working in practice. The window was a fixed
+  60,000 characters regardless of the model, which on a typical local setup is several times
+  everything it can hold at once — so instead of a page it got a flood. And when the assistant was
+  driving tools through the newer function-calling interface, the "start at line N" option wasn't
+  offered to it at all, so it could only ever ask for the beginning of a file and had no way to reach
+  the rest. The window is now sized to what the model can actually hold — a third of its working
+  space, so a few results can sit alongside each other — and reading on is offered wherever the
+  assistant can ask for it.
+- **A cut-off chapter analysis keeps what it managed to say** — the reported "not parseable JSON,
+  likely truncated" turned out to be exactly that: the reading model was cut off at its length limit
+  mid-answer. The response wasn't nonsense, it was a good answer missing its last few characters — a
+  summary, the cast, and nine of the ten scene descriptions, all discarded over a missing bracket, and
+  the chapter marked done so nothing ever went back for it. A truncated answer is now closed off at
+  the last complete entry and everything up to there is kept; only the half-written tail is dropped,
+  never guessed at.
+- **…and it's much less likely to be cut off in the first place** — the length limit was a flat
+  number, but analysis writes one scene description per illustration in the chapter, so a chapter
+  split into a dozen images needs several times what a two-image chapter does. The limit now scales
+  with the number of illustrations, and is held below the model's loaded window — a limit larger than
+  the window doesn't buy anything and can push the server into truncating the *chapter* instead,
+  trading a cut answer for a cut question.
+- **It stops losing the thread after reading something big** — the assistant would read a file and
+  then, immediately, no longer know what it had been asked to do; twice in a row, and eventually it
+  forgot an explicit request to create a calendar invite. It wasn't weighting old messages over new
+  ones — it genuinely no longer had the instruction. The conversation was measured and trimmed to fit
+  before a turn started, and then anything the assistant fetched *during* the turn was added on top
+  with no limit at all: one file read can be 60,000 characters, which on a typical local model is
+  several times the entire space available for input. The model server then does the only thing it
+  can and cuts the prompt from the front — and the front is where the system instructions and your
+  original request live. Everything a turn sends is now measured as it goes, and the two things that
+  must never be dropped are pinned: who the assistant is, and what you asked for. What gets shed is
+  the middle — older chatter first, then the oldest tool results. The newest result is kept even when
+  it alone is too big, cut in the middle with a note saying so, because answering "read this file"
+  with nothing is not an improvement. The assistant is also told that trimming happened, so it can
+  ask rather than assume the conversation began there.
 - **Its appearance no longer fades from its own memory** — Soul keeps far more notes than can fit in
   every prompt, and prompt selection preferred the newest ones. Because a physical description is
   usually written near the beginning, it could remain plainly visible in the Soul panel while the

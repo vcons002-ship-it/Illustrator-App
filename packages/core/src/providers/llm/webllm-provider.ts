@@ -15,6 +15,7 @@ import {
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
+  repairTruncatedJson,
   stripThink,
   type RawExtraction,
 } from "./extraction.js";
@@ -436,10 +437,18 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
 /** Fail an engine load only after this long with NO progress events (ms). */
 const ENGINE_STALL_MS = 60_000;
 
-/** Tolerant parse of the model's JSON into the shared RawExtraction shape. */
+/**
+ * Tolerant parse of the model's JSON into the shared RawExtraction shape.
+ *
+ * A response cut off at the token ceiling is repaired and re-parsed rather than discarded — see
+ * {@link repairTruncatedJson}. What arrived is what the model actually said; only the incomplete tail
+ * is dropped. Without this, one missing brace cost a chapter its summary, its cast, and every scene
+ * prompt it had already produced.
+ */
 export function parseExtraction(content: string): RawExtraction {
+  const body = stripFences(stripThink(content));
   try {
-    const json = JSON.parse(stripFences(stripThink(content))) as Record<string, unknown>;
+    const json = parseOrRepair(body);
     return {
       summary: str(json.summary),
       keyMoment: str(json.keyMoment),
@@ -527,6 +536,20 @@ export function parseExtraction(content: string): RawExtraction {
     };
   } catch {
     return { characters: [], glossary: [], environments: [], spoilers: [] };
+  }
+}
+
+/**
+ * Parse the body, repairing a truncation if the plain parse fails. Throws only when even the repair
+ * is unparseable — the caller's catch then yields an empty extraction, which reads as a failure.
+ */
+function parseOrRepair(body: string): Record<string, unknown> {
+  try {
+    return JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    const repaired = repairTruncatedJson(body);
+    if (!repaired) throw new Error("unparseable");
+    return JSON.parse(repaired) as Record<string, unknown>;
   }
 }
 

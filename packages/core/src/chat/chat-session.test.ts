@@ -318,6 +318,70 @@ describe("jsonGatedTokenSink", () => {
   });
 });
 
+describe("trimTurnMessages (the context a turn actually sends)", () => {
+  const sys = { role: "system" as const, content: "SYSTEM: you are the assistant." };
+  const goal = { role: "user" as const, content: "GOAL: create the calendar invite for Friday." };
+
+  /** The reported sequence: a task, a huge file read, then the model's next move. */
+  function turnAfterFileRead(fileChars: number) {
+    return [
+      sys,
+      { role: "user" as const, content: "OLD: unrelated chatter from an earlier turn." },
+      { role: "assistant" as const, content: "OLD: sure." },
+      goal,
+      { role: "assistant" as const, content: '{"tool":"read_file"}' },
+      { role: "user" as const, content: `FILE:${"x".repeat(fileChars)}` },
+    ];
+  }
+
+  it("keeps the system prompt and the request that started the turn when a big read blows the budget", async () => {
+    const { trimTurnMessages } = await import("./chat-session.js");
+    // This is the whole bug: drop-oldest would delete the GOAL first, so the assistant reads a file
+    // and immediately no longer knows what it was doing.
+    const out = trimTurnMessages(turnAfterFileRead(5_000), 3, 2_000);
+    expect(out[0]).toEqual(sys);
+    expect(out.some((m) => m.content.startsWith("GOAL:"))).toBe(true);
+    expect(out.some((m) => m.content.startsWith("OLD:"))).toBe(false);
+  });
+
+  it("keeps the newest result even when it alone exceeds the budget, cut in the middle", async () => {
+    const { trimTurnMessages, TRUNCATED_RESULT_MARKER } = await import("./chat-session.js");
+    const out = trimTurnMessages(turnAfterFileRead(50_000), 3, 2_000);
+    const last = out[out.length - 1]!;
+    // Dropping it outright would answer "read this file" with nothing — a different failure, no better.
+    expect(last.content).toContain("FILE:");
+    expect(last.content).toContain(TRUNCATED_RESULT_MARKER);
+    expect(last.content.length).toBeLessThan(2_000);
+  });
+
+  it("says that it trimmed, so a partial view isn't mistaken for the whole conversation", async () => {
+    const { trimTurnMessages, TRIMMED_MARKER } = await import("./chat-session.js");
+    const out = trimTurnMessages(turnAfterFileRead(5_000), 3, 2_000);
+    expect(out.some((m) => m.content === TRIMMED_MARKER)).toBe(true);
+  });
+
+  it("leaves a turn that fits completely alone", async () => {
+    const { trimTurnMessages } = await import("./chat-session.js");
+    const messages = turnAfterFileRead(100);
+    expect(trimTurnMessages(messages, 3, 1_000_000)).toEqual(messages);
+    expect(trimTurnMessages(messages, 3, 0)).toEqual(messages); // no budget set → no bound
+  });
+
+  it("keeps the newest rounds and sheds the oldest ones in between", async () => {
+    const { trimTurnMessages } = await import("./chat-session.js");
+    const messages = [
+      sys,
+      goal,
+      { role: "user" as const, content: `R1:${"a".repeat(900)}` },
+      { role: "user" as const, content: `R2:${"b".repeat(900)}` },
+      { role: "user" as const, content: `R3:${"c".repeat(900)}` },
+    ];
+    const out = trimTurnMessages(messages, 1, 2_100).map((m) => m.content.slice(0, 2));
+    expect(out).toContain("R3");
+    expect(out).not.toContain("R1");
+  });
+});
+
 describe("trimChatHistory", () => {
   it("keeps the newest whole turns within budget, always at least the last", async () => {
     const { trimChatHistory } = await import("./chat-session.js");

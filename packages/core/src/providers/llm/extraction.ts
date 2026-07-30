@@ -1417,6 +1417,84 @@ export function slug(s: string): string {
  * malformed JSON). Callers treat it as a failure so the chapter is retried
  * instead of silently committed with nothing to render from.
  */
+/**
+ * Close a JSON document that was cut off mid-flight, keeping everything that HAD arrived.
+ *
+ * A response truncated at the token ceiling is not garbage — it is a correct document missing its
+ * tail. `JSON.parse` rejects the whole thing, so a chapter that produced a summary, its cast, and
+ * nine of its ten scene prompts was thrown away entirely and left with nothing to render from. That
+ * is the "not parseable JSON (likely truncated)" failure, and losing 90% of a good answer to a
+ * missing brace is the wrong response to it.
+ *
+ * The repair is conservative: rewind to the last position where the document was between elements —
+ * after a completed value, never inside a string or a half-written key — and close whatever is still
+ * open. Anything partial is discarded rather than guessed at, so the result is either valid JSON that
+ * the model actually produced or nothing at all. Returns "" when there is no safe point to rewind to.
+ * PURE.
+ */
+export function repairTruncatedJson(text: string): string {
+  const start = text.indexOf("{");
+  if (start < 0) return "";
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  // The last index (exclusive) at which the document was between elements, with the bracket stack it
+  // had there — the only places it is safe to cut.
+  let safeEnd = -1;
+  let safeDepth = 0;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{" || ch === "[") {
+      stack.push(ch);
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      safeEnd = i + 1;
+      safeDepth = stack.length;
+    } else if (ch === ",") {
+      // Between elements: everything up to here is complete.
+      safeEnd = i;
+      safeDepth = stack.length;
+    }
+  }
+  if (safeEnd < 0 || safeDepth < 0) return "";
+  const head = text.slice(start, safeEnd).replace(/,\s*$/, "");
+  if (!head) return "";
+  // Close what was open AT the safe point, innermost first. The stack there is the prefix of `stack`
+  // of length safeDepth — the scan only ever pushed past it.
+  let closers = "";
+  const openAtSafe = openBracketsAt(text, start, safeEnd);
+  for (let i = openAtSafe.length - 1; i >= 0; i--) closers += openAtSafe[i] === "{" ? "}" : "]";
+  return head + closers;
+}
+
+/** The bracket stack open at `end`, re-scanned so it matches the position we actually cut at. */
+function openBracketsAt(text: string, start: number, end: number): string[] {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < end; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  return stack;
+}
+
 export function isEmptyExtraction(raw: RawExtraction): boolean {
   return (
     raw.characters.length === 0 &&

@@ -132,7 +132,12 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         },
         { role: "user", content: extractionUserContent(input) },
       ],
-      { json: true, noThink: true, ...(input.signal ? { signal: input.signal } : {}) },
+      {
+        json: true,
+        noThink: true,
+        maxTokens: this.extractionTokens(input.sceneCount ?? input.unitRanges?.length ?? 0),
+        ...(input.signal ? { signal: input.signal } : {}),
+      },
     );
     const raw = parseExtraction(text);
     // Nothing usable parsed — an empty/absent body, truncated/malformed JSON, or a
@@ -149,6 +154,25 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       );
     }
     return mergeExtraction(input.existing, raw, input.chapterIndex, input.unitRanges);
+  }
+
+  /**
+   * Response ceiling for one chapter's extraction, sized to the work asked for.
+   *
+   * A flat ceiling is wrong in both directions. Extraction emits one scene prompt PER illustration in
+   * the chapter, plus the chapter's new entities — so a chapter split into a dozen images needs several
+   * times what a two-image chapter does, and the fixed 12k cut the long ones off mid-JSON. That is the
+   * "not parseable JSON (likely truncated)" failure at its source; the repair in `parseExtraction`
+   * salvages what arrived, but not being cut off is better than being rescued from it.
+   *
+   * Bounded by the loaded window when we know it: `num_predict` and the prompt share `num_ctx`, so a
+   * ceiling larger than the window buys nothing and can push the server into truncating the INPUT
+   * instead — trading a cut answer for a cut question.
+   */
+  private extractionTokens(scenes: number): number {
+    const wanted = EXTRACTION_BASE_TOKENS + Math.max(0, scenes) * EXTRACTION_TOKENS_PER_SCENE;
+    const ceiling = this.numCtx ? Math.max(2048, Math.floor(this.numCtx * 0.5)) : MAX_EXTRACTION_TOKENS;
+    return Math.min(wanted, MAX_EXTRACTION_TOKENS, ceiling);
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
@@ -771,6 +795,13 @@ function ollamaRoot(baseUrl: string): string {
  * without body streaming (the extension's proxy). Throws the server's body text on a bad status.
  */
 /** Connect-phase bound for the native NDJSON `/api/chat` path — matches streamSse's 30s. */
+/** Room for a chapter's summary, location and new entities before any scene prompts. */
+const EXTRACTION_BASE_TOKENS = 8_192;
+/** Extra room per illustration in the chapter — one Layer-1 scene prompt each. */
+const EXTRACTION_TOKENS_PER_SCENE = 700;
+/** Sanity ceiling: past this a local decode is impractically slow and the chapter is too big. */
+const MAX_EXTRACTION_TOKENS = 32_768;
+
 const OLLAMA_CONNECT_TIMEOUT_MS = 30_000;
 
 async function streamOllamaLines(

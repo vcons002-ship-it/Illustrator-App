@@ -1014,13 +1014,46 @@ describe("LocalServerLLMProvider", () => {
     ).rejects.toThrow(/not parseable/);
   });
 
-  it("raises the extraction response bound (folded scene prompts need headroom)", async () => {
-    const transport = new FakeTransport(() => ({
-      json: { choices: [{ message: { content: '{"summary":"s"}' } }] },
-    }));
-    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
-    await provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
-    expect((transport.requests[0]!.body as { max_tokens?: number }).max_tokens).toBe(12288);
+  it("sizes the extraction response bound to the number of scene prompts asked for", async () => {
+    // Extraction emits one Layer-1 prompt PER illustration in the chapter, so a chapter split into a
+    // dozen images needs several times what a two-image chapter does. A flat ceiling cut the long
+    // ones off mid-JSON — the "not parseable JSON (likely truncated)" failure at its source.
+    const cap = async (unitRanges?: [number, number][]) => {
+      const transport = new FakeTransport(() => ({
+        json: { choices: [{ message: { content: '{"summary":"s"}' } }] },
+      }));
+      const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+      await provider.extractEntities({
+        bookId: "b",
+        chapterIndex: 0,
+        chapterText: "x",
+        existing: emptyBible(),
+        ...(unitRanges ? { unitRanges } : {}),
+      });
+      return (transport.requests[0]!.body as { max_tokens?: number }).max_tokens!;
+    };
+    const ranges = (n: number): [number, number][] => Array.from({ length: n }, (_, i) => [i, i]);
+    const none = await cap();
+    const twelve = await cap(ranges(12));
+    expect(twelve).toBeGreaterThan(await cap(ranges(2)));
+    expect(twelve).toBeGreaterThan(none);
+    expect(none).toBeGreaterThanOrEqual(8192); // room for summary + entities on their own
+  });
+
+  it("bounds the extraction response by the LOADED window — a ceiling past it truncates the input", async () => {
+    // num_predict and the prompt share num_ctx, so an oversized ceiling trades a cut answer for a
+    // cut question.
+    const transport = new FakeTransport(() => ({ json: { message: { content: '{"summary":"s"}' } } }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport, numCtx: 8192 });
+    await provider.extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible(),
+      unitRanges: Array.from({ length: 20 }, (_, i) => [i, i] as [number, number]),
+    });
+    const body = transport.requests[0]!.body as { options?: { num_predict?: number } };
+    expect(body.options!.num_predict).toBeLessThanOrEqual(4096);
   });
 
   it("disables model reasoning for ANALYSIS calls only (chat keeps thinking)", async () => {
