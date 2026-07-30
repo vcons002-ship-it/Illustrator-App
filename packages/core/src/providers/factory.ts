@@ -4,7 +4,7 @@ import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { MockLLMProvider } from "./llm/mock-llm-provider.js";
 import { WebLLMProvider } from "./llm/webllm-provider.js";
 import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
-import { DEFAULT_LOCAL_SERVER_TEXT_MODEL } from "./catalog.js";
+import { DEFAULT_LOCAL_SERVER_TEXT_MODEL, type LocalTextServerId } from "./catalog.js";
 import type { LLMProvider } from "./llm/llm-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
 import { GeminiNativeImageProvider } from "./image/gemini-native-image-provider.js";
@@ -42,6 +42,8 @@ export interface LLMProviderOptions {
   /** Ollama only: context window to LOAD the model with (sent as `options.num_ctx` via the native
    * `/api/chat`). Sizes the KV cache so a big model fits the GPU; undefined = the default `/v1` path. */
   numCtx?: number;
+  /** Local server's structured-output dialect. */
+  serverType?: LocalTextServerId;
   /** Gemini only: ground technical analysis in Google Search (same Gemini key). */
   ground?: boolean;
   /** Relax adjustable provider safety filters for adult source material (Gemini). */
@@ -101,6 +103,7 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
         ...(transport ? { transport } : {}),
         ...(opts.fetch ? { fetchImpl: opts.fetch } : {}),
         ...(opts.numCtx ? { numCtx: opts.numCtx } : {}),
+        ...(opts.serverType ? { serverType: opts.serverType } : {}),
       });
     }
     case "mock":

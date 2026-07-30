@@ -86,10 +86,7 @@ import {
   userSoulEssencePromptBlock,
   buildSoulEssenceDistillationPrompt,
   buildSoulEssenceMergePrompt,
-  soulEssenceJsonSchema,
   partitionSoulNotes,
-  parseSoulEssence,
-  parseSoulEssenceMerge,
   validateSoulEssence,
   loadSoulEssence,
   saveSoulEssence,
@@ -247,6 +244,10 @@ import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
 import type { EngineVram, SoulEssenceJobPhase, SoulEssenceJobProgress } from "./remote-sync.js";
+import {
+  completeSoulEssenceWithRepair,
+  type SoulEssenceCompletionFailure,
+} from "./soul-essence-completion.js";
 
 /**
  * Engine host. Runs the Visual Bible extraction, render pipeline, and JIT buffer
@@ -2390,38 +2391,40 @@ async function completeSoulEssence(
   signal?: AbortSignal,
   digests?: readonly SoulEssenceDigestInput[],
   onToken?: (delta: string) => void,
-  onRepair?: () => void,
-): Promise<SoulEssence | undefined> {
-  if (!supportsChat(llm)) return undefined;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (signal?.aborted) throw abortError();
-    if (attempt > 0) onRepair?.();
-    const system = attempt === 0
-      ? prompt.system
-      : `${prompt.system}\n\nREPAIR ATTEMPT: The prior response failed strict validation. Re-read every requirement, copy the exact fingerprint/kind/schema, obey the prompt's evidence-link rules, preserve every required facet, and return one complete JSON object.`;
-    const raw = await llm.chat(
-      [
-        { role: "system", content: system },
-        { role: "user", content: prompt.user },
-      ],
-      {
-        maxTokens,
-        reasoningEffort: "none",
-        responseFormat: "json",
-        jsonSchema: soulEssenceJsonSchema(kind, prompt.sourceFingerprint),
-        ...(onToken ? { onToken } : {}),
-        ...(signal ? { signal } : {}),
-      },
-    );
-    // Some OpenAI-compatible servers do not stop an HTTP response immediately. Cancellation still
-    // must prevent that late response from being parsed, cached, or saved.
-    if (signal?.aborted) throw abortError();
-    const parsed = digests
-      ? parseSoulEssenceMerge(raw, kind, notes, digests, Date.now())
-      : parseSoulEssence(raw, kind, notes, Date.now());
-    if (parsed) return parsed;
-  }
-  return undefined;
+  onRepair?: (feedback: string, truncated: boolean) => void,
+): Promise<{ essence?: SoulEssence; failure?: SoulEssenceCompletionFailure }> {
+  return completeSoulEssenceWithRepair({
+    llm,
+    kind,
+    notes,
+    prompt,
+    maxTokens,
+    ...(signal ? { signal } : {}),
+    ...(digests ? { digests } : {}),
+    ...(onToken ? { onToken } : {}),
+    ...(onRepair ? { onRepair } : {}),
+  });
+}
+
+function soulEssenceFormatError(
+  failure: SoulEssenceCompletionFailure | undefined,
+  scope: "source" | "merge",
+): Error {
+  const raw = failure?.feedback.replace(/\s+/g, " ").trim() ?? "";
+  const detail = raw.length > 700 ? `${raw.slice(0, 697)}...` : raw;
+  const stage =
+    scope === "source"
+      ? "one authoritative Soul note"
+      : "the final Soul summaries";
+  return new Error(
+    [
+      `The text model could not ground ${stage} after a targeted repair.`,
+      detail,
+      "The original Soul notes are unchanged. Retry, or choose a stronger instruction model if this repeats.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 }
 
 function groupSoulDigests(
@@ -2464,6 +2467,7 @@ async function distillSoulEssence(
   sourceBudget: number,
   outputBudget: number,
   reuseCache: boolean,
+  allowAdaptiveRecovery: boolean,
   signal?: AbortSignal,
   onProgress?: SoulEssenceProgressCallback,
   onToken?: (delta: string) => void,
@@ -2475,6 +2479,7 @@ async function distillSoulEssence(
   let activePhase: SoulEssenceJobPhase = "analyzing";
   let activePass = 0;
   let activeTotal = 0;
+  let lastCompletionFailure: SoulEssenceCompletionFailure | undefined;
   const digest = async (
     scopeNotes: readonly SoulNote[],
     prompt: ReturnType<typeof buildSoulEssenceDistillationPrompt>,
@@ -2494,7 +2499,7 @@ async function distillSoulEssence(
         return valid;
       }
     }
-    const essence = await completeSoulEssence(
+    const result = await completeSoulEssence(
       llm,
       kind,
       scopeNotes,
@@ -2503,13 +2508,17 @@ async function distillSoulEssence(
       signal,
       children,
       onToken,
-      () =>
+      (_feedback, truncated) =>
         onProgress?.(
           "validating",
-          `The model returned invalid structured data; repairing pass ${activePass}…`,
+          truncated
+            ? `The model's response was cut off; repairing pass ${activePass} with a shorter answer…`
+            : `The model missed a grounding rule; repairing pass ${activePass} with the exact missing evidence…`,
           { pass: activePass, total: activeTotal },
         ),
     );
+    const essence = result.essence;
+    lastCompletionFailure = result.failure;
     if (essence && fingerprint !== rootFingerprint) {
       // Appearance/directions are reconstructed deterministically from scopeNotes during cache
       // validation, so do not duplicate potentially large exact arrays in every child digest.
@@ -2534,67 +2543,118 @@ async function distillSoulEssence(
   };
 
   try {
-    let digests: SoulEssenceDigestInput[] = [];
     const chunks = partitionSoulNotes(notes, sourceBudget);
     let completed = 0;
     let total = chunks.length;
-    for (let index = 0; index < chunks.length; index++) {
-      const chunk = chunks[index]!;
+    const analyzeChunk = async (
+      chunk: readonly SoulNote[],
+      label: string,
+      retrying = false,
+    ): Promise<SoulEssenceDigestInput[]> => {
       activePhase = "analyzing";
       activePass = completed + 1;
       activeTotal = total;
       onProgress?.(
         activePhase,
-        chunks.length === 1
+        retrying
+          ? `Retrying ${label} as a smaller grounded section (${chunk.length} note${chunk.length === 1 ? "" : "s"})…`
+          : chunks.length === 1
           ? "Analyzing the complete Soul…"
-          : `Analyzing Soul section ${index + 1} of ${chunks.length}…`,
+          : `Analyzing ${label}…`,
         { pass: activePass, total: activeTotal },
       );
       const essence = await digest(
         chunk,
         buildSoulEssenceDistillationPrompt(kind, chunk),
       );
-      if (!essence) {
-        return undefined;
+      if (essence) {
+        completed += 1;
+        return [{ notes: chunk, essence }];
       }
-      digests.push({ notes: chunk, essence });
-      completed += 1;
+
+      // Do not relax grounding or falsely attach a missed ID. A repeatedly failing multi-note leaf
+      // is divided until the model has a small, explicit evidence set (ultimately one source), then
+      // the existing merge path recombines the validated meanings and restores citations.
+      if (!allowAdaptiveRecovery || chunk.length <= 1) {
+        throw soulEssenceFormatError(lastCompletionFailure, "source");
+      }
+      const middle = Math.ceil(chunk.length / 2);
+      const left = chunk.slice(0, middle);
+      const right = chunk.slice(middle);
+      total += 1; // one planned leaf is now two successful leaf passes
+      activeTotal = total;
+      onProgress?.(
+        "validating",
+        `That section still missed evidence; splitting it into ${left.length} and ${right.length} notes…`,
+        { pass: completed + 1, total },
+      );
+      return [
+        ...(await analyzeChunk(left, `${label}, first half`, true)),
+        ...(await analyzeChunk(right, `${label}, second half`, true)),
+      ];
+    };
+
+    let digests: SoulEssenceDigestInput[] = [];
+    for (let index = 0; index < chunks.length; index++) {
+      digests.push(
+        ...(await analyzeChunk(
+          chunks[index]!,
+          `Soul section ${index + 1} of ${chunks.length}`,
+        )),
+      );
     }
     await flushCache();
+
+    const mergeGroup = async (
+      group: readonly SoulEssenceDigestInput[],
+    ): Promise<SoulEssenceDigestInput> => {
+      if (group.length === 1) return group[0]!;
+      activePhase = "merging";
+      activePass = completed + 1;
+      activeTotal = total;
+      onProgress?.(
+        activePhase,
+        "Integrating grounded Soul summaries into one everyday identity…",
+        { pass: activePass, total: activeTotal },
+      );
+      const scopeNotes = group.flatMap((child) => [...child.notes]);
+      const essence = await digest(
+        scopeNotes,
+        buildSoulEssenceMergePrompt(kind, scopeNotes, group),
+        group,
+      );
+      if (essence) {
+        completed += 1;
+        return { notes: scopeNotes, essence };
+      }
+      if (!allowAdaptiveRecovery || group.length <= 2) {
+        throw soulEssenceFormatError(lastCompletionFailure, "merge");
+      }
+
+      // A small local model may preserve every child facet pairwise but lose one when asked to merge
+      // a large group at once. Fall back to a balanced merge tree without weakening validation.
+      const middle = Math.ceil(group.length / 2);
+      const left = group.slice(0, middle);
+      const right = group.slice(middle);
+      total += Number(left.length > 1) + Number(right.length > 1);
+      activeTotal = total;
+      onProgress?.(
+        "validating",
+        `The combined summary was too broad; retrying it as two smaller grounded merges…`,
+        { pass: completed + 1, total },
+      );
+      const mergedLeft = await mergeGroup(left);
+      const mergedRight = await mergeGroup(right);
+      return mergeGroup([mergedLeft, mergedRight]);
+    };
 
     while (digests.length > 1) {
       const next: SoulEssenceDigestInput[] = [];
       const groups = groupSoulDigests(digests, sourceBudget);
       const mergeCount = groups.filter((group) => group.length > 1).length;
       total += mergeCount;
-      let mergeIndex = 0;
       for (const group of groups) {
-        if (group.length === 1) {
-          next.push(group[0]!);
-          continue;
-        }
-        mergeIndex += 1;
-        activePhase = "merging";
-        activePass = completed + 1;
-        activeTotal = total;
-        onProgress?.(
-          activePhase,
-          mergeCount === 1
-            ? "Integrating the Soul into one everyday identity…"
-            : `Integrating Soul summary ${mergeIndex} of ${mergeCount}…`,
-          { pass: activePass, total: activeTotal },
-        );
-        const scopeNotes = group.flatMap((digest) => [...digest.notes]);
-        const essence = await digest(
-          scopeNotes,
-          buildSoulEssenceMergePrompt(kind, scopeNotes, group),
-          group,
-        );
-        if (!essence) {
-          return undefined;
-        }
-        next.push({ notes: scopeNotes, essence });
-        completed += 1;
+        next.push(await mergeGroup(group));
       }
       await flushCache();
       digests = next;
@@ -2683,6 +2743,7 @@ async function ensureSoulEssence(
         opts.sourceBudget ?? soulDistillationSourceBudget(),
         opts.outputBudget ?? soulDistillationOutputBudget(),
         true,
+        opts.force === true,
         opts.signal,
         opts.onProgress,
         opts.onToken,

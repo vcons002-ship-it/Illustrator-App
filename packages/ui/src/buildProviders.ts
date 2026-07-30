@@ -286,6 +286,9 @@ function buildLLM(
             ...(serverModel ? { model: serverModel } : {}),
             ...(transport ? { transport } : {}),
             ...(numCtx ? { numCtx } : {}),
+            serverType: bundled
+              ? "llamacpp"
+              : (settings.localTextServer ?? "ollama"),
           }),
           diag: {
             id: "local-server",

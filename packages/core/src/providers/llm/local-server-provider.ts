@@ -58,10 +58,24 @@ export interface LocalServerProviderOptions {
    * native endpoint); leave undefined for LM Studio / llama.cpp / the default path.
    */
   numCtx?: number;
+  /**
+   * OpenAI-compatible servers disagree on structured-output syntax. The bundled desktop model is
+   * known llama.cpp, so it can receive llama.cpp's direct `response_format.schema`; unknown servers
+   * stay on portable json_object mode.
+   */
+  serverType?: "ollama" | "lmstudio" | "llamacpp";
 }
 
 interface ChatResponse {
   choices?: { message?: { content?: string }; finish_reason?: string }[];
+}
+
+function isRequestShapeRejection(error: unknown): boolean {
+  return error instanceof Error && /\bstatus (?:400|422)\b/.test(error.message);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 interface ModelsResponse {
@@ -108,6 +122,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
   private readonly model: string;
   private readonly apiKey: string | undefined;
   private readonly numCtx: number | undefined;
+  private readonly serverType: LocalServerProviderOptions["serverType"];
   /** Cached "does this model support native tool calling" (Ollama `/api/show` capabilities includes
    * "tools"). Resolved once per provider instance; a fresh model/settings change rebuilds the provider. */
   private toolSupport?: Promise<boolean>;
@@ -120,7 +135,21 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     this.model = opts.model;
     this.apiKey = opts.apiKey;
     this.numCtx = opts.numCtx && opts.numCtx > 0 ? opts.numCtx : undefined;
+    this.serverType = opts.serverType;
     this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
+  }
+
+  /** llama.cpp's OpenAI endpoint accepts the schema directly beside json_object. */
+  private openAiResponseFormat(
+    json: boolean,
+    schema: Record<string, unknown> | undefined,
+    includeSchema = true,
+  ): Record<string, unknown> | undefined {
+    if (!json) return undefined;
+    return {
+      type: "json_object",
+      ...(includeSchema && schema && this.serverType === "llamacpp" ? { schema } : {}),
+    };
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -257,7 +286,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       const toolAcc = new Map<number, { name?: string; args: string }>();
       // One streaming attempt at a given reasoning effort. Returns the full reply + whether the
       // server cut us off at max_tokens (finish_reason "length", surfaced for auto-continuation).
-      const attempt = async (effort?: ChatOptions["reasoningEffort"]): Promise<{ full: string; truncated: boolean }> => {
+      const attempt = async (
+        effort?: ChatOptions["reasoningEffort"],
+        includeSchema = true,
+      ): Promise<{ full: string; truncated: boolean }> => {
         let full = "";
         let emitted = 0;
         let truncated = false;
@@ -274,10 +306,17 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
             // Thinking level for reasoning models (Qwen3, etc.). Unsupported servers ignore it.
             ...(effort ? { reasoning_effort: effort } : {}),
             ...(withTools && opts.tools ? { tools: opts.tools } : {}),
-            // OpenAI-compatible local servers consistently support json_object;
-            // strict json_schema support varies, so the prompt remains responsible
-            // for the optional schema's exact shape on this path.
-            ...(json ? { response_format: { type: "json_object" } } : {}),
+            // The app-managed llama.cpp server supports a direct schema grammar. Other
+            // OpenAI-compatible local servers stay on portable json_object mode.
+            ...(this.openAiResponseFormat(json, opts.jsonSchema, includeSchema)
+              ? {
+                  response_format: this.openAiResponseFormat(
+                    json,
+                    opts.jsonSchema,
+                    includeSchema,
+                  ),
+                }
+              : {}),
           },
           ...(opts.signal ? { signal: opts.signal } : {}),
           onEvent: (e) => {
@@ -317,10 +356,35 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       try {
         r = await attempt(opts.reasoningEffort);
       } catch (err) {
+        if (isAbortError(err) || opts.signal?.aborted) throw err;
         // A strict server may reject reasoning_effort (esp. the non-standard "none"). Never let a
         // thinking-level preference break chat: if nothing streamed yet, retry once without it.
-        if (opts.reasoningEffort && !emittedAny) {
-          r = await attempt(undefined);
+        if (opts.reasoningEffort && !emittedAny && isRequestShapeRejection(err)) {
+          try {
+            r = await attempt(undefined);
+          } catch (retryError) {
+            if (isAbortError(retryError) || opts.signal?.aborted) throw retryError;
+            // An older/custom llama.cpp build may not accept the direct schema dialect. Only before
+            // any output was emitted and only after a request-shape rejection, fall back once to
+            // generic json_object so utility jobs still run.
+            if (
+              opts.jsonSchema &&
+              this.serverType === "llamacpp" &&
+              !emittedAny &&
+              isRequestShapeRejection(retryError)
+            ) {
+              r = await attempt(undefined, false);
+            } else {
+              throw retryError;
+            }
+          }
+        } else if (
+          opts.jsonSchema &&
+          this.serverType === "llamacpp" &&
+          !emittedAny &&
+          isRequestShapeRejection(err)
+        ) {
+          r = await attempt(undefined, false);
         } else {
           throw new Error(`Local LLM server stream failed with ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -340,6 +404,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
       noThink: opts.reasoningEffort === "none",
+      ...(opts.onComplete ? { onComplete: opts.onComplete } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return stripThink(text).trim();
@@ -396,13 +461,14 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       signal?: AbortSignal;
       maxTokens?: number;
       noThink?: boolean;
+      onComplete?: (meta: { truncated: boolean }) => void;
     },
   ): Promise<string> {
     // num_ctx set ⇒ Ollama native, so extraction/prompt calls LOAD at the same window as chat
     // (no reload thrash between opening a book and chatting).
     if (this.numCtx !== undefined) return this.completeViaOllama(messages, opts);
     const json = opts.json;
-    const send = (noThink: boolean) =>
+    const send = (noThink: boolean, includeSchema = true) =>
       this.transport.send({
         url: `${this.baseUrl}/chat/completions`,
         method: "POST",
@@ -432,7 +498,15 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
           // know the field ignore it (and stripThink still cleans up any that think
           // anyway). Chat keeps thinking — that's where open-ended reasoning helps.
           ...(noThink ? { reasoning_effort: "none" } : {}),
-          ...(json ? { response_format: { type: "json_object" } } : {}),
+          ...(this.openAiResponseFormat(json, opts.jsonSchema, includeSchema)
+            ? {
+                response_format: this.openAiResponseFormat(
+                  json,
+                  opts.jsonSchema,
+                  includeSchema,
+                ),
+              }
+            : {}),
         },
       });
     let res = await send(opts.noThink === true);
@@ -440,6 +514,16 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       // A strict server may reject the non-standard "none" value (OpenAI's own enum
       // is low/medium/high) — never let the opt-out break analysis; retry without it.
       res = await send(false);
+    }
+    if (
+      !res.ok &&
+      opts.jsonSchema &&
+      this.serverType === "llamacpp" &&
+      (res.status === 400 || res.status === 422)
+    ) {
+      // Backward compatibility for an older/custom llama.cpp server that supports JSON mode but not
+      // its newer direct schema field. The bundled pinned server takes the first constrained path.
+      res = await send(false, false);
     }
     if (!res.ok) {
       // Surface the server's own error body — Ollama/LM Studio return a JSON or text
@@ -463,11 +547,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     // The server cut the response at max_tokens. For the JSON path that means a
     // truncated, unparseable extraction — fail loudly (the engine retries / the
     // prompt pass recovers) rather than silently committing an empty chapter.
-    if (json && choice?.finish_reason === "length") {
+    const truncated = choice?.finish_reason === "length";
+    if (json && truncated && !opts.onComplete) {
       throw new Error(
         "Local LLM extraction was truncated at the response limit — the chapter will be retried.",
       );
     }
+    opts.onComplete?.({ truncated });
     return choice?.message?.content ?? "";
   }
 
@@ -530,6 +616,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         ...(opts.signal ? { signal: opts.signal } : {}),
         ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
         noThink: opts.reasoningEffort === "none",
+        ...(opts.onComplete ? { onComplete: opts.onComplete } : {}),
       });
     }
     let full = "";
@@ -604,6 +691,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       signal?: AbortSignal;
       maxTokens?: number;
       noThink?: boolean;
+      onComplete?: (meta: { truncated: boolean }) => void;
     },
   ): Promise<string> {
     const res = await this.transport.send({
@@ -627,9 +715,11 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       throw new Error(`Ollama /api/chat failed with status ${res.status}${reason ? `: ${reason}` : ""}`);
     }
     const data = await res.json<OllamaChatLine>();
-    if (opts.json && data.done_reason === "length") {
+    const truncated = data.done_reason === "length";
+    if (opts.json && truncated && !opts.onComplete) {
       throw new Error("Local LLM extraction was truncated at the response limit — the chapter will be retried.");
     }
+    opts.onComplete?.({ truncated });
     return data.message?.content ?? "";
   }
 
