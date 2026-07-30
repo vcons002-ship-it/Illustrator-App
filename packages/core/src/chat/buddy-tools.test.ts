@@ -694,6 +694,17 @@ describe("buildBuddySystemPrompt", () => {
     expect(p).toContain("You are the assistant on the home screen of Visual Reader");
   });
 
+  it("tells the assistant to replace corrected Soul appearances instead of stacking them", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], loadedToolsets: [] });
+    expect(p).toContain('{"tool":"remember"');
+    expect(p).toContain('{"tool":"forget"');
+    expect(p).not.toContain('{"tool":"remove_library_book"');
+    expect(p).toMatch(/appearance correction is a REPLACEMENT/i);
+    expect(p).toMatch(/forget the superseded appearance note first/i);
+    expect(p).toContain('"green eyes", never "green eyes, not blue"');
+    expect(p).toMatch(/fictional story.*current Soul fact/i);
+  });
+
   it("story mode demands prose-only beats and never an empty/meta reply", () => {
     const p = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
     expect(p).toContain("STORY MODE");

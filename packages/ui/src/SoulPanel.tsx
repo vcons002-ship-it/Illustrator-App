@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   MAX_SOUL_IMAGES,
+  renderSoulAppearanceFact,
   SOUL_ESSENCE_FACETS,
   type SoulEssence,
   type SoulImage,
@@ -17,6 +18,12 @@ import {
   modalInputStyle as input,
   modalNoteRowStyle as noteRow,
 } from "./tokens.js";
+import {
+  deleteSoulNoteAt,
+  editSoulNoteAt,
+  nextSoulNoteTimestamp,
+  soulNoteRows,
+} from "./soul-note-editing.js";
 
 /**
  * Edit one of the two identity "souls" — authoritative durable notes, separate from
@@ -145,7 +152,6 @@ export const SoulPanel = memo(function SoulPanel({
 }: SoulPanelProps) {
   const copy = COPY[variant];
   const [list, setList] = useState<SoulNote[]>(notes);
-  useEffect(() => setList(notes), [notes]);
   const [shownEssence, setShownEssence] = useState<SoulEssence | undefined>(essence);
   useEffect(() => setShownEssence(essence), [essence]);
   const [nameDraft, setNameDraft] = useState(name);
@@ -154,7 +160,7 @@ export const SoulPanel = memo(function SoulPanel({
   useEffect(() => setPics(images), [images]);
   const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
-  const [editingAt, setEditingAt] = useState<number | undefined>();
+  const [editingIndex, setEditingIndex] = useState<number | undefined>();
   const [editText, setEditText] = useState("");
   const [savingBusy, setSavingBusy] = useState(false);
   const [essenceSubmitting, setEssenceSubmitting] = useState(false);
@@ -165,7 +171,15 @@ export const SoulPanel = memo(function SoulPanel({
   const [clock, setClock] = useState(Date.now());
   const [error, setError] = useState("");
 
-  const sorted = useMemo(() => [...list].sort((a, b) => b.at - a.at), [list]);
+  useEffect(() => {
+    setList(notes);
+    // An assistant/linked-desktop update can replace the source array while this panel is open.
+    // Cancel the local row edit rather than applying its now-stale array index to a different note.
+    setEditingIndex(undefined);
+    setEditText("");
+  }, [notes]);
+
+  const sorted = useMemo(() => soulNoteRows(list), [list]);
   const full = list.length >= limits.max;
   const essenceBusy = essenceSubmitting || Boolean(essenceProgress?.active);
   const operationBusy = savingBusy || essenceBusy;
@@ -217,25 +231,26 @@ export const SoulPanel = memo(function SoulPanel({
       return;
     }
     setDraft("");
-    await persist([...list, { text, at: Date.now() }]);
+    await persist([...list, { text, at: nextSoulNoteTimestamp(list) }]);
   };
 
   const saveEdit = async (): Promise<void> => {
-    if (editingAt === undefined || operationBusy) return;
+    if (editingIndex === undefined || operationBusy) return;
     const text = editText.trim().slice(0, limits.note);
     if (!text) {
-      await persist(list.filter((n) => n.at !== editingAt));
-    } else if (list.some((n) => n.at !== editingAt && n.text.toLowerCase() === text.toLowerCase())) {
+      await persist(deleteSoulNoteAt(list, editingIndex));
+    } else if (list.some((n, index) => index !== editingIndex && n.text.toLowerCase() === text.toLowerCase())) {
       setError("Another note already says that.");
       return;
     } else {
-      await persist(list.map((n) => (n.at === editingAt ? { ...n, text } : n)));
+      await persist(editSoulNoteAt(list, editingIndex, text));
     }
-    setEditingAt(undefined);
+    setEditingIndex(undefined);
     setEditText("");
   };
 
-  const remove = (at: number): void => void persist(list.filter((n) => n.at !== at));
+  const remove = (sourceIndex: number): void =>
+    void persist(deleteSoulNoteAt(list, sourceIndex));
 
   const refreshEssence = async (): Promise<void> => {
     if (!onRefreshEssence || operationBusy) return;
@@ -535,7 +550,9 @@ export const SoulPanel = memo(function SoulPanel({
                 {shownEssence.exactAppearance.length ? (
                   <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
                     {shownEssence.exactAppearance.map((fact, index) => (
-                      <li key={`${fact.sourceIds.join("-")}-${index}`}>{fact.text}</li>
+                      <li key={`${fact.sourceIds.join("-")}-${index}`}>
+                        {renderSoulAppearanceFact(fact)}
+                      </li>
                     ))}
                   </ul>
                 ) : (
@@ -617,9 +634,9 @@ export const SoulPanel = memo(function SoulPanel({
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {sorted.map((n) =>
-              editingAt === n.at ? (
-                <div key={n.at} style={editRow}>
+            {sorted.map(({ note: n, sourceIndex, key }) =>
+              editingIndex === sourceIndex ? (
+                <div key={key} style={editRow}>
                   <input
                     style={{ ...input, flex: 1 }}
                     value={editText}
@@ -633,7 +650,7 @@ export const SoulPanel = memo(function SoulPanel({
                         // Escape doesn't also close the whole dialog.
                         e.preventDefault();
                         e.stopPropagation();
-                        setEditingAt(undefined);
+                        setEditingIndex(undefined);
                         setEditText("");
                       }
                     }}
@@ -644,7 +661,7 @@ export const SoulPanel = memo(function SoulPanel({
                   <button
                     style={btn}
                     onClick={() => {
-                      setEditingAt(undefined);
+                      setEditingIndex(undefined);
                       setEditText("");
                     }}
                   >
@@ -652,20 +669,20 @@ export const SoulPanel = memo(function SoulPanel({
                   </button>
                 </div>
               ) : (
-                <div key={n.at} style={noteRow}>
+                <div key={key} style={noteRow}>
                   <span style={{ minWidth: 0, wordBreak: "break-word" }}>{n.text}</span>
                   <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                     <button
                       style={btn}
                       onClick={() => {
                         setError("");
-                        setEditingAt(n.at);
+                        setEditingIndex(sourceIndex);
                         setEditText(n.text);
                       }}
                     >
                       Edit
                     </button>
-                    <button style={btn} onClick={() => remove(n.at)} disabled={operationBusy}>
+                    <button style={btn} onClick={() => remove(sourceIndex)} disabled={operationBusy}>
                       Delete
                     </button>
                   </span>

@@ -1543,16 +1543,21 @@ export function buildBuddySystemPrompt(raw: {
       `(one of: ${styles}), how often it illustrates ("pagesPerImage": a page count, or "chapter" for one image per ` +
       'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
       'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
-      '("…in oil painting style") or pace.\n' +
-      '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
-      'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
-      '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
-      'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
-      '"remember…". One short note, not conversation recap.\n' +
-      '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
-      '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
-      checklistCatalog
+      '("…in oil painting style") or pace.\n'
       : "") +
+    // Memory and checklist tools are always on: the model must not need a manual before it can
+    // remember a durable fact or advance work it is already doing.
+    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
+    'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
+    '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
+    'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
+    '"remember…". One short note, not conversation recap. An appearance correction is a REPLACEMENT, not another ' +
+    'trait to stack: for about:"self" or about:"user", forget the superseded appearance note first, then remember one ' +
+    'clean positive current fact (for example "green eyes", never "green eyes, not blue"). Do not save a former/negated ' +
+    "look or an appearance that exists only inside a fictional story as a current Soul fact.\n" +
+    '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
+    '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
+    checklistCatalog +
     // Settings + setup guides — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canAppSettings
       ? `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +

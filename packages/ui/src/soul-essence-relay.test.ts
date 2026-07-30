@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SoulEssence } from "@visual-reader/core";
+import {
+  SOUL_ESSENCE_SCHEMA_VERSION,
+  type SoulEssence,
+} from "@visual-reader/core";
 import type {
   AppSyncMessage,
   SoulEssenceJobProgress,
@@ -40,9 +43,9 @@ vi.mock("../../../apps/web/src/runtime.js", () => ({
 }));
 
 const ESSENCE = {
-  schemaVersion: 2,
+  schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
   kind: "self",
-  sourceFingerprint: "soul-v2-test",
+  sourceFingerprint: `soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-test`,
   generatedAt: 123,
   generalizedEssence: { text: "Warm, curious, and direct", sourceIds: [] },
   facets: {

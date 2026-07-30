@@ -83,7 +83,9 @@ describe("selfPortraitPrompt", () => {
       { text: "Her face carries a broad grin.", at: 4 },
     ];
     const out = selfPortraitPrompt("draw yourself at the library", "Sage", notes);
-    expect(out).toContain("silver hair, grey eyes, and a long charcoal coat");
+    expect(out).toContain("silver hair");
+    expect(out).toContain("grey eyes");
+    expect(out).toContain("a long charcoal coat");
     expect(out).not.toContain("abandoned railways");
     expect(out).not.toContain("difficult honesty");
     expect(out).not.toMatch(/grin/i);
@@ -204,7 +206,7 @@ describe("Soul Essence derivation", () => {
     expect(soulNoteSources(notes)[0]!.id).toMatch(/^sn_[0-9a-f]{16}$/);
   });
 
-  it("builds a strict distillation request grounded in every current note", () => {
+  it("builds a strict personality distillation request without appearance-only sources", () => {
     const notes = [
       note("Fascinated by abandoned railway systems.", 1),
       note("Physical description: silver hair, grey eyes, and a long charcoal coat.", 2),
@@ -223,10 +225,13 @@ describe("Soul Essence derivation", () => {
     expect(built.system).toMatch(/exactAppearance as an empty array/i);
     expect(built.system).toMatch(/personalityDirections with empty text and sourceIds/i);
     expect(built.user).not.toContain("Sage");
-    for (const source of soulNoteSources(notes)) {
+    const sources = soulNoteSources(notes);
+    for (const source of [sources[0]!, sources[2]!]) {
       expect(built.user).toContain(source.id);
       expect(built.user).toContain(source.text);
     }
+    expect(built.user).not.toContain(sources[1]!.id);
+    expect(built.user).not.toContain(sources[1]!.text);
   });
 
   it("constrains generated citations to the authoritative source IDs", () => {
@@ -285,9 +290,13 @@ describe("Soul Essence derivation", () => {
     expect(parsed.kind).toBe("self");
     expect(parsed.sourceFingerprint).toBe(soulSourceFingerprint(notes));
     expect(parsed.facets.coreDisposition.sourceIds).toEqual([sources[1]!.id]);
-    expect(parsed.exactAppearance).toEqual([
-      { text: notes[0]!.text, sourceIds: [sources[0]!.id] },
+    expect(parsed.exactAppearance.map((fact) => fact.text)).toEqual([
+      "silver hair",
+      "grey eyes.",
     ]);
+    expect(parsed.exactAppearance.every((fact) =>
+      fact.sourceIds.includes(sources[0]!.id)
+    )).toBe(true);
   });
 
   it("requires a short grounded generalized essence when support facets contain identity meaning", () => {
@@ -334,7 +343,10 @@ describe("Soul Essence derivation", () => {
       appearance,
     );
     expect(appearanceOnly?.generalizedEssence).toEqual({ text: "", sourceIds: [] });
-    expect(appearanceOnly?.exactAppearance).toHaveLength(1);
+    expect(appearanceOnly?.exactAppearance.map((fact) => fact.text)).toEqual([
+      "silver hair",
+      "grey eyes.",
+    ]);
   });
 
   it("salvages a generated final-brace cutoff without making stored essence parsing tolerant", () => {
@@ -654,13 +666,16 @@ describe("Soul Essence derivation", () => {
     expect(result?.generatedAt).toBe(123);
     expect(result?.sourceFingerprint).toBe(soulSourceFingerprint(notes));
     expect(result?.facets.coreDisposition.text).toMatch(/systems-minded/);
-    // The model omitted exactAppearance, but deterministic source selection keeps the old look.
-    expect(result?.exactAppearance).toEqual([
-      {
-        text: notes[0]!.text,
-        sourceIds: [soulNoteSources(notes)[0]!.id],
-      },
+    // The model omitted exactAppearance, but deterministic source selection keeps every current
+    // atomic appearance field, independently replaceable by a later correction.
+    expect(result?.exactAppearance.map((fact) => fact.text)).toEqual([
+      "silver hair",
+      "grey eyes",
+      "a long charcoal coat.",
     ]);
+    expect(result?.exactAppearance.every((fact) =>
+      fact.sourceIds.includes(soulNoteSources(notes)[0]!.id)
+    )).toBe(true);
   });
 
   it("rejects stale, wrong-version, wrong-kind, unsupported, and uncited output", () => {
@@ -795,13 +810,26 @@ describe("Soul Essence derivation", () => {
     expect(parseSoulEssence(JSON.stringify(paraphrased), "self", notes)).toBeUndefined();
 
     const valid = parseSoulEssence(JSON.stringify(payload("self", notes)), "self", notes);
-    expect(valid?.exactAppearance[0]?.text).toBe("silver hair and grey eyes");
-    expect(valid?.exactAppearance[0]?.text).not.toMatch(/grin/i);
+    expect(valid?.exactAppearance.map((fact) => fact.text)).toEqual([
+      "silver hair",
+      "grey eyes",
+    ]);
+    expect(valid?.exactAppearance.map((fact) => fact.text).join(" ")).not.toMatch(/grin/i);
     const store = new InMemoryStore();
     await expect(saveSoulEssence(store, "self", valid!, notes)).resolves.toBeTruthy();
     expect(await loadSoulEssence(store, "self", notes)).toEqual(
       expect.objectContaining({ exactAppearance: valid!.exactAppearance }),
     );
+  });
+
+  it("omits a standalone scene expression from personality distillation", () => {
+    const notes = [note("Her face carries a broad grin.", 1)];
+    const source = soulNoteSources(notes)[0]!;
+    const built = buildSoulEssenceDistillationPrompt("self", notes);
+
+    expect(visualSoulNotes(notes)).toBe("");
+    expect(built.user).not.toContain(source.id);
+    expect(built.user).not.toContain(source.text);
   });
 
   it("merges evidence IDs when distinct appearance notes reduce to the same durable clause", () => {
@@ -811,12 +839,11 @@ describe("Soul Essence derivation", () => {
     ];
     const raw = payload("self", notes, "");
     const parsed = parseSoulEssence(JSON.stringify(raw), "self", notes)!;
-    expect(parsed.exactAppearance).toEqual([
-      {
-        text: "silver hair",
-        sourceIds: soulNoteSources(notes).map((source) => source.id),
-      },
-    ]);
+    expect(parsed.exactAppearance).toHaveLength(1);
+    expect(parsed.exactAppearance[0]).toMatchObject({
+      text: "silver hair",
+      sourceIds: soulNoteSources(notes).map((source) => source.id),
+    });
   });
 
   it("never promotes colour metaphors, old interests, or mixed personality clauses into appearance", () => {
@@ -827,7 +854,8 @@ describe("Soul Essence derivation", () => {
     ];
     const valid = parseSoulEssence(JSON.stringify(payload("self", notes)), "self", notes);
     expect(valid?.exactAppearance.map((fact) => fact.text)).toEqual([
-      "Physical description: silver hair and grey eyes",
+      "silver hair",
+      "grey eyes",
     ]);
     expect(valid?.exactAppearance.map((fact) => fact.text).join(" ")).not.toMatch(
       /railway|black-and-white|honesty/i,
@@ -917,7 +945,8 @@ describe("Soul Essence derivation", () => {
     expect(block).toContain("Name: Sage");
     expect(block).toContain("Intellectually curious and attentive to overlooked patterns");
     expect(block).not.toContain("Drawn to overlooked structures");
-    expect(block).toContain(notes[1]!.text); // exact appearance is never summarised away
+    expect(block).toContain("silver hair");
+    expect(block).toContain("clear grey eyes"); // current exact appearance is never summarised away
     expect(block).not.toContain("abandoned railway systems");
     expect(block).toMatch(/Embody this silently/i);
     expect(block).toMatch(/Do not steer unrelated conversation/i);
@@ -946,7 +975,8 @@ describe("Soul Essence derivation", () => {
     ];
     const self = selfSoulExactIdentityPromptBlock(notes, "Sage");
     expect(self).toContain("Name: Sage");
-    expect(self).toContain("silver hair and clear grey eyes");
+    expect(self).toContain("silver hair");
+    expect(self).toContain("clear grey eyes");
     expect(self).toContain("Never flatter the reader reflexively");
     expect(self).not.toContain("abandoned railway");
     expect(self).toMatch(/generalized essence pending/i);
@@ -1037,12 +1067,17 @@ describe("Soul Essence derivation", () => {
 
   it("keeps every exact appearance fact persisted while bounding the standing ordinary prompt", () => {
     const notes = Array.from({ length: 30 }, (_, index) =>
-      note(`Appearance detail ${index}: a distinct scar beside the left eyebrow`, index + 1),
+      note(`Accessories: ring number ${index} etched with a distinct geometric pattern`, index + 1),
     );
-    const essence = parseSoulEssence(JSON.stringify(payload("self", notes)), "self", notes)!;
+    const essence = parseSoulEssence(
+      JSON.stringify(payload("self", notes, "", "")),
+      "self",
+      notes,
+    )!;
     expect(essence.exactAppearance).toHaveLength(notes.length);
     const block = selfSoulEssencePromptBlock(essence, "Sage");
-    expect(block).toContain("Appearance detail 0");
+    expect(block).toContain("ring number 29");
+    expect(block).not.toContain("ring number 0");
     expect(block.length).toBeLessThan(SOUL_LOOK_BUDGET_CHARS + 1_600);
   });
 
@@ -1191,8 +1226,14 @@ describe("how many identity notes survive", () => {
       note(`a newer personality observation number ${i}`, i + 2),
     );
     const notes = [oldLook, ...newer];
-    expect(selfSoulPromptBlock(notes, "Sage")).toContain(oldLook.text);
-    expect(userSoulPromptBlock(notes, "Alex")).toContain(oldLook.text);
+    for (const block of [
+      selfSoulPromptBlock(notes, "Sage"),
+      userSoulPromptBlock(notes, "Alex"),
+    ]) {
+      expect(block).toContain("auburn braid");
+      expect(block).toContain("green eyes");
+      expect(block).toContain("jagged scar through one eyebrow");
+    }
   });
 
   it("says how many it left out rather than presenting a partial self as the whole", () => {
@@ -1237,7 +1278,7 @@ describe("visualSoulNotes", () => {
       note("Tall, with a jagged scar across one eyebrow"),
     ];
     expect(visualSoulNotes(notes)).toBe(
-      "silver hair; wears a long coat; Tall, with a jagged scar across one eyebrow",
+      "Tall; silver hair; a jagged scar across one eyebrow; wears a long coat",
     );
   });
 
@@ -1280,14 +1321,25 @@ describe("visualSoulNotes", () => {
       note("Always wears a charcoal coat; grinning."),
       note("Usually wears glasses, smiling now."),
       note("Green eyes and eyes narrowed."),
-    ])).toBe("Always wears a charcoal coat; Usually wears glasses; Green eyes");
+    ])).toBe("Green eyes; Usually wears glasses; Always wears a charcoal coat");
   });
 
   it("never cuts a note in half — whole notes only, up to the budget", () => {
     const long = note("silver hair that falls past the shoulders, always slightly unkempt");
     const out = visualSoulNotes([long, note("wears a long grey coat")], 70);
-    expect(out).toBe(long.text); // the second didn't fit, so it isn't there at all
+    expect(out).toBe("silver hair that falls past the shoulders; always slightly unkempt");
     expect(out.endsWith("unkempt")).toBe(true);
+  });
+
+  it("does not leak an old scalar from a compound fact after one subslot changes", () => {
+    const out = visualSoulNotes([
+      note("Tall and broad-shouldered", 1),
+      note("Height: short", 2),
+    ]);
+
+    expect(out).toContain("short");
+    expect(out).toContain("broad-shouldered");
+    expect(out).not.toMatch(/\btall\b/i);
   });
 
   it("keeps a word-safe prefix when the foundational physical description exceeds the budget", () => {
@@ -1298,14 +1350,14 @@ describe("visualSoulNotes", () => {
     const out = visualSoulNotes([note(description)], 120);
     expect(out).toBeTruthy();
     expect(out.length).toBeLessThanOrEqual(120);
-    expect(out).toContain("Physical description");
     expect(out).toContain("auburn hair");
-    expect(description.startsWith(out)).toBe(true);
+    expect(out).toContain("green eyes");
+    expect(out).toContain("freckled olive skin");
   });
 
   it("recognises an explicitly labelled appearance note", () => {
     expect(visualSoulNotes([note("Appearance: angular and imposing")])).toBe(
-      "Appearance: angular and imposing",
+      "angular and imposing",
     );
   });
 

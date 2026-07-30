@@ -141,7 +141,7 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
  * It is deliberately disposable: the source fingerprint makes an essence invalid as soon as any
  * source note changes, and every distilled assertion points back to the notes that support it.
  */
-export const SOUL_ESSENCE_SCHEMA_VERSION = 2 as const;
+export const SOUL_ESSENCE_SCHEMA_VERSION = 3 as const;
 export const MAX_SOUL_ESSENCE_FACET_CHARS = 420;
 /**
  * The standing identity is intentionally much smaller than its grounded support facets. This is
@@ -194,9 +194,11 @@ export type SoulEssenceFacets = {
 };
 
 export interface SoulEssenceAppearanceFact {
-  /** Verbatim visual clause from a source note, after deterministic transient-clause removal. */
+  /** Verbatim visual span/value from a source note, after deterministic current-state reconciliation. */
   text: string;
   sourceIds: string[];
+  /** Deterministic semantic anchor for rendering an otherwise-bare exact value such as "auburn". */
+  slot?: string;
 }
 
 export interface SoulEssenceDirectionFact {
@@ -339,6 +341,19 @@ export function partitionSoulNotes(
   return chunks;
 }
 
+function soulSourcesForPersonalityDistillation(
+  notes: readonly SoulNote[],
+): SoulEssenceSource[] {
+  const sources = soulNoteSources(notes);
+  const projection = reconcileSoulAppearance(notes);
+  const accounted = new Set(projection.accountedSourceIds);
+  return sources.flatMap((source) => {
+    const nonVisual = projection.nonVisualTextBySourceId[source.id]?.trim();
+    if (nonVisual) return [{ ...source, text: nonVisual }];
+    return accounted.has(source.id) ? [] : [source];
+  });
+}
+
 function essenceJsonShape(kind: SoulKind, sourceFingerprint: string): string {
   return `{"schemaVersion":${SOUL_ESSENCE_SCHEMA_VERSION},"kind":"${kind}","sourceFingerprint":"${sourceFingerprint}","generalizedEssence":{"text":"","sourceIds":[]},"facets":{"coreDisposition":{"text":"","sourceIds":[]},"conversationalVoice":{"text":"","sourceIds":[]},"thinkingStyle":{"text":"","sourceIds":[]},"valuesAndMotivations":{"text":"","sourceIds":[]},"relationalStyle":{"text":"","sourceIds":[]},"personalityDirections":{"text":"","sourceIds":[]},"tensionsAndNuance":{"text":"","sourceIds":[]}},"exactAppearance":[]}`;
 }
@@ -429,7 +444,7 @@ export function buildSoulEssenceDistillationPrompt(
     "Preserve meaningful tensions instead of flattening contradictions.",
     "Return personalityDirections with empty text and sourceIds. Deterministic source validation restores explicit behavioral directions verbatim, so never paraphrase, weaken, or invert them here.",
     "Do not invent facts. Every non-empty facet must cite one or more supplied source IDs that directly support it.",
-    "Every supplied source ID other than an explicit behavioral direction or visual fact must remain covered in at least one facet it informed. An anecdote/example may support a broad facet without being repeated in the facet text.",
+    "Every supplied source ID other than an explicit behavioral direction must remain covered in at least one facet it informed. Appearance-only and superseded visual sources have already been removed and are accounted deterministically; do not reconstruct or infer them.",
     "Return exactAppearance as an empty array. Deterministic source validation restores exact physical clauses directly from the authoritative notes, so never summarize or paraphrase appearance here.",
     `Keep every facet at or below ${MAX_SOUL_ESSENCE_FACET_CHARS} characters. Synthesize in natural third-person fragments; do not quote or enumerate examples.`,
     "Return strict JSON only: no markdown fence, preamble, comments, or trailing commas.",
@@ -439,8 +454,8 @@ export function buildSoulEssenceDistillationPrompt(
   const user = [
     `Kind: ${kind}`,
     `Source fingerprint (copy exactly): ${sourceFingerprint}`,
-    "Complete authoritative sources (use every relevant note; IDs are evidence citations):",
-    JSON.stringify(soulNoteSources(notes)),
+    "Personality-relevant authoritative source clauses (use every supplied item; IDs are evidence citations):",
+    JSON.stringify(soulSourcesForPersonalityDistillation(notes)),
   ].join("\n");
   return { system, user, sourceFingerprint };
 }
@@ -772,52 +787,33 @@ function cleanGeneralizedEssence(
 
 function cleanExactAppearance(
   value: unknown,
+  notes: readonly SoulNote[],
   sources: readonly SoulEssenceSource[],
 ): SoulEssenceAppearanceFact[] | undefined {
   if (value !== undefined && !Array.isArray(value)) return undefined;
-  const byId = new Map(sources.map((source) => [source.id, source]));
-  const knownIds = new Set(byId.keys());
-  const facts: SoulEssenceAppearanceFact[] = [];
-  const addFact = (text: string, sourceId: string) => {
-    const existing = facts.find((fact) => fact.text === text);
-    if (existing) {
-      if (!existing.sourceIds.includes(sourceId)) existing.sourceIds.push(sourceId);
-    } else {
-      facts.push({ text, sourceIds: [sourceId] });
-    }
-  };
-
+  const projection = reconcileSoulAppearance(notes);
+  const canonical = projection.activeFacts;
+  const knownIds = new Set(sources.map((source) => source.id));
+  // Stored values are derived cache data, but still reject invented/paraphrased facts rather than
+  // silently legitimising them. A missing/subset value is harmless: the current projection below
+  // deterministically restores every active source-exact fact.
   for (const item of (value ?? []) as unknown[]) {
     const record = objectRecord(item);
     if (!record || typeof record.text !== "string") return undefined;
     const text = record.text.trim();
     const sourceIds = cleanEvidenceIds(record.sourceIds ?? record.evidence, knownIds);
     if (!text || !sourceIds?.length) return undefined;
-    // Accept either a complete verbatim source note at the model boundary or one of the canonical
-    // verbatim visual fragments produced by a previous validation/save. This makes canonical mixed
-    // notes round-trip while still refusing every generated paraphrase.
-    for (const sourceId of sourceIds) {
-      const source = byId.get(sourceId);
-      if (!source) return undefined;
-      const visualTexts = visualSoulFragments(source.text);
-      if (source.text.trim() === text) {
-        for (const visualText of visualTexts) addFact(visualText, sourceId);
-      } else if (visualTexts.includes(text)) {
-        addFact(text, sourceId);
-      } else {
-        return undefined;
-      }
-    }
+    const slot = typeof record.slot === "string" ? record.slot : undefined;
+    const fact = canonical.find(
+      (candidate) =>
+        candidate.text === text &&
+        (slot !== undefined
+          ? candidate.slot === slot
+          : sourceIds.every((sourceId) => candidate.sourceIds.includes(sourceId))),
+    );
+    if (!fact || sourceIds.some((sourceId) => !fact.sourceIds.includes(sourceId))) return undefined;
   }
-
-  // A model omission must not erase an old foundational description. Deterministically supplement
-  // every source note the existing visual-soul classifier recognizes.
-  for (const source of sources) {
-    for (const visualText of visualSoulFragments(source.text)) {
-      addFact(visualText, source.id);
-    }
-  }
-  return facts;
+  return canonical;
 }
 
 const PERSONALITY_DIRECTION_WORDS =
@@ -839,12 +835,21 @@ function isPersonalityDirectionNote(text: string): boolean {
   );
 }
 
+function personalityDirectionClauses(text: string): string[] {
+  const clauses = text
+    .split(/\s*(?:;|\r?\n)\s*|(?<=[.!?])\s+/)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  const exact = clauses.filter(isPersonalityDirectionNote);
+  return exact.length > 0 ? exact : isPersonalityDirectionNote(text) ? [text.trim()] : [];
+}
+
 function personalityDirectionSourceIds(
   notes: readonly SoulNote[],
   sources: readonly SoulEssenceSource[],
 ): string[] {
   return notes.flatMap((note, index) =>
-    isPersonalityDirectionNote(note.text)
+    personalityDirectionClauses(note.text).length > 0
       ? [sources[index]!.id]
       : [],
   );
@@ -855,10 +860,10 @@ function exactPersonalityDirections(
   sources: readonly SoulEssenceSource[],
 ): SoulEssenceDirectionFact[] {
   return notes.flatMap((note, index) => {
-    const text = note.text.trim();
-    return text && isPersonalityDirectionNote(text)
-      ? [{ text, sourceIds: [sources[index]!.id] }]
-      : [];
+    return personalityDirectionClauses(note.text).map((text) => ({
+      text,
+      sourceIds: [sources[index]!.id],
+    }));
   });
 }
 
@@ -882,6 +887,67 @@ function boundedExactTexts(texts: readonly string[], budget: number): string {
   return kept.join("; ");
 }
 
+type SoulAppearanceValidationFact = Pick<SoulAppearanceContribution, "slot" | "text">;
+
+function soulAppearanceValidationFacts(
+  notes: readonly SoulNote[],
+  sources: readonly SoulEssenceSource[],
+): SoulAppearanceValidationFact[] {
+  return notes.flatMap((note, index) =>
+    analyseAppearanceNote(note, sources[index]!, index).contributions.map(
+      ({ slot, text }) => ({ slot, text }),
+    ),
+  );
+}
+
+const APPEARANCE_SLOT_ANCHORS: Readonly<Record<string, RegExp>> = {
+  eyes: /\b(?:eye|eyes|eyed|iris|irises|pupil|pupils)\b/i,
+  hair: /\b(?:hair|haired|braid|braids|curl|curls|loc|locs|ponytail|bun|bald|shaved)\b/i,
+  skin: /\b(?:skin|skinned|complexion)\b/i,
+  face: /\b(?:face|facial|jaw|chin|cheek|cheekbone|nose|lip|mouth|teeth|dimple)\b/i,
+  mark: /\b(?:mark|scar|tattoo|birthmark|piercing|freckle|burn|vitiligo)\b/i,
+  feature: /\b(?:feature|wing|horn|antler|tail|pointed ears?|scale|fur|feather|fang|claw|hoof|antenna|tentacle|fin|gill|halo|prosthetic|cybernetic)\b/i,
+  accessory: /\b(?:accessor|glasses|spectacles|mask|hat|cap|hood|scarf|glove|necklace|bracelet|earring|ring|jewellery|jewelry)\b/i,
+  clothing: /\b(?:clothing|clothes|outfit|coat|jacket|cloak|robe|dress|gown|armour|armor|uniform|shirt|tunic|trousers|jeans|boots|shoes)\b/i,
+  age: /\b(?:age|aged|years? old|teen|twenties|thirties|forties|fifties|sixties|seventies|eighties|middle aged|elderly)\b/i,
+  gender: /\b(?:gender|woman|man|female|male|nonbinary|androgynous)\b/i,
+  ethnicity: /\b(?:ethnicity|race|racial|afro latina|latina|latino|asian|indigenous|middle eastern|african|european|hispanic|mixed race)\b/i,
+  height: /\b(?:height|stature|feet|foot|inches|centimetres|centimeters|meters|metres|tall (?:person|woman|man|figure)|short (?:person|woman|man|figure))\b/i,
+  weight: /\b(?:weight|weighs?|pounds?|lbs?|kilograms?|kgs?)\b/i,
+  build: /\b(?:build|body|frame|physique|shoulders?)\b/i,
+  species: /\b(?:species|human|android|robot|cyborg|elf|fae|fairy|demon|angel|alien|dragon|vampire|werewolf)\b/i,
+  appearance: /\b(?:appearance|physical|look|looks)\b/i,
+};
+
+function appearanceSlotAnchoredInText(slot: string, normalized: string): boolean {
+  const family = slot.split(/[.:]/, 1)[0] ?? "";
+  return APPEARANCE_SLOT_ANCHORS[family]?.test(normalized) ?? false;
+}
+
+const UNAMBIGUOUS_PHYSICAL_COMPOUND =
+  /\b(?:black|white|gr[ae]y|brown|blond(?:e)?|auburn|red|ginger|silver|gold(?:en)?|blue|green|hazel|amber|violet|purple|pink|teal|turquoise|copper|crimson|scarlet|orange|olive|tan(?:ned)?|pale|ivory|ebony|bronze|multicolou?red)[ -](?:eyed|haired|skinned)\b/i;
+
+function facetRepeatsSourceAppearance(
+  text: string,
+  facts: readonly SoulAppearanceValidationFact[],
+): boolean {
+  if (UNAMBIGUOUS_PHYSICAL_COMPOUND.test(text)) return true;
+  const normalized = normalizedAppearanceKey(text);
+  if (!normalized) return false;
+  const padded = ` ${normalized} `;
+  return facts.some((fact) => {
+    const exact = normalizedAppearanceKey(fact.text);
+    if (!exact || !padded.includes(` ${exact} `)) return false;
+    // Preserve high-confidence phrase matching, but require semantic context for short values such
+    // as "blue" and "32" so idioms and unrelated prose do not trigger a repair loop.
+    return (
+      exact.length >= 6 ||
+      normalized === exact ||
+      appearanceSlotAnchoredInText(fact.slot, normalized)
+    );
+  });
+}
+
 function normaliseSoulEssence(
   value: unknown,
   kind: SoulKind,
@@ -896,10 +962,28 @@ function normaliseSoulEssence(
 
   const sources = soulNoteSources(notes);
   const knownIds = new Set(sources.map((source) => source.id));
+  const appearanceProjection = reconcileSoulAppearance(notes);
+  const appearanceValidationFacts = soulAppearanceValidationFacts(notes, sources);
+  const appearanceOnlyIds = new Set(
+    appearanceProjection.accountedSourceIds.filter(
+      (id) => !appearanceProjection.nonVisualTextBySourceId[id],
+    ),
+  );
   const rawFacets = objectRecord(record.facets);
   if (!rawFacets) return undefined;
-  const generalizedEssence = cleanGeneralizedEssence(record.generalizedEssence, knownIds);
-  if (!generalizedEssence) return undefined;
+  const rawGeneralizedEssence = cleanGeneralizedEssence(record.generalizedEssence, knownIds);
+  if (!rawGeneralizedEssence) return undefined;
+  const generalizedEssence = {
+    ...rawGeneralizedEssence,
+    sourceIds: rawGeneralizedEssence.sourceIds.filter((id) => !appearanceOnlyIds.has(id)),
+  };
+  if (
+    generalizedEssence.text &&
+    (
+      generalizedEssence.sourceIds.length === 0 ||
+      facetRepeatsSourceAppearance(generalizedEssence.text, appearanceValidationFacts)
+    )
+  ) return undefined;
 
   const facets = {} as SoulEssenceFacets;
   for (const key of SOUL_ESSENCE_FACETS) {
@@ -911,9 +995,19 @@ function normaliseSoulEssence(
     }
     const facet = cleanFacet(rawFacets[key], knownIds);
     if (!facet) return undefined;
-    facets[key] = facet;
+    const sourceIds = facet.sourceIds.filter((id) => !appearanceOnlyIds.has(id));
+    if (
+      facet.text &&
+      (
+        sourceIds.length === 0 ||
+        facetRepeatsSourceAppearance(facet.text, appearanceValidationFacts)
+      )
+    ) {
+      return undefined;
+    }
+    facets[key] = { text: facet.text, sourceIds };
   }
-  const exactAppearance = cleanExactAppearance(record.exactAppearance, sources);
+  const exactAppearance = cleanExactAppearance(record.exactAppearance, notes, sources);
   if (!exactAppearance) return undefined;
   const exactDirections = exactPersonalityDirections(notes, sources);
   // Never trust a generated paraphrase for an explicit behavioral direction: even a grounded model
@@ -945,14 +1039,32 @@ function normaliseSoulEssence(
   const hasSynthesis =
     !!generalizedEssence.text ||
     SOUL_ESSENCE_FACETS.some((key) => !!facets[key].text);
-  if (notes.length > 0 && !hasSynthesis && exactAppearance.length === 0) return undefined;
+  if (
+    notes.length > 0 &&
+    !hasSynthesis &&
+    exactAppearance.length === 0 &&
+    appearanceProjection.accountedSourceIds.length === 0
+  ) return undefined;
   const citedSourceIds = new Set([
     ...generalizedEssence.sourceIds,
     ...SOUL_ESSENCE_FACETS.flatMap((key) => facets[key].sourceIds),
     ...exactAppearance.flatMap((fact) => fact.sourceIds),
     ...exactDirections.flatMap((fact) => fact.sourceIds),
+    ...appearanceProjection.accountedSourceIds.filter(
+      (id) => !appearanceProjection.nonVisualTextBySourceId[id],
+    ),
   ]);
   if (sources.some((source) => !citedSourceIds.has(source.id))) return undefined;
+  const semanticCitedSourceIds = new Set([
+    ...generalizedEssence.sourceIds,
+    ...SOUL_ESSENCE_FACETS.flatMap((key) => facets[key].sourceIds),
+    ...exactDirections.flatMap((fact) => fact.sourceIds),
+  ]);
+  if (
+    Object.keys(appearanceProjection.nonVisualTextBySourceId).some(
+      (id) => !semanticCitedSourceIds.has(id),
+    )
+  ) return undefined;
   const directionSourceIds = personalityDirectionSourceIds(notes, sources);
   if (
     directionSourceIds.length > 0 &&
@@ -1112,15 +1224,18 @@ export function soulEssenceRepairFeedback(
 
   const sources = soulNoteSources(notes);
   const knownIds = new Set(sources.map((source) => source.id));
+  const appearanceProjection = reconcileSoulAppearance(notes);
+  const appearanceValidationFacts = soulAppearanceValidationFacts(notes, sources);
+  const pureAppearanceIds = new Set(
+    appearanceProjection.accountedSourceIds.filter(
+      (id) => !appearanceProjection.nonVisualTextBySourceId[id],
+    ),
+  );
   const covered = new Set<string>();
+  for (const id of pureAppearanceIds) covered.add(id);
   for (let index = 0; index < notes.length; index++) {
     const source = sources[index]!;
-    if (
-      isPersonalityDirectionNote(notes[index]!.text) ||
-      visualSoulFragments(notes[index]!.text).length > 0
-    ) {
-      covered.add(source.id);
-    }
+    if (personalityDirectionClauses(notes[index]!.text).length > 0) covered.add(source.id);
   }
 
   const issues: string[] = [];
@@ -1163,6 +1278,14 @@ export function soulEssenceRepairFeedback(
       }
     }
   }
+  if (
+    generalizedText &&
+    facetRepeatsSourceAppearance(generalizedText, appearanceValidationFacts)
+  ) {
+    issues.push(
+      "generalizedEssence repeats physical-description text; appearance is reconciled separately.",
+    );
+  }
   const missingFacetKeys = SOUL_ESSENCE_FACETS.filter(
     (key) => !objectRecord(rawFacets[key]),
   );
@@ -1194,7 +1317,7 @@ export function soulEssenceRepairFeedback(
     const validIds: string[] = [];
     const unknownIds: string[] = [];
     for (const item of rawIds) {
-      if (typeof item === "string" && knownIds.has(item)) validIds.push(item);
+      if (typeof item === "string" && knownIds.has(item) && !pureAppearanceIds.has(item)) validIds.push(item);
       else unknownIds.push(String(item));
     }
     if (unknownIds.length > 0) {
@@ -1204,6 +1327,9 @@ export function soulEssenceRepairFeedback(
     }
     if (text && validIds.length === 0) {
       issues.push(`facets.${key} has meaningful text but no valid source ID.`);
+    }
+    if (text && facetRepeatsSourceAppearance(text, appearanceValidationFacts)) {
+      issues.push(`facets.${key} repeats physical-description text; appearance is reconciled separately.`);
     }
     if (text) {
       for (const id of validIds) covered.add(id);
@@ -1616,8 +1742,9 @@ function essenceContentLines(essence: SoulEssence, name: string): string[] {
   // The persisted essence retains every exact visual clause, but the standing ordinary-chat block
   // is bounded to the same descriptor budget as image prompts. Overflow remains visible in the Soul
   // panel and retrievable from the authoritative notes.
-  const exactLook = visualSoulNotes(
-    essence.exactAppearance.map((fact, at) => ({ text: fact.text, at })),
+  const exactLook = renderSoulAppearanceFacts(
+    essence.exactAppearance,
+    SOUL_LOOK_BUDGET_CHARS,
   );
   if (exactLook) candidates.push(`- Exact physical appearance: ${exactLook}`);
   const generalized = essence.generalizedEssence.text.trim();
@@ -1638,8 +1765,7 @@ function sourceExactIdentityLines(notes: readonly SoulNote[], name: string): str
   const lines = name.trim() ? [`- Name: ${name.trim()}`] : [];
   const directions = boundedExactTexts(
     notes
-      .map((note) => note.text.trim())
-      .filter((text) => text && isPersonalityDirectionNote(text)),
+      .flatMap((note) => personalityDirectionClauses(note.text)),
     SOUL_DIRECTION_PROMPT_BUDGET_CHARS,
   );
   if (directions) lines.push(`- Source-exact personality directions: ${directions}`);
@@ -1649,8 +1775,8 @@ function sourceExactIdentityLines(notes: readonly SoulNote[], name: string): str
 }
 
 /**
- * Safe temporary ordinary-chat context while a v2 essence has not been generated yet. It preserves
- * exact invariants without reverting to the raw interests/thoughts dossier that v2 was built to stop.
+ * Safe temporary ordinary-chat context while the current essence has not been generated yet. It
+ * preserves exact invariants without reverting to the raw interests/thoughts dossier.
  */
 export function selfSoulExactIdentityPromptBlock(
   notes: readonly SoulNote[],
@@ -1899,10 +2025,57 @@ export function soulEvidencePromptBlock(
   const appearanceOnly =
     APPEARANCE_QUESTION.test(categoryRequest) &&
     !NON_APPEARANCE_IDENTITY_QUESTION.test(categoryRequest);
+  const appearanceHistoryRequest =
+    appearanceOnly &&
+    /\b(?:used to|formerly|previous(?:ly)?|old (?:appearance|look)|in the past|before)\b/i.test(
+      groundedRequest,
+    );
+  if (appearanceOnly && !appearanceHistoryRequest) {
+    const facts = reconcileSoulAppearance(notes).activeFacts;
+    if (facts.length === 0) return "";
+    const subject = kind === "self" ? "ASSISTANT" : "READER";
+    const prefix = [
+      `SOUL SOURCE EXAMPLES / EVIDENCE ABOUT THE ${subject} (for this explicit identity question only):`,
+      "These are authoritative current appearance facts, not standing conversational topics.",
+    ];
+    const suffix =
+      "Do not turn these examples into recurring themes or steer later unrelated conversation toward them.";
+    const lines = [...prefix];
+    let used = [...prefix, suffix].join("\n").length + 1;
+    for (const fact of facts) {
+      const line = `- ${renderSoulAppearanceFact(fact)}`;
+      if (used + line.length + 1 > budget) continue;
+      lines.push(line);
+      used += line.length + 1;
+    }
+    if (lines.length === prefix.length) return "";
+    lines.push(suffix);
+    return lines.join("\n");
+  }
   const sources = soulNoteSources(notes);
+  const appearanceProjection = reconcileSoulAppearance(notes);
+  const appearanceAccounted = new Set(appearanceProjection.accountedSourceIds);
+  const mixedAppearanceRequest = APPEARANCE_QUESTION.test(categoryRequest);
   const candidates = notes
-    .map((note, index) => ({ note, index, sourceId: sources[index]!.id }))
-    .filter(({ note }) => !appearanceOnly || visualSoulFragments(note.text).length > 0);
+    .map((note, index) => {
+      const sourceId = sources[index]!.id;
+      let evidenceText = note.text.trim();
+      if (appearanceAccounted.has(sourceId) && !appearanceHistoryRequest) {
+        const parts: string[] = [];
+        const nonVisual = appearanceProjection.nonVisualTextBySourceId[sourceId]?.trim();
+        if (nonVisual) parts.push(nonVisual);
+        if (mixedAppearanceRequest) {
+          for (const fact of appearanceProjection.activeFacts) {
+            if (fact.sourceIds.includes(sourceId)) parts.push(renderSoulAppearanceFact(fact));
+          }
+        }
+        evidenceText = [...new Set(parts)].join("; ");
+      }
+      return { note, index, sourceId, evidenceText };
+    })
+    .filter(({ note, evidenceText }) =>
+      !!evidenceText && (!appearanceOnly || visualSoulFragments(note.text).length > 0),
+    );
   if (candidates.length === 0) return "";
 
   const terms = expandedEvidenceTerms(evidenceQueryTerms(groundedRequest));
@@ -1913,8 +2086,8 @@ export function soulEvidencePromptBlock(
     categoryRequest,
     appearanceOnly,
   );
-  const score = ({ note, sourceId }: (typeof candidates)[number]): number => {
-    const text = note.text.toLowerCase();
+  const score = ({ evidenceText, sourceId }: (typeof candidates)[number]): number => {
+    const text = evidenceText.toLowerCase();
     const lexical = terms.reduce((total, term) => total + (text.includes(term) ? 1 : 0), 0);
     return lexical + (facetSourceIds.has(sourceId) ? 4 : 0);
   };
@@ -1942,10 +2115,10 @@ export function soulEvidencePromptBlock(
     "Do not turn these examples into recurring themes or steer later unrelated conversation toward them.";
   const lines = [...prefix];
   let used = [...prefix, suffix].join("\n").length + 1;
-  for (const { note } of ordered) {
+  for (const { note, evidenceText: sanitizedEvidence } of ordered) {
     const evidenceText = appearanceOnly
       ? visualSoulFragments(note.text).join("; ")
-      : note.text.trim();
+      : sanitizedEvidence;
     const line = `- ${evidenceText}`;
     if (!evidenceText || used + line.length + 1 > budget) continue;
     lines.push(line);
@@ -2009,9 +2182,28 @@ export function soulNotesForPrompt(
   return { shown, omitted: notes.length - shown.length };
 }
 
+function currentSoulNotesForStandingPrompt(notes: readonly SoulNote[]): SoulNote[] {
+  const sources = soulNoteSources(notes);
+  const projection = reconcileSoulAppearance(notes);
+  const accounted = new Set(projection.accountedSourceIds);
+  return notes.flatMap((note, index) => {
+    const source = sources[index]!;
+    if (!accounted.has(source.id)) return [note];
+    const parts: string[] = [];
+    const nonVisual = projection.nonVisualTextBySourceId[source.id]?.trim();
+    if (nonVisual) parts.push(nonVisual);
+    for (const fact of projection.activeFacts) {
+      if (fact.sourceIds.includes(source.id)) parts.push(renderSoulAppearanceFact(fact));
+    }
+    const text = [...new Set(parts)].join("; ");
+    return text ? [{ ...note, text }] : [];
+  });
+}
+
 export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): string {
   if (notes.length === 0 && !name) return "";
-  const { shown, omitted } = soulNotesForPrompt(notes);
+  const currentNotes = currentSoulNotesForStandingPrompt(notes);
+  const { shown, omitted } = soulNotesForPrompt(currentNotes);
   return (
     "WHO YOU ARE (your own durable identity — your persona, character, voice, and look). This is who " +
     "you are in EVERY conversation: by default speak and carry yourself as this character — in ordinary " +
@@ -2030,11 +2222,12 @@ export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
 /** System-prompt block for what the assistant knows about the reader's own character ("" when empty). */
 export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): string {
   if (notes.length === 0 && !name) return "";
+  const currentNotes = currentSoulNotesForStandingPrompt(notes);
   return (
     "WHO THE READER IS (durable identity facts about the reader's own character — look, personality, " +
     "how they like to be portrayed; use these when the reader plays themselves):\n" +
     (name ? `- Name: ${name}\n` : "") +
-    soulNotesForPrompt(notes)
+    soulNotesForPrompt(currentNotes)
       .shown.map((n) => `- ${n.text}`)
       .join("\n")
   );
@@ -2045,25 +2238,35 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
  * worn, and colour — the things an image model can draw.
  */
 const LOOK_WORDS =
-  /\b(appearance|physical\s+(?:description|appearance|traits?|features?|build)|looks?\s+like|physique|hair(?:ed)?|eyes?|eyed|irises?|pupils?|eyebrows?|brows?|eyelashes?|beard|moustache|stubble|skin(?:ned)?|complexion|freckles?|scars?|tattoos?|facial\s+features?|tall|slim|slender|stocky|wiry|heavyset|muscular|athletic|petite|curvy|plump|gaunt|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|jaw|cheekbones?|nose|lips|fingers?|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|necklace|bracelet|earrings?|braid|ponytail|shaved|bald|curly|wavy|blonde?|brunette|auburn|ginger|tanned|freckled)\b/i;
+  /\b(appearance|physical\s+(?:description|appearance|traits?|features?|build)|looks?\s+like|physique|hair(?:ed)?|eyes?|eyed|irises?|pupils?|eyebrows?|brows?|eyelashes?|beard|moustache|stubble|skin(?:ned)?|complexion|freckles?|scars?|tattoos?|vitiligo|facial\s+features?|height|weight|weighs?|tall|slim|slender|stocky|wiry|heavyset|muscular|athletic|petite|curvy|plump|gaunt|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|jaw|cheekbones?|nose|lips|fingers?|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|necklace|bracelet|earrings?|braid|ponytail|shaved|bald|curly|wavy|blonde?|brunette|auburn|ginger|tanned|freckled)\b/i;
 const LOOK_CONTEXT_WORDS =
   /\b(?:(?:short|long|straight|lean|broad)\s+(?:hair|build|frame|body|shoulders?|face|features?)|(?:body|build|frame|shoulders?)\s*(?:is|are|:)?\s*(?:short|tall|slim|slender|stocky|wiry|lean|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt))\b/i;
 const LOOK_STRUCTURED_FACTS =
   /(?:\b(?:round|oval|angular|square|heart-shaped|narrow|long|broad)\s+(?:face|facial features?)\b|\b(?:average|medium|lean|rangy|slim|slender|stocky|wiry|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt)\s+(?:build|frame|body)\b|\b(?:lean|slim|wiry)\s+and\s+rangy\b|\b(?:face|build|frame|body)\s*(?:is|are|:)\s*(?:round|oval|angular|square|heart-shaped|average|medium|lean|rangy|slim|slender|stocky|wiry|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt)\b|\b(?:height|posture)\s*(?:is|:)\s*(?:average|short|tall|upright|straight|stooped|slouched|relaxed|rigid)\b|\b(?:calloused|scarred|tattooed|prosthetic|cybernetic|missing)\s+(?:(?:left|right)\s+)?(?:arms?|hands?|legs?|feet|fingers?)\b|\bmissing\s+(?:(?:the|a|an|left|right)\s+){0,2}(?:arms?|hands?|legs?|feet|fingers?|eyes?|ears?)\b|\b\d{1,3}(?:[- ]year[- ]old| years? old)\b|\b(?:[3-7]\s*(?:ft|feet)\s*\d{0,2}\s*(?:in|inches)?|[3-7]'\s*\d{1,2}(?:"| inches?)?|(?:[89]\d|1\d{2}|2[0-4]\d)\s*(?:cm|centimetres?|centimeters?)|\d(?:\.\d{1,2})?\s*(?:m|metres?|meters?))\b|^(?:(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+)(?:(?:a|an)\s+)?(?:woman|man|female|male|nonbinary|androgynous(?: person)?|amputee)\.?$|^(?:(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+)?(?:(?:a|an)\s+)?(?:black|white|asian|latina?|latino|indigenous|middle eastern|brown-skinned|dark-skinned|light-skinned|olive-skinned)\s+(?:woman|man|person|female|male|nonbinary)\b|^(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+(?:black|white|asian|latina?|latino|indigenous|middle eastern|brown-skinned|dark-skinned|light-skinned|olive-skinned)\.?$)/i;
 const LOOK_STANDALONE_GENDER =
   /^(?:(?:a|an)\s+)?(?:woman|man|female|male|nonbinary|androgynous(?:\s+person)?)\.?$/i;
+const LOOK_ADDITIONAL_WORDS =
+  /\b(?:birthmarks?|piercings?|vitiligo|dimples?|jawline|chin|cheeks?|mouth|teeth|fangs?|ears?|arms?|hands?|legs?|feet|dress|gown|rings?|accessories?|clothing|outfit|species|nonhuman|wings?|horns?|antlers?|tail|scales?|fur|feathers?|claws?|hooves?|antennae?|tentacles?|fins?|gills?|halo|cybernetic|prosthetic)\b/i;
+
+const NON_APPEARANCE_LOOK_IDIOMS =
+  /\b(?:(?:keep(?:s|ing)?|kept|has|have|had)\s+)?(?:an?|one|the)?\s*eye\s+(?:on|for)\b|\btall order\b/gi;
 
 function isLookNote(text: string): boolean {
+  const literal = text.replace(NON_APPEARANCE_LOOK_IDIOMS, " ").replace(/\s+/g, " ").trim();
+  if (!literal) return false;
   return (
-    LOOK_WORDS.test(text) ||
-    LOOK_CONTEXT_WORDS.test(text) ||
-    LOOK_STRUCTURED_FACTS.test(text.trim()) ||
-    LOOK_STANDALONE_GENDER.test(text.trim())
+    LOOK_WORDS.test(literal) ||
+    LOOK_CONTEXT_WORDS.test(literal) ||
+    LOOK_STRUCTURED_FACTS.test(literal) ||
+    LOOK_STANDALONE_GENDER.test(literal) ||
+    LOOK_ADDITIONAL_WORDS.test(literal)
   );
 }
 
 const TRANSIENT_VISUAL_FRAGMENT =
   /\b(?:smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|frown(?:s|ed|ing)?|scowl(?:s|ed|ing)?|laugh(?:s|ed|ing)?|cry(?:ing|ies|ied)?|tears?|blush(?:es|ed|ing)?|angry|sad|happy|surprised|afraid|fearful|worried|anxious|excited|expression|gesture|pose|posing)\b/i;
+const TRANSIENT_SCENE_ACTION =
+  /\b(?:smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|frown(?:s|ed|ing)?|scowl(?:s|ed|ing)?|laugh(?:s|ed|ing)?|cry(?:ing|ies|ied)?|blush(?:es|ed|ing)?|gesture|pose|posing)\b/i;
 
 /**
  * Source-grounded visual clauses from a mixed Soul note. Semicolons/newlines/sentence boundaries
@@ -2081,6 +2284,1008 @@ function visualSoulFragments(text: string): string[] {
     .filter((part) => part && !TRANSIENT_VISUAL_FRAGMENT.test(part) && isLookNote(part));
 }
 
+type SoulAppearanceOperation = "set" | "add" | "remove";
+
+interface SoulAppearanceContribution {
+  text: string;
+  originText: string;
+  originKey: string;
+  fieldLabel: string;
+  sourceId: string;
+  sourceIndex: number;
+  sourceAt: number;
+  sequence: number;
+  slot: string;
+  key: string;
+  additive: boolean;
+  operation: SoulAppearanceOperation;
+  priority: number;
+}
+
+interface SoulAppearanceNoteAnalysis {
+  contributions: SoulAppearanceContribution[];
+  accounted: boolean;
+  snapshot: boolean;
+  historical: boolean;
+  nonVisualText: string;
+  resetPrefixes: string[];
+}
+
+/**
+ * The current source-exact appearance projected from the append-only Soul ledger. Older visual
+ * sources remain stored for provenance, but only `activeFacts` describe the person now.
+ */
+export interface SoulAppearanceProjection {
+  activeFacts: SoulEssenceAppearanceFact[];
+  accountedSourceIds: string[];
+  supersededSourceIds: string[];
+  historicalSourceIds: string[];
+  /** Non-appearance clauses retained from mixed notes, keyed by their authoritative source ID. */
+  nonVisualTextBySourceId: Record<string, string>;
+}
+
+const APPEARANCE_FIELD_LINE =
+  /^\s*(?:[-*]\s*)?(gender|sex|age|ethnicity|race|height|weight|build|body(?:\s+type)?|skin(?:\s+(?:color|colour|tone))?|complexion|hair(?:\s+(?:color|colour|length|style|texture))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|face|facial\s+features?|distinguishing\s+marks?|marks?|scars?|tattoos?|birthmarks?|piercings?|accessories?|clothing|clothes|outfit|species|nonhuman\s+features?|features?)\s*:\s*(.*)$/i;
+const APPEARANCE_BLOCK_LINE =
+  /^\s*(?:[-*]\s*)?((?:(?:current|updated|new|corrected|replacement|revised|latest)\s+)?(?:physical\s+description|physical\s+appearance|appearance|look))\s*:\s*(.*)$/i;
+const APPEARANCE_SNAPSHOT_WORDS =
+  /\b(?:current|updated|new|corrected|replacement|revised|latest)\b/i;
+const HISTORICAL_APPEARANCE_WORDS =
+  /\b(?:used to|formerly|previously|in the past|old (?:physical )?(?:description|appearance|look)|before (?:that|this)|once (?:had|was|wore)|as a child)\b/i;
+const CURRENT_APPEARANCE_WORDS = /\b(?:but\s+)?(?:now|currently|these days|today)\b/i;
+const APPEARANCE_REMOVAL_WORDS =
+  /\b(?:no longer|not anymore|without|removed?|(?:do not|does not|don['’]t|doesn['’]t) (?:have|wear)|stopped wearing|lost (?:the|his|her|their|my)|no\s+(?:visible\s+)?(?:scars?|tattoos?|birthmarks?|piercings?|freckles?|burns?|marks?|glasses|spectacles|mask|hat|cap|hood|scarf|gloves?|necklace|bracelet|earrings?|ring|jewell?ery))\b/i;
+const NONVISUAL_SOUL_WORDS =
+  /\b(?:values?|belie(?:f|fs|ves)|thinks?|thoughts?|interests?|curiosity|personality|voice|speaks?|responds?|conversation|honesty|ethics?|morals?|prefers?|enjoys?|loves?|hates?|drawn to|cares? about)\b/i;
+const EMPTY_APPEARANCE_VALUE =
+  /^(?:unknown|unspecified|unclear|unchanged|same as before|not (?:specified|described|known|provided)|tbd|none|n\/?a|null|undefined|[-–—]+|\?+)$/i;
+const EXPLICIT_EMPTY_APPEARANCE_VALUE =
+  /^(?:none|absent|no(?:ne)?|no\s+(?:visible\s+)?(?:hair|eyes?|scars?|tattoos?|birthmarks?|piercings?|marks?|features?|accessories|clothing|clothes)|without\s+(?:any\s+)?(?:hair|eyes?|scars?|tattoos?|birthmarks?|piercings?|marks?|features?|accessories|clothing|clothes))\.?$/i;
+
+const APPEARANCE_COLOR =
+  "(?:black|white|gr[ae]y|brown|blond(?:e)?|auburn|red|ginger|silver|gold(?:en)?|blue|green|hazel|amber|violet|purple|pink|teal|turquoise|copper|crimson|scarlet|orange|olive|tan(?:ned)?|pale|ivory|ebony|bronze|multicolou?red)";
+const HAIR_COLOR_WITH_ANCHOR = new RegExp(
+  `\\b${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?\\s+(?:hair|braids?|curls?|locs|dreadlocks?|ponytail)\\b`,
+  "i",
+);
+const EYE_COLOR_WITH_ANCHOR = new RegExp(
+  `\\b${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?(?:\\s+(?:almond-shaped|round|narrow|wide-set|close-set|deep-set|large|small|hooded))?\\s+(?:eyes?|irises?|pupils?)\\b|\\b${APPEARANCE_COLOR}[- ]eyed\\b`,
+  "i",
+);
+const SKIN_COLOR_WITH_ANCHOR = new RegExp(
+  `\\b${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?\\s+(?:skin|complexion)\\b`,
+  "i",
+);
+const COLOR_ONLY = new RegExp(`\\b${APPEARANCE_COLOR}\\b`, "i");
+
+function isStandaloneAppearanceDescriptor(text: string): boolean {
+  return (
+    COLOR_ONLY.test(text) ||
+    /\b(?:long|short|straight|wavy|curly|coily|braided|unkempt|sleek|round|oval|angular|tall|slim|lean|stocky|muscular|athletic|overbite)\b/i.test(
+      text,
+    )
+  );
+}
+
+function exactMatch(text: string, pattern: RegExp): string {
+  return text.match(pattern)?.[0]?.trim() ?? "";
+}
+
+function appearanceSlotPriority(slot: string): number {
+  if (slot === "species") return 0;
+  if (slot === "gender") return 10;
+  if (slot === "ethnicity") return 20;
+  if (slot === "age") return 30;
+  if (slot === "height") return 40;
+  if (slot === "weight") return 45;
+  if (slot === "build") return 50;
+  if (slot.startsWith("skin.")) return 60;
+  if (slot.startsWith("hair.")) return 70;
+  if (slot.startsWith("eyes.")) return 80;
+  if (slot.startsWith("face.")) return 90;
+  if (slot.startsWith("feature:")) return 100;
+  if (slot.startsWith("mark:")) return 110;
+  if (slot.startsWith("accessory:")) return 120;
+  if (slot.startsWith("clothing:")) return 130;
+  return 140;
+}
+
+function normalizedAppearanceKey(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function markIdentity(text: string): string {
+  const kind =
+    text.match(/\b(scar|tattoo|birthmark|piercing|freckle|burn|mark|vitiligo)(?:s| patches)?\b/i)?.[1]?.toLowerCase() ??
+    "mark";
+  const side = text.match(/\b(left|right)\b/i)?.[1]?.toLowerCase() ?? "";
+  const place =
+    text.match(/\b(eyebrow|brow|eye|cheek|face|nose|lip|chin|neck|shoulder|arm|hand|finger|chest|back|waist|hip|leg|knee|ankle|foot|ear)s?\b/i)?.[1]?.toLowerCase() ??
+    "";
+  return `mark:${kind}:${side}:${place}:${appearanceDetailIdentity(text)}`;
+}
+
+function appearanceDetailIdentity(text: string): string {
+  return normalizedAppearanceKey(
+    text
+      .replace(
+        /\b(?:no longer|not anymore|without|removed?|do not|does not|don['’]t|doesn['’]t|stopped (?:having|wearing)|lost|no)\b/gi,
+        " ",
+      )
+      .replace(/\b(?:has?|have|wears?|the|a|an|any|my|his|her|their|its)\b/gi, " "),
+  );
+}
+
+function additiveIdentityPrefix(key: string): string {
+  const parts = key.split(":");
+  return parts[0] === "mark" ? parts.slice(0, 4).join(":") : parts.slice(0, 2).join(":");
+}
+
+const APPEARANCE_IDENTITY_STOP_WORDS = new Set([
+  "a", "an", "any", "has", "have", "her", "his", "its", "left", "my", "no", "right",
+  "the", "their", "with", "without",
+]);
+
+function distinctiveAppearanceTokens(text: string): string[] {
+  return normalizedAppearanceKey(appearanceDetailIdentity(text))
+    .split(" ")
+    .filter((token) =>
+      token.length > 2 &&
+      !APPEARANCE_IDENTITY_STOP_WORDS.has(token) &&
+      !/^(?:scar|scars|tattoo|tattoos|birthmark|birthmarks|piercing|piercings|freckle|freckles|burn|burns|mark|marks|feature|features|eye|eyes|eyebrow|eyebrows|brow|brows|cheek|cheeks|face|chin|neck|arm|arms|hand|hands|leg|legs|foot|feet|ear|ears|horn|horns|antler|antlers|tail|tails)$/.test(token),
+    );
+}
+
+function isBroadMarkRemoval(text: string): boolean {
+  if (
+    /\b(?:left|right|eyebrow|brow|eye|cheek|face|nose|lip|chin|neck|shoulder|arm|hand|finger|chest|back|waist|hip|leg|knee|ankle|foot|ear)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  return /\b(?:no|without|does not have|doesn't have|no longer has?|no longer have)\s+(?:any\s+)?(?:scars?|tattoos?|birthmarks?|piercings?|freckles?|burns?|marks?)\b/i.test(
+    text,
+  );
+}
+
+function appearanceFieldSlot(label: string): string {
+  const key = label.toLowerCase().replace(/\s+/g, " ").trim();
+  if (key === "gender" || key === "sex") return "gender";
+  if (key === "age") return "age";
+  if (key === "ethnicity" || key === "race") return "ethnicity";
+  if (key === "height") return "height";
+  if (key === "weight") return "weight";
+  if (key === "build" || key.startsWith("body")) return "build";
+  if (key.startsWith("skin") || key === "complexion") return "skin.tone";
+  if (key.startsWith("hair")) return `hair.${key.includes("color") || key.includes("colour") ? "color" : key.includes("length") ? "length" : key.includes("style") || key.includes("texture") ? "style" : "other"}`;
+  if (/^(?:(?:left|right)\s+)?eyes?\b/.test(key)) {
+    return `eyes.${key.includes("color") || key.includes("colour") ? "color" : key.includes("shape") ? "shape" : "other"}`;
+  }
+  if (key === "face" || key.startsWith("facial")) return "face.other";
+  if (/marks?|scars?|tattoos?|birthmarks?|piercings?/.test(key)) return "mark:other";
+  if (key.startsWith("accessor")) return "accessory:other";
+  if (/clothing|clothes|outfit/.test(key)) return "clothing:other";
+  if (key === "species") return "species";
+  if (/nonhuman|features?/.test(key)) return "feature:other";
+  return "appearance.other";
+}
+
+function appearanceFieldResetPrefix(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").trim();
+  if (/^scars?$/.test(normalized)) return "mark:scar";
+  if (/^tattoos?$/.test(normalized)) return "mark:tattoo";
+  if (/^birthmarks?$/.test(normalized)) return "mark:birthmark";
+  if (/^piercings?$/.test(normalized)) return "mark:piercing";
+  const slot = appearanceFieldSlot(label);
+  if (slot.startsWith("hair.")) return "hair.";
+  if (slot.startsWith("eyes.")) return "eyes.";
+  if (slot.startsWith("skin.")) return "skin.";
+  if (slot.startsWith("face.")) return "face.";
+  if (slot.startsWith("mark:")) return "mark:";
+  if (slot.startsWith("feature:")) return "feature:";
+  if (slot.startsWith("accessory:")) return "accessory:";
+  if (slot.startsWith("clothing:")) return "clothing:";
+  return slot;
+}
+
+function appearanceContributions(
+  text: string,
+  source: SoulEssenceSource,
+  sourceIndex: number,
+  sequenceStart: number,
+  label = "",
+  operation: SoulAppearanceOperation = "set",
+  pairedEyeSide = "",
+): SoulAppearanceContribution[] {
+  const value = text.trim().replace(/^(?:and|with)\s+/i, "").trim();
+  if (!value || EMPTY_APPEARANCE_VALUE.test(value)) return [];
+  const contributions: SoulAppearanceContribution[] = [];
+  let sequence = sequenceStart;
+  const add = (
+    slot: string,
+    exactText = value,
+    additive = false,
+    key = slot,
+  ) => {
+    const clean = exactText.trim();
+    if (!clean) return;
+    const resolvedKey = additive ? key : slot;
+    if (contributions.some((fact) => fact.slot === slot && fact.text === clean)) return;
+    contributions.push({
+      text: clean,
+      originText: value,
+      originKey: `${source.id}:${sequenceStart}`,
+      fieldLabel: label,
+      sourceId: source.id,
+      sourceIndex,
+      sourceAt: source.at,
+      sequence: sequence++,
+      slot,
+      key: resolvedKey,
+      additive,
+      operation: operation === "remove" ? "remove" : additive ? "add" : "set",
+      priority: appearanceSlotPriority(slot),
+    });
+  };
+
+  const labelledSlot = label ? appearanceFieldSlot(label) : "";
+  // A named structured field is authoritative about its family. In particular, "Hair: black"
+  // must not also overwrite ethnicity, and "Clothing: short black dress" must not overwrite height
+  // or ethnicity. The generic Appearance/Physical description block remains free to contain all.
+  const constrainedSlot =
+    labelledSlot && labelledSlot !== "appearance.other" ? labelledSlot : "";
+  const allows = (prefix: string) =>
+    !constrainedSlot || constrainedSlot === prefix || constrainedSlot.startsWith(`${prefix}.`) ||
+    constrainedSlot.startsWith(`${prefix}:`);
+
+  const hairMention =
+    allows("hair") &&
+    (labelledSlot.startsWith("hair.") ||
+      /\b(?:hair|braids?|curls?|locs|dreadlocks?|ponytail|bun|bald|shaved|unkempt|sleek)\b/i.test(value));
+  if (hairMention) {
+    const color = exactMatch(value, HAIR_COLOR_WITH_ANCHOR) ||
+      (labelledSlot.startsWith("hair.") ? exactMatch(value, COLOR_ONLY) : "");
+    const length = exactMatch(
+      value,
+      /\b(?:bald|shaved|buzz(?:ed|cut)?|close-cropped|cropped|pixie|short|chin-length|shoulder-length|mid-back|waist-length|floor-length|long|falls? (?:past|to) (?:the )?(?:chin|shoulders?|mid-back|waist))\b/i,
+    );
+    const style = exactMatch(
+      value,
+      /\b(?:straight|wavy|curly|curls?|coily|kinky|braided|braids?|locs|dreadlocks?|ponytail|bun|undercut|mohawk|fringe|bangs|messy|unkempt|sleek)\b/i,
+    );
+    if (color) add("hair.color", color);
+    if (length) add("hair.length", length);
+    if (style) add("hair.style", style);
+    if (!color && !length && !style) add(labelledSlot.startsWith("hair.") ? labelledSlot : "hair.other");
+  }
+
+  const facialHairMatch = value.match(
+    new RegExp(`\\b(?:${APPEARANCE_COLOR}\\s+)?(beard|moustache|mustache|stubble)\\b`, "i"),
+  );
+  const facialHair = facialHairMatch?.[0]?.trim() ?? "";
+  if (!constrainedSlot && facialHair) {
+    const kind =
+      facialHairMatch?.[1]?.toLowerCase() === "mustache"
+        ? "moustache"
+        : facialHairMatch?.[1]?.toLowerCase();
+    add("hair.facial", facialHair, true, `hair:facial:${kind ?? "other"}`);
+  }
+
+  const eyeMention =
+    allows("eyes") &&
+    (labelledSlot.startsWith("eyes.") || /\b(?:eyes?|irises?|pupils?|[\p{L}-]+-eyed)\b/iu.test(value));
+  if (eyeMention) {
+    const eyeContext = `${label} ${value}`;
+    const side =
+      /\bleft(?:\s+eye)?\b/i.test(eyeContext) ? "left" :
+      /\bright(?:\s+eye)?\b/i.test(eyeContext) ? "right" :
+      pairedEyeSide ||
+      "";
+    const color = exactMatch(value, EYE_COLOR_WITH_ANCHOR) ||
+      (labelledSlot.startsWith("eyes.") ? exactMatch(value, COLOR_ONLY) : "");
+    const shape = exactMatch(value, /\b(?:almond-shaped|round|narrow|wide-set|close-set|deep-set|large|small|hooded)\b/i);
+    if (color) add(`eyes.color${side ? `.${side}` : ""}`, color);
+    if (shape) add(`eyes.shape${side ? `.${side}` : ""}`, shape);
+    if (!color && !shape) add(labelledSlot.startsWith("eyes.") ? labelledSlot : `eyes.other${side ? `.${side}` : ""}`);
+  }
+
+  const skinMention =
+    allows("skin") &&
+    (labelledSlot.startsWith("skin.") || /\b(?:skin|complexion|skinned)\b/i.test(value));
+  if (skinMention) {
+    const tone = exactMatch(value, SKIN_COLOR_WITH_ANCHOR) ||
+      (labelledSlot.startsWith("skin.") ? exactMatch(value, COLOR_ONLY) : "");
+    if (tone) add("skin.tone", tone);
+    if (!tone) add(labelledSlot.startsWith("skin.") ? labelledSlot : "skin.other");
+  }
+
+  const genderText = exactMatch(
+    value,
+    /\b(?:woman|man|female|male|nonbinary|androgynous(?:\s+person)?)\b/i,
+  );
+  const combinedDemographic =
+    !!genderText &&
+    /^(?:(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+)?(?:(?:a|an)\s+)?(?:black|white|asian|afro[- ]latina?|latina?|latino|indigenous|middle eastern|african|european|hispanic|mixed[- ]race)\s+(?:woman|man|person|female|male|nonbinary)\.?$/i.test(
+      value,
+    );
+  if (
+    labelledSlot === "gender" ||
+    (
+      !constrainedSlot &&
+      (
+        LOOK_STANDALONE_GENDER.test(value) ||
+        combinedDemographic ||
+        /^(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+(?:(?:a|an)\s+)?(?:woman|man|female|male|nonbinary|androgynous(?:\s+person)?)\.?$/i.test(
+          value,
+        )
+      )
+    )
+  ) add("gender", genderText || value);
+  const ethnicityText = exactMatch(
+    value,
+    /\b(?:black|white|asian|afro[- ]latina?|latina?|latino|indigenous|middle eastern|african|european|hispanic|mixed[- ]race)\b/i,
+  );
+  if (
+    labelledSlot === "ethnicity" ||
+    (
+      !constrainedSlot &&
+      /^(?:(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+)?(?:(?:a|an)\s+)?(?:black|white|asian|afro[- ]latina?|latina?|latino|indigenous|middle eastern|african|european|hispanic|mixed[- ]race)(?:\s+(?:woman|man|person|female|male|nonbinary))?\.?$/i.test(
+        value,
+      )
+    )
+  ) add("ethnicity", ethnicityText || value);
+  const ageText = exactMatch(
+    value,
+    /\b(?:\d{1,3}(?:[- ]year[- ]old| years? old)|(?:(?:early|mid|late)\s+)?(?:teens?|twenties|thirties|forties|fifties|sixties|seventies|eighties)|middle-aged|elderly)\b/i,
+  );
+  if (
+    labelledSlot === "age" ||
+    (
+      !constrainedSlot &&
+      !!ageText
+    )
+  ) add("age", ageText || value);
+  const heightText = exactMatch(
+    value,
+    /\b(?:height(?:\s+is)?\s+(?:average|medium|tall|short)|(?:average|medium|tall|short)\s+height|tall|short|[3-7]\s*(?:ft|feet|foot)\s*\d{0,2}\s*(?:in|inches)?|[3-7]'\s*\d{1,2}(?:"| inches?)?|(?:[89]\d|1\d{2}|2[0-4]\d)\s*cm)(?=\s|[.,;]|$)/i,
+  );
+  if (
+    labelledSlot === "height" ||
+    (!constrainedSlot && !!heightText)
+  ) add("height", heightText || value);
+  const weightText = exactMatch(
+    value,
+    /\b(?:weight(?:\s+is)?\s+[^,;.]+|weighs?\s+[^,;.]+|\d+(?:\.\d+)?\s*(?:lbs?|pounds?|kg|kilograms?))\b/i,
+  );
+  if (
+    labelledSlot === "weight" ||
+    (!constrainedSlot && !!weightText)
+  ) add("weight", weightText || value);
+  const buildText = exactMatch(
+    value,
+    /\b(?:lean\s+and\s+rangy|broad[- ]shouldered|average|medium|slim|slender|stocky|wiry|lean|rangy|heavyset|muscular|athletic|petite|curvy|plump|gaunt)(?:\s+(?:build|frame|body))?\b/i,
+  );
+  if (
+    labelledSlot === "build" ||
+    (!constrainedSlot && (!!buildText || /\b(?:build|frame|physique)\b/i.test(value)))
+  ) add("build", buildText || value);
+  const speciesText = exactMatch(
+    value,
+    /\b(?:human|android|robot|cyborg|elf|fae|fairy|demon|angel|alien|dragon|vampire|werewolf)\b/i,
+  );
+  if (
+    labelledSlot === "species" ||
+    (!constrainedSlot && !!speciesText)
+  ) add("species", speciesText || value);
+
+  const markMention =
+    labelledSlot.startsWith("mark:") ||
+    /\b(?:birthmarks?|scars?|tattoos?|piercings?|freckles?|burns?|vitiligo(?:\s+patches?)?)\b/i.test(value);
+
+  if (
+    allows("face") &&
+    !markMention &&
+    (
+       labelledSlot.startsWith("face.") ||
+      /\b(?:face|facial features?|dimples?|jaw(?:line)?|chin|cheeks?|cheekbones?|nose|lips?|mouth|teeth|eyebrows?|brows?|eyelashes?)\b/i.test(value)
+    )
+  ) {
+    const shape = exactMatch(value, /\b(?:round|oval|angular|square|heart-shaped|narrow|long|broad)\b/i);
+    const cheekbones = exactMatch(
+      value,
+      /\b(?:(?:high|prominent|defined|sharp)\s+)?cheekbones?\b/i,
+    );
+    if (shape) add("face.shape", shape);
+    if (cheekbones) {
+      add(
+        "face.detail",
+        cheekbones,
+        true,
+        "face:cheekbones",
+      );
+    }
+    if (!shape && !cheekbones) {
+      add(
+        labelledSlot.startsWith("face.") ? labelledSlot : "face.other",
+        value,
+        true,
+        `face:${appearanceDetailIdentity(value)}`,
+      );
+    }
+  }
+
+  if (
+    allows("mark") &&
+    markMention
+  ) {
+    add("mark:detail", value, true, markIdentity(value));
+  }
+
+  const feature = value.match(/\b(wings?|horns?|antlers?|tails?|pointed\s+ears?|scales?|fur|feathers?|fangs?|claws?|hooves?|antennae?|tentacles?|fins?|gills?|halo|cybernetic|prosthetic(?:\s+(?:(?:left|right)\s+)?(?:arm|hand|finger|leg|foot|eye|ear))?|missing\s+(?:(?:the|a|an|left|right)\s+){0,2}(?:arm|hand|finger|leg|foot|eye|ear)|calloused\s+(?:arms?|hands?|fingers?|legs?|feet))\b/i)?.[1];
+  if (allows("feature") && (labelledSlot.startsWith("feature:") || feature)) {
+    const noun =
+      feature?.match(/\b(wing|horn|antler|tail|ear|scale|fur|feather|fang|claw|hoof|antenna|tentacle|fin|gill|halo|cybernetic|prosthetic|missing|calloused)/i)?.[1]?.toLowerCase() ??
+      "other";
+    add("feature:detail", value, true, `feature:${noun}:${appearanceDetailIdentity(value)}`);
+  }
+
+  const accessory =
+    value.match(/\b(glasses|spectacles|mask|hat|cap|hood|scarf|gloves?|necklace|bracelet|earrings?|rings?|jewell?ery)\b/i)?.[1]?.toLowerCase();
+  if (allows("accessory") && (labelledSlot.startsWith("accessory:") || accessory)) {
+    const category =
+      accessory === "spectacles"
+        ? "glasses"
+        : accessory === "rings"
+          ? "ring"
+          : accessory || "other";
+    add(
+      `accessory:${category}`,
+      value,
+      !/^(?:glasses|spectacles|mask|hat|cap|hood|scarf|glove)s?$/.test(category),
+      `accessory:${category}:${appearanceDetailIdentity(value)}`,
+    );
+  }
+
+  const clothing =
+    value.match(/\b(coat|jacket|cloak|robes?|dress|gown|armou?r|uniform|shirt|tunic|trousers|jeans|boots?|shoes?)\b/i)?.[1]?.toLowerCase();
+  if (allows("clothing") && (labelledSlot.startsWith("clothing:") || clothing)) {
+    const category =
+      !clothing ? "other" :
+      /coat|jacket|cloak|robe|armou?r/.test(clothing) ? "outerwear" :
+      /shirt|tunic|dress|gown|uniform/.test(clothing) ? "top" :
+      /trousers|jeans/.test(clothing) ? "bottom" :
+      /boots?|shoes?/.test(clothing) ? "footwear" :
+      clothing;
+    const garment =
+      clothing?.replace(/^(robes?|boots?|shoes?)$/, (word) => word.replace(/s$/, "")) ??
+      "other";
+    add(
+      `clothing:${category}`,
+      value,
+      true,
+      `clothing:${category}:${garment}`,
+    );
+  }
+
+  if (contributions.length === 0 && labelledSlot) {
+    const additive = labelledSlot.startsWith("mark:") || labelledSlot.startsWith("feature:");
+    add(labelledSlot, value, additive, `${labelledSlot}:${normalizedAppearanceKey(value)}`);
+  }
+  return contributions;
+}
+
+function splitAppearanceAtoms(value: string, forceAppearance: boolean): string[] {
+  const durable = stripTransientCharacterDetailsExact(value).trim();
+  if (!durable) return [];
+  let parts = durable
+    .split(/\s*(?:;|\r?\n)\s*|(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  parts = parts.flatMap((part) => {
+    const pieces = part.split(/\s*,\s*/).map((piece) => piece.trim()).filter(Boolean);
+    if (pieces.length < 2) return [part];
+    if (forceAppearance) return pieces;
+    const independentlyVisual = pieces.every(
+      (piece) =>
+        isLookNote(piece) ||
+        isStandaloneAppearanceDescriptor(piece),
+    );
+    return independentlyVisual ? pieces : [part];
+  });
+  const splitConjunctions: string[] = [];
+  for (const part of parts) {
+    const match = part.match(/^(.+?)\s+(?:and|while)\s+(.+)$/i);
+    const left = match?.[1]?.trim() ?? "";
+    const right = match?.[2]?.trim() ?? "";
+    const visual = (side: string) =>
+      isLookNote(side) || isStandaloneAppearanceDescriptor(side);
+    const nonVisual = (side: string) =>
+      NONVISUAL_SOUL_WORDS.test(side) || isPersonalityDirectionNote(side);
+    const sameBuild =
+      !!match &&
+      [left, right].every((side) =>
+        /\b(?:build|frame|body|shoulders?|lean|rangy|slim|slender|stocky|wiry|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt)\b/i.test(side),
+      );
+    const independentlySeparated =
+      (visual(left) && visual(right)) ||
+      (visual(left) && nonVisual(right)) ||
+      (nonVisual(left) && visual(right));
+    if (match && !sameBuild && independentlySeparated) {
+      splitConjunctions.push(left, right);
+    } else {
+      splitConjunctions.push(part);
+    }
+  }
+  return splitConjunctions
+    .map((part) => part.replace(/^(?:and|with)\s+/i, "").trim())
+    .filter((part) => part && !EMPTY_APPEARANCE_VALUE.test(part))
+    .filter((part) => {
+      if (!TRANSIENT_VISUAL_FRAGMENT.test(part)) return true;
+      return /\b(?:permanent|habitual|signature|fixed|constant|always|smile-shaped|grin-shaped)\b/i.test(part);
+    });
+}
+
+function chronologicalSoulSources(
+  notes: readonly SoulNote[],
+): { source: SoulEssenceSource; note: SoulNote; index: number }[] {
+  const sources = soulNoteSources(notes);
+  return notes
+    .map((note, index) => ({ source: sources[index]!, note, index }))
+    .sort((a, b) => {
+      const aAt = Number.isFinite(a.note.at) ? a.note.at : Number.NEGATIVE_INFINITY;
+      const bAt = Number.isFinite(b.note.at) ? b.note.at : Number.NEGATIVE_INFINITY;
+      if (aAt !== bAt) return aAt - bAt;
+      return a.index - b.index;
+    });
+}
+
+function analyseAppearanceNote(
+  note: SoulNote,
+  source: SoulEssenceSource,
+  sourceIndex: number,
+): SoulAppearanceNoteAnalysis {
+  const contributions: SoulAppearanceContribution[] = [];
+  const nonVisual: string[] = [];
+  let accounted = false;
+  let snapshot = false;
+  let pendingSnapshot = false;
+  let historical = false;
+  let appearanceBlock = false;
+  let implicitFieldLabel = "";
+  let pairedEyeCount = 0;
+  let sequence = 0;
+  const resetPrefixes: string[] = [];
+
+  const visit = (
+    raw: string,
+    label = "",
+    forceAppearance = false,
+    operationOverride?: SoulAppearanceOperation,
+  ) => {
+    const segment = raw.trim();
+    if (!segment) return;
+    const appearanceGrounded =
+      forceAppearance ||
+      !!label ||
+      isLookNote(segment) ||
+      /\b(?:physical (?:description|appearance)|appearance|looked? like)\b/i.test(segment);
+    if (!appearanceGrounded) {
+      nonVisual.push(segment);
+      return;
+    }
+    const subjectNotAnymore = segment.match(
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+(.+?)\s+anymore[.!]?$/i,
+    );
+    if (subjectNotAnymore) {
+      accounted = true;
+      implicitFieldLabel = subjectNotAnymore[1]!;
+      visit(
+        subjectNotAnymore[2]!.trim(),
+        subjectNotAnymore[1]!,
+        true,
+        "remove",
+      );
+      return;
+    }
+    const subjectRemoval = segment.match(
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:is|are|has|have)\s+(?:now\s+)?no longer\s+(.+)$/i,
+    );
+    if (subjectRemoval) {
+      accounted = true;
+      implicitFieldLabel = subjectRemoval[1]!;
+      visit(subjectRemoval[2]!.trim(), subjectRemoval[1]!, true, "remove");
+      return;
+    }
+    const subjectContrastCorrection = segment.match(
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+.+?\s+but\s+(.+)$/i,
+    );
+    if (subjectContrastCorrection) {
+      accounted = true;
+      implicitFieldLabel = subjectContrastCorrection[1]!;
+      visit(
+        subjectContrastCorrection[2]!.trim(),
+        subjectContrastCorrection[1]!,
+        true,
+      );
+      return;
+    }
+    const subjectCorrection = segment.match(
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:is|are|has|have)\s+(?:now\s+)?(.+)$/i,
+    );
+    if (subjectCorrection) {
+      accounted = true;
+      implicitFieldLabel = subjectCorrection[1]!;
+      visit(subjectCorrection[2]!.trim(), subjectCorrection[1]!, true);
+      return;
+    }
+    const transition = CURRENT_APPEARANCE_WORDS.exec(segment);
+    if (transition && HISTORICAL_APPEARANCE_WORDS.test(segment.slice(0, transition.index))) {
+      accounted = true;
+      historical = true;
+      const current = segment.slice(transition.index + transition[0].length).trim().replace(/^(?:has?|is|are|wears?)\s+/i, "");
+      if (current) visit(current, label, true);
+      return;
+    }
+    if (HISTORICAL_APPEARANCE_WORDS.test(segment) && !CURRENT_APPEARANCE_WORDS.test(segment)) {
+      accounted = true;
+      historical = true;
+      for (const atom of splitAppearanceAtoms(segment, false)) {
+        if (
+          (NONVISUAL_SOUL_WORDS.test(atom) || isPersonalityDirectionNote(atom)) &&
+          !isLookNote(atom)
+        ) {
+          nonVisual.push(atom);
+        }
+      }
+      return;
+    }
+    const operation: SoulAppearanceOperation =
+      operationOverride ??
+      (APPEARANCE_REMOVAL_WORDS.test(segment) || /^\s*no\s+/i.test(segment)
+        ? "remove"
+        : "set");
+    const positiveSegment = segment.replace(/\s*,\s*not\b.*$/i, "").trim();
+    const atoms = splitAppearanceAtoms(positiveSegment, forceAppearance || !!label);
+    let found = false;
+    for (const atom of atoms) {
+      const visual =
+        forceAppearance ||
+        !!label ||
+        isLookNote(atom) ||
+        isStandaloneAppearanceDescriptor(atom);
+      if (
+        !visual ||
+        isPersonalityDirectionNote(atom) ||
+        (NONVISUAL_SOUL_WORDS.test(atom) && !isLookNote(atom))
+      ) {
+        nonVisual.push(atom);
+        continue;
+      }
+      const pairedEyeSide =
+        /\bone\b.*\beye\b/i.test(atom)
+          ? pairedEyeCount++ === 0
+            ? "left"
+            : "right"
+          : "";
+      const next = appearanceContributions(
+        atom,
+        source,
+        sourceIndex,
+        sequence,
+        label,
+        operation,
+        pairedEyeSide,
+      );
+      sequence += Math.max(1, next.length);
+      if (next.length > 0) {
+        contributions.push(...next);
+        found = true;
+      } else if (!forceAppearance) {
+        nonVisual.push(atom);
+      }
+    }
+    if (found || operation === "remove") accounted = true;
+  };
+
+  for (const rawLine of note.text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const block = line.match(APPEARANCE_BLOCK_LINE);
+    if (block) {
+      appearanceBlock = true;
+      const wantsSnapshot =
+        APPEARANCE_SNAPSHOT_WORDS.test(block[1]!) ||
+        /\bphysical\s+(?:description|appearance)\b/i.test(block[1]!);
+      accounted = true;
+      const before = contributions.length;
+      visit(block[2]!, "appearance", true);
+      if (wantsSnapshot && contributions.length > before) {
+        snapshot = true;
+        pendingSnapshot = false;
+      } else if (wantsSnapshot && !block[2]!.trim()) {
+        // A multiline "Physical description:" header is a snapshot once its first real field
+        // arrives. A non-empty placeholder such as "Updated appearance: unknown" is not.
+        pendingSnapshot = true;
+      }
+      continue;
+    }
+    const field = line.match(APPEARANCE_FIELD_LINE);
+    if (field) {
+      accounted = true;
+      const beforeActions = contributions.length + resetPrefixes.length;
+      if (EXPLICIT_EMPTY_APPEARANCE_VALUE.test(field[2]!.trim())) {
+        resetPrefixes.push(appearanceFieldResetPrefix(field[1]!));
+      } else {
+        visit(field[2]!, field[1]!, true);
+      }
+      if (
+        pendingSnapshot &&
+        contributions.length + resetPrefixes.length > beforeActions
+      ) {
+        snapshot = true;
+        pendingSnapshot = false;
+      }
+      // A structured field is a patch, not a whole-field snapshot. "Eyes: green" changes colour
+      // while retaining an independently stored shape; full Physical description blocks are the
+      // explicit replace-all boundary.
+      continue;
+    }
+    const parts = line.split(/\s*;\s*|(?<=[.!?])\s+/).filter(Boolean);
+    for (const part of parts) {
+      const implicitCorrection =
+        implicitFieldLabel &&
+        part.match(/^(?:they|it|these|those)\s+(?:is|are)\s+(?:now\s+)?(.+)$/i);
+      if (implicitCorrection) {
+        accounted = true;
+        visit(implicitCorrection[1]!.trim(), implicitFieldLabel, true);
+        continue;
+      }
+      const durablePart = stripTransientCharacterDetailsExact(part).trim();
+      if (
+        TRANSIENT_VISUAL_FRAGMENT.test(part) &&
+        !durablePart &&
+        (accounted || appearanceBlock || isLookNote(part) || TRANSIENT_SCENE_ACTION.test(part))
+      ) {
+        accounted = true;
+        continue;
+      }
+      const clearlyNonVisual =
+        NONVISUAL_SOUL_WORDS.test(part) || isPersonalityDirectionNote(part);
+      const forced = appearanceBlock && !clearlyNonVisual;
+      if (forced || isLookNote(part) || HISTORICAL_APPEARANCE_WORDS.test(part) || APPEARANCE_REMOVAL_WORDS.test(part)) {
+        const before = contributions.length;
+        visit(part, "", forced);
+        if (pendingSnapshot && contributions.length > before) {
+          snapshot = true;
+          pendingSnapshot = false;
+        }
+      } else {
+        nonVisual.push(part.trim());
+      }
+    }
+  }
+
+  return {
+    contributions,
+    accounted,
+    snapshot,
+    historical,
+    nonVisualText: nonVisual.filter(Boolean).join("; "),
+    resetPrefixes,
+  };
+}
+
+/**
+ * Reconcile the Soul's append-only appearance history into one current, source-exact projection.
+ * Singleton fields are patches (newest wins); marks and nonhuman features are additive unless a
+ * later tombstone or explicit current/updated snapshot removes them.
+ */
+export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppearanceProjection {
+  const singleton = new Map<string, SoulAppearanceContribution>();
+  const additive = new Map<string, SoulAppearanceContribution>();
+  const accounted = new Set<string>();
+  const superseded = new Set<string>();
+  const historical = new Set<string>();
+  const nonVisualTextBySourceId: Record<string, string> = {};
+  const contributionsByOrigin = new Map<string, SoulAppearanceContribution[]>();
+  const corroboratingSourceIds = new Map<SoulAppearanceContribution, string[]>();
+
+  const retire = (fact: SoulAppearanceContribution | undefined) => {
+    if (fact) superseded.add(fact.sourceId);
+  };
+  const retireSingleton = (
+    slot: string,
+    includeSubslots: boolean,
+    preserveExact = false,
+  ) => {
+    for (const [key, prior] of singleton) {
+      if (preserveExact && key === slot) continue;
+      if (
+        key === slot ||
+        (includeSubslots && key.startsWith(`${slot}.`)) ||
+        (!includeSubslots && slot.startsWith(`${key}.`))
+      ) {
+        retire(prior);
+        singleton.delete(key);
+      }
+    }
+  };
+  for (const { source, note, index } of chronologicalSoulSources(notes)) {
+    const analysis = analyseAppearanceNote(note, source, index);
+    if (analysis.nonVisualText) nonVisualTextBySourceId[source.id] = analysis.nonVisualText;
+    if (analysis.accounted) accounted.add(source.id);
+    if (analysis.historical) historical.add(source.id);
+    for (const contribution of analysis.contributions) {
+      if (contribution.operation === "remove") continue;
+      const origin = contributionsByOrigin.get(contribution.originKey) ?? [];
+      origin.push(contribution);
+      contributionsByOrigin.set(contribution.originKey, origin);
+    }
+    if (analysis.snapshot) {
+      for (const fact of singleton.values()) retire(fact);
+      for (const fact of additive.values()) retire(fact);
+      singleton.clear();
+      additive.clear();
+    }
+    for (const prefix of analysis.resetPrefixes) {
+      for (const [slot, prior] of singleton) {
+        if (slot === prefix || slot.startsWith(prefix)) {
+          retire(prior);
+          singleton.delete(slot);
+        }
+      }
+      for (const [key, prior] of additive) {
+        if (key === prefix || key.startsWith(prefix)) {
+          retire(prior);
+          additive.delete(key);
+        }
+      }
+    }
+    for (const fact of analysis.contributions) {
+      if (fact.operation === "remove") {
+        if (fact.additive) {
+          const removeByCategory =
+            fact.slot.startsWith("mark:") && isBroadMarkRemoval(fact.text);
+          const categoryPrefix = fact.key.split(":").slice(0, 2).join(":");
+          const identityPrefix = additiveIdentityPrefix(fact.key);
+          const candidates = [...additive].filter(([key]) =>
+            removeByCategory
+              ? key.startsWith(`${categoryPrefix}:`)
+              : additiveIdentityPrefix(key) === identityPrefix,
+          );
+          let removals = candidates.filter(([key]) => key === fact.key);
+          if (removeByCategory) {
+            removals = candidates;
+          } else if (removals.length === 0) {
+            const targetTokens = distinctiveAppearanceTokens(fact.text);
+            const qualified = candidates.filter(([, prior]) => {
+              const priorTokens = new Set(distinctiveAppearanceTokens(prior.text));
+              return targetTokens.length > 0 &&
+                targetTokens.every((token) => priorTokens.has(token));
+            });
+            if (qualified.length === 1) removals = qualified;
+            else if (targetTokens.length === 0 && candidates.length === 1) removals = candidates;
+          }
+          for (const [key, prior] of removals) {
+            retire(prior);
+            additive.delete(key);
+          }
+        } else {
+          const broadEyeField =
+            fact.slot === "eyes.color" || fact.slot === "eyes.shape";
+          retireSingleton(fact.slot, broadEyeField);
+        }
+        continue;
+      }
+      if (fact.operation === "add") {
+        const prior = additive.get(fact.key);
+        if (prior && prior.text !== fact.text) retire(prior);
+        if (prior?.text === fact.text) {
+          corroboratingSourceIds.set(
+            fact,
+            [...new Set([
+              ...(corroboratingSourceIds.get(prior) ?? [prior.sourceId]),
+              fact.sourceId,
+            ])],
+          );
+        }
+        additive.set(fact.key, fact);
+      } else {
+        const broadEyeField =
+          fact.slot === "eyes.color" || fact.slot === "eyes.shape";
+        retireSingleton(fact.slot, broadEyeField, true);
+        const prior = singleton.get(fact.slot);
+        if (prior && prior.text !== fact.text) retire(prior);
+        if (prior?.text === fact.text) {
+          corroboratingSourceIds.set(
+            fact,
+            [...new Set([
+              ...(corroboratingSourceIds.get(prior) ?? [prior.sourceId]),
+              fact.sourceId,
+            ])],
+          );
+        }
+        singleton.set(fact.slot, fact);
+      }
+    }
+  }
+
+  const current = [...singleton.values(), ...additive.values()]
+    .sort((a, b) =>
+      a.priority - b.priority ||
+      b.sourceAt - a.sourceAt ||
+      b.sourceIndex - a.sourceIndex ||
+      a.sequence - b.sequence
+    );
+  const currentSet = new Set(current);
+  const currentByOrigin = new Map<string, SoulAppearanceContribution[]>();
+  for (const fact of current) {
+    const group = currentByOrigin.get(fact.originKey) ?? [];
+    group.push(fact);
+    currentByOrigin.set(fact.originKey, group);
+  }
+  const outputFacts: SoulAppearanceContribution[] = [];
+  const handledOrigins = new Set<string>();
+  for (const fact of current) {
+    if (handledOrigins.has(fact.originKey)) continue;
+    handledOrigins.add(fact.originKey);
+    const activeGroup = currentByOrigin.get(fact.originKey) ?? [fact];
+    const completeGroup = contributionsByOrigin.get(fact.originKey) ?? [];
+    if (
+      completeGroup.length > 0 &&
+      completeGroup.every((candidate) => currentSet.has(candidate))
+    ) {
+      const outputFact = { ...fact, text: fact.originText };
+      outputFacts.push(outputFact);
+      const corroborating = corroboratingSourceIds.get(fact);
+      if (corroborating) corroboratingSourceIds.set(outputFact, corroborating);
+    } else {
+      outputFacts.push(...activeGroup);
+    }
+  }
+  outputFacts.sort((a, b) =>
+    a.priority - b.priority ||
+    b.sourceAt - a.sourceAt ||
+    b.sourceIndex - a.sourceIndex ||
+    a.sequence - b.sequence
+  );
+  const activeFacts: SoulEssenceAppearanceFact[] = [];
+  const activeFactByKey = new Map<string, SoulEssenceAppearanceFact>();
+  for (const fact of outputFacts) {
+    const needsAnchor =
+      fact.text !== fact.originText ||
+      (!!fact.fieldLabel && fact.fieldLabel.toLowerCase() !== "appearance");
+    const slot = needsAnchor ? fact.slot : undefined;
+    const key = JSON.stringify([fact.text, slot ?? null]);
+    const existing = activeFactByKey.get(key);
+    const sourceIds = corroboratingSourceIds.get(fact) ?? [fact.sourceId];
+    if (existing) {
+      for (const sourceId of sourceIds) {
+        if (!existing.sourceIds.includes(sourceId)) existing.sourceIds.push(sourceId);
+      }
+    } else {
+      const activeFact = {
+        text: fact.text,
+        sourceIds: [...sourceIds],
+        ...(slot ? { slot } : {}),
+      };
+      activeFacts.push(activeFact);
+      activeFactByKey.set(key, activeFact);
+    }
+  }
+  return {
+    activeFacts,
+    accountedSourceIds: [...accounted],
+    supersededSourceIds: [...superseded],
+    historicalSourceIds: [...historical],
+    nonVisualTextBySourceId,
+  };
+}
+
 /**
  * The soul notes that describe an APPEARANCE, for seeding a played character's look.
  *
@@ -2095,36 +3300,77 @@ function visualSoulFragments(text: string): string[] {
  * once extraction had read a beat or two and filled in real appearance fields — which is exactly why
  * the opening image was poor and a later re-render was fine.
  *
- * Source-grounded visual clauses only, oldest first, up to `budget` characters, except that one
- * foundational description longer than the entire budget is retained as a word-safe prefix rather
- * than dropped.
+ * Current source-grounded visual facts only, ordered by identity priority and then correction
+ * recency, up to `budget` characters. If no complete fact fits, the highest-priority current fact is
+ * retained as a word-safe prefix rather than dropped.
  * Returns "" when nothing looks like a description — better a character the model renders neutrally
  * than one it renders from a personality note. PURE.
  */
 export const SOUL_LOOK_BUDGET_CHARS = MAX_CHARACTER_DESCRIPTOR_CHARS;
 
-export function visualSoulNotes(notes: readonly SoulNote[], budget = SOUL_LOOK_BUDGET_CHARS): string {
+/** Render a source-exact fact with its semantic slot when the exact span is otherwise ambiguous. */
+export function renderSoulAppearanceFact(fact: SoulEssenceAppearanceFact): string {
+  const text = fact.text.trim();
+  const slot = fact.slot ?? "";
+  if (slot.startsWith("hair.") && !/\b(?:hair|braid|curl|locs?|ponytail|bun)\b/i.test(text)) {
+    return `hair ${slot.slice("hair.".length)}: ${text}`;
+  }
+  if (slot.startsWith("eyes.") && !/\b(?:eyes?|irises?|pupils?)\b/i.test(text)) {
+    return `eye ${slot.split(".")[1] ?? "detail"}: ${text}`;
+  }
+  if (slot.startsWith("skin.") && !/\b(?:skin|complexion)\b/i.test(text)) {
+    return `skin ${slot.slice("skin.".length)}: ${text}`;
+  }
+  if (slot.startsWith("face.") && !/\b(?:face|facial features?|jaw|chin|cheeks?|cheekbones?|nose|lips?|mouth)\b/i.test(text)) {
+    return `face ${slot.slice("face.".length)}: ${text}`;
+  }
+  const scalarLabel: Record<string, string> = {
+    age: "age",
+    gender: "gender",
+    ethnicity: "ethnicity/race",
+    height: "height",
+    weight: "weight",
+    build: "build",
+    species: "species",
+  };
+  const label = scalarLabel[slot];
+  if (label && !new RegExp(`\\b${label.split("/")[0]}\\b`, "i").test(text)) {
+    return `${label}: ${text}`;
+  }
+  return text;
+}
+
+function renderSoulAppearanceFacts(
+  facts: readonly SoulEssenceAppearanceFact[],
+  budget: number,
+): string {
   const kept: string[] = [];
   let used = 0;
-  for (const n of notes) {
-    for (const text of visualSoulFragments(n.text)) {
-      const cost = text.length + (kept.length ? 2 : 0); // "; "
-      // A comprehensive physical description is commonly the FIRST soul entry and may be longer than
-      // the image descriptor budget. Returning "" in that case loses the reader's entire appearance.
-      // Keep a word-safe prefix of that one foundational clause; once something is kept, skip oversized
-      // clauses and continue looking for shorter details that still fit.
-      if (used + cost > budget) {
-        if (kept.length === 0 && budget > 0) {
-          const prefix = text.slice(0, budget + 1).replace(/\s+\S*$/, "").replace(/[;,:\s]+$/, "");
-          return prefix || text.slice(0, budget);
-        }
-        continue;
-      }
-      kept.push(text);
-      used += cost;
+  let highestPriorityOversized = "";
+  for (const fact of facts) {
+    const text = renderSoulAppearanceFact(fact);
+    const cost = text.length + (kept.length ? 2 : 0); // "; "
+    if (used + cost > budget) {
+      // Do not let one long paragraph starve later atomic identity fields. Remember it only as a
+      // last-resort prefix when no complete current fact fits at all.
+      if (!highestPriorityOversized) highestPriorityOversized = text;
+      continue;
     }
+    kept.push(text);
+    used += cost;
+  }
+  if (kept.length === 0 && highestPriorityOversized && budget > 0) {
+    const prefix = highestPriorityOversized
+      .slice(0, budget + 1)
+      .replace(/\s+\S*$/, "")
+      .replace(/[;,:\s]+$/, "");
+    return prefix || highestPriorityOversized.slice(0, budget);
   }
   return kept.join("; ");
+}
+
+export function visualSoulNotes(notes: readonly SoulNote[], budget = SOUL_LOOK_BUDGET_CHARS): string {
+  return renderSoulAppearanceFacts(reconcileSoulAppearance(notes).activeFacts, budget);
 }
 
 function escapeRegExp(s: string): string {
