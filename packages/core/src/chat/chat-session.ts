@@ -128,6 +128,30 @@ export interface ChatTurnOutcome {
  * 200k-token cloud models), so the host passes a per-provider budget. The
  * newest turn is always kept, however large.
  */
+/**
+ * However little is left, keep at least this much conversation. `trimChatHistory` already guarantees
+ * the newest turn survives; this keeps a couple of exchanges around it.
+ */
+export const MIN_HISTORY_CHARS = 2_000;
+
+/**
+ * What is left of a turn's input allowance for the CONVERSATION, once the system prompt has taken
+ * what it needs.
+ *
+ * The budget used to be a fixed fraction — 30% of input to history, 70% reserved for the book. That
+ * is roughly right for the in-book reader, where a book section really is most of the prompt. It is
+ * badly wrong for the landing-page chat, which has NO book: 70% of the allowance was held back for a
+ * section that does not exist, and on an 8k-window local model the conversation was capped at ~4,400
+ * characters. That is two or three exchanges — so the assistant genuinely could not see what had just
+ * been said, which is not a subtle degradation but the thing people report as "it forgets".
+ *
+ * Measuring beats guessing: the system prompt is built before the history is trimmed in every path,
+ * so its real size is known. Whatever it did not use belongs to the conversation. PURE.
+ */
+export function historyBudget(inputChars: number, systemChars: number): number {
+  return Math.max(MIN_HISTORY_CHARS, inputChars - systemChars);
+}
+
 export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn[] {
   let used = 0;
   let start = history.length;

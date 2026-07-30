@@ -382,6 +382,30 @@ describe("trimTurnMessages (the context a turn actually sends)", () => {
   });
 });
 
+describe("historyBudget (what the conversation actually gets)", () => {
+  it("gives the conversation everything the system prompt didn't use", async () => {
+    const { historyBudget } = await import("./chat-session.js");
+    expect(historyBudget(14_745, 2_000)).toBe(12_745);
+  });
+
+  it("is dramatically larger than the old fixed fraction where there is no book", async () => {
+    // The landing-page chat has NO book section, so the 70/30 split reserved most of the window for
+    // something that isn't there. On an 8k-window model that capped the conversation at ~4,400
+    // characters — two or three exchanges — which is what "it forgets what we just said" was.
+    const { historyBudget } = await import("./chat-session.js");
+    const input = 14_745;
+    const oldFixed = Math.floor(input * 0.3);
+    expect(historyBudget(input, 2_500)).toBeGreaterThan(oldFixed * 2);
+  });
+
+  it("still leaves a floor when the system prompt has taken everything", async () => {
+    // An in-book turn with a large book section. trimChatHistory keeps the newest turn regardless;
+    // this keeps a couple of exchanges around it.
+    const { historyBudget, MIN_HISTORY_CHARS } = await import("./chat-session.js");
+    expect(historyBudget(10_000, 50_000)).toBe(MIN_HISTORY_CHARS);
+  });
+});
+
 describe("trimChatHistory", () => {
   it("keeps the newest whole turns within budget, always at least the last", async () => {
     const { trimChatHistory } = await import("./chat-session.js");

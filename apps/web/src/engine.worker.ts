@@ -12,6 +12,7 @@ import {
   lookupBible,
   measureContextUsage,
   searchBookPassages,
+  historyBudget,
   trimChatHistory,
   CHARS_PER_TOKEN,
   CHAT_CONTEXT_BUDGET_CHARS,
@@ -2653,9 +2654,11 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       story?.mode === "roleplay"
         ? roleplayStoryTurnPrompt(msg.userText, story.play)
         : msg.userText;
+    // The conversation gets whatever the system prompt didn't use — measured, not guessed. See
+    // historyBudget: a fixed fraction starved the chat of all but the last exchange or two.
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: modelFacingUserText }],
-      budgets.history,
+      historyBudget(budgets.input, system.length),
     );
     // Where the context is going, for the usage donut — posted before the turn.
     post({
@@ -4776,9 +4779,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       story?.mode === "roleplay"
         ? roleplayStoryTurnPrompt(msg.userText, story.play)
         : msg.userText;
+    // As above: the buddy chat has no book section at all, so a fixed 30%-to-history split
+    // reserved most of the window for something that isn't there and left the conversation with a
+    // few hundred words. What the setup didn't use is the conversation's.
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: modelFacingUserText }],
-      budgets.history,
+      historyBudget(budgets.input, setup.length),
     );
     post({
       type: "chatContextUsage",
