@@ -78,7 +78,12 @@ function splitTransientConjunctions(value: string): string[] {
   for (let index = 1; index < tokens.length; index += 2) {
     const separator = tokens[index] ?? " and ";
     const next = tokens[index + 1] ?? "";
-    if (isTransientCharacterDetail(current) || isTransientCharacterDetail(next)) {
+    // Expressions/gestures and scene lighting are safe clause boundaries. A broad bearing phrase
+    // ("a look of quiet intensity and pouty lips") is not: splitting that wrapper can duplicate the
+    // durable tail when the same trait was already extracted elsewhere.
+    const separablyTransient = (part: string) =>
+      TRANSIENT_CHARACTER_DETAIL.test(part) || SCENE_LIGHTING_DETAIL.test(part);
+    if (separablyTransient(current) || separablyTransient(next)) {
       if (current.trim()) parts.push(current.trim());
       current = next;
     } else {
@@ -87,6 +92,14 @@ function splitTransientConjunctions(value: string): string[] {
   }
   if (current.trim()) parts.push(current.trim());
   return parts;
+}
+
+function splitCharacterDetailClauses(value: string): string[] {
+  return value
+    .split(/\s*(?:;|\r?\n|,\s+)\s*/)
+    .flatMap(splitTransientConjunctions)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -115,11 +128,7 @@ export function unwrapAppearancePhrase(value: string): string {
 export function stripTransientCharacterDetails(value: string): string {
   const detail = value.trim();
   if (!detail) return "";
-  const parts = detail
-    .split(/\s*(?:;|\r?\n|,\s+)\s*/)
-    .flatMap(splitTransientConjunctions)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const parts = splitCharacterDetailClauses(detail);
   const kept = parts
     .filter((part) => !isTransientCharacterDetail(part))
     .map(unwrapAppearancePhrase)
@@ -127,6 +136,21 @@ export function stripTransientCharacterDetails(value: string): string {
   // Preserve exact formatting when nothing was removed or unwrapped.
   if (kept.length === parts.length && kept.every((part, index) => part === parts[index])) return detail;
   return kept.join(", ");
+}
+
+/**
+ * Remove transient clauses without rewriting the surviving source text.
+ *
+ * Soul evidence uses this variant because exact physical facts must remain verbatim, including
+ * punctuation and subject wording. Visual-Bible fields use the normal sanitizer above, which also
+ * unwraps extractor prose for prompt quality and duplicate detection.
+ */
+export function stripTransientCharacterDetailsExact(value: string): string {
+  const detail = value.trim();
+  if (!detail) return "";
+  const parts = splitCharacterDetailClauses(detail);
+  const kept = parts.filter((part) => !isTransientCharacterDetail(part));
+  return kept.length === parts.length ? detail : kept.join(", ");
 }
 
 /**

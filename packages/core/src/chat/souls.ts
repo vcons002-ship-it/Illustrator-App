@@ -3,7 +3,7 @@ import { type NoteEntry, type NoteStoreSpec, loadNotes, saveNotes, rememberIn, f
 // The soul's look-budget is deliberately the SAME number the image prompt will accept for a
 // character, so the soul is never the tighter of the two and nothing is trimmed twice.
 import { MAX_CHARACTER_DESCRIPTOR_CHARS } from "../providers/image/bible-injection.js";
-import { stripTransientCharacterDetails } from "../visual-bible/character-details.js";
+import { stripTransientCharacterDetailsExact } from "../visual-bible/character-details.js";
 
 /**
  * The two identity "souls" — durable notes, separate from reader-memory, that capture
@@ -1180,7 +1180,7 @@ function visualSoulFragments(text: string): string[] {
     .split(
       /\s*(?:;|\r?\n)\s*|(?<=[.!?])\s+|,\s*(?=(?:now\s+)?(?:smil|grin|frown|scowl|laugh|cry|tear|blush|eyes? (?:narrow|widen)|brows? furrow|arms? cross|clench))|(?:\s+while|\s+and)\s+(?=(?:smil|grin|frown|scowl|laugh|cry|tear|blush|eyes? (?:narrow|widen)|brows? furrow|arms? cross|clench))/i,
     )
-    .map((part) => stripTransientCharacterDetails(part).trim())
+    .map((part) => stripTransientCharacterDetailsExact(part).trim())
     .filter((part) => part && !TRANSIENT_VISUAL_FRAGMENT.test(part) && isLookNote(part));
 }
 

@@ -4,6 +4,7 @@ import {
   isTransientCharacterDetail,
   sanitizeAppearanceDetails,
   stripTransientCharacterDetails,
+  stripTransientCharacterDetailsExact,
 } from "./character-details.js";
 
 describe("transient character details", () => {
@@ -44,6 +45,9 @@ describe("transient character details", () => {
       "always wears a charcoal coat",
     );
     expect(stripTransientCharacterDetails("grinning and blue-eyed")).toBe("blue-eyed");
+    expect(stripTransientCharacterDetailsExact("She is Black.")).toBe("She is Black.");
+    expect(stripTransientCharacterDetailsExact("Androgynous person.")).toBe("Androgynous person.");
+    expect(stripTransientCharacterDetailsExact("silver hair; grinning")).toBe("silver hair");
     expect(durableCharacterDetails(["wiry", "grinning", "one-eyed"])).toEqual([
       "wiry",
       "one-eyed",
