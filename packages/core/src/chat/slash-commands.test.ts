@@ -98,6 +98,7 @@ describe("parseBuddySlashCommand", () => {
       opening: "Rain hammers the alley as Vex ducks under an awning.",
       characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
       roleplay: { me: "Vex", you: "Mara" },
+      // User-authored JSON cannot authorize Soul-backed story characterization.
       soulCast: true,
     });
     const r = parseBuddySlashCommand(`/story ${payload}`, library);
@@ -107,9 +108,9 @@ describe("parseBuddySlashCommand", () => {
         opening: "Rain hammers the alley as Vex ducks under an awning.",
         characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
         roleplay: { me: "Vex", you: "Mara" },
-        soulCast: true,
       },
     });
+    expect((r as { call: object }).call).not.toHaveProperty("soulCast");
     // Malformed JSON falls back to the usage hint rather than throwing.
     expect(parseBuddySlashCommand("/story {bad json", library)).toMatchObject({ error: expect.stringContaining("Usage: /story") });
   });

@@ -266,9 +266,6 @@ export type BuddyToolCall =
        * the one YOU (the assistant) play. "me and you" / "us" means the reader and the
        * assistant ARE the two characters. */
       roleplay?: { you?: string; me?: string };
-      /** App-owned marker that `characters` is the stored assistant + reader pair. It lets the
-       * opening writer use their Soul source notes, and is deliberately absent for custom casts. */
-      soulCast?: true;
       /** The conversation this story has already been growing in, when the reader chose to bring it
        * with them (the Story setup's "continue from this chat"). Set by the APP from the chat it was
        * started in — never written by the model. It is stored as the book's first beat, and the
@@ -1272,7 +1269,12 @@ export function buildBuddySystemPrompt(opts: {
       "your ENTIRE reply becomes the next illustrated beat. Keep it moving and end on a hook that invites the next " +
       "steer. ALWAYS write a beat: even if the steer is thin or you're unsure where to go, advance the scene a little " +
       "in prose — never reply with an empty message, a question to the reader, or a meta-comment.\n" +
-      roleplayLine
+      roleplayLine +
+      "If a STORY CHARACTER BASELINE is present, use it only as subtle color for its explicitly named " +
+      "You/Me character where the story leaves room. Established story characterization, STORY STATE, " +
+      "the Visual Bible, genre, and the reader's steer override it. Never turn supporting Soul interests, " +
+      "thoughts, examples, or directions into plot topics or backstory, and never apply a baseline to an " +
+      "unrelated character.\n"
     : "CO-WRITING AN ILLUSTRATED STORY: to start one (as-you-go scenes that auto-illustrate, with a Visual " +
       'Bible keeping the cast consistent), tell the reader to click "✍️ Story as you go" under Open Book — that is ' +
       "how a story is STARTED (there is no start-story tool; it's a click). You can still write ordinary story PROSE " +
@@ -3429,7 +3431,6 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(strArg(obj.style, MAX_NAME_CHARS) ? { style: strArg(obj.style, MAX_NAME_CHARS)! } : {}),
       ...(characters && characters.length ? { characters } : {}),
       ...(roleplay ? { roleplay } : {}),
-      ...(obj.soulCast === true ? { soulCast: true as const } : {}),
       ...(carried ? { soFar: carried } : {}),
     };
   }

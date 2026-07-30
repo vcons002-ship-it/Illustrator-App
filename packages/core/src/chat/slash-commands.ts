@@ -179,9 +179,6 @@ export function parseBuddySlashCommand(
           ...(typeof payload.style === "string" ? { style: payload.style } : {}),
           ...(Array.isArray(payload.characters) ? { characters: payload.characters } : {}),
           ...(payload.roleplay && typeof payload.roleplay === "object" ? { roleplay: payload.roleplay } : {}),
-          // App-owned: only the setup modal's "You & me" cast opts into Soul source
-          // characterization. Custom casts omit it.
-          ...(payload.soulCast === true ? { soulCast: true } : {}),
           // The chat the story has already been told in, when the reader chose to bring it along.
           ...(typeof payload.soFar === "string" ? { soFar: payload.soFar } : {}),
         });

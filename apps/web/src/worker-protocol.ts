@@ -306,6 +306,11 @@ export type MainToWorker =
       /** This conversation is the dedicated Creative window. It remains true for reader-authored
        * turns there, while `creativeIdle` only marks the unattended run itself. */
       creativeSession?: boolean;
+      /**
+       * Trusted host control data for a Story-setup "You & me" start. It is deliberately outside
+       * user/model-authored `/story` JSON so a custom cast cannot opt itself into either Soul.
+       */
+      storySoulCast?: { self: string; user: string };
     };
 
 export type WorkerToMain =

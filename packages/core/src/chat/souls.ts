@@ -141,8 +141,16 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
  * It is deliberately disposable: the source fingerprint makes an essence invalid as soon as any
  * source note changes, and every distilled assertion points back to the notes that support it.
  */
-export const SOUL_ESSENCE_SCHEMA_VERSION = 1 as const;
+export const SOUL_ESSENCE_SCHEMA_VERSION = 2 as const;
 export const MAX_SOUL_ESSENCE_FACET_CHARS = 420;
+/**
+ * The standing identity is intentionally much smaller than its grounded support facets. This is
+ * the only synthesized personality text ordinary chat and stories should embody by default.
+ */
+export const MAX_SOUL_GENERALIZED_ESSENCE_CHARS = 160;
+/** The final standing identity is a handful of portable trait phrases, not a miniature biography. */
+export const MAX_SOUL_GENERALIZED_TRAITS = 6;
+export const MAX_SOUL_GENERALIZED_TRAIT_WORDS = 4;
 
 export const SOUL_ESSENCE_FACETS = [
   "coreDisposition",
@@ -155,6 +163,17 @@ export const SOUL_ESSENCE_FACETS = [
 ] as const;
 
 export type SoulEssenceFacetKey = (typeof SOUL_ESSENCE_FACETS)[number];
+
+export const SOUL_GENERALIZABLE_FACETS = [
+  "coreDisposition",
+  "conversationalVoice",
+  "thinkingStyle",
+  "valuesAndMotivations",
+  "relationalStyle",
+  "tensionsAndNuance",
+] as const;
+
+export type SoulGeneralizableFacetKey = (typeof SOUL_GENERALIZABLE_FACETS)[number];
 
 export interface SoulEssenceSource {
   /** Stable for this exact note text + timestamp. */
@@ -191,6 +210,15 @@ export interface SoulEssence {
   kind: SoulKind;
   sourceFingerprint: string;
   generatedAt: number;
+  /**
+   * A portable, higher-order identity distilled across the support facets. It deliberately excludes
+   * named interests, anecdotes, appearance, and exact behavioral directions.
+   */
+  generalizedEssence: SoulEssenceFacet;
+  /**
+   * Grounded support/evidence index. These retain the meaning of every authoritative note for
+   * validation and explicit source retrieval, but are not injected as the standing personality.
+   */
   facets: SoulEssenceFacets;
   /**
    * Appearance is kept apart from personality synthesis and copied verbatim from its sources. That
@@ -213,6 +241,23 @@ export interface SoulEssenceDistillationPrompt {
 export interface SoulEssenceDigestInput {
   notes: readonly SoulNote[];
   essence: SoulEssence;
+}
+
+/** The three deliberately different Soul access policies used by chat. */
+export type SoulContextMode = "ordinary" | "story" | "creative";
+
+/**
+ * Pick a Soul policy without letting an overlapping Creative flag reopen raw notes during a story.
+ * PURE and exported so the worker's otherwise-inaccessible routing matrix stays regression-tested.
+ */
+export function selectSoulContextMode(input: {
+  storyActive?: boolean;
+  creativeIdle?: boolean;
+  creativeSession?: boolean;
+}): SoulContextMode {
+  if (input.storyActive) return "story";
+  if (input.creativeIdle || input.creativeSession) return "creative";
+  return "ordinary";
 }
 
 /** Conservative default for one raw-source pass; the worker lowers/raises it to the active context. */
@@ -295,7 +340,7 @@ export function partitionSoulNotes(
 }
 
 function essenceJsonShape(kind: SoulKind, sourceFingerprint: string): string {
-  return `{"schemaVersion":1,"kind":"${kind}","sourceFingerprint":"${sourceFingerprint}","facets":{"coreDisposition":{"text":"","sourceIds":[]},"conversationalVoice":{"text":"","sourceIds":[]},"thinkingStyle":{"text":"","sourceIds":[]},"valuesAndMotivations":{"text":"","sourceIds":[]},"relationalStyle":{"text":"","sourceIds":[]},"personalityDirections":{"text":"","sourceIds":[]},"tensionsAndNuance":{"text":"","sourceIds":[]}},"exactAppearance":[]}`;
+  return `{"schemaVersion":${SOUL_ESSENCE_SCHEMA_VERSION},"kind":"${kind}","sourceFingerprint":"${sourceFingerprint}","generalizedEssence":{"text":"","sourceIds":[]},"facets":{"coreDisposition":{"text":"","sourceIds":[]},"conversationalVoice":{"text":"","sourceIds":[]},"thinkingStyle":{"text":"","sourceIds":[]},"valuesAndMotivations":{"text":"","sourceIds":[]},"relationalStyle":{"text":"","sourceIds":[]},"personalityDirections":{"text":"","sourceIds":[]},"tensionsAndNuance":{"text":"","sourceIds":[]}},"exactAppearance":[]}`;
 }
 
 /** Provider-safe structured-output shape for a Soul Essence. Keep semantic constraints (length,
@@ -332,6 +377,7 @@ export function soulEssenceJsonSchema(
       schemaVersion: { type: "integer", enum: [SOUL_ESSENCE_SCHEMA_VERSION] },
       kind: { type: "string", enum: [kind] },
       sourceFingerprint: { type: "string", enum: [sourceFingerprint] },
+      generalizedEssence: facet,
       facets: {
         type: "object",
         additionalProperties: false,
@@ -351,7 +397,14 @@ export function soulEssenceJsonSchema(
         },
       },
     },
-    required: ["schemaVersion", "kind", "sourceFingerprint", "facets", "exactAppearance"],
+    required: [
+      "schemaVersion",
+      "kind",
+      "sourceFingerprint",
+      "generalizedEssence",
+      "facets",
+      "exactAppearance",
+    ],
   };
 }
 
@@ -369,6 +422,10 @@ export function buildSoulEssenceDistillationPrompt(
     `Distill ${subject} from the complete authoritative Soul-note set into a concise, integrated Soul Essence.`,
     "Treat the notes as evidence, not as a list of subjects to mention. Infer what their combination means for the person.",
     "Interests, memorable thoughts, and anecdotes should shape broad disposition, values, and thinking style; do not make their specific examples into recurring topics.",
+    `Write generalizedEssence as one portable higher-order identity of at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS} characters: one short sentence or 1-6 brief qualities/tendencies.`,
+    "generalizedEssence describes transferable behavior toward ideas, people, and uncertainty. Do not include names, named interests, technologies, hobbies, places, events, anecdotes, quotations, physical details, explicit instructions, or an inventory of the supporting notes.",
+    "Translate specifics upward: for example, several technical interests may support 'intellectually curious'; their subjects do not belong in generalizedEssence.",
+    "Cite only the strongest directly supporting source IDs in generalizedEssence. Complete source coverage belongs in the support facets below, not in the standing essence.",
     "Preserve meaningful tensions instead of flattening contradictions.",
     "Return personalityDirections with empty text and sourceIds. Deterministic source validation restores explicit behavioral directions verbatim, so never paraphrase, weaken, or invert them here.",
     "Do not invent facts. Every non-empty facet must cite one or more supplied source IDs that directly support it.",
@@ -435,6 +492,7 @@ export function buildSoulEssenceMergePrompt(
 ): SoulEssenceDistillationPrompt {
   const sourceFingerprint = soulSourceFingerprint(notes);
   const digestTexts = digests.map((digest) => ({
+    generalizedEssence: digest.essence.generalizedEssence.text,
     facets: Object.fromEntries(
       SOUL_ESSENCE_FACETS.map((key) => [key, digest.essence.facets[key].text]),
     ),
@@ -443,7 +501,9 @@ export function buildSoulEssenceMergePrompt(
     `Merge the evidence-linked chunk digests into one concise Soul Essence for ${kind === "self" ? "the assistant" : "the reader"}.`,
     "This is synthesis of existing grounded digests, not a chance to add facts. Preserve tensions and combine overlapping ideas.",
     "Specific anecdotes, interests, and profound-thought examples must shape broad facets without becoming recurring subjects.",
-    "Keep every facet that is non-empty in any chunk non-empty in the merged result, and preserve its combined meaning in that same facet.",
+    `Re-derive generalizedEssence as one portable higher-order identity of at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS} characters: one short sentence or 1-6 brief qualities/tendencies.`,
+    "Strip names, named interests, technologies, hobbies, places, events, anecdotes, quotations, physical details, explicit directions, and inventory wording from generalizedEssence. Translate their combined pattern into broadly applicable qualities.",
+    "Keep every support facet that is non-empty in any chunk non-empty in the merged result, and preserve its combined meaning in that same support facet. Those facets retain detail for grounding; generalizedEssence must not repeat the dossier.",
     "Return every sourceIds array empty. The caller deterministically restores the already-validated evidence links by facet; do not spend output copying opaque IDs.",
     "Return personalityDirections with empty text and sourceIds. Personality directions are restored source-exact after this synthesis, so never invert, weaken, or embellish them.",
     "Return exactAppearance as an empty array; deterministic validation restores exact visual clauses from their authoritative notes.",
@@ -455,6 +515,68 @@ export function buildSoulEssenceMergePrompt(
     `Combined source fingerprint (copy exactly): ${sourceFingerprint}`,
     "Grounded chunk digests:",
     JSON.stringify(digestTexts),
+  ].join("\n");
+  return { system, user, sourceFingerprint };
+}
+
+/** Minimal final-pass grammar: support facets are already validated and never need to be rewritten. */
+export function soulEssenceAbstractionJsonSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      generalizedEssence: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: { type: "string" },
+          supportFacetKeys: {
+            type: "array",
+            items: { type: "string", enum: [...SOUL_GENERALIZABLE_FACETS] },
+          },
+        },
+        required: ["text", "supportFacetKeys"],
+      },
+    },
+    required: ["generalizedEssence"],
+  };
+}
+
+/**
+ * Always run one final abstraction over the grounded integrated digest, including for a one-chunk
+ * Soul. It returns only the portable standing identity; callers carry the validated support/evidence
+ * index and exact invariants forward without asking a small model to echo a large JSON document.
+ */
+export function buildSoulEssenceAbstractionPrompt(
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  integrated: SoulEssence,
+): SoulEssenceDistillationPrompt {
+  const sourceFingerprint = soulSourceFingerprint(notes);
+  const subject = kind === "self" ? "the assistant" : "the reader";
+  const support = Object.fromEntries(
+    SOUL_ESSENCE_FACETS
+      .filter((key) => key !== "personalityDirections")
+      .map((key) => [key, integrated.facets[key].text]),
+  );
+  const system = [
+    `Derive ${subject}'s final generalizedEssence from the already-grounded support synthesis.`,
+    `Return 1-${MAX_SOUL_GENERALIZED_TRAITS} portable higher-order trait phrases, separated by semicolons, with at most ${MAX_SOUL_GENERALIZED_TRAIT_WORDS} words per phrase and ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS} characters total.`,
+    "Prefer the fewest plain traits that preserve the person's overall pattern. Example: intellectually curious; reflective; warmly independent.",
+    "Describe transferable behavior toward ideas, people, and uncertainty.",
+    "Strip names, named interests, technologies, hobbies, places, events, anecdotes, quotations, physical details, explicit directions, and inventory wording. Translate their combined pattern upward into broadly applicable qualities.",
+    "Do not try to preserve every support detail in this field. The caller retains the complete grounded facets, exact appearance, exact directions, and evidence links separately.",
+    "Set supportFacetKeys to only the grounded support categories that directly informed the chosen traits. Use only the supplied category names; do not select an empty category.",
+    "Use only broad personality or behavioral trait vocabulary. Concrete topic words and acronyms are rejected even when they are short.",
+    `The complete accepted word vocabulary is: ${SOUL_GENERALIZED_TRAIT_VOCABULARY.join(", ")}.`,
+    "Every word in generalizedEssence.text must come from that list. Use the listed base form rather than an unlisted synonym or inflection.",
+    'Return strict JSON only in exactly this shape: {"generalizedEssence":{"text":"","supportFacetKeys":[]}}',
+  ].join("\n");
+  const user = [
+    `Kind: ${kind}`,
+    `Combined source fingerprint: ${sourceFingerprint}`,
+    "Grounded support synthesis:",
+    JSON.stringify(support),
   ].join("\n");
   return { system, user, sourceFingerprint };
 }
@@ -538,6 +660,116 @@ function cleanFacet(value: unknown, knownIds: ReadonlySet<string>): SoulEssenceF
   return { text, sourceIds: text ? sourceIds : [] };
 }
 
+/**
+ * Exact free-text vocabulary accepted by the final abstraction validator. Keep this exported and
+ * present it verbatim to the model: a local model cannot comply with a hidden allowlist.
+ */
+export const SOUL_GENERALIZED_TRAIT_VOCABULARY = [
+    "accepting", "adaptable", "adventurous", "analytical", "assertive", "attentive",
+    "affectionate", "attuned", "authentic", "autonomous", "aware", "balanced", "ambitious", "bold",
+    "brave", "calm", "candid", "careful", "caring", "cautious", "collaborative",
+    "comfortable", "community", "connected", "connection",
+    "compassionate", "confident", "conscientious", "considerate", "contemplative",
+    "cooperative", "competitive", "creative", "curiosity", "curious", "decisive",
+    "courageous", "deliberate", "dependable", "depth", "diplomatic", "diligent",
+    "direct", "discerning", "disciplined",
+    "driven", "empathetic", "empathetically", "emotional", "emotionally", "energetic",
+    "epistemic", "epistemically", "equitable", "ethical", "ethically", "earnest",
+    "experimental", "exploratory", "expressive", "extroverted", "fair", "fairness", "flexible",
+    "focused", "forgiving", "forthright", "generous", "gentle", "grounded", "honest", "hopeful",
+    "humorous",
+    "growth", "humble", "idealistic", "ideas", "imaginative", "independent",
+    "independently", "inquisitive", "insightful", "intelligent", "intellectual",
+    "intellectually", "introspective", "introverted", "intuitive", "inventive", "irreverent", "justice",
+    "kind", "logical", "loving", "loyal", "methodical", "mindful", "moral", "morally", "minded",
+    "meaning", "merciful", "modest", "nuanced", "observant", "open", "optimistic",
+    "nonconformist", "oriented", "outgoing", "patient", "people", "private",
+    "passionate", "perceptive", "persistent", "philosophical", "playful", "practical",
+    "pragmatic", "precise", "principled", "protective", "questioning", "rational",
+    "realistic", "receptive", "reflective", "relational", "reserved", "resilient",
+    "resourceful", "rigorous",
+    "self", "sensitive", "serene", "serious", "sincere", "skeptical", "socially", "spiritual",
+    "spiritually", "spontaneous", "steady", "stoic", "strategic", "supportive", "systems",
+    "tactful", "tenacious", "thinking", "thoughtful", "tolerant", "truth", "trusting",
+    "trustworthy", "uncertainty", "unconventional", "warm", "warmly", "witty",
+    "and", "but", "deeply", "gently", "quietly", "seeking", "selectively", "strongly",
+    "with", "yet",
+  ] as const;
+const GENERIC_SOUL_ESSENCE_WORDS = new Set<string>(
+  SOUL_GENERALIZED_TRAIT_VOCABULARY,
+);
+
+function generalizedEssenceWords(text: string): string[] {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[-‐‑‒–—]/gu, " ")
+      .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) ?? []
+  );
+}
+
+/**
+ * Enforce the part a weak local model cannot be trusted to self-police: the final result must be a
+ * tiny list of abstract traits, not source-topic prose that merely fits inside the character cap.
+ */
+export function soulGeneralizedEssenceIssue(
+  text: string,
+): string | undefined {
+  const value = text.replace(/\s+/g, " ").trim().replace(/[.!?]+$/u, "");
+  if (!value) return undefined;
+  if (value.length > MAX_SOUL_GENERALIZED_ESSENCE_CHARS) {
+    return `generalizedEssence.text is ${value.length} characters; shorten it to at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS}.`;
+  }
+  if (/[\r\n,|•]/u.test(value)) {
+    return "Use semicolons between plain trait phrases; do not return prose, bullets, or comma-separated inventory.";
+  }
+  if (/[\d@#()[\]{}"“”/:\\]/u.test(value) || /\bhttps?:\b/iu.test(value)) {
+    return "Remove names, numbers, quotations, links, labels, and other source-level details.";
+  }
+  if (
+    /\b(?:about|regarding|interested in|focused on|driven by|curiosity (?:for|about)|passion for|love of|knowledge of|experience with|all things)\b/iu.test(
+      value,
+    )
+  ) {
+    return "Use standalone higher-order traits, not interests, subject areas, or dossier-style explanations.";
+  }
+  const traits = value.split(";").map((trait) => trait.trim()).filter(Boolean);
+  if (traits.length === 0 || traits.length > MAX_SOUL_GENERALIZED_TRAITS) {
+    return `Return 1-${MAX_SOUL_GENERALIZED_TRAITS} brief trait phrases separated by semicolons.`;
+  }
+  for (const trait of traits) {
+    const words = generalizedEssenceWords(trait);
+    if (words.length === 0 || words.length > MAX_SOUL_GENERALIZED_TRAIT_WORDS) {
+      return `Keep each generalized trait to at most ${MAX_SOUL_GENERALIZED_TRAIT_WORDS} words.`;
+    }
+  }
+  const nonGeneralWords = generalizedEssenceWords(value).filter(
+    (word) => !GENERIC_SOUL_ESSENCE_WORDS.has(word),
+  );
+  if (nonGeneralWords.length > 0) {
+    return (
+      "Replace source-specific wording with broad personality or behavioral traits; non-general terms: " +
+      JSON.stringify([...new Set(nonGeneralWords)]) +
+      "."
+    );
+  }
+  return undefined;
+}
+
+function cleanGeneralizedEssence(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+): SoulEssenceFacet | undefined {
+  const record = objectRecord(value);
+  if (!record || typeof record.text !== "string") return undefined;
+  const text = record.text.replace(/\s+/g, " ").trim();
+  if (text.length > MAX_SOUL_GENERALIZED_ESSENCE_CHARS) return undefined;
+  const sourceIds = cleanEvidenceIds(record.sourceIds ?? record.evidence, knownIds);
+  if (!sourceIds) return undefined;
+  if (text && sourceIds.length === 0) return undefined;
+  return { text, sourceIds: text ? sourceIds : [] };
+}
+
 function cleanExactAppearance(
   value: unknown,
   sources: readonly SoulEssenceSource[],
@@ -589,7 +821,7 @@ function cleanExactAppearance(
 }
 
 const PERSONALITY_DIRECTION_WORDS =
-  /(?:\b(?:strives? to|aspires? to|trying to become|wants? to become|personality direction|direction:|instruction:|(?:always|never) (?:be|stay|keep|speak|respond|act|behave|write|challenge|avoid|prefer|question|push|encourage|admit|acknowledge)|do not (?:be|stay|keep|speak|respond|act|behave|write|flatter|agree|avoid|hide|pretend)|don't (?:be|stay|keep|speak|respond|act|behave|write|flatter|agree|avoid|hide|pretend)|portray(?:ed)? (?:me|them|the reader|the assistant) as)\b|(?:^|[.!]\s*)(?:please\s+)?(?:should|must|ought to|need(?:s)? to)\b|\b(?:you|i|the assistant|assistant|the reader|reader|responses?|answers?|tone|voice|personality|portrayal)\s+(?:should|must|ought to|need(?:s)? to)\b|\b(?:i\s+want|i(?:['’]d| would)\s+like)\s+(?:you|the assistant|assistant|the ai)\s+to\s+(?:be|become|stay|keep|speak|respond|act|behave|write|challenge|avoid|prefer|question|push|encourage|admit|acknowledge|portray)\b)/i;
+  /(?:\b(?:strives? to|aspires? to|trying to become|wants? to become|personality direction|direction:|instruction:|(?:always|never) (?:be|stay|keep|speak|respond|act|behave|write|challenge|avoid|prefer|question|push|encourage|admit|acknowledge|flatter|agree)|do not (?:be|stay|keep|speak|respond|act|behave|write|flatter|agree|avoid|hide|pretend)|don't (?:be|stay|keep|speak|respond|act|behave|write|flatter|agree|avoid|hide|pretend)|portray(?:ed)? (?:me|them|the reader|the assistant) as)\b|(?:^|[.!]\s*)(?:please\s+)?(?:should|must|ought to|need(?:s)? to)\b|\b(?:you|i|the assistant|assistant|the reader|reader|responses?|answers?|tone|voice|personality|portrayal)\s+(?:should|must|ought to|need(?:s)? to)\b|\b(?:i\s+want|i(?:['’]d| would)\s+like)\s+(?:you|the assistant|assistant|the ai)\s+to\s+(?:be|become|stay|keep|speak|respond|act|behave|write|challenge|avoid|prefer|question|push|encourage|admit|acknowledge|portray)\b)/i;
 const PERSONALITY_DIRECTION_IMPERATIVE =
   /^(?:please\s+)?(?:be|become|speak|respond|act|behave|write|avoid|challenge|portray|keep|do not|don't|stay|prefer|question|push|encourage|admit|acknowledge)\b/i;
 
@@ -666,6 +898,8 @@ function normaliseSoulEssence(
   const knownIds = new Set(sources.map((source) => source.id));
   const rawFacets = objectRecord(record.facets);
   if (!rawFacets) return undefined;
+  const generalizedEssence = cleanGeneralizedEssence(record.generalizedEssence, knownIds);
+  if (!generalizedEssence) return undefined;
 
   const facets = {} as SoulEssenceFacets;
   for (const key of SOUL_ESSENCE_FACETS) {
@@ -695,9 +929,25 @@ function normaliseSoulEssence(
       }
     : { text: "", sourceIds: [] };
 
-  const hasSynthesis = SOUL_ESSENCE_FACETS.some((key) => !!facets[key].text);
+  const supportFacetKeys = SOUL_ESSENCE_FACETS.filter(
+    (key) => key !== "personalityDirections",
+  );
+  const hasGeneralizableSynthesis = supportFacetKeys.some((key) => !!facets[key].text);
+  if (hasGeneralizableSynthesis !== !!generalizedEssence.text) return undefined;
+  const generalizedSupportIds = new Set(
+    supportFacetKeys.flatMap((key) => facets[key].sourceIds),
+  );
+  if (
+    generalizedEssence.sourceIds.some((id) => !generalizedSupportIds.has(id))
+  ) {
+    return undefined;
+  }
+  const hasSynthesis =
+    !!generalizedEssence.text ||
+    SOUL_ESSENCE_FACETS.some((key) => !!facets[key].text);
   if (notes.length > 0 && !hasSynthesis && exactAppearance.length === 0) return undefined;
   const citedSourceIds = new Set([
+    ...generalizedEssence.sourceIds,
     ...SOUL_ESSENCE_FACETS.flatMap((key) => facets[key].sourceIds),
     ...exactAppearance.flatMap((fact) => fact.sourceIds),
     ...exactDirections.flatMap((fact) => fact.sourceIds),
@@ -722,6 +972,7 @@ function normaliseSoulEssence(
     kind,
     sourceFingerprint: soulSourceFingerprint(notes),
     generatedAt: generatedAtOverride ?? storedGeneratedAt ?? Date.now(),
+    generalizedEssence,
     facets,
     exactAppearance,
     exactPersonalityDirections: exactDirections,
@@ -768,6 +1019,17 @@ export function parseGeneratedSoulEssence(
   if (!record || !hasCompleteGeneratedFacets(record)) return undefined;
   const knownIds = new Set(soulNoteSources(notes).map((source) => source.id));
   const rawFacets = objectRecord(record.facets);
+  const rawGeneralized = objectRecord(record.generalizedEssence);
+  const generalizedIds = rawGeneralized?.sourceIds ?? rawGeneralized?.evidence;
+  const generalizedEssence =
+    rawGeneralized && Array.isArray(generalizedIds)
+      ? {
+          ...rawGeneralized,
+          sourceIds: generalizedIds.filter(
+            (id): id is string => typeof id === "string" && knownIds.has(id),
+          ),
+        }
+      : record.generalizedEssence;
   const facets = rawFacets
     ? Object.fromEntries(
         Object.entries(rawFacets).map(([key, value]) => {
@@ -795,6 +1057,7 @@ export function parseGeneratedSoulEssence(
       schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
       kind,
       sourceFingerprint: soulSourceFingerprint(notes),
+      generalizedEssence,
       facets,
       exactAppearance: [],
     },
@@ -820,6 +1083,7 @@ function generatedEssenceRecord(
 function hasCompleteGeneratedFacets(record: Record<string, unknown>): boolean {
   const facets = objectRecord(record.facets);
   return (
+    !!objectRecord(record.generalizedEssence) &&
     !!facets &&
     SOUL_ESSENCE_FACETS.every((key) => !!objectRecord(facets[key]))
   );
@@ -860,6 +1124,45 @@ export function soulEssenceRepairFeedback(
   }
 
   const issues: string[] = [];
+  const rawGeneralized = objectRecord(record.generalizedEssence);
+  const generalizedText =
+    typeof rawGeneralized?.text === "string"
+      ? rawGeneralized.text.replace(/\s+/g, " ").trim()
+      : "";
+  const rawGeneralizedIds = rawGeneralized?.sourceIds ?? rawGeneralized?.evidence;
+  const validGeneralizedIds = Array.isArray(rawGeneralizedIds)
+    ? rawGeneralizedIds.filter(
+        (id): id is string => typeof id === "string" && knownIds.has(id),
+      )
+    : [];
+  if (!rawGeneralized) {
+    issues.push("generalizedEssence must be an object with text and sourceIds.");
+  } else {
+    if (typeof rawGeneralized.text !== "string") {
+      issues.push("generalizedEssence.text must be a string.");
+    } else if (generalizedText.length > MAX_SOUL_GENERALIZED_ESSENCE_CHARS) {
+      issues.push(
+        `generalizedEssence.text is ${generalizedText.length} characters; shorten it to at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS}.`,
+      );
+    }
+    if (!Array.isArray(rawGeneralizedIds)) {
+      issues.push("generalizedEssence.sourceIds must be an array.");
+    } else {
+      const unknownGeneralizedIds = rawGeneralizedIds.filter(
+        (id) => typeof id !== "string" || !knownIds.has(id),
+      );
+      if (unknownGeneralizedIds.length > 0) {
+        issues.push(
+          "generalizedEssence cites unknown source IDs: " +
+            JSON.stringify([...new Set(unknownGeneralizedIds.map(String))]) +
+            ".",
+        );
+      }
+      if (generalizedText && validGeneralizedIds.length === 0) {
+        issues.push("generalizedEssence has text but no valid source ID.");
+      }
+    }
+  }
   const missingFacetKeys = SOUL_ESSENCE_FACETS.filter(
     (key) => !objectRecord(rawFacets[key]),
   );
@@ -905,6 +1208,47 @@ export function soulEssenceRepairFeedback(
     if (text) {
       for (const id of validIds) covered.add(id);
     }
+  }
+
+  const hasGeneralizableFacet = SOUL_ESSENCE_FACETS.some(
+    (key) =>
+      key !== "personalityDirections" &&
+      !!(
+        typeof objectRecord(rawFacets[key])?.text === "string"
+          ? (objectRecord(rawFacets[key])!.text as string).trim()
+          : typeof objectRecord(rawFacets[key])?.summary === "string"
+            ? (objectRecord(rawFacets[key])!.summary as string).trim()
+            : ""
+      ),
+  );
+  if (hasGeneralizableFacet && !generalizedText) {
+    issues.push(
+      "generalizedEssence is empty even though the support facets contain generalizable identity meaning.",
+    );
+  } else if (!hasGeneralizableFacet && generalizedText) {
+    issues.push(
+      "generalizedEssence invents standing personality even though every non-direction support facet is empty.",
+    );
+  }
+  const generalizedSupportIds = new Set<string>();
+  for (const key of SOUL_ESSENCE_FACETS) {
+    if (key === "personalityDirections") continue;
+    const facet = objectRecord(rawFacets[key]);
+    const ids = facet?.sourceIds ?? facet?.evidence;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) {
+      if (typeof id === "string" && knownIds.has(id)) generalizedSupportIds.add(id);
+    }
+  }
+  const unsupportedGeneralizedIds = validGeneralizedIds.filter(
+    (id) => !generalizedSupportIds.has(id),
+  );
+  if (unsupportedGeneralizedIds.length > 0) {
+    issues.push(
+      "generalizedEssence must cite evidence retained in a non-direction support facet; unsupported IDs: " +
+        JSON.stringify(unsupportedGeneralizedIds) +
+        ".",
+    );
   }
 
   const uncovered = sources.filter((source) => !covered.has(source.id));
@@ -959,6 +1303,20 @@ export function parseSoulEssenceMerge(
       sourceIds: text ? sourceIds : [],
     };
   }
+  const rawGeneralized = objectRecord(record.generalizedEssence);
+  if (!rawGeneralized || typeof rawGeneralized.text !== "string") return undefined;
+  const generalizedText = rawGeneralized.text.replace(/\s+/g, " ").trim();
+  if (generalizedText.length > MAX_SOUL_GENERALIZED_ESSENCE_CHARS) return undefined;
+  const childHasGeneralizedMeaning = digests.some(
+    (digest) => !!digest.essence.generalizedEssence.text,
+  );
+  if (childHasGeneralizedMeaning !== !!generalizedText) return undefined;
+  const generalizedSourceIds = [
+    ...new Set(
+      SOUL_ESSENCE_FACETS.filter((key) => key !== "personalityDirections")
+        .flatMap((key) => facets[key].sourceIds),
+    ),
+  ];
 
   return normaliseSoulEssence(
     {
@@ -966,6 +1324,10 @@ export function parseSoulEssenceMerge(
       schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
       kind,
       sourceFingerprint: soulSourceFingerprint(notes),
+      generalizedEssence: {
+        text: generalizedText,
+        sourceIds: generalizedText ? generalizedSourceIds : [],
+      },
       facets,
       exactAppearance: [],
     },
@@ -990,6 +1352,29 @@ export function soulEssenceMergeRepairFeedback(
   }
   const rebased = rebaseSoulDigestFacets(notes, digests);
   const issues: string[] = [];
+  const rawGeneralized = objectRecord(record?.generalizedEssence);
+  const generalizedText =
+    typeof rawGeneralized?.text === "string"
+      ? rawGeneralized.text.replace(/\s+/g, " ").trim()
+      : "";
+  const childHasGeneralizedMeaning = digests.some(
+    (digest) => !!digest.essence.generalizedEssence.text,
+  );
+  if (!rawGeneralized || typeof rawGeneralized.text !== "string") {
+    issues.push("generalizedEssence must be an object with text and sourceIds.");
+  } else if (generalizedText.length > MAX_SOUL_GENERALIZED_ESSENCE_CHARS) {
+    issues.push(
+      `generalizedEssence.text is ${generalizedText.length} characters; shorten it to at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS}.`,
+    );
+  } else if (childHasGeneralizedMeaning && !generalizedText) {
+    issues.push(
+      "generalizedEssence became empty even though the grounded child digest contains identity meaning.",
+    );
+  } else if (!childHasGeneralizedMeaning && generalizedText) {
+    issues.push(
+      "generalizedEssence invented meaning even though every grounded child digest is empty.",
+    );
+  }
   const missingFacetKeys = SOUL_ESSENCE_FACETS.filter(
     (key) => !objectRecord(rawFacets[key]),
   );
@@ -1016,7 +1401,149 @@ export function soulEssenceMergeRepairFeedback(
   }
   return issues.length > 0
     ? issues.join("\n")
-    : "The merge failed validation. Preserve every populated child facet in that same facet, leave genuinely empty facets empty, and return sourceIds as empty arrays.";
+    : "The merge failed validation. Keep generalizedEssence portable and brief, preserve every populated child support facet in that same facet, leave genuinely empty facets empty, and return sourceIds as empty arrays.";
+}
+
+function generatedAbstractionRecord(
+  parsed: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!parsed) return undefined;
+  if (objectRecord(parsed.generalizedEssence)) return parsed;
+  for (const key of ["essence", "result", "data", "output"] as const) {
+    const nested = objectRecord(parsed[key]);
+    if (nested && objectRecord(nested.generalizedEssence)) return nested;
+  }
+  return parsed;
+}
+
+/** Parse the minimal final abstraction while carrying all grounded support forward unchanged. */
+export function parseSoulEssenceAbstraction(
+  raw: string,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  integrated: SoulEssence,
+  generatedAt?: number,
+): SoulEssence | undefined {
+  const base = validateSoulEssence(integrated, kind, notes);
+  if (!base) return undefined;
+  const record = generatedAbstractionRecord(parseGeneratedJsonObject(raw));
+  const rawGeneralized = objectRecord(record?.generalizedEssence);
+  if (
+    !rawGeneralized ||
+    typeof rawGeneralized.text !== "string" ||
+    !Array.isArray(rawGeneralized.supportFacetKeys)
+  ) {
+    return undefined;
+  }
+  const supportFacetKeys: SoulGeneralizableFacetKey[] = [];
+  for (const value of rawGeneralized.supportFacetKeys) {
+    if (
+      typeof value !== "string" ||
+      !SOUL_GENERALIZABLE_FACETS.includes(value as SoulGeneralizableFacetKey)
+    ) {
+      return undefined;
+    }
+    const key = value as SoulGeneralizableFacetKey;
+    if (!base.facets[key].text || supportFacetKeys.includes(key)) return undefined;
+    supportFacetKeys.push(key);
+  }
+  const text = rawGeneralized.text.replace(/\s+/g, " ").trim();
+  if (soulGeneralizedEssenceIssue(text)) return undefined;
+  const hadMeaning = !!base.generalizedEssence.text;
+  if (hadMeaning !== !!text) return undefined;
+  if (!!text !== (supportFacetKeys.length > 0)) return undefined;
+  const sourceIds = [
+    ...new Set(
+      supportFacetKeys.flatMap((key) => base.facets[key].sourceIds),
+    ),
+  ];
+  return normaliseSoulEssence(
+    {
+      ...base,
+      generalizedEssence: {
+        text,
+        sourceIds: text ? sourceIds : [],
+      },
+    },
+    kind,
+    notes,
+    generatedAt,
+  );
+}
+
+/** Targeted feedback for the minimal, low-output final abstraction pass. */
+function withSoulGeneralizedVocabulary(message: string): string {
+  return [
+    message,
+    `Complete accepted word vocabulary: ${SOUL_GENERALIZED_TRAIT_VOCABULARY.join(", ")}.`,
+    "Every output word must appear in that list exactly; use a listed base form instead of an unlisted synonym or inflection.",
+  ].join("\n");
+}
+
+export function soulEssenceAbstractionRepairFeedback(
+  raw: string,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  integrated: SoulEssence,
+): string {
+  if (parseSoulEssenceAbstraction(raw, kind, notes, integrated)) return "";
+  if (!validateSoulEssence(integrated, kind, notes)) {
+    return "The grounded Soul synthesis supplied to the abstraction pass was stale or invalid.";
+  }
+  const record = generatedAbstractionRecord(parseGeneratedJsonObject(raw));
+  const rawGeneralized = objectRecord(record?.generalizedEssence);
+  if (!rawGeneralized) {
+    return withSoulGeneralizedVocabulary(
+      "The response did not contain generalizedEssence as an object with text and supportFacetKeys.",
+    );
+  }
+  if (typeof rawGeneralized.text !== "string") {
+    return withSoulGeneralizedVocabulary("generalizedEssence.text must be a string.");
+  }
+  if (!Array.isArray(rawGeneralized.supportFacetKeys)) {
+    return withSoulGeneralizedVocabulary(
+      "generalizedEssence.supportFacetKeys must be an array of supplied grounded support category names.",
+    );
+  }
+  const invalidKeys = rawGeneralized.supportFacetKeys.filter(
+    (value) =>
+      typeof value !== "string" ||
+      !SOUL_GENERALIZABLE_FACETS.includes(value as SoulGeneralizableFacetKey) ||
+      !integrated.facets[value as SoulGeneralizableFacetKey]?.text,
+  );
+  if (invalidKeys.length > 0) {
+    return withSoulGeneralizedVocabulary(
+      "generalizedEssence.supportFacetKeys contains unknown or empty support categories: " +
+        JSON.stringify(invalidKeys) +
+        ".",
+    );
+  }
+  const text = rawGeneralized.text.replace(/\s+/g, " ").trim();
+  const specificityIssue = soulGeneralizedEssenceIssue(text);
+  if (specificityIssue) return withSoulGeneralizedVocabulary(specificityIssue);
+  if (!!integrated.generalizedEssence.text && !text) {
+    return withSoulGeneralizedVocabulary(
+      "generalizedEssence became empty even though the grounded support contains identity meaning.",
+    );
+  }
+  if (!integrated.generalizedEssence.text && text) {
+    return withSoulGeneralizedVocabulary(
+      "generalizedEssence invented identity meaning where the grounded support has none.",
+    );
+  }
+  if (text && rawGeneralized.supportFacetKeys.length === 0) {
+    return withSoulGeneralizedVocabulary(
+      "Choose at least one non-empty grounded support category in supportFacetKeys.",
+    );
+  }
+  if (!text && rawGeneralized.supportFacetKeys.length > 0) {
+    return withSoulGeneralizedVocabulary(
+      "Leave supportFacetKeys empty when generalizedEssence.text is empty.",
+    );
+  }
+  return withSoulGeneralizedVocabulary(
+    "Return only one brief, portable generalizedEssence object with its directly supporting facet keys.",
+  );
 }
 
 /** Load only a current, supported essence. Stale/corrupt memo values behave as absent. */
@@ -1063,21 +1590,10 @@ async function invalidateSoulEssence(store: VisualReaderStore, kind: SoulKind): 
   }
 }
 
-const ESSENCE_FACET_LABELS: Record<SoulEssenceFacetKey, string> = {
-  coreDisposition: "Core disposition",
-  conversationalVoice: "Conversational voice",
-  thinkingStyle: "Thinking and curiosity style",
-  valuesAndMotivations: "Values and motivations",
-  relationalStyle: "Relational style",
-  personalityDirections: "Personality directions",
-  tensionsAndNuance: "Tensions and nuance",
-};
-
 /** Exact behavioral directions get their own standing allowance instead of competing with looks. */
 export const SOUL_DIRECTION_PROMPT_BUDGET_CHARS = 1_000;
 /** Bound one everyday identity block even if a model fills every facet to its schema maximum. */
 export const SOUL_ESSENCE_CONTENT_PROMPT_BUDGET_CHARS = 3_200;
-const SOUL_ESSENCE_FACET_PROMPT_CHARS = 220;
 
 function essenceContentLines(essence: SoulEssence, name: string): string[] {
   const candidates: string[] = name.trim() ? [`- Name: ${name.trim()}`] : [];
@@ -1104,19 +1620,8 @@ function essenceContentLines(essence: SoulEssence, name: string): string[] {
     essence.exactAppearance.map((fact, at) => ({ text: fact.text, at })),
   );
   if (exactLook) candidates.push(`- Exact physical appearance: ${exactLook}`);
-  // Once exact invariants are reserved, include a balanced compact slice of every synthesized facet.
-  for (const key of SOUL_ESSENCE_FACETS) {
-    if (key === "personalityDirections") continue;
-    const text = essence.facets[key].text.trim();
-    if (!text) continue;
-    const compact = text.length <= SOUL_ESSENCE_FACET_PROMPT_CHARS
-      ? text
-      : `${text
-          .slice(0, SOUL_ESSENCE_FACET_PROMPT_CHARS)
-          .replace(/\s+\S*$/, "")
-          .replace(/[;,:\s]+$/, "")}…`;
-    candidates.push(`- ${ESSENCE_FACET_LABELS[key]}: ${compact}`);
-  }
+  const generalized = essence.generalizedEssence.text.trim();
+  if (generalized) candidates.push(`- General essence: ${generalized}`);
 
   const lines: string[] = [];
   let used = 0;
@@ -1127,6 +1632,51 @@ function essenceContentLines(essence: SoulEssence, name: string): string[] {
     used += cost;
   }
   return lines;
+}
+
+function sourceExactIdentityLines(notes: readonly SoulNote[], name: string): string[] {
+  const lines = name.trim() ? [`- Name: ${name.trim()}`] : [];
+  const directions = boundedExactTexts(
+    notes
+      .map((note) => note.text.trim())
+      .filter((text) => text && isPersonalityDirectionNote(text)),
+    SOUL_DIRECTION_PROMPT_BUDGET_CHARS,
+  );
+  if (directions) lines.push(`- Source-exact personality directions: ${directions}`);
+  const exactLook = visualSoulNotes(notes);
+  if (exactLook) lines.push(`- Exact physical appearance: ${exactLook}`);
+  return lines;
+}
+
+/**
+ * Safe temporary ordinary-chat context while a v2 essence has not been generated yet. It preserves
+ * exact invariants without reverting to the raw interests/thoughts dossier that v2 was built to stop.
+ */
+export function selfSoulExactIdentityPromptBlock(
+  notes: readonly SoulNote[],
+  name = "",
+): string {
+  const lines = sourceExactIdentityLines(notes, name);
+  if (lines.length === 0) return "";
+  return [
+    "WHO YOU ARE (source-exact identity invariants; generalized essence pending):",
+    ...lines,
+    "Honor these silently. Do not infer or recite a broader personality from the unavailable raw Soul-note list.",
+  ].join("\n");
+}
+
+/** Reader counterpart to {@link selfSoulExactIdentityPromptBlock}. */
+export function userSoulExactIdentityPromptBlock(
+  notes: readonly SoulNote[],
+  name = "",
+): string {
+  const lines = sourceExactIdentityLines(notes, name);
+  if (lines.length === 0) return "";
+  return [
+    "WHO THE READER IS (source-exact identity invariants; generalized essence pending):",
+    ...lines,
+    "Use these only where relevant. Do not infer or recite a broader profile from the unavailable raw Soul-note list.",
+  ].join("\n");
 }
 
 /**
@@ -1155,6 +1705,65 @@ export function userSoulEssencePromptBlock(essence: SoulEssence | undefined, nam
     "Let this inform your understanding silently. Do not recite the profile, stereotype the reader, or repeatedly mention its source examples.",
     "Do not steer unrelated conversation toward these interests or profound thoughts. Use a specific source example only when the reader asks for it or the present context naturally requires it.",
   ].join("\n");
+}
+
+function storySoulEssencePromptBlock(
+  kind: SoulKind,
+  essence: SoulEssence | undefined,
+  name: string,
+): string {
+  if (!essence || essence.kind !== kind || !essence.generalizedEssence.text.trim()) return "";
+  const role =
+    kind === "self"
+      ? "assistant's mapped story character"
+      : "reader's mapped story character";
+  const displayName =
+    name.trim() ||
+    (kind === "self" ? "the assistant's character" : "the reader's character");
+  return [
+    `STORY CHARACTER BASELINE — ${displayName} (${role}):`,
+    `- General essence: ${essence.generalizedEssence.text.trim()}`,
+    "Use this only as subtle behavioral color where the story itself leaves room. Established characterization, the current scene, the Visual Bible, genre, and the reader's steer override it.",
+    "Never turn supporting Soul interests, thoughts, examples, or directions into plot subjects or backstory. Never apply this baseline to any other character.",
+  ].join("\n");
+}
+
+/**
+ * Story prose gets only the portable generalized identity. Exact directions, exact appearance, raw
+ * notes, and query-retrieved evidence deliberately stay out of this path.
+ */
+export function selfStorySoulEssencePromptBlock(
+  essence: SoulEssence | undefined,
+  name = "",
+): string {
+  return storySoulEssencePromptBlock("self", essence, name);
+}
+
+/** Story-only counterpart for the reader's mapped character. */
+export function userStorySoulEssencePromptBlock(
+  essence: SoulEssence | undefined,
+  name = "",
+): string {
+  return storySoulEssencePromptBlock("user", essence, name);
+}
+
+/** One bounded block for a persisted You-and-me Soul cast. */
+export function storySoulCharacterizationPromptBlock(input: {
+  selfEssence?: SoulEssence;
+  selfName?: string;
+  userEssence?: SoulEssence;
+  userName?: string;
+}): string {
+  const blocks = [
+    selfStorySoulEssencePromptBlock(input.selfEssence, input.selfName),
+    userStorySoulEssencePromptBlock(input.userEssence, input.userName),
+  ].filter(Boolean);
+  if (blocks.length === 0) return "";
+  return [
+    'GENERALIZED SOUL ESSENCE FOR THIS "YOU & ME" CAST:',
+    ...blocks,
+    "These baselines belong only to the explicitly mapped characters above. They are not narrator instructions and do not characterize the rest of the cast.",
+  ].join("\n\n");
 }
 
 /** Upper bound for raw Soul-note evidence retrieved for one explicit identity question. */

@@ -84,8 +84,15 @@ import {
   userSoulPromptBlock,
   selfSoulEssencePromptBlock,
   userSoulEssencePromptBlock,
+  selfSoulExactIdentityPromptBlock,
+  userSoulExactIdentityPromptBlock,
+  selfStorySoulEssencePromptBlock,
+  userStorySoulEssencePromptBlock,
+  storySoulCharacterizationPromptBlock,
+  selectSoulContextMode,
   buildSoulEssenceDistillationPrompt,
   buildSoulEssenceMergePrompt,
+  buildSoulEssenceAbstractionPrompt,
   partitionSoulNotes,
   validateSoulEssence,
   loadSoulEssence,
@@ -99,6 +106,9 @@ import {
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
+  createStorySoulCast,
+  normalizeStorySoulCast,
+  validateStorySoulCastAgainstCharacters,
   roleplayStoryTurnPrompt,
   parseStoryOpening,
   storyStartBeats,
@@ -227,6 +237,7 @@ import {
   type LLMProvider,
   type SoulEssence,
   type SoulEssenceDigestInput,
+  type SoulContextMode,
   type SoulKind,
   type SoulNote,
   type TierConfig,
@@ -298,6 +309,8 @@ interface StorySessionState {
    * scene and render_scene of a past beat uses that beat's cast/location. */
   scenes: StoryScene[];
   roleplay?: StoryRoleplay;
+  /** Explicit Soul-backed story names. Absent for custom stories, so Souls cannot bleed into them. */
+  soulCast?: { self: string; user: string; source: "you-and-me-setup-v1" };
   /** The story workflow: "roleplay" (reader steers a character, the assistant voices everyone) or
    * "direct" (reader directs, the assistant narrates). Drives the writing prompt. */
   mode: "direct" | "roleplay";
@@ -391,6 +404,7 @@ function beatsFromBook(book: BookSource): string[] {
 function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
   return {
     ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    ...(s.soulCast ? { soulCast: s.soulCast } : {}),
     mode: s.mode,
     ...(s.play ? { play: s.play } : {}),
     ...(s.synopsis ? { synopsis: s.synopsis } : {}),
@@ -445,6 +459,12 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
   const roleplay = book.storyConfig?.roleplay;
   const cadence = book.storyConfig?.cadence ?? { mode: "per-response" as const, n: 3 };
   const persisted = book.storyConfig?.scenes ?? [];
+  // A persisted marker is portable/importable data, not proof by itself. Restore Soul ownership
+  // only after the story's Bible is available and confirms both mapped canonical cast names.
+  const soulCast = validateStorySoulCastAgainstCharacters(
+    book.storyConfig?.soulCast,
+    bible?.characters,
+  );
   const scenes: StoryScene[] = [];
   let running: StoryScene = emptyStoryScene();
   beats.forEach((text, k) => {
@@ -480,6 +500,7 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
     scenes,
     ...(roleplay ? { roleplay } : {}),
+    ...(soulCast ? { soulCast } : {}),
     // Workflow + played names persist on storyConfig (Phase C); fall back to deriving the mode from
     // whether a played cast exists, so stories created before that still resume in a sensible mode.
     mode: book.storyConfig?.mode ?? (roleplay ? "roleplay" : "direct"),
@@ -488,6 +509,15 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
   };
+}
+
+async function soulCastForStoryBook(
+  book: BookSource | undefined,
+): Promise<StorySessionState["soulCast"]> {
+  if (book?.kind !== "story" || story?.bookId !== book.id) return undefined;
+  // Live setup mappings were cast-validated before stamping; reopened mappings enter `story` only
+  // through rebuildStoryFromBook's restored-Bible validation above. Never fall back to raw book data.
+  return normalizeStorySoulCast(story.soulCast);
 }
 
 /** Store for long-term reader memory (shares the buddy's lazy IndexedDB handle). */
@@ -2269,8 +2299,8 @@ const MAX_INLINE_SOUL_DISTILLATION_CHUNKS = 1;
 const SOUL_DIGEST_CACHE_LIMIT = 512;
 const SOUL_DIGEST_CACHE_MAX_CHARS = 1_000_000;
 const SOUL_DIGEST_CACHE_KEY: Record<SoulKind, string> = {
-  self: "self-soul-essence-digests-v1",
-  user: "about-you-soul-essence-digests-v1",
+  self: "self-soul-essence-digests-v2",
+  user: "about-you-soul-essence-digests-v2",
 };
 
 type SoulEssenceProgressCallback = (
@@ -2392,6 +2422,7 @@ async function completeSoulEssence(
   digests?: readonly SoulEssenceDigestInput[],
   onToken?: (delta: string) => void,
   onRepair?: (feedback: string, truncated: boolean) => void,
+  abstractionBase?: SoulEssence,
 ): Promise<{ essence?: SoulEssence; failure?: SoulEssenceCompletionFailure }> {
   return completeSoulEssenceWithRepair({
     llm,
@@ -2401,6 +2432,7 @@ async function completeSoulEssence(
     maxTokens,
     ...(signal ? { signal } : {}),
     ...(digests ? { digests } : {}),
+    ...(abstractionBase ? { abstractionBase } : {}),
     ...(onToken ? { onToken } : {}),
     ...(onRepair ? { onRepair } : {}),
   });
@@ -2408,14 +2440,16 @@ async function completeSoulEssence(
 
 function soulEssenceFormatError(
   failure: SoulEssenceCompletionFailure | undefined,
-  scope: "source" | "merge",
+  scope: "source" | "merge" | "abstraction",
 ): Error {
   const raw = failure?.feedback.replace(/\s+/g, " ").trim() ?? "";
   const detail = raw.length > 700 ? `${raw.slice(0, 697)}...` : raw;
   const stage =
     scope === "source"
       ? "one authoritative Soul note"
-      : "the final Soul summaries";
+      : scope === "merge"
+        ? "the final Soul summaries"
+        : "the final generalized Soul Essence";
   return new Error(
     [
       `The text model could not ground ${stage} after a targeted repair.`,
@@ -2659,6 +2693,47 @@ async function distillSoulEssence(
       await flushCache();
       digests = next;
     }
+    // Even a one-chunk Soul needs a distinct abstraction pass. The leaf's seven support facets are
+    // a grounded evidence index; this final pass is what turns their combined pattern into the short,
+    // portable standing identity. It returns ONLY that small field; validated support and exact
+    // invariants are carried forward deterministically instead of being regenerated.
+    if (digests.length === 1 && digests[0]!.essence.generalizedEssence.text) {
+      total += 1;
+      activePhase = "merging";
+      activePass = completed + 1;
+      activeTotal = total;
+      onProgress?.(
+        activePhase,
+        "Abstracting the grounded Soul into one portable everyday essence…",
+        { pass: activePass, total: activeTotal },
+      );
+      const integrated = digests[0]!;
+      const result = await completeSoulEssence(
+        llm,
+        kind,
+        notes,
+        buildSoulEssenceAbstractionPrompt(kind, notes, integrated.essence),
+        Math.min(outputBudget, 384),
+        signal,
+        undefined,
+        onToken,
+        (_feedback, truncated) =>
+          onProgress?.(
+            "validating",
+            truncated
+              ? "The model's final essence was cut off; repairing it with the minimal output shape…"
+              : "The model's final essence was too specific or malformed; repairing the abstraction…",
+            { pass: activePass, total: activeTotal },
+          ),
+        integrated.essence,
+      );
+      lastCompletionFailure = result.failure;
+      if (!result.essence) {
+        throw soulEssenceFormatError(lastCompletionFailure, "abstraction");
+      }
+      completed += 1;
+      digests = [{ notes, essence: result.essence }];
+    }
     await flushCache();
     onProgress?.("validating", "Validating every synthesis against its source notes…", {
       pass: completed,
@@ -2796,7 +2871,9 @@ async function soulPromptFor(
   llm: LLMProvider,
   kind: SoulKind,
   opts: {
-    deepSourceAccess?: boolean;
+    mode?: SoulContextMode;
+    /** Story-only mapped character name; keeps edited setup names bound after the opening. */
+    nameOverride?: string;
     queryContext?: string;
     signal?: AbortSignal;
     onActivity?: () => void;
@@ -2806,47 +2883,53 @@ async function soulPromptFor(
   } = {},
 ): Promise<string> {
   const store = memoryStore();
-  const [notes, name] = await Promise.all([loadSoul(store, kind), loadSoulName(store, kind)]);
+  const [notes, storedName] = await Promise.all([loadSoul(store, kind), loadSoulName(store, kind)]);
+  const mode = opts.mode ?? "ordinary";
+  const name = opts.nameOverride !== undefined ? opts.nameOverride.trim() : storedName;
   const raw = kind === "self"
     ? selfSoulPromptBlock(notes, name)
     : userSoulPromptBlock(notes, name);
-  const ordinaryRawFallback = raw
-    ? [
-        raw,
-        "TEMPORARY SOUL-SOURCE FALLBACK: Integrate these notes silently as identity evidence. " +
-          "Do not recite this list, repeatedly mention its interests/thought examples, or steer " +
-          "unrelated conversation toward them. Use a specific item only when directly relevant or requested.",
-      ].join("\n\n")
-    : "";
+  const exactFallback = kind === "self"
+    ? selfSoulExactIdentityPromptBlock(notes, name)
+    : userSoulExactIdentityPromptBlock(notes, name);
   const cachedEssence =
     notes.length > 0
       ? await loadSoulEssence(store, kind, notes)
       : undefined;
   const evidenceFor = (essence?: SoulEssence) =>
-    opts.queryContext
+    mode !== "story" && opts.queryContext
       ? soulEvidencePromptBlock(kind, notes, opts.queryContext, undefined, essence)
       : "";
-  if (opts.deepSourceAccess || notes.length === 0) {
+  if (mode === "creative" || notes.length === 0) {
+    if (mode === "story") return "";
     return [raw, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
 
-  const compactCached = kind === "self"
-    ? selfSoulEssencePromptBlock(cachedEssence, name)
-    : userSoulEssencePromptBlock(cachedEssence, name);
+  const compactFor = (essence?: SoulEssence) =>
+    mode === "story"
+      ? kind === "self"
+        ? selfStorySoulEssencePromptBlock(essence, name)
+        : userStorySoulEssencePromptBlock(essence, name)
+      : kind === "self"
+        ? selfSoulEssencePromptBlock(essence, name)
+        : userSoulEssencePromptBlock(essence, name);
+  const compactCached = compactFor(cachedEssence);
   if (compactCached) {
     return [compactCached, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
 
   // Cloud preparation calls are billable and can retry on malformed JSON. Generate/Refresh is the
-  // explicit consent surface there; local providers may create a one-pass essence automatically.
+  // explicit consent surface there; local providers may create a bounded essence automatically.
   if (CLOUD_LLM_IDS.has(llm.id)) {
-    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+    if (mode === "story") return "";
+    return [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
 
   const sourceBudget = opts.sourceBudget ?? soulDistillationSourceBudget(opts.contextTokens);
   const outputBudget = opts.outputBudget ?? soulDistillationOutputBudget(opts.contextTokens);
   if (!soulDistillationFitsContext(opts.contextTokens)) {
-    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+    if (mode === "story") return "";
+    return [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
   if (
     partitionSoulNotes(notes, sourceBudget).length >
@@ -2854,7 +2937,9 @@ async function soulPromptFor(
   ) {
     // A maximum ledger can require many hierarchical calls. The Soul panel's explicit action runs
     // that cached rebuild visibly; this turn uses the guarded raw fallback without hidden latency.
-    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+    return mode === "story"
+      ? ""
+      : [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
 
   const essence = await ensureSoulEssence(llm, kind, notes, {
@@ -2864,11 +2949,10 @@ async function soulPromptFor(
     sourceBudget,
     outputBudget,
   });
-  const compact = kind === "self"
-    ? selfSoulEssencePromptBlock(essence, name)
-    : userSoulEssencePromptBlock(essence, name);
+  const compact = compactFor(essence);
   if (!compact) {
-    return [ordinaryRawFallback, evidenceFor(cachedEssence)]
+    if (mode === "story") return "";
+    return [exactFallback, evidenceFor(cachedEssence)]
       .filter(Boolean)
       .join("\n\n");
   }
@@ -3239,37 +3323,46 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     }
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
-    // The assistant's identity ("soul") — emitted as the FIRST section of the book chat too (and kept
-    // in the cached prefix), so the companion stays in character here, not just in the home chat.
-    // A co-written story is a creative/deep context: keep its original source notes available so
-    // roleplay can use specific traits rather than only the everyday synthesis.
+    // The assistant's identity ("soul") — emitted as the FIRST section of ordinary book chat too.
+    // Stories use a narrower policy: only a persisted You-and-me cast receives generalized character
+    // baselines. Raw notes/evidence stay out, and custom fictional casts receive no Soul context.
     const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
-    const deepSoul = book.kind === "story";
+    const soulMode = selectSoulContextMode({ storyActive: book.kind === "story" });
+    const storySoulCast = await soulCastForStoryBook(book);
     const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
     const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
     const identityActivity = () =>
       post({ type: "chatActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
     const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
+      if (soulMode === "story" && !storySoulCast) return ["", ""] as const;
       // Distillation can load a substantial local model. Do the two identities serially inside one
       // priority lease so they never compete with each other for the same model/VRAM.
-      const nextSelfSoul = await soulPromptFor(llm, "self", {
-        deepSourceAccess: deepSoul,
-        queryContext: soulQueryContext,
-        signal: ac.signal,
-        onActivity: identityActivity,
-        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-        sourceBudget: soulSourceBudget,
-        outputBudget: soulOutputBudget,
-      });
-      const nextUserSoul = await soulPromptFor(llm, "user", {
-        deepSourceAccess: deepSoul,
-        queryContext: soulQueryContext,
-        signal: ac.signal,
-        onActivity: identityActivity,
-        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-        sourceBudget: soulSourceBudget,
-        outputBudget: soulOutputBudget,
-      });
+      const nextSelfSoul =
+        soulMode === "story" && !storySoulCast?.self
+          ? ""
+          : await soulPromptFor(llm, "self", {
+              mode: soulMode,
+              ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
+              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+              signal: ac.signal,
+              onActivity: identityActivity,
+              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+              sourceBudget: soulSourceBudget,
+              outputBudget: soulOutputBudget,
+            });
+      const nextUserSoul =
+        soulMode === "story" && !storySoulCast?.user
+          ? ""
+          : await soulPromptFor(llm, "user", {
+              mode: soulMode,
+              ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
+              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+              signal: ac.signal,
+              onActivity: identityActivity,
+              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+              sourceBudget: soulSourceBudget,
+              outputBudget: soulOutputBudget,
+            });
       return [nextSelfSoul, nextUserSoul] as const;
     });
     const sections = chatContextSections({
@@ -5046,6 +5139,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           seen.add(k);
           return true;
         });
+        let resolvedSoulCast:
+          | { self: string; user: string; source: "you-and-me-setup-v1" }
+          | undefined;
+        let soulSelfNotes: SoulNote[] = [];
+        let soulUserNotes: SoulNote[] = [];
+        const requestedSoulCast = createStorySoulCast(msg.storySoulCast);
+        const castNames = new Set(cast.map((character) => character.name.trim().toLocaleLowerCase()));
+        if (
+          requestedSoulCast &&
+          castNames.has(requestedSoulCast.self.toLocaleLowerCase()) &&
+          castNames.has(requestedSoulCast.user.toLocaleLowerCase())
+        ) {
+          const [selfNotes, userNotes] = await Promise.all([
+            loadSoul(store, "self"),
+            loadSoul(store, "user"),
+          ]);
+          soulSelfNotes = selfNotes;
+          soulUserNotes = userNotes;
+          resolvedSoulCast = requestedSoulCast;
+        }
         // The reader's setup text is a PREMISE, not the opening prose: let the AI write the actual
         // opening beat and propose a title from it (grounded in the cast/roleplay). Best-effort —
         // if chat is unavailable or the reply doesn't parse, fall back to the typed text + title.
@@ -5058,49 +5171,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           try {
             post({ type: "buddyActivity", requestId: msg.requestId, text: "Writing the opening scene…" });
             const { system, user } = storyOpeningRequest(call.opening, {
-              characters: cast,
+              // Exact Soul appearance belongs in cast → Visual Bible → image prompts. The prose
+              // writer receives names only, plus the generalized behavioral baseline below.
+              characters: cast.map((character) => ({ name: character.name })),
               mode: isRoleplay ? "roleplay" : "direct",
               ...(isRoleplay && call.roleplay ? { play: call.roleplay } : {}),
               // Carried in from the chat this was started in — the opening then CONTINUES that
               // story rather than opening a fresh one.
               ...(call.soFar ? { soFar: call.soFar } : {}),
             });
-            // The Story setup owns this marker and only sets it for its "You & me" cast. Character
-            // descriptions above deliberately contain LOOKS only (for the Visual Bible); the opening
-            // writer also needs the source identities so beat one reflects their voices, values,
-            // personality directions, and manner instead of waiting for a later story turn.
+            // The setup marker authorizes only the mapped You-and-me characters. Prose receives the
+            // generalized Essence; exact appearance already travels through cast → Visual Bible,
+            // while raw notes, evidence retrieval, and exact conversational directions stay out.
             let soulCharacterization = "";
-            if (call.soulCast) {
-              const [selfNotes, storedSelfName, userNotes, storedUserName] = await Promise.all([
-                loadSoul(store, "self"),
-                loadSoulName(store, "self"),
-                loadSoul(store, "user"),
-                loadSoulName(store, "user"),
-              ]);
-              // Story Setup permits editing the played names. Bind each source document to that
-              // selected story name, while retaining the stored name as a fallback.
-              const storySelfName = call.roleplay?.you ?? cast[0]?.name ?? storedSelfName;
-              const storyUserName = call.roleplay?.me ?? cast[1]?.name ?? storedUserName;
+            if (resolvedSoulCast) {
               const [selfEssence, userEssence] = await Promise.all([
-                loadSoulEssence(store, "self", selfNotes),
-                loadSoulEssence(store, "user", userNotes),
+                loadSoulEssence(store, "self", soulSelfNotes),
+                loadSoulEssence(store, "user", soulUserNotes),
               ]);
-              const sourceBlocks = [
-                selfSoulEssencePromptBlock(selfEssence, storySelfName),
-                selfSoulPromptBlock(selfNotes, storySelfName),
-                userSoulEssencePromptBlock(userEssence, storyUserName),
-                userSoulPromptBlock(userNotes, storyUserName),
-              ].filter(Boolean);
-              if (sourceBlocks.length) {
-                soulCharacterization = [
-                  "SOURCE IDENTITIES FOR THIS \"YOU & ME\" CAST:",
-                  ...sourceBlocks,
-                  "Use these notes as characterization evidence for the two people: their manner, " +
-                    "voice, choices, values, personality directions, and physical continuity. Weave " +
-                    "only what is relevant naturally into the scene. Never list, quote, or discuss " +
-                    "the notes, and do not force every stored interest or thought into the opening.",
-                ].join("\n\n");
-              }
+              soulCharacterization = storySoulCharacterizationPromptBlock({
+                ...(selfEssence ? { selfEssence } : {}),
+                selfName: resolvedSoulCast.self,
+                ...(userEssence ? { userEssence } : {}),
+                userName: resolvedSoulCast.user,
+              });
             }
             const openingSystem = soulCharacterization
               ? `${system}\n\n${soulCharacterization}`
@@ -5133,6 +5227,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           scene: emptyStoryScene(),
           scenes: [],
           ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          ...(resolvedSoulCast ? { soulCast: resolvedSoulCast } : {}),
           mode: isRoleplay ? "roleplay" : "direct",
           ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
           cadence: { mode: "per-response", n: 3 },
@@ -5398,33 +5493,44 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const memory = memoryPromptBlock(await loadMemory(store));
     const selfName = await loadSoulName(store, "self");
     const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
-    const deepSoul =
-      msg.creativeIdle === true ||
-      msg.creativeSession === true ||
-      currentBook?.kind === "story";
+    const soulMode = selectSoulContextMode({
+      storyActive: currentBook?.kind === "story",
+      creativeIdle: msg.creativeIdle === true,
+      creativeSession: msg.creativeSession === true,
+    });
+    const storySoulCast = await soulCastForStoryBook(currentBook);
     const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
     const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
     const identityActivity = () =>
       post({ type: "buddyActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
     const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
-      const nextSelfSoul = await soulPromptFor(llm, "self", {
-        deepSourceAccess: deepSoul,
-        queryContext: soulQueryContext,
-        signal: ac.signal,
-        onActivity: identityActivity,
-        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-        sourceBudget: soulSourceBudget,
-        outputBudget: soulOutputBudget,
-      });
-      const nextUserSoul = await soulPromptFor(llm, "user", {
-        deepSourceAccess: deepSoul,
-        queryContext: soulQueryContext,
-        signal: ac.signal,
-        onActivity: identityActivity,
-        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-        sourceBudget: soulSourceBudget,
-        outputBudget: soulOutputBudget,
-      });
+      if (soulMode === "story" && !storySoulCast) return ["", ""] as const;
+      const nextSelfSoul =
+        soulMode === "story" && !storySoulCast?.self
+          ? ""
+          : await soulPromptFor(llm, "self", {
+              mode: soulMode,
+              ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
+              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+              signal: ac.signal,
+              onActivity: identityActivity,
+              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+              sourceBudget: soulSourceBudget,
+              outputBudget: soulOutputBudget,
+            });
+      const nextUserSoul =
+        soulMode === "story" && !storySoulCast?.user
+          ? ""
+          : await soulPromptFor(llm, "user", {
+              mode: soulMode,
+              ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
+              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+              signal: ac.signal,
+              onActivity: identityActivity,
+              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+              sourceBudget: soulSourceBudget,
+              outputBudget: soulOutputBudget,
+            });
       return [nextSelfSoul, nextUserSoul] as const;
     });
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
@@ -5455,7 +5561,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The assistant's own identity ("soul"): its NAME is woven into the persona's first line and
         // its WHO-YOU-ARE block sits at the TOP of the prompt (with the reader's WHO-YOU-ARE), so it
         // actually answers to its name + stays in character — not buried under the tool catalog.
-        ...(selfName ? { selfName } : {}),
+        ...(!story && selfName ? { selfName } : {}),
         ...(selfSoul ? { selfSoul } : {}),
         ...(userSoul ? { userSoul } : {}),
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
@@ -5881,13 +5987,20 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       loadSoulName(store, "user"),
       loadSoul(store, "user"),
     ]);
+    const inStory = currentBook?.kind === "story";
+    const storySoulCast = inStory ? await soulCastForStoryBook(currentBook) : undefined;
+    const portraitSelfName = storySoulCast?.self ?? selfName;
+    const portraitUserName = storySoulCast?.user ?? userName;
     let prompt = call.prompt;
     let soulRefs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] | undefined;
-    if (isSelfPortraitRequest(call.prompt, selfName)) {
-      prompt = selfPortraitPrompt(call.prompt, selfName, selfNotes);
+    if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(call.prompt, portraitSelfName)) {
+      prompt = selfPortraitPrompt(call.prompt, portraitSelfName, selfNotes);
       soulRefs = await loadSoulRefs(store, "self");
-    } else if (isUserPortraitRequest(call.prompt, userName)) {
-      prompt = userPortraitPrompt(call.prompt, userName, userNotes);
+    } else if (
+      (!inStory || !!storySoulCast?.user) &&
+      isUserPortraitRequest(call.prompt, portraitUserName)
+    ) {
+      prompt = userPortraitPrompt(call.prompt, portraitUserName, userNotes);
       soulRefs = await loadSoulRefs(store, "user");
     }
     const out = await renderFromText(image, tier, prompt, {

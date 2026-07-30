@@ -80,6 +80,16 @@ export interface BookSource {
   storyConfig?: {
     /** The played characters (e.g. a "me and you" pair) — assumed present each beat. */
     roleplay?: { playedCharacterNames: string[] };
+    /**
+     * The explicit "You & me" Soul-backed cast mapping. Its presence, rather than story mode alone,
+     * authorizes generalized Soul characterization for these two names.
+     */
+    soulCast?: {
+      self: string;
+      user: string;
+      /** App-owned provenance; mappings without it are treated as untrusted imported/custom state. */
+      source: "you-and-me-setup-v1";
+    };
     /** The story workflow: "roleplay" (reader steers a character) or "direct" (reader directs). */
     mode?: "direct" | "roleplay";
     /** Roleplay only: the played character NAMES (me = reader, you = assistant) for authorship boundaries. */

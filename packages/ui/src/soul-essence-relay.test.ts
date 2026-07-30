@@ -40,10 +40,11 @@ vi.mock("../../../apps/web/src/runtime.js", () => ({
 }));
 
 const ESSENCE = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   kind: "self",
-  sourceFingerprint: "soul-v1-test",
+  sourceFingerprint: "soul-v2-test",
   generatedAt: 123,
+  generalizedEssence: { text: "Warm, curious, and direct", sourceIds: [] },
   facets: {
     coreDisposition: { text: "Warm", sourceIds: [] },
     conversationalVoice: { text: "Direct", sourceIds: [] },

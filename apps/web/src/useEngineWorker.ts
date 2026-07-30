@@ -339,6 +339,8 @@ export interface EngineWorkerApi {
     creativeIdle?: boolean,
     /** The dedicated Creative conversation gets deeper source-soul context on every turn. */
     creativeSession?: boolean,
+    /** Trusted Story-setup mapping, carried outside the user-authored slash-command JSON. */
+    storySoulCast?: { self: string; user: string },
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -2120,6 +2122,7 @@ export function useEngineWorker(
       appManagedSteps?: boolean,
       creativeIdle?: boolean,
       creativeSession?: boolean,
+      storySoulCast?: { self: string; user: string },
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -2150,7 +2153,7 @@ export function useEngineWorker(
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}) });
       }),
     [],
   );

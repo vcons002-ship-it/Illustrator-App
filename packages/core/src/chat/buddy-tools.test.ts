@@ -1714,6 +1714,7 @@ describe("story as you go tools", () => {
           style: "storybook illustration",
           characters: ["Mira", { name: "Toll", description: "tall, salt-and-pepper beard" }, "", { name: "" }],
           roleplay: { you: "Mira", me: "Toll" },
+          // Generic tool JSON must not be able to authorize Soul access.
           soulCast: true,
         }),
       ),
@@ -1724,11 +1725,10 @@ describe("story as you go tools", () => {
       style: "storybook illustration",
       characters: [{ name: "Mira" }, { name: "Toll", description: "tall, salt-and-pepper beard" }],
       roleplay: { you: "Mira", me: "Toll" },
-      soulCast: true,
     });
-    // Only literal true survives parsing; ordinary/custom story calls do not gain Soul access.
+    // Neither true nor false survives generic parsing; only trusted host control data can authorize.
     expect(
-      parseBuddyToolCall(JSON.stringify({ tool: "start_story", opening: "A custom tale.", soulCast: false })),
+      parseBuddyToolCall(JSON.stringify({ tool: "start_story", opening: "A custom tale.", soulCast: true })),
     ).not.toHaveProperty("soulCast");
     // No opening → not a valid start.
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
@@ -1750,6 +1750,11 @@ describe("story as you go tools", () => {
     expect(active).not.toContain('"tool":"continue_story"');
     expect(active).not.toContain('"tool":"render_scene"');
     expect(active).not.toContain('"tool":"set_story_cadence"');
+    expect(active).toMatch(/STORY CHARACTER BASELINE/);
+    expect(active).toMatch(/Established story characterization, STORY STATE, the Visual Bible.*override/i);
+    expect(active).toMatch(/Never turn supporting Soul interests.*into plot topics or backstory/i);
+    expect(active).toMatch(/never apply a baseline to an unrelated character/i);
+    expect(idle).not.toMatch(/STORY CHARACTER BASELINE/);
     // Roleplay narration names the played characters.
     const rp = buildBuddySystemPrompt({
       persona: "assistant",
