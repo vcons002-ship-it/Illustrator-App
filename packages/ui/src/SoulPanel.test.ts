@@ -1,13 +1,16 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { SoulEssence } from "@visual-reader/core";
+import {
+  SOUL_ESSENCE_SCHEMA_VERSION,
+  type SoulEssence,
+} from "@visual-reader/core";
 import { SoulPanel, type SoulPanelProps } from "./SoulPanel.js";
 
 const ESSENCE = {
-  schemaVersion: 2,
+  schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
   kind: "self",
-  sourceFingerprint: "soul-v2-panel",
+  sourceFingerprint: `soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-panel`,
   generatedAt: 123,
   generalizedEssence: {
     text: "Intellectually curious, warm, and quietly playful.",
@@ -25,7 +28,10 @@ const ESSENCE = {
     personalityDirections: { text: "Stay grounded.", sourceIds: ["source-1"] },
     tensionsAndNuance: { text: "Playful but precise.", sourceIds: ["source-1"] },
   },
-  exactAppearance: [{ text: "silver hair", sourceIds: ["source-1"] }],
+  exactAppearance: [
+    { text: "silver hair", sourceIds: ["source-1"] },
+    { text: "green", sourceIds: ["source-1"], slot: "eyes.color" },
+  ],
   exactPersonalityDirections: [{ text: "Never be fawning.", sourceIds: ["source-1"] }],
 } satisfies SoulEssence;
 
@@ -107,6 +113,7 @@ describe("SoulPanel everyday essence presentation", () => {
     expect(directionStart).toBeLessThan(detailsStart);
     expect(appearanceStart).toBeGreaterThan(-1);
     expect(appearanceStart).toBeLessThan(detailsStart);
+    expect(html).toContain("eye color: green");
     expect(html).toContain(
       "Stories use it as a subtle baseline alongside the character&#x27;s exact visual identity.",
     );
