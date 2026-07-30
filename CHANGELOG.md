@@ -7,6 +7,26 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **It can read a document that doesn't fit — a contract, a manual, a whole report** — ask it to find
+  every deadline in a three-hundred-page file and it now works through the entire thing section by
+  section and comes back with the answers, each with the line it was found on. The document never
+  enters the conversation, so its size costs nothing: what comes back is a list of findings, not three
+  hundred pages. Crucially the app drives the reading, not the assistant — it can't lose its place,
+  because it was never keeping it; each section is a fresh question with a short reminder of what has
+  already been found, so the same recurring item isn't reported twenty times. This is the same method
+  the app uses to read a novel into its Visual Bible, pointed at your own documents.
+- **It knows which way to read** — plain reading is still there and still right for a small file, for
+  one section you already know you want, and before any edit (an edit has to match text it has
+  actually seen). Sweeping is for "find every X in here". They work together: sweep to find where
+  something is, then read those exact lines to see it in context. If you ask it to sweep a file small
+  enough to just read, it says so and reads it instead of grinding through sections for no reason.
+- **A partial answer says it's partial** — if a section can't be read, it's retried, and if it still
+  fails the result names the lines that are missing rather than quietly returning nine findings where
+  there were ten. Stopping mid-way keeps what it found, and asking again picks up where it left off
+  instead of starting over.
+- **Reading on works whichever way the assistant asks** — a file read past the first page could be
+  requested one way and not the other, depending on how the assistant phrased the call. Both ways
+  understand "start at line N" now.
 - **Reading a big file works a window at a time, and it can turn the page** — this is how a large
   document gets read without losing everything else: one read returns a chunk and says which line it
   stopped at, so the assistant reads, takes what it needs, and reads on. That was already how the

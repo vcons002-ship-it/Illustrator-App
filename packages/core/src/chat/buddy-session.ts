@@ -25,6 +25,11 @@ import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
+import {
+  MIN_CHUNKED_DOCUMENT_CHARS,
+  chunkDocument,
+  extractFromDocument,
+} from "../files/document-extraction.js";
 import { allowedInCreativeIdle } from "./tool-approval.js";
 
 /**
@@ -609,6 +614,20 @@ export async function runBuddyTurn(opts: {
         lastWasCompleteStep = false; // real work happened
         continue;
       }
+      // Sweep a whole document. Handled HERE rather than in the auto-run executor because it needs
+      // what only the turn has: the model itself. The loop is code-driven — the document is read in
+      // chunks the model never has to hold, and only the findings come back. See document-extraction.
+      if (call.tool === "extract_from_document") {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const result = await runDocumentExtraction(call, opts, (done, total) =>
+          opts.onEvent?.({ kind: "activity", text: `Reading section ${done} of ${total}…` }),
+        );
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
+        lastWasCompleteStep = false; // real work happened
+        continue;
+      }
       if (isHostTool(call)) {
         // Write-capable sub-agent: execute the host tool out-of-band (host runs it in the agent's
         // worktree, optionally after an approval) and continue, rather than suspending the turn.
@@ -680,10 +699,55 @@ export async function runBuddyTurn(opts: {
   }
 }
 
+/**
+ * Read a whole document and return only what was asked for.
+ *
+ * Declines rather than degrades in two cases, both of which say WHY. Without a file reader it cannot
+ * run at all; and for a document small enough to simply read, chunked extraction is pure overhead —
+ * a slower, lossier way to reach an answer the model could have read for itself — so it says so and
+ * points at `read`, instead of quietly doing the expensive thing.
+ */
+async function runDocumentExtraction(
+  call: { path: string; question: string },
+  opts: { llm: ChatCapable; deps: BuddyDeps; contextChars?: number; signal?: AbortSignal },
+  onProgress: (done: number, total: number) => void,
+): Promise<BuddyToolResultPayload> {
+  if (!opts.deps.readFile) {
+    return { error: "reading local files isn't enabled (turn on file pulling in Settings, on desktop)." };
+  }
+  let text: string;
+  try {
+    text = await opts.deps.readFile(call.path);
+  } catch (err) {
+    return { error: `couldn't read ${call.path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const window = readFileWindow(opts.contextChars);
+  if (text.length <= Math.max(MIN_CHUNKED_DOCUMENT_CHARS, window)) {
+    return {
+      error:
+        `${call.path} is small enough to read directly (${text.length} characters) — use ` +
+        `{"tool":"read","source":"file","ref":"${call.path}"} instead. Sweeping it in sections would be slower ` +
+        "and would give you findings where you could have had the text.",
+    };
+  }
+  const state = await extractFromDocument({
+    text,
+    question: call.question,
+    // One chunk has to leave room for the question, the already-found block and the reply.
+    chunkChars: Math.max(2_000, Math.floor(window * 0.7)),
+    model: {
+      chat: (messages, o) => opts.llm.chat(messages, { ...(o?.maxTokens ? { maxTokens: o.maxTokens } : {}), ...(o?.signal ? { signal: o.signal } : {}) }),
+    },
+    onProgress,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+  return { documentExtraction: { question: call.question, ...state, chunks: chunkDocument(text, Math.max(2_000, Math.floor(window * 0.7))).length } };
+}
+
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
+  call: Exclude<BuddyToolCall, { tool: "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

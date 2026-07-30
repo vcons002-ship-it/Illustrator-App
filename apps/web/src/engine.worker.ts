@@ -4555,6 +4555,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
       }
+      if (slash.call.tool === "extract_from_document") {
+        // Sweeping a document is a model-driven loop, so it needs a turn to run in — a slash command
+        // has no LLM here. Same shape as spawn_agents below.
+        post({
+          type: "buddyDone",
+          requestId: msg.requestId,
+          text: "Ask me in chat to find something in that document — I'll read it through section by section.",
+          transcript: [],
+        });
+        return;
+      }
       if (slash.call.tool === "spawn_agents") {
         // Parallel fan-out only makes sense inside an LLM turn (the model writes the subtasks) — not
         // as a one-shot slash command, which has no runSubAgents orchestration here.

@@ -10,6 +10,7 @@ export * from "./chat/index.js";
 export * from "./pipeline/index.js";
 export * from "./reader-support/technical-support.js";
 export * from "./files/local-files.js";
+export * from "./files/document-extraction.js";
 export * from "./files/project.js";
 export * from "./files/doc-images.js";
 export * from "./files/attachment-text.js";

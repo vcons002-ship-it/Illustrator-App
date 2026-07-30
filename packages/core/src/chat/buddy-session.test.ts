@@ -75,6 +75,66 @@ describe("runBuddyTurn — a huge tool result doesn't cost the assistant its ins
   });
 });
 
+describe("runBuddyTurn — extract_from_document", () => {
+  const bigDoc = Array.from({ length: 4_000 }, (_, i) => `line ${i + 1}: some contract text here`).join("\n");
+
+  it("sweeps the whole document and returns findings, never the document", async () => {
+    // The point of the tool: a document far larger than the window costs one result-sized message.
+    const llm = scriptedLlm([
+      '{"tool":"extract_from_document","path":"/c.txt","question":"every deadline"}',
+      '{"findings":[{"text":"Deadline: 3 March","line":12}]}',
+      "There's one deadline: 3 March.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "find every deadline in /c.txt" }],
+      contextChars: 30_000,
+      deps: { ...baseDeps, readFile: async () => bigDoc },
+    });
+    expect(outcome.text).toContain("3 March");
+    const fedBack = outcome.transcript.map((t) => t.content).join("\n");
+    expect(fedBack).toContain("line 12: Deadline: 3 March");
+    // The document did not enter the conversation.
+    expect(fedBack).not.toContain("line 3000: some contract text");
+    expect(fedBack.length).toBeLessThan(5_000);
+  });
+
+  it("tells the model to just READ a file small enough to read, instead of sweeping it", async () => {
+    // No silent degradation: chunking a short file is a slower, lossier route to an answer it could
+    // have had in full.
+    const llm = scriptedLlm([
+      '{"tool":"extract_from_document","path":"/small.txt","question":"every deadline"}',
+      "Reading it directly instead.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "find every deadline" }],
+      contextChars: 30_000,
+      deps: { ...baseDeps, readFile: async () => "a short file" },
+    });
+    const fedBack = outcome.transcript.map((t) => t.content).join("\n");
+    expect(fedBack).toContain("small enough to read directly");
+    expect(fedBack).toContain('"tool":"read"');
+    expect(outcome.text).toContain("Reading it directly");
+  });
+
+  it("says so rather than pretending, when file access is off", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"extract_from_document","path":"/c.txt","question":"q"}',
+      "I can't read your files.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "sweep it" }],
+      deps: baseDeps,
+    });
+    expect(outcome.transcript.map((t) => t.content).join("\n")).toContain("isn't enabled");
+  });
+});
+
 describe("runBuddyTurn — story-mode empty-reply repair", () => {
   it("re-prompts for the next BEAT (not a meta wrap-up) and returns the recovered prose", async () => {
     const llm = scriptedLlm(["", "She steps into the rain, and the door clicks shut behind her."]);
