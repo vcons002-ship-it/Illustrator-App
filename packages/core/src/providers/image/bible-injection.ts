@@ -1,6 +1,8 @@
 import type { Character, Creature, Environment, Outfit, VisualBible } from "../../types/bible.js";
 import {
-  durableCharacterDetails,
+  drawableDetail,
+  drawableTraits,
+  firstAppearanceVariant,
   stripTransientCharacterDetails,
 } from "../../visual-bible/character-details.js";
 
@@ -94,28 +96,34 @@ export function describeCharacterIdentity(c: Character): string {
   if (a) {
     // Identity-defining fields in priority order (mirrors the old buildSubject), each with the noun
     // it describes when it needs one.
-    for (const [v, noun] of [
-      [a.gender, ""],
-      [a.age, ""],
-      [a.height, ""],
-      [a.hair, "hair"],
-      [a.distinguishingMarks, ""],
-      [a.eyes, "eyes"],
+    // `one` marks a field describing a SINGLE attribute, where accumulated re-wordings are competing
+    // answers rather than extra features — see firstAppearanceVariant. The two list fields
+    // (distinguishing marks, notes) keep every entry.
+    for (const [v, noun, one] of [
+      [a.gender, "", true],
+      [a.age, "", true],
+      [a.height, "", true],
+      [a.hair, "hair", true],
+      [a.distinguishingMarks, "", false],
+      [a.eyes, "eyes", true],
       // Build is left alone: it's already stored as a body phrase ("petite but voluptuous, ample
       // bust"), and anchoring it produced "…ample bust build".
-      [a.build, ""],
-      [a.skinTone, "skin"],
+      [a.build, "", true],
+      [a.skinTone, "skin", true],
       // Free-form notes are where an exact appearance imported from the reader's "You" data lives.
       // It must remain drawable even after story analysis fills one or two structured fields.
-      [a.notes, ""],
+      [a.notes, "", false],
     ] as const) {
-      const named = anchorField(stripTransientCharacterDetails(v), noun);
+      const durable = stripTransientCharacterDetails(v);
+      const named = anchorField(drawableDetail(one ? firstAppearanceVariant(durable) : durable), noun);
       if (named) fields.push(named);
     }
   }
   // Older story imports seeded the "You" description here. Include it alongside structured fields
-  // rather than only as an all-or-nothing fallback, so re-analysis cannot hide that stored look.
-  for (const t of durableCharacterDetails(c.persistentTraits)) fields.push(t);
+  // rather than only as an all-or-nothing fallback, so re-analysis cannot hide that stored look —
+  // but only the traits that describe how someone LOOKS. The rest of this list is personality and
+  // biography, which cannot be drawn and drowns out what can (see drawableTraits).
+  for (const t of drawableTraits(c.persistentTraits)) fields.push(t);
   return capBodyDescriptor(dedupeFragments(fields.length ? fields : ["person"]), MAX_CHARACTER_DESCRIPTOR_CHARS);
 }
 
@@ -298,6 +306,40 @@ export function appendSceneWardrobe(
     clauses.push(`${c.name} in ${outfit.label}`);
   }
   return clauses.length ? `${prompt} (Wardrobe: ${clauses.join("; ")}.)` : prompt;
+}
+
+/**
+ * Who a stored beat DECLARES is in this shot, as distinct people.
+ *
+ * The cast recorded on a keyEvent is the extraction model's per-beat statement of who is in the
+ * frame, written while it had the prose in front of it. That is a different and much smaller set
+ * than the people resolved as "present": a page scan returns everyone the page NAMES — including
+ * those merely remembered, discussed, or spoken about — and a story beat's tracked cast is who is in
+ * the ROOM across the beat. Either one, used as a subject count, describes a crowd that isn't there.
+ *
+ * Resolved to bible entities so a nickname and a real name are one person, with an unresolvable name
+ * kept as itself rather than dropped (it is still someone the beat says is in the shot). Returns an
+ * empty list when the beat declares no cast — the caller then falls back to whoever is present.
+ */
+export function castSubjects(
+  cast: readonly { name: string; outfit?: string }[] | undefined,
+  bible: VisualBible,
+): { name: string }[] {
+  if (!cast || cast.length === 0) return [];
+  const out: { name: string }[] = [];
+  const seen = new Set<string>();
+  for (const entry of cast) {
+    const name = (entry.name ?? "").trim();
+    if (!name) continue;
+    const character = bible.characters.find((ch) =>
+      [ch.name, ...ch.aliases].some((n) => n.toLowerCase() === name.toLowerCase()),
+    );
+    const key = (character?.id ?? name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: character?.name ?? name });
+  }
+  return out;
 }
 
 /**
@@ -670,16 +712,38 @@ export function worldStyleClause(worldStyle?: string): string {
 const SCAFFOLD_PREFIX = /^(Title|Style|Layout|Characters|Creatures|Outfits|Places|Setting reference):\s/;
 
 /**
- * The human-readable caption for a rendered prompt: the scene sentence(s) WITHOUT the
- * machine scaffolding around them — the leading reference block (`Title: … Style: …
- * Characters: …`) and the trailing `Style:` / `Layout:` paragraphs. The full prompt stays
- * persisted for troubleshooting (the UI offers it behind a toggle); this is just the
- * friendly view. Falls back to the input when stripping would leave nothing.
+ * Machine instructions that sit INSIDE the scene paragraph rather than in one of their own.
+ *
+ * Paragraph-level scaffolding was easy to drop; these were not, so the caption opened with
+ * "Exactly two people in focus." and closed with "(Wardrobe: …)" — directions to a renderer,
+ * read by someone who just wanted to know what they were looking at. They are safe to remove
+ * precisely because the caption is no longer the only view of the prompt: the exact text sent to
+ * the model is one disclosure away, so the caption's job is to read well and nothing else.
+ */
+const INLINE_DIRECTIVES: RegExp[] = [
+  // Subject count (pipeline's countSceneSubjects) — always the opening sentence.
+  /^(?:Exactly |Several |A crowd of )?(?:zero|one|two|three|four|five|six|several|a crowd of)[^.]*?\bin focus\.\s*/i,
+  // Wardrobe note (appendSceneWardrobe) and the beat cue for a split scene, both parentheticals.
+  /\s*\(Wardrobe:[^)]*\)/gi,
+  /\s*\(Part \d+ of this scene's sequence[^)]*\)/gi,
+  // Tracked-cast rescue clause (pipeline's nameActiveScene).
+  /\s*Scene continuity:[^.]*\.\s*$/i,
+];
+
+/**
+ * The human-readable caption for a rendered prompt: the scene sentence(s) WITHOUT the machine
+ * scaffolding around them — the leading reference block (`Title: … Style: … Characters: …`), the
+ * trailing `Style:` / `Layout:` paragraphs, and the inline directives above. The full prompt stays
+ * persisted and the UI offers it behind a toggle; this is just the friendly view. Falls back to the
+ * input when stripping would leave nothing.
  */
 export function displayCaption(prompt: string): string {
   const paragraphs = prompt.split(/\n{2,}/);
   const kept = paragraphs.filter((p) => !SCAFFOLD_PREFIX.test(p.trim()));
-  const out = kept.join("\n\n").trim();
+  let out = kept.join("\n\n").trim();
+  for (const directive of INLINE_DIRECTIVES) out = out.replace(directive, "").trim();
+  // Capitalise whatever now leads: dropping the count sentence can leave a lower-case scene.
+  out = out.replace(/^\p{Ll}/u, (ch) => ch.toUpperCase());
   return out || prompt;
 }
 
