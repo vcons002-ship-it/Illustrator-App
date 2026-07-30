@@ -88,6 +88,23 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **"Chapter 7 analysis failed" now says why it failed** — the message told you something had gone
+  wrong and withheld the only part worth knowing, even though the component that failed had written a
+  perfectly good explanation: the response was cut off at its length limit, the local server ran out
+  of memory, there's no model by that name. All of it was being thrown away and logged nowhere, so the
+  one message you did see couldn't answer the only question it raises. The reason now travels with the
+  note — "Chapter 7 analysis failed — continuing. Local LLM server request failed with status 500:
+  out of memory" — which is the difference between a mystery and a fix.
+- **A retry now actually re-tries** — a chapter that fails gets one more attempt, but the two ran
+  back to back with no pause between them. On a single-GPU machine the commonest transient cause is
+  the text model being unable to load while image generation is holding the graphics memory, and that
+  takes seconds to clear — so the retry hit the same wall a millisecond later and could never help
+  with the very thing it exists for. It now waits a few seconds first, and a pause during that wait
+  stops immediately instead of sitting out the delay.
+- **Pausing no longer quietly costs you a chapter** — stopping analysis mid-chapter was treated as
+  that chapter having failed: it was marked as done, so nothing ever went back to it, and you were
+  told its analysis had failed when all you'd done was press pause. A cut-off chapter now stays in the
+  queue and is analysed when you resume, and says nothing.
 - **Descriptions stopped dragging everything about a person into the picture** — a character's entry
   accumulates across a whole book, and all of it was being handed to the image model. One reported
   prompt described a man as "male, blond hair, arctic blue; icy-blue; evil; glacial blue eyes, stocky,

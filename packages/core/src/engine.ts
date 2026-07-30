@@ -93,7 +93,21 @@ export interface EngineOptions {
    * in the terse beat text. Absent for the book illustrator (cast comes from page text).
    */
   onChapterExtracted?: (chapterIndex: number, bible: VisualBible) => StoryPresent | undefined;
+  /**
+   * How long to wait before re-attempting a chapter whose extraction threw. Injectable so tests
+   * don't sleep; the default is tuned for the condition it exists for — see the retry loop.
+   */
+  extractionRetryDelayMs?: number;
 }
+
+/**
+ * Pause between the two extraction attempts for one chapter.
+ *
+ * Long enough for the commonest transient cause to clear: on a single-GPU machine the LLM server
+ * cannot load its model while image generation holds the VRAM, and a frame takes seconds. Short
+ * enough that a genuinely broken setup still reports quickly.
+ */
+const EXTRACTION_RETRY_DELAY_MS = 4_000;
 
 /** A user correction to a single character (any subset of editable fields). */
 export interface CharacterPatch {
@@ -149,6 +163,8 @@ export class Engine {
   private bibleRun = 0;
   /** Aborts the in-flight chapter extraction so a pause/book-switch frees the GPU at once. */
   private bibleAbort?: AbortController;
+  /** See {@link EXTRACTION_RETRY_DELAY_MS}. */
+  private readonly extractionRetryDelayMs: number;
   /**
    * Whether an extraction loop is currently working through pending chapters.
    *
@@ -198,6 +214,7 @@ export class Engine {
     // the reference), which must never mutate the caller's object or the module default.
     this.tier = { ...(opts.tier ?? DEFAULT_TIER_CONFIG) };
     this.illustrateAfter = opts.illustrateAfter ?? "chapter";
+    this.extractionRetryDelayMs = opts.extractionRetryDelayMs ?? EXTRACTION_RETRY_DELAY_MS;
   }
 
   /**
@@ -553,8 +570,18 @@ export class Engine {
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
       let next: VisualBible | undefined;
+      let lastError: unknown;
       for (let attempt = 0; attempt < 2 && !next; attempt++) {
         if (stop()) return false;
+        // Wait before the RETRY (never before the first try). The commonest transient failure on a
+        // one-GPU machine is the LLM server unable to load its model because image generation is
+        // holding the VRAM — and back-to-back attempts hit that a millisecond apart, so the retry
+        // could not help with the very thing it exists for. Abort-aware: a pause or a book switch
+        // during the wait stops the loop instead of sleeping the delay out.
+        if (attempt > 0) {
+          await delay(this.extractionRetryDelayMs, ac.signal);
+          if (stop()) return false;
+        }
         try {
           next = await this.opts.llm.extractEntities({
             bookId,
@@ -570,8 +597,12 @@ export class Engine {
             ...(this.tier.allowMature ? { allowMature: true } : {}),
             signal: ac.signal,
           });
-        } catch {
-          /* retry once, then give up on just this chapter */
+        } catch (err) {
+          // Kept, not swallowed: the providers already write a usable diagnosis ("truncated at the
+          // response limit", "status 500 … check it's pulled and your machine has enough memory",
+          // "the server doesn't have a model by that name"), and discarding it left the one message
+          // the reader DID see — "analysis failed" — unable to answer the only question it raises.
+          lastError = err;
         }
       }
       // Cite the grounding sources in the glossary (the local-reader analogue of the
@@ -603,9 +634,14 @@ export class Engine {
         // releases the unit — so a terse beat still illustrates the tracked scene.
         const present = this.opts.onChapterExtracted?.(chapterIndex, this.bible);
         if (present) this.pipeline?.setStoryPresent(chapterIndex, present);
+      } else if (isAbortError(lastError)) {
+        // Aborted, not failed — a pause or a book switch cut the call. Leave the chapter PENDING so
+        // resuming analyses it; marking it processed here retired a chapter nobody ever looked at,
+        // and said "analysis failed" about a stop the reader had just asked for.
+        return false;
       } else {
         this.bible = markChapterProcessed(this.bible!, chapterIndex);
-        this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
+        this.opts.onBibleNote?.(chapterFailureNote(chapterIndex, lastError));
       }
       await this.store.putBible(this.bible!);
       if (cancelled()) return false; // re-check after the async persist, before notifying
@@ -1293,6 +1329,53 @@ function nextRefSlot(ids: string[]): number {
 }
 
 /** Mark a chapter processed without adding entities (used when extraction fails). */
+/** Longest provider reason carried into a status note — enough to diagnose, not a wall of text. */
+const MAX_NOTE_REASON_CHARS = 220;
+
+/**
+ * The status note for a chapter whose analysis failed twice, WITH the reason.
+ *
+ * "Chapter 7 analysis failed" states that something went wrong and withholds the only part worth
+ * knowing. The provider that threw knows whether the response was truncated, the server was out of
+ * memory, or the model name is wrong — and each of those points at a different fix. Falls back to
+ * the bare note when the thrown value carries no message at all. PURE.
+ */
+export function chapterFailureNote(chapterIndex: number, err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const reason = raw.trim().replace(/\s+/g, " ");
+  const short =
+    reason.length > MAX_NOTE_REASON_CHARS
+      ? `${reason.slice(0, MAX_NOTE_REASON_CHARS).replace(/\s+\S*$/, "")}…`
+      : reason;
+  const head = `Chapter ${chapterIndex + 1} analysis failed — continuing.`;
+  return short ? `${head} ${short}` : head;
+}
+
+/**
+ * Whether a thrown value is a cancellation rather than a failure. `fetch` rejects with a DOMException
+ * named "AbortError"; the transports wrap it, so the message is checked too.
+ */
+function isAbortError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const { name, message } = err as { name?: unknown; message?: unknown };
+  if (name === "AbortError") return true;
+  return typeof message === "string" && /\babort(?:ed|error)?\b/i.test(message);
+}
+
+/** Sleep, cut short if the signal aborts (a pause must not wait out a retry delay). */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!(ms > 0) || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 function markChapterProcessed(bible: VisualBible, chapterIndex: number): VisualBible {
   if (bible.processedChapters.includes(chapterIndex)) return bible;
   return { ...bible, processedChapters: [...bible.processedChapters, chapterIndex] };
