@@ -7,6 +7,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **It carries a short list of what it can do, and fetches the details when it needs them** — the
+  instructions the assistant reads before every single message had grown to about 12,300 words' worth
+  of tokens, and two-thirds of that was documentation for things the conversation you're having never
+  touches: how to run shell commands, how to animate a video, how to build a spreadsheet, how to change
+  a setting. On a local model that left almost no room for the conversation itself, which is why it
+  kept forgetting what you'd just said. It now carries a one-line index — "coding — write, edit and run
+  code", "video — make a video or animate an image" — and pulls in the full instructions for a group
+  the moment a request needs one. **Per turn: about 12,300 tokens down to about 5,100.**
+- **And it can't get it wrong by forgetting** — if it reaches for a tool whose instructions it hasn't
+  pulled in yet, it gets those instructions back rather than an error, and carries on. So guessing
+  costs a moment, never a wrong action from half-remembered syntax. Once a group is loaded it stays for
+  the rest of that conversation, so a coding session pays for the coding instructions once.
+- **Nothing it offers is new** — loading a group can only ever reveal what your setup already allows.
+  A phone that can't run commands still can't, whatever the assistant asks for.
 - **The conversation now actually fits** — the previous attempt at this measured the space properly
   but was still working inside a ceiling that was too low to matter. The room set aside for everything
   the model reads was a flat 45% of what it can hold — and on a real setup the assistant's own setup

@@ -25,6 +25,7 @@ import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
+import { isToolAvailable, toolsetForTool } from "./toolsets.js";
 import {
   MIN_CHUNKED_DOCUMENT_CHARS,
   chunkDocument,
@@ -239,6 +240,9 @@ export interface BuddyTurnOutcome {
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
+  /** Toolsets loaded by the end of the turn (seeded + anything pulled in). The host keeps these for
+   * the session so the next turn doesn't pay the round-trip again. */
+  loadedToolsets?: readonly string[];
   /** The turn stopped at a per-turn tool-round budget with the model still wanting to call tools (a
    * "keep going?" checkpoint — used for cloud models) rather than finishing. The host can offer a
    * Continue affordance; saying/clicking continue resumes from the persisted progress. */
@@ -366,6 +370,10 @@ export async function runBuddyTurn(opts: {
    * and tests, which run a round or two on small inputs).
    */
   contextChars?: number;
+  /** Toolsets already loaded for this session — see `toolsets.ts`. Absent = every tool available. */
+  loadedToolsets?: readonly string[];
+  /** The documentation for a toolset, supplied by the host (which knows the environment's flags). */
+  toolsetDoc?: (id: string) => string;
   deps: BuddyDeps;
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
@@ -429,6 +437,13 @@ export async function runBuddyTurn(opts: {
   // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
   // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
   let lastWasCompleteStep = false;
+  /** Toolsets loaded so far THIS turn — grows as the model asks (or as it calls something it hasn't
+   * asked for). The host seeds it with what the session already loaded, so a coding conversation pays
+   * for the coding document once rather than every turn. */
+  let loadedToolsets: readonly string[] = opts.loadedToolsets ?? [];
+  /** Whether on-demand loading is in play at all. Absent `loadedToolsets` means the host hasn't opted
+   * in, and every tool stays callable — the legacy behaviour, and what sub-agents and tests rely on. */
+  const deferring = opts.loadedToolsets !== undefined;
 
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
@@ -501,8 +516,13 @@ export async function runBuddyTurn(opts: {
     opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
     const reply = await chatOnce();
     const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
-    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome =>
-      lastThinking.trim() ? { ...out, thinking: lastThinking.trim() } : out;
+    // Every finished outcome funnels through here, so it is also where the turn reports which
+    // toolsets ended up loaded — the host keeps them for the session rather than re-paying next turn.
+    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome => ({
+      ...out,
+      ...(deferring ? { loadedToolsets } : {}),
+      ...(lastThinking.trim() ? { thinking: lastThinking.trim() } : {}),
+    });
     if (calls.length === 0) {
       // Hit the per-turn budget with the model STILL trying to call a tool → this is a "keep going?"
       // checkpoint (cloud pause / backstop), not a natural finish. Flag it so the host offers Continue.
@@ -614,6 +634,33 @@ export async function runBuddyTurn(opts: {
         lastWasCompleteStep = false; // real work happened
         continue;
       }
+      // ON-DEMAND TOOL DOCUMENTATION. Two entries to the same door:
+      //
+      //   load_toolset  — the model asked for the details, having read the index.
+      //   anything else — the model called a tool whose details it never loaded. It gets the SAME
+      //                   document back instead of an error, and re-issues its call. Forgetting to
+      //                   load is therefore a round-trip, never a wrong action with invented
+      //                   arguments — which is the failure every "look it up first" scheme depends on
+      //                   the model not having, and small models reliably do.
+      if (call.tool === "load_toolset" || (deferring && !isToolAvailable(call.tool, loadedToolsets))) {
+        const id = call.tool === "load_toolset" ? call.name : toolsetForTool(call.tool)?.id;
+        const already = id ? loadedToolsets.includes(id) : false;
+        if (id && !already) loadedToolsets = [...loadedToolsets, id];
+        const doc = id && opts.toolsetDoc ? opts.toolsetDoc(id) : "";
+        const result: BuddyToolResultPayload = doc
+          ? {
+              toolsetLoaded: {
+                id: id!,
+                doc,
+                ...(call.tool === "load_toolset" ? {} : { retry: call.tool as string }),
+              },
+            }
+          : { error: `there's no toolset called "${id ?? call.tool}".` };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
+        continue;
+      }
       // Sweep a whole document. Handled HERE rather than in the auto-run executor because it needs
       // what only the turn has: the model itself. The loop is code-driven — the document is read in
       // chunks the model never has to hold, and only the findings come back. See document-extraction.
@@ -642,7 +689,7 @@ export async function runBuddyTurn(opts: {
         }
         if (feedbacks.length === 0) {
           opts.onEvent?.({ kind: "tool", round, call });
-          return { text: "", transcript, pendingTool: call, toolResults };
+          return withThinking({ text: "", transcript, pendingTool: call, toolResults });
         }
         deferred = true;
         break;
@@ -747,7 +794,7 @@ async function runDocumentExtraction(
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
+  call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

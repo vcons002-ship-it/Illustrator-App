@@ -61,6 +61,7 @@ import {
   buildToolCallFormat,
   type CreatedFileRef,
   ollamaToolSchemas,
+  toolsetDoc,
   shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
@@ -426,6 +427,17 @@ function persistStoryConfig(): void {
 /** The live STORY STATE block fed to the WRITING model each beat (present cast + location from the
  * tracker, the last few beats verbatim, and the rolling synopsis) — so a long story keeps continuity
  * even after chat history is trimmed. "" when there's nothing to say. */
+/**
+ * Toolsets loaded per chat session, remembered across turns.
+ *
+ * A conversation that turns to code loads the coding documentation once and keeps it — paying the
+ * round-trip on every later turn would be worse than never having deferred it. Cleared when the chat
+ * is cleared, since a fresh conversation is a fresh set of needs.
+ */
+const loadedToolsetsBySession = new Map<string, string[]>();
+
+/** The prompt options that decide what this ENVIRONMENT can offer, shared by the prompt and the
+ * per-toolset documents so the two can never disagree about what exists. */
 function buildStoryStateBlock(s: StorySessionState): string {
   const bible = currentBible;
   const presentCast = (s.scene.presentCharacterIds ?? []).map((id) => {
@@ -5451,6 +5463,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         });
         return;
       }
+      if (slash.call.tool === "load_toolset") {
+        // Loading documentation only means something inside a turn, where the loaded set is carried
+        // and the prompt is rebuilt around it. Same shape as the two above.
+        post({
+          type: "buddyDone",
+          requestId: msg.requestId,
+          text: "Just ask me for what you need — I'll pull in the right tools myself.",
+          transcript: [],
+        });
+        return;
+      }
       if (slash.call.tool === "spawn_agents") {
         // Parallel fan-out only makes sense inside an LLM turn (the model writes the subtasks) — not
         // as a one-shot slash command, which has no runSubAgents orchestration here.
@@ -5554,8 +5577,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       settings?.keys?.schwabClientSecret &&
       (await loadSchwabTokens(store))
     );
-    const setup =
-      buildBuddySystemPrompt({
+    // On-demand tool documentation: the prompt carries a one-line index and the model loads what a
+    // request actually needs (see chat/toolsets.ts). Held per session so a coding conversation pays
+    // for the coding document once, not once a turn.
+    const sessionKey = msg.taskPlanId ?? "buddy";
+    const loadedToolsets = loadedToolsetsBySession.get(sessionKey) ?? [];
+    const promptOpts = {
         persona: msg.persona,
         library: msg.library,
         // The assistant's own identity ("soul"): its NAME is woven into the persona's first line and
@@ -5669,7 +5696,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               mcpServers: [],
             }
           : {}),
-      }) +
+    } as const;
+    const setup =
+      buildBuddySystemPrompt({ ...promptOpts, loadedToolsets }) +
       (memory ? `\n\n${memory}` : "") +
       // selfSoul/userSoul are now injected at the TOP of buildBuddySystemPrompt (see above), not appended here.
       (skills ? `\n\n${skills}` : "") +
@@ -5740,6 +5769,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       history,
       maxTokens: budgets.reply,
       contextChars: budgets.input,
+      loadedToolsets,
+      // The document is DERIVED from the same prompt options, so what the model loads is exactly the
+      // text the prompt would have carried — there is no second copy to fall out of date.
+      toolsetDoc: (id: string) => toolsetDoc(id, { ...promptOpts, loadedToolsets }),
       // The hard limit for an unattended creative run — enforced in the loop, independent of what the
       // prompt above happens to advertise.
       ...(msg.creativeIdle ? { creativeIdle: true } : {}),
@@ -5753,10 +5786,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // back to the text catalog (still in `system`) when unsupported. Same availability flags as the prompt.
       ...(llm.id === "local-server"
         ? {
+            // Gated by the SAME loaded set as the prompt. These ride alongside it, so leaving them
+            // ungated would hand back most of what deferring the prompt text just saved.
             tools: ollamaToolSchemas({
               canSearchFiles: corsProxyAvailable,
               canRunCommands: corsProxyAvailable && !!settings?.allowCommands,
               canWolfram: !!settings?.keys?.wolfram,
+              loadedToolsets,
             }),
           }
         : {}),
@@ -5850,6 +5886,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       signal: ac.signal,
     }));
+    // Remember what the turn pulled in, so the next one in this chat doesn't pay the round-trip again.
+    if (outcome.loadedToolsets) loadedToolsetsBySession.set(sessionKey, [...outcome.loadedToolsets]);
     // Self-improving skills (opt-in): after a substantive, USER-initiated multi-step turn,
     // record the task; only when a SIMILAR task has RECURRED (so a playbook will actually pay
     // off next time) distil a candidate skill and OFFER it for the reader to keep — never saved

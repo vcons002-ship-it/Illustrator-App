@@ -75,6 +75,92 @@ describe("runBuddyTurn — a huge tool result doesn't cost the assistant its ins
   });
 });
 
+describe("runBuddyTurn — tools loaded on demand", () => {
+  const docFor = (id: string) => `TOOLSET "${id}" — loaded.\n- {"tool":"run_command","command":"…"}`;
+
+  it("loads a set when the model asks, and the tools then work", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"load_toolset","name":"coding"}',
+      '{"tool":"run_command","command":"ls"}',
+      "Done.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "list the files" }],
+      loadedToolsets: [],
+      toolsetDoc: docFor,
+      runHostTool: async () => ({ command: { stdout: "a.txt", stderr: "", code: 0, timedOut: false } }),
+      deps: baseDeps,
+    });
+    expect(outcome.loadedToolsets).toContain("coding");
+    const fed = outcome.transcript.map((t) => t.content).join("\n");
+    expect(fed).toContain('TOOLSET "coding" — loaded');
+    expect(fed).toContain("a.txt"); // the real call ran afterwards
+  });
+
+  it("SUPPLIES the documentation when the model forgets to load — never an error", async () => {
+    // The property the whole scheme rests on: a model that guesses gets what it needed back, not a
+    // refusal. It never has to remember to look something up first.
+    const llm = scriptedLlm(['{"tool":"run_command","command":"ls"}', "Understood.", "Done."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "list the files" }],
+      loadedToolsets: [],
+      toolsetDoc: docFor,
+      deps: baseDeps,
+    });
+    const fed = outcome.transcript.map((t) => t.content).join("\n");
+    expect(fed).toContain('TOOLSET "coding" — loaded');
+    expect(fed).toMatch(/Re-issue that call now/);
+    expect(fed).not.toMatch(/failed|not available|can't/i);
+    expect(outcome.loadedToolsets).toContain("coding");
+  });
+
+  it("carries a set the session already loaded, without re-fetching it", async () => {
+    const llm = scriptedLlm(['{"tool":"run_command","command":"ls"}', "Done."]);
+    let docs = 0;
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "again" }],
+      loadedToolsets: ["coding"],
+      toolsetDoc: (id) => { docs++; return docFor(id); },
+      runHostTool: async () => ({ command: { stdout: "ok", stderr: "", code: 0, timedOut: false } }),
+      deps: baseDeps,
+    });
+    expect(docs).toBe(0); // already had it
+    expect(outcome.transcript.map((t) => t.content).join("\n")).toContain("ok");
+  });
+
+  it("says so plainly when the set doesn't exist", async () => {
+    const llm = scriptedLlm(['{"tool":"load_toolset","name":"coding"}', "Sorry."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "x" }],
+      loadedToolsets: [],
+      toolsetDoc: () => "",
+      deps: baseDeps,
+    });
+    expect(outcome.transcript.map((t) => t.content).join("\n")).toContain("no toolset called");
+  });
+
+  it("does not gate anything when the host hasn't opted in", async () => {
+    // Sub-agents and every existing caller keep the old behaviour: every tool callable, no index.
+    const llm = scriptedLlm(['{"tool":"search_web","query":"q"}', "Found it."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "x" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ link: "https://x", title: "t", snippet: "s" }] },
+    });
+    expect(outcome.loadedToolsets).toBeUndefined();
+    expect(outcome.text).toContain("Found it");
+  });
+});
+
 describe("runBuddyTurn — extract_from_document", () => {
   const bigDoc = Array.from({ length: 4_000 }, (_, i) => `line ${i + 1}: some contract text here`).join("\n");
 
