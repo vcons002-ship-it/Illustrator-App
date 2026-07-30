@@ -85,7 +85,7 @@ describe("the index", () => {
 
   it("says that guessing is safe", () => {
     // The model must know a forgotten load costs a round-trip, not an error — otherwise it hedges.
-    expect(toolsetIndexBlock(["coding"], [])).toMatch(/instructions back instead of an error/);
+    expect(toolsetIndexBlock(["coding"], [])).toMatch(/instructions back rather than an error/);
   });
 
   it("is empty when there is nothing to offer", () => {
@@ -98,7 +98,7 @@ describe("the prompt shrinks", () => {
     const legacy = build();
     const lean = build({ loadedToolsets: [] });
     expect(tok(lean)).toBeLessThan(tok(legacy) / 2);
-    expect(lean).toContain("MORE TOOLS, LOADED ON DEMAND");
+    expect(lean).toContain("YOU CAN DO MORE THAN THE TOOLS BELOW");
     expect(lean).not.toContain('"tool":"run_command"');
     expect(lean).not.toContain('"tool":"generate_video"');
   });
@@ -123,7 +123,7 @@ describe("the prompt shrinks", () => {
     expect(legacy).toContain('"tool":"create_spreadsheet"');
     expect(legacy).toContain('"tool":"update_setting"');
     expect(legacy).toContain('"tool":"search_books"');
-    expect(legacy).not.toContain("MORE TOOLS, LOADED ON DEMAND");
+    expect(legacy).not.toContain("YOU CAN DO MORE THAN THE TOOLS BELOW");
   });
 
   it("never advertises what the machine cannot do", () => {
@@ -136,6 +136,39 @@ describe("the prompt shrinks", () => {
       loadedToolsets: ["coding"],
     } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
     expect(phone).not.toContain('"tool":"run_command"');
+  });
+});
+
+describe("the loader is reachable", () => {
+  // The bug this whole scheme died on: the index told the model to call `load_toolset`, and
+  // `load_toolset` was in neither the native schema list nor the text catalogue. A model driving
+  // through native tool-calling sees ONLY that list, so the on-demand sets could not be reached at
+  // all. An instruction to call something uncallable is worse than no instruction.
+  it("is in the native schemas, always, whatever is loaded", () => {
+    for (const loaded of [[], ["coding"], ["coding", "video"]]) {
+      const names = ollamaToolSchemas({ canSearchFiles: true, loadedToolsets: loaded }).map((t) => t.function.name);
+      expect(names, `missing with ${JSON.stringify(loaded)}`).toContain("load_toolset");
+    }
+  });
+
+  it("names the groups in its own description, so a native call knows what to pass", () => {
+    const schema = ollamaToolSchemas({ loadedToolsets: [] }).find((t) => t.function.name === "load_toolset")!;
+    for (const id of TOOLSET_IDS) expect(schema.function.description).toContain(id);
+    expect(schema.function.parameters.required).toEqual(["name"]);
+  });
+
+  it("is a peer of the other tools in the text catalogue, not just prose", () => {
+    expect(build({ loadedToolsets: [] })).toContain('- {"tool":"load_toolset","name":"…"}');
+  });
+
+  it("tells the model not to claim it can't do something in the list", () => {
+    // The observed failure mode: it read the index as a description of what it lacked.
+    expect(build({ loadedToolsets: [] })).toMatch(/NEVER tell the reader you are unable/);
+  });
+
+  it("is absent for a caller that hasn't opted in — there is nothing to load", () => {
+    expect(build()).not.toContain('"tool":"load_toolset"');
+    expect(ollamaToolSchemas({ canSearchFiles: true }).map((t) => t.function.name)).toContain("load_toolset");
   });
 });
 

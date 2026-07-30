@@ -191,12 +191,13 @@ export function toolsetIndexBlock(available: readonly string[], loaded: readonly
   if (rows.length === 0) return "";
   const lines = rows.map((t) => `- ${t.id}${loaded.includes(t.id) ? " (loaded)" : ""} — ${t.trigger}`);
   return (
-    "MORE TOOLS, LOADED ON DEMAND — you have many more abilities than the tools listed above. Their " +
-    "details are not in front of you until you ask for them, which keeps room for the actual " +
-    'conversation. When a request needs one, call {"tool":"load_toolset","name":"…"} FIRST and the ' +
-    "full instructions come back; then make the real call. If you call one of their tools without " +
-    "loading it, you get the instructions back instead of an error — so guessing is safe, but loading " +
-    "first is quicker:\n" +
-    lines.join("\n")
+    "YOU CAN DO MORE THAN THE TOOLS BELOW. These groups are things you CAN do; their instructions " +
+    "are not in front of you yet, which is what keeps room for the actual conversation. NEVER tell " +
+    "the reader you are unable to do something in this list — load it and do it:\n" +
+    lines.join("\n") +
+    '\n\nTo load one: {"tool":"load_toolset","name":"<group>"}. The full instructions come straight ' +
+    "back and stay for the rest of the conversation; then make the real call. If you call one of " +
+    "their tools without loading it first you get the instructions back rather than an error, so a " +
+    "guess costs nothing — but loading first is quicker."
   );
 }

@@ -7,6 +7,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **It can actually reach the tools it was told to load** — the change that shrank the assistant's
+  instructions gave it a short list of tool groups and told it to pull in whichever a request needed.
+  It never did, and the reason was embarrassing: the thing it was told to call, the loader itself,
+  wasn't on its list of tools. Not in the structured list the local models use, not in the written
+  one. So it read an instruction to call something it had no way to call, and quietly carried on
+  without. The loader is now a tool like any other in both places, it lists the groups by name in its
+  own description so there's nothing to guess, and the list of groups now says plainly: these are
+  things you CAN do — never tell the reader you can't do one of them, load it and do it.
 - **It carries a short list of what it can do, and fetches the details when it needs them** — the
   instructions the assistant reads before every single message had grown to about 12,300 words' worth
   of tokens, and two-thirds of that was documentation for things the conversation you're having never

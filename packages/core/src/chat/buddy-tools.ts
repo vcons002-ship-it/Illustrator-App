@@ -1376,6 +1376,12 @@ export function buildBuddySystemPrompt(raw: {
       ? ""
       : `${toolsetIndexBlock(availableToolsets(raw), opts.loadedToolsets)}\n\n`) +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
+    (opts.omitToolsetIndex || !opts.loadedToolsets
+      ? ""
+      : `- {"tool":"load_toolset","name":"…"} — LOAD one of the tool groups listed just above, when a ` +
+        `request needs an ability you don't see in this list. One of: ${TOOLSET_IDS.join(", ")}. Do this ` +
+        `BEFORE saying you can't do something — the ability probably exists, you just don't have its ` +
+        `instructions in front of you yet.\n`) +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
     "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
     "linear algebra (det, inv, [[1,2],[3,4]]*[[5],[6]]); CALCULUS + algebra (derivative('x^2','x'), " +
@@ -2433,6 +2439,17 @@ export function ollamaToolSchemas(opts: {
   loadedToolsets?: readonly string[];
 }): ToolSchema[] {
   const t: ToolSchema[] = [
+    // FIRST, and never gated. The loader is the one tool whose absence is unrecoverable: a model
+    // driving through native tool-calling sees only this list, so leaving it out meant the on-demand
+    // sets could not be reached AT ALL — the index told it to call something it had no way to call.
+    toolFn(
+      "load_toolset",
+      `Load the full instructions for a group of tools you don't currently have. Groups: ${TOOLSET_IDS.join(", ")}. ` +
+        "Call this FIRST when a request needs an ability that isn't in your current tool list — " +
+        "then make the real call.",
+      { name: strParam(`Which group to load — one of: ${TOOLSET_IDS.join(", ")}.`) },
+      ["name"],
+    ),
     toolFn(
       "generate_image",
       "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something.",
@@ -2684,8 +2701,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return path ? { tool, path, ...(from ? { from } : {}), ...(to ? { to } : {}) } : undefined;
   }
   if (tool === "load_toolset") {
+    // An unknown group is PARSED, not dropped. A dropped call vanishes and the model learns nothing;
+    // a parsed one comes back as "there's no toolset called X" with the real list, which it can act on.
     const name = (strArg(obj.name ?? obj.toolset ?? obj.id, 40) || "").toLowerCase();
-    return name && TOOLSET_IDS.includes(name) ? { tool, name } : undefined;
+    return name ? { tool, name } : undefined;
   }
   if (tool === "extract_from_document") {
     const path = strArg(obj.path, 2000);

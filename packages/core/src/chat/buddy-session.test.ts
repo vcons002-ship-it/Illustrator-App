@@ -134,8 +134,9 @@ describe("runBuddyTurn — tools loaded on demand", () => {
     expect(outcome.transcript.map((t) => t.content).join("\n")).toContain("ok");
   });
 
-  it("says so plainly when the set doesn't exist", async () => {
-    const llm = scriptedLlm(['{"tool":"load_toolset","name":"coding"}', "Sorry."]);
+  it("names the real groups when asked for one that doesn't exist", async () => {
+    // Parsed rather than dropped: a dropped call vanishes and the model learns nothing.
+    const llm = scriptedLlm(['{"tool":"load_toolset","name":"telepathy"}', "Sorry."]);
     const outcome = await runBuddyTurn({
       llm,
       system: "sys",
@@ -144,7 +145,9 @@ describe("runBuddyTurn — tools loaded on demand", () => {
       toolsetDoc: () => "",
       deps: baseDeps,
     });
-    expect(outcome.transcript.map((t) => t.content).join("\n")).toContain("no toolset called");
+    const fed = outcome.transcript.map((t) => t.content).join("\n");
+    expect(fed).toContain("no toolset called");
+    expect(fed).toContain("coding"); // …and lists the ones that do exist
   });
 
   it("does not gate anything when the host hasn't opted in", async () => {
