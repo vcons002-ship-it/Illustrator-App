@@ -394,7 +394,7 @@ export function promptSystemFor(kind: string): string {
 }
 
 /**
- * JSON Schema for the extraction result. Gemini (`responseSchema`) and OpenAI
+ * JSON Schema for the extraction result. Gemini (`responseJsonSchema`) and OpenAI
  * (`response_format: json_schema`) both consume this so the model returns
  * validated JSON; Claude expresses the same shape via its Zod helper.
  */

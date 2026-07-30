@@ -44,14 +44,18 @@ export interface ChatMessage {
  * existing injected fakes that ignore them keep working. */
 export type ChatComplete = (
   messages: ChatMessage[],
-  opts: {
-    json: boolean;
-    onToken?: (count: number) => void;
-    onText?: (delta: string) => void;
-    signal?: AbortSignal;
-    maxTokens?: number;
-  },
+  opts: WebLLMCompletionOptions,
 ) => Promise<string>;
+
+export interface WebLLMCompletionOptions {
+  json: boolean;
+  /** Optional JSON Schema grammar used by WebLLM's json_object mode. */
+  jsonSchema?: Record<string, unknown>;
+  onToken?: (count: number) => void;
+  onText?: (delta: string) => void;
+  signal?: AbortSignal;
+  maxTokens?: number;
+}
 
 /** Live generation activity, so the UI can show the model is making progress. */
 export interface GenerationActivity {
@@ -130,6 +134,119 @@ function runSerial<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+function webLlmAbortError(): DOMException {
+  return new DOMException("Aborted", "AbortError");
+}
+
+function throwIfWebLlmAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw webLlmAbortError();
+}
+
+/**
+ * Run one WebLLM completion, preferring its streaming API for live progress.
+ *
+ * Some WebLLM/browser combinations do not support streaming, so a genuine
+ * streaming failure retries once through the buffered API. Cancellation is not
+ * such a failure: retrying after Abort would silently start a second,
+ * non-cancellable generation and hold the local-model queue after the UI had
+ * already reported the job stopped.
+ */
+export async function completeWithWebLlm(
+  engine: MLCEngineInterface,
+  messages: ChatMessage[],
+  opts: WebLLMCompletionOptions,
+): Promise<string> {
+  const temperature = opts.json ? 0 : 0.7;
+  const responseFormat = opts.json
+    ? ({
+        type: "json_object" as const,
+        ...(opts.jsonSchema ? { schema: JSON.stringify(opts.jsonSchema) } : {}),
+      })
+    : undefined;
+  // Extraction can return a long JSON object (every described character +
+  // glossary); give it ample room so the JSON isn't truncated mid-object.
+  const maxTokens = opts.maxTokens ?? (opts.json ? 4096 : 512);
+  let cancelled = false;
+  let streaming = true;
+  let streamStarted = false;
+  let interruptedAfterStart = false;
+  const interrupt = (): void => {
+    cancelled = true;
+    // Buffered WebLLM does not expose cancellation, and interruptGenerate leaves a sticky flag in
+    // older engines that poisons later buffered requests. Mark it cancelled, but only interrupt the
+    // streaming generator whose normal tail we can drain below.
+    if (!streaming || (streamStarted && interruptedAfterStart)) return;
+    try {
+      // WebLLM owns a per-model lock until its iterable reaches the normal tail. Interrupt tells the
+      // generator to stop at its next boundary; the loop below keeps draining so that tail releases
+      // the lock instead of stranding every later local request.
+      void engine.interruptGenerate();
+      if (streamStarted) interruptedAfterStart = true;
+    } catch {
+      // The final AbortError remains the caller-facing result even if an older engine cannot stop.
+    }
+  };
+  opts.signal?.addEventListener("abort", interrupt);
+
+  try {
+    throwIfWebLlmAborted(opts.signal);
+    const stream = await engine.chat.completions.create({
+      stream: true,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      ...(responseFormat ? { response_format: responseFormat } : {}),
+    });
+    let text = "";
+    let tokens = 0;
+    const iterator = stream[Symbol.asyncIterator]();
+    while (true) {
+      // Starting next() first matters when Abort landed in the tiny gap after create(): WebLLM
+      // resets its interrupt flag as the iterable starts, so interrupt immediately afterward and
+      // then drain its terminal chunks.
+      const next = iterator.next();
+      streamStarted = true;
+      if (opts.signal?.aborted) interrupt();
+      const step = await next;
+      if (step.done) break;
+      if (cancelled) continue;
+      const chunk = step.value;
+      const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (delta) {
+        text += delta;
+        opts.onToken?.(++tokens);
+        opts.onText?.(delta);
+      }
+    }
+    if (cancelled) throw webLlmAbortError();
+    return text;
+  } catch (error) {
+    if (
+      cancelled ||
+      opts.signal?.aborted ||
+      (error instanceof Error && error.name === "AbortError")
+    ) {
+      throw webLlmAbortError();
+    }
+    throwIfWebLlmAborted(opts.signal);
+    streaming = false;
+    cancelled = false;
+    const res = await engine.chat.completions.create({
+      stream: false,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      ...(responseFormat ? { response_format: responseFormat } : {}),
+    });
+    // WebLLM's buffered request does not expose an AbortSignal option. Refuse
+    // to consume a result if cancellation arrived while that fallback ran.
+    throwIfWebLlmAborted(opts.signal);
+    return res.choices[0]?.message?.content ?? "";
+  } finally {
+    opts.signal?.removeEventListener("abort", interrupt);
+  }
+}
+
 export class WebLLMProvider implements LLMProvider, ChatCapable {
   readonly id = "local";
   private readonly model: string;
@@ -204,7 +321,8 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
       }
     };
     const text = await complete(messages, {
-      json: false,
+      json: opts.responseFormat === "json",
+      ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
       ...(opts.onToken ? { onText } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
@@ -259,45 +377,7 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
     if (this.injected) return this.injected;
     const engine = await this.engine();
     return (messages, opts) =>
-      runSerial(async () => {
-        const temperature = opts.json ? 0 : 0.7;
-        const responseFormat = opts.json ? ({ type: "json_object" } as const) : undefined;
-        // Extraction can return a long JSON object (every described character +
-        // glossary); give it ample room so the JSON isn't truncated mid-object.
-        const maxTokens = opts.maxTokens ?? (opts.json ? 4096 : 512);
-        // Stream so callers get live token progress (proof the model is working);
-        // fall back to a single-shot completion if streaming isn't available.
-        try {
-          const stream = await engine.chat.completions.create({
-            stream: true,
-            messages,
-            temperature,
-            max_tokens: maxTokens,
-            ...(responseFormat ? { response_format: responseFormat } : {}),
-          });
-          let text = "";
-          let tokens = 0;
-          for await (const chunk of stream) {
-            if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-            const delta = chunk.choices[0]?.delta?.content ?? "";
-            if (delta) {
-              text += delta;
-              opts.onToken?.(++tokens);
-              opts.onText?.(delta);
-            }
-          }
-          return text;
-        } catch {
-          const res = await engine.chat.completions.create({
-            stream: false,
-            messages,
-            temperature,
-            max_tokens: maxTokens,
-            ...(responseFormat ? { response_format: responseFormat } : {}),
-          });
-          return res.choices[0]?.message?.content ?? "";
-        }
-      });
+      runSerial(() => completeWithWebLlm(engine, messages, opts));
   }
 
   private engine(): Promise<MLCEngineInterface> {

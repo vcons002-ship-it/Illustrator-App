@@ -153,6 +153,13 @@ export class Engine {
   private biblePaused = false;
   private imagePaused = false;
   /**
+   * Temporary scheduler holds are separate from the reader's pause switches. A foreground local
+   * text job can block Engine execution without changing visible pause intent; nested Engine
+   * commands may call resumeGeneration(), but cannot defeat these counters.
+   */
+  private bibleExecutionHolds = 0;
+  private imageExecutionHolds = 0;
+  /**
    * Monotonic token for the active bible-extraction run. Starting a new run (open a
    * book, resume, regenerate) bumps it; an older in-flight loop sees the mismatch at
    * its next checkpoint (and after each await) and bails WITHOUT touching shared
@@ -271,6 +278,7 @@ export class Engine {
     // the bufferEpoch guard). Result: only the just-opened book ever processes.
     this.bibleRun++;
     this.bibleAbort?.abort(); // cancel the previous book's in-flight extraction
+    this.bibleLoopActive = false;
     this.buffer?.setGenerationEnabled(false);
     const epoch = ++this.bufferEpoch;
     const onUpdate = this.opts.onUpdate;
@@ -327,8 +335,8 @@ export class Engine {
   startGeneration(): void {
     if (this.generationStarted) return;
     this.generationStarted = true;
-    this.buffer?.setGenerationEnabled(true);
-    this.biblePromise = this.buildBibleInBackground();
+    this.buffer?.setGenerationEnabled(!this.isImageExecutionBlocked());
+    if (!this.isBibleExecutionBlocked()) this.biblePromise = this.buildBibleInBackground();
   }
 
   /** Whether generation has been started for the current book. */
@@ -446,7 +454,7 @@ export class Engine {
   }
 
   /** The whole LLM phase (extraction + prompts) is done — nothing left to resume. */
-  private isLlmPhaseComplete(): boolean {
+  isLlmPhaseComplete(): boolean {
     if (!this.bible) return false;
     if (this.llmPhaseCache?.bible !== this.bible) {
       this.llmPhaseCache = {
@@ -477,7 +485,7 @@ export class Engine {
     // `stop`: also stop when paused, but only when DECIDING to start the next chapter
     // (an already-completed extraction is still committed so in-flight work isn't wasted).
     const cancelled = (): boolean => this.bibleRun !== myRun;
-    const stop = (): boolean => this.biblePaused || cancelled();
+    const stop = (): boolean => this.isBibleExecutionBlocked() || cancelled();
     this.bibleLoopActive = true;
     try {
       // Sweep until nothing is pending. Re-checking matters because the book GROWS while this
@@ -526,7 +534,7 @@ export class Engine {
   private async extractPendingChapters(myRun: number, ac: AbortController, first: boolean): Promise<boolean> {
     if (!this.book || !this.bible) return false;
     const cancelled = (): boolean => this.bibleRun !== myRun;
-    const stop = (): boolean => this.biblePaused || cancelled();
+    const stop = (): boolean => this.isBibleExecutionBlocked() || cancelled();
     const bookId = this.book.id;
     const textByChapter = chapterText(this.book); // story chapters only
     const storyIndices = [...textByChapter.keys()];
@@ -724,7 +732,7 @@ export class Engine {
     signal: AbortSignal,
   ): Promise<void> {
     if (!this.book || !this.bible || !this.pipeline) return;
-    const stop = (): boolean => this.biblePaused || this.bibleRun !== myRun;
+    const stop = (): boolean => this.isBibleExecutionBlocked() || this.bibleRun !== myRun;
     const cancelled = (): boolean => this.bibleRun !== myRun;
     const total = this.storyUnitIndices.length;
     // Count the already-prompted units once, then keep a running tally — recounting
@@ -797,16 +805,21 @@ export class Engine {
    */
   async rebuildPrompts(): Promise<void> {
     if (!this.book || !this.bible) return;
-    this.bible = clearKeyEvents(this.bible);
-    await this.store.putBible(this.bible);
-    this.opts.onBibleUpdate?.(this.bible);
-    // Explicit on-demand rewrite: run the per-unit prompt pass (NOT re-extraction).
-    if (this.generationStarted && !this.biblePaused) {
+    // Keep our own hold across persistence. A foreground chat/Soul hold can otherwise release
+    // while putBible is pending and restart the old loop before this reset is fully committed.
+    const releaseResetHold = this.acquireExecutionHold({ bible: true });
+    try {
       const myRun = ++this.bibleRun;
       this.bibleAbort?.abort();
-      const ac = new AbortController();
-      this.bibleAbort = ac;
-      this.biblePromise = this.buildPromptsForUnits(myRun, ac.signal);
+      this.bibleLoopActive = false;
+      this.bible = clearKeyEvents(this.bible);
+      await this.store.putBible(this.bible);
+      if (this.bibleRun !== myRun) return;
+      this.opts.onBibleUpdate?.(this.bible);
+      // Releasing the nested hold below restarts the normal bible loop. Since completed chapters
+      // remain processed, it performs only the missing per-unit prompt pass.
+    } finally {
+      releaseResetHold();
     }
   }
 
@@ -1083,13 +1096,15 @@ export class Engine {
    */
   setBiblePaused(paused: boolean): void {
     if (this.biblePaused === paused) return;
+    const wasBlocked = this.isBibleExecutionBlocked();
     this.biblePaused = paused;
-    if (paused) {
+    const blocked = this.isBibleExecutionBlocked();
+    if (!wasBlocked && blocked) {
       // Cancel the in-flight chapter extraction so the GPU frees promptly (the loop
       // then bails at its next `stop()` check); the chapter stays unprocessed and is
       // re-extracted, in order, on resume.
       this.bibleAbort?.abort();
-    } else if (this.generationStarted && !this.isLlmPhaseComplete()) {
+    } else if (wasBlocked && !blocked && this.generationStarted && !this.isLlmPhaseComplete()) {
       // Resume the LLM phase if EITHER extraction or prompt-writing is unfinished (a pause
       // can stop the prompt pass after all chapters are extracted).
       this.biblePromise = this.buildBibleInBackground();
@@ -1101,7 +1116,54 @@ export class Engine {
     if (this.imagePaused === paused) return;
     this.imagePaused = paused;
     // Only (re-)enable rendering once the user has actually begun generating.
-    this.buffer?.setGenerationEnabled(!paused && this.generationStarted);
+    this.buffer?.setGenerationEnabled(!this.isImageExecutionBlocked() && this.generationStarted);
+  }
+
+  private isBibleExecutionBlocked(): boolean {
+    return this.biblePaused || this.bibleExecutionHolds > 0;
+  }
+
+  private isImageExecutionBlocked(): boolean {
+    return this.imagePaused || this.imageExecutionHolds > 0;
+  }
+
+  /**
+   * Temporarily block the Engine's local-model work without altering user-visible pause state.
+   * Returns an idempotent release that restarts only work the reader still wants running.
+   */
+  acquireExecutionHold(opts: { bible?: boolean; images?: boolean }): () => void {
+    if (opts.bible) {
+      const wasBlocked = this.isBibleExecutionBlocked();
+      this.bibleExecutionHolds++;
+      if (!wasBlocked) this.bibleAbort?.abort();
+    }
+    if (opts.images) {
+      this.imageExecutionHolds++;
+      this.buffer?.setGenerationEnabled(false);
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (opts.bible) {
+        const wasBlocked = this.isBibleExecutionBlocked();
+        this.bibleExecutionHolds = Math.max(0, this.bibleExecutionHolds - 1);
+        if (
+          wasBlocked &&
+          !this.isBibleExecutionBlocked() &&
+          this.generationStarted &&
+          !this.isLlmPhaseComplete()
+        ) {
+          this.biblePromise = this.buildBibleInBackground();
+        }
+      }
+      if (opts.images) {
+        this.imageExecutionHolds = Math.max(0, this.imageExecutionHolds - 1);
+        this.buffer?.setGenerationEnabled(
+          !this.isImageExecutionBlocked() && this.generationStarted,
+        );
+      }
+    };
   }
 
   /** Pause both pipelines (the combined "Pause" action). */
@@ -1135,19 +1197,31 @@ export class Engine {
    */
   async regenerateStoryboard(): Promise<void> {
     if (!this.book) return;
+    // Hold the bible loop through the awaited deletion. A foreground Soul job may release its
+    // outer hold during this await; this nested hold keeps the old Bible from restarting first.
+    const releaseResetHold = this.acquireExecutionHold({ bible: true });
+    try {
+      const resetRun = ++this.bibleRun;
+      this.bibleAbort?.abort();
+      this.bibleLoopActive = false;
     // Deletions are carried over. Everything else here is model output being thrown away and
     // rewritten, but a removal is a reader's decision ABOUT that output — and a re-analysis is the
     // one moment the whole book is read again, so dropping them would resurrect every entry the
     // reader had said isn't a thing. They stay listed under "Deleted" and can still be restored.
-    const removed = this.bible?.removed ?? [];
-    await this.store.deleteBible?.(this.book.id);
-    this.bible = { ...createEmptyBible(this.book.id), ...(removed.length ? { removed } : {}) };
-    this.opts.onBibleUpdate?.(this.bible);
-    this.biblePaused = false;
-    this.imagePaused = false;
-    if (this.generationStarted) {
-      this.buffer?.setGenerationEnabled(true);
-      this.biblePromise = this.buildBibleInBackground();
+      const removed = this.bible?.removed ?? [];
+      const bookId = this.book.id;
+      await this.store.deleteBible?.(bookId);
+      if (this.bibleRun !== resetRun || this.book.id !== bookId) return;
+      this.bible = { ...createEmptyBible(bookId), ...(removed.length ? { removed } : {}) };
+      this.opts.onBibleUpdate?.(this.bible);
+      this.biblePaused = false;
+      this.imagePaused = false;
+      if (this.generationStarted) {
+        this.buffer?.setGenerationEnabled(!this.isImageExecutionBlocked());
+      }
+    } finally {
+      // The outer Soul/chat hold, if any, still wins. Otherwise this resumes a fresh analysis.
+      releaseResetHold();
     }
   }
 
@@ -1285,7 +1359,7 @@ export class Engine {
     // has no reason to cancel the work in flight, and doing so is what stopped fast-arriving beats
     // from ever being extracted (see `bibleLoopActive`). A running loop re-reads the book's pending
     // chapters after each sweep, so it picks this one up by itself.
-    if (this.generationStarted && !this.biblePaused && !this.bibleLoopActive) {
+    if (this.generationStarted && !this.isBibleExecutionBlocked() && !this.bibleLoopActive) {
       this.biblePromise = this.buildBibleInBackground();
     }
     // Jump the new beat's image ahead of the strict in-order schedule — it's what the

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   chunkArrayBuffer,
   concatArrayBuffers,
@@ -31,6 +31,8 @@ import type {
   EngineVram,
   PlannerCommand,
   PlannerMirror,
+  SoulEssenceJobProgress,
+  SoulEssenceRelayRequestId,
   SyncToPhone,
 } from "./remote-sync.js";
 import { restartApp } from "./runtime.js";
@@ -55,6 +57,17 @@ import { restartApp } from "./runtime.js";
 export interface UpdateResult {
   status: "uptodate" | "updated" | "needs-restart" | "error";
   message: string;
+}
+
+function createSoulEssenceClientNonce(): string {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+  } catch {
+    // Older embedded webviews can expose crypto without implementing randomUUID.
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 export interface RemoteMirrorDeps {
@@ -89,7 +102,13 @@ export interface RemoteMirrorDeps {
   applySoul: (kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence) => void;
   refreshSoul: (kind: SoulKind) => void;
   /** DESKTOP: rebuild an Essence with the model/store that owns the authoritative Soul. */
-  generateSoulEssence: (kind: SoulKind) => Promise<{ essence?: SoulEssence; error?: string }>;
+  generateSoulEssence: (
+    kind: SoulKind,
+    onProgress?: (progress: SoulEssenceJobProgress) => void,
+    onRequestId?: (requestId: number) => void,
+  ) => Promise<{ essence?: SoulEssence; error?: string }>;
+  /** DESKTOP: cancel the exact worker/bootstrap request correlated to the phone request. */
+  cancelSoulEssenceRequest: (requestId: number) => void;
   /** PHONE: adopt the desktop's scheduled tasks (the phone has no scheduler of its own). */
   setScheduled: (tasks: ScheduledTask[]) => void;
   setBook: (book: BookSource | undefined) => void;
@@ -145,6 +164,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     applySoul,
     refreshSoul,
     generateSoulEssence,
+    cancelSoulEssenceRequest,
     setScheduled,
     setBook,
     setBible,
@@ -218,11 +238,25 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   // phone's worker because its local store intentionally has no mirrored Soul notes.
   const soulEssenceRefreshPending = useRef(
     new Map<
-      number,
+      SoulEssenceRelayRequestId,
       {
+        kind: SoulKind;
         timer: ReturnType<typeof setTimeout>;
+        resetWatchdog: () => void;
         resolve: (result: { essence?: SoulEssence; error?: string }) => void;
       }
+    >(),
+  );
+  const [soulEssenceProgress, setSoulEssenceProgress] = useState<
+    ({ active: true; requestId: SoulEssenceRelayRequestId; kind: SoulKind } &
+      SoulEssenceJobProgress) |
+      undefined
+  >();
+  /** DESKTOP: phone relay requestId → exact local worker/bootstrap requestId. */
+  const remoteSoulEssenceWorkerRequests = useRef(
+    new Map<
+      SoulEssenceRelayRequestId,
+      { kind: SoulKind; workerRequestId: number }
     >(),
   );
   // PHONE: lazy image-card fetches awaiting the desktop's vrsync:fileData reply, keyed by reqId.
@@ -235,7 +269,9 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const fetchingImageIds = useRef(new Set<string>());
   const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
+  const soulEssenceClientNonce = useRef(createSoulEssenceClientNonce());
   const soulEssenceRefreshReqId = useRef(0);
+  const foregroundSoulEssenceRequestId = useRef<SoulEssenceRelayRequestId | undefined>(undefined);
 
   // Live scheduled tasks for the snapshot builder (which is read from a ref by the once-registered
   // relay handler, so it must not close over a stale array).
@@ -345,11 +381,32 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
           case "vrsync:soul":
             applySoul(msg.kind, msg.name, msg.notes, msg.essence);
             break;
+          case "vrsync:soulEssenceProgress": {
+            const pending = soulEssenceRefreshPending.current.get(msg.requestId);
+            if (pending?.kind === msg.kind) {
+              pending.resetWatchdog();
+              if (foregroundSoulEssenceRequestId.current === msg.requestId) {
+                setSoulEssenceProgress({
+                  active: true,
+                  requestId: msg.requestId,
+                  kind: msg.kind,
+                  ...msg.progress,
+                });
+              }
+            }
+            break;
+          }
           case "vrsync:soulEssenceResult": {
             const pending = soulEssenceRefreshPending.current.get(msg.requestId);
-            if (pending) {
+            if (pending?.kind === msg.kind) {
               soulEssenceRefreshPending.current.delete(msg.requestId);
               clearTimeout(pending.timer);
+              if (foregroundSoulEssenceRequestId.current === msg.requestId) {
+                foregroundSoulEssenceRequestId.current = undefined;
+                setSoulEssenceProgress((progress) =>
+                  progress?.requestId === msg.requestId ? undefined : progress,
+                );
+              }
               pending.resolve({
                 ...(msg.essence ? { essence: msg.essence } : {}),
                 ...(msg.error ? { error: msg.error } : {}),
@@ -501,21 +558,66 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
           case "vrcmd:soulName":
             void saveSoulName(libraryStore, msg.kind, msg.name).then(() => refreshSoul(msg.kind)).catch(() => {});
             break;
-          case "vrcmd:soulEssenceRefresh":
-            void generateSoulEssence(msg.kind)
+          case "vrcmd:soulEssenceRefresh": {
+            let correlation:
+              | { kind: SoulKind; workerRequestId: number }
+              | undefined;
+            void generateSoulEssence(
+              msg.kind,
+              (progress) => {
+                if (
+                  !correlation ||
+                  remoteSoulEssenceWorkerRequests.current.get(msg.requestId) !== correlation
+                ) {
+                  return;
+                }
+                sendAppSync({
+                  type: "vrsync:soulEssenceProgress",
+                  requestId: msg.requestId,
+                  kind: msg.kind,
+                  progress,
+                });
+              },
+              (workerRequestId) => {
+                correlation = { kind: msg.kind, workerRequestId };
+                remoteSoulEssenceWorkerRequests.current.set(msg.requestId, correlation);
+              },
+            )
               .catch((err): { essence?: SoulEssence; error?: string } => ({
                 error: err instanceof Error ? err.message : String(err),
               }))
-              .then((result) =>
+              .then((result) => {
+                if (
+                  !correlation ||
+                  remoteSoulEssenceWorkerRequests.current.get(msg.requestId) !== correlation
+                ) {
+                  return;
+                }
                 sendAppSync({
                   type: "vrsync:soulEssenceResult",
                   requestId: msg.requestId,
                   kind: msg.kind,
                   ...(result.essence ? { essence: result.essence } : {}),
                   ...(result.error ? { error: result.error } : {}),
-                }),
-              );
+                });
+              })
+              .finally(() => {
+                if (
+                  correlation &&
+                  remoteSoulEssenceWorkerRequests.current.get(msg.requestId) === correlation
+                ) {
+                  remoteSoulEssenceWorkerRequests.current.delete(msg.requestId);
+                }
+              });
             break;
+          }
+          case "vrcmd:soulEssenceCancel": {
+            const correlation = remoteSoulEssenceWorkerRequests.current.get(msg.requestId);
+            if (correlation?.kind === msg.kind) {
+              cancelSoulEssenceRequest(correlation.workerRequestId);
+            }
+            break;
+          }
           case "vrcmd:chatSend":
           case "vrcmd:storyStart":
           case "vrcmd:chatSwitch":
@@ -642,6 +744,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     setRemoteHost,
     refreshSkills,
     generateSoulEssence,
+    cancelSoulEssenceRequest,
     clearBuddyPlan,
     bookRef,
     phoneExitedBookId,
@@ -725,17 +828,61 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const requestSoulEssenceRefresh = useCallback(
     (kind: SoulKind): Promise<{ essence?: SoulEssence; error?: string }> =>
       new Promise((resolve) => {
-        const requestId = soulEssenceRefreshReqId.current++;
-        const timer = setTimeout(() => {
+        const requestId =
+          `${soulEssenceClientNonce.current}:${soulEssenceRefreshReqId.current++}` as SoulEssenceRelayRequestId;
+        foregroundSoulEssenceRequestId.current = requestId;
+        setSoulEssenceProgress({
+          active: true,
+          requestId,
+          kind,
+          phase: "queued",
+          message: "Sending Soul Essence generation to the linked desktop…",
+          startedAt: Date.now(),
+          tokens: 0,
+        });
+        const onStall = () => {
           if (soulEssenceRefreshPending.current.delete(requestId)) {
+            sendAppSync({ type: "vrcmd:soulEssenceCancel", requestId, kind });
+            if (foregroundSoulEssenceRequestId.current === requestId) {
+              foregroundSoulEssenceRequestId.current = undefined;
+              setSoulEssenceProgress((progress) =>
+                progress?.requestId === requestId ? undefined : progress,
+              );
+            }
             resolve({ error: "The desktop did not finish the Soul Essence refresh. Check the phone link and try again." });
           }
-        // The desktop worker has its own 10-minute ceiling. Leave relay margin so its specific
-        // success/error can arrive before the phone reports a generic link timeout.
-        }, 660_000);
-        soulEssenceRefreshPending.current.set(requestId, { timer, resolve });
+        };
+        let pending!: {
+          kind: SoulKind;
+          timer: ReturnType<typeof setTimeout>;
+          resetWatchdog: () => void;
+          resolve: (result: { essence?: SoulEssence; error?: string }) => void;
+        };
+        const resetWatchdog = (): void => {
+          if (pending?.timer) clearTimeout(pending.timer);
+          // The desktop uses a 10-minute INACTIVITY watchdog. Leave one minute of relay margin and
+          // rearm on every mirrored load/pass/token update, so a healthy large Soul is never cut off.
+          pending.timer = setTimeout(onStall, 11 * 60_000);
+        };
+        pending = {
+          kind,
+          timer: setTimeout(onStall, 11 * 60_000),
+          resetWatchdog,
+          resolve,
+        };
+        soulEssenceRefreshPending.current.set(requestId, pending);
         sendAppSync({ type: "vrcmd:soulEssenceRefresh", requestId, kind });
       }),
+    [sendAppSync],
+  );
+  const cancelSoulEssenceRefresh = useCallback(
+    (kind: SoulKind): void => {
+      for (const [requestId, pending] of soulEssenceRefreshPending.current) {
+        if (pending.kind !== kind) continue;
+        sendAppSync({ type: "vrcmd:soulEssenceCancel", requestId, kind });
+        pending.resetWatchdog();
+      }
+    },
     [sendAppSync],
   );
   useEffect(
@@ -775,6 +922,8 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     fileFetchSeq,
     hostToolReqId,
     requestSoulEssenceRefresh,
+    cancelSoulEssenceRefresh,
+    soulEssenceProgress,
     onSettingsChange,
   };
 }

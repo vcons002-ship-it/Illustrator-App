@@ -297,6 +297,58 @@ function essenceJsonShape(kind: SoulKind, sourceFingerprint: string): string {
   return `{"schemaVersion":1,"kind":"${kind}","sourceFingerprint":"${sourceFingerprint}","facets":{"coreDisposition":{"text":"","sourceIds":[]},"conversationalVoice":{"text":"","sourceIds":[]},"thinkingStyle":{"text":"","sourceIds":[]},"valuesAndMotivations":{"text":"","sourceIds":[]},"relationalStyle":{"text":"","sourceIds":[]},"personalityDirections":{"text":"","sourceIds":[]},"tensionsAndNuance":{"text":"","sourceIds":[]}},"exactAppearance":[]}`;
 }
 
+/** Provider-safe structured-output shape for a Soul Essence. Keep semantic constraints (length,
+ * evidence coverage, exact empty appearance) in the validator/prompt: several cloud structured-output
+ * APIs reject otherwise-valid JSON Schema keywords such as maxLength, maxItems, and uniqueItems. */
+export function soulEssenceJsonSchema(
+  kind: SoulKind,
+  sourceFingerprint: string,
+): Record<string, unknown> {
+  const facet = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      text: { type: "string" },
+      sourceIds: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+    required: ["text", "sourceIds"],
+  };
+  const facets = Object.fromEntries(
+    SOUL_ESSENCE_FACETS.map((key) => [key, facet]),
+  );
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      schemaVersion: { type: "integer", enum: [SOUL_ESSENCE_SCHEMA_VERSION] },
+      kind: { type: "string", enum: [kind] },
+      sourceFingerprint: { type: "string", enum: [sourceFingerprint] },
+      facets: {
+        type: "object",
+        additionalProperties: false,
+        properties: facets,
+        required: Object.keys(facets),
+      },
+      exactAppearance: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+            sourceIds: { type: "array", items: { type: "string" } },
+          },
+          required: ["text", "sourceIds"],
+        },
+      },
+    },
+    required: ["schemaVersion", "kind", "sourceFingerprint", "facets", "exactAppearance"],
+  };
+}
+
 /**
  * Prompts an LLM to integrate ALL current source notes into a compact latent identity. The model is
  * required to cite source IDs; parsing below refuses stale fingerprints and invented IDs.

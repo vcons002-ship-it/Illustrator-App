@@ -28,6 +28,13 @@ const contentFrame = (content: string): string => sseFrame({ choices: [{ delta: 
 const toolFrame = (index: number, fn: { name?: string; arguments?: string }): string =>
   sseFrame({ choices: [{ delta: { tool_calls: [{ index, function: fn }] } }] });
 
+const JSON_SCHEMA = {
+  type: "object",
+  properties: { summary: { type: "string" } },
+  required: ["summary"],
+  additionalProperties: false,
+};
+
 describe("nativeToolCallsToText", () => {
   it("serializes object arguments into the app's tool-call text line", () => {
     expect(nativeToolCallsToText([{ function: { name: "create_task", arguments: { title: "buy milk" } } }])).toBe(
@@ -61,6 +68,23 @@ describe("nativeToolCallsToText", () => {
 });
 
 describe("LocalServerLLMProvider streaming merge (/v1 SSE)", () => {
+  it("requests json_object mode on the OpenAI-compatible streaming path", async () => {
+    const frames = contentFrame('{"summary":"local"}') + "data: [DONE]\n\n";
+    const { fetchImpl, requests } = streamingFetch([frames]);
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl });
+    const text = await p.chat([{ role: "user", content: "summarize" }], {
+      onToken: () => {},
+      responseFormat: "json",
+      jsonSchema: JSON_SCHEMA,
+    });
+    expect(text).toBe('{"summary":"local"}');
+    expect(requests[0]!.body).toMatchObject({
+      stream: true,
+      temperature: 0,
+      response_format: { type: "json_object" },
+    });
+  });
+
   it("merges content deltas and tool-call argument fragments split across events and chunks", async () => {
     const frames = [
       contentFrame("On "),
@@ -150,6 +174,31 @@ describe("LocalServerLLMProvider streaming merge (/v1 SSE)", () => {
 });
 
 describe("LocalServerLLMProvider Ollama native path (numCtx)", () => {
+  it("uses the supplied schema grammar on the native streaming path", async () => {
+    const lines = [
+      JSON.stringify({ message: { content: '{"summary":"ollama"}' } }),
+      JSON.stringify({ done: true }),
+    ].join("\n");
+    const { fetchImpl, requests } = streamingFetch([lines]);
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      fetchImpl,
+      numCtx: 4096,
+    });
+    const text = await p.chat([{ role: "user", content: "summarize" }], {
+      onToken: () => {},
+      responseFormat: "json",
+      jsonSchema: JSON_SCHEMA,
+    });
+    expect(text).toBe('{"summary":"ollama"}');
+    expect(requests[0]!.body).toMatchObject({
+      stream: true,
+      format: JSON_SCHEMA,
+      options: { temperature: 0 },
+    });
+  });
+
   it("streams NDJSON from /api/chat, loading the model at the configured window", async () => {
     const lines = [
       JSON.stringify({ message: { content: "Hel" } }),

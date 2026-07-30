@@ -35,8 +35,12 @@ export interface SoulPanelProps {
   notes: SoulNote[];
   /** The compact identity synthesis used for ordinary conversation. */
   essence?: SoulEssence | undefined;
+  /** Live progress for the dedicated, non-persisted text-model job that builds the essence. */
+  essenceProgress?: SoulEssenceGenerationProgress | undefined;
   /** Regenerate the compact identity synthesis from the authoritative notes. */
   onRefreshEssence?: () => Promise<SoulEssence | undefined>;
+  /** Cancel the active essence-generation job, when the host supports cancellation. */
+  onCancelEssence?: () => void | Promise<void>;
   /** Persist the WHOLE notes list (the panel manages the array; App writes + reloads it). */
   onSaveNotes: (notes: SoulNote[]) => Promise<void>;
   /** Persist the played-character name. */
@@ -48,6 +52,32 @@ export interface SoulPanelProps {
   onSaveImages?: (images: SoulImage[]) => Promise<void>;
   onClose: () => void;
   limits: { note: number; max: number; name: number };
+}
+
+export type SoulEssenceGenerationPhase =
+  | "queued"
+  | "loading"
+  | "analyzing"
+  | "merging"
+  | "validating"
+  | "saving"
+  | "complete"
+  | "cancelled"
+  | "error";
+
+export interface SoulEssenceGenerationProgress {
+  active: boolean;
+  phase?: SoulEssenceGenerationPhase | undefined;
+  /** Human-readable detail supplied by the generation host. */
+  message?: string | undefined;
+  /** One-based model pass currently in progress. */
+  pass?: number | undefined;
+  /** Total model passes, when it can be determined in advance. */
+  total?: number | undefined;
+  /** Tokens processed or generated so far, when reported by the provider. */
+  tokens?: number | undefined;
+  /** Epoch milliseconds, used to show elapsed time. */
+  startedAt?: number | undefined;
 }
 
 const COPY = {
@@ -79,12 +109,33 @@ const ESSENCE_FACET_LABELS: Record<(typeof SOUL_ESSENCE_FACETS)[number], string>
   tensionsAndNuance: "Tensions and nuance",
 };
 
+const ESSENCE_PHASE_LABELS: Record<SoulEssenceGenerationPhase, string> = {
+  queued: "Queued",
+  loading: "Loading the text model",
+  analyzing: "Analyzing source notes",
+  merging: "Integrating Soul",
+  validating: "Validating essence",
+  saving: "Saving essence",
+  complete: "Everyday essence generated and saved",
+  cancelled: "Generation cancelled",
+  error: "Essence generation failed",
+};
+
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}:${String(seconds).padStart(2, "0")}` : `${seconds}s`;
+}
+
 export const SoulPanel = memo(function SoulPanel({
   variant,
   name,
   notes,
   essence,
+  essenceProgress,
   onRefreshEssence,
+  onCancelEssence,
   onSaveNotes,
   onSaveName,
   images,
@@ -105,44 +156,62 @@ export const SoulPanel = memo(function SoulPanel({
   const [draft, setDraft] = useState("");
   const [editingAt, setEditingAt] = useState<number | undefined>();
   const [editText, setEditText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [savingBusy, setSavingBusy] = useState(false);
+  const [essenceSubmitting, setEssenceSubmitting] = useState(false);
+  const [essenceStartedAt, setEssenceStartedAt] = useState<number | undefined>();
+  const [essenceNotice, setEssenceNotice] = useState("");
+  const [essenceError, setEssenceError] = useState("");
+  const [cancellingEssence, setCancellingEssence] = useState(false);
+  const [clock, setClock] = useState(Date.now());
   const [error, setError] = useState("");
 
   const sorted = useMemo(() => [...list].sort((a, b) => b.at - a.at), [list]);
   const full = list.length >= limits.max;
+  const essenceBusy = essenceSubmitting || Boolean(essenceProgress?.active);
+  const operationBusy = savingBusy || essenceBusy;
+  const activeStartedAt = essenceProgress?.startedAt ?? essenceStartedAt;
+
+  useEffect(() => {
+    if (!essenceBusy || activeStartedAt === undefined) return;
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [activeStartedAt, essenceBusy]);
 
   const persist = async (next: SoulNote[]): Promise<void> => {
-    setBusy(true);
+    setSavingBusy(true);
     setError("");
     try {
       await onSaveNotes(next);
       setList(next);
       // A source-note change makes the previously distilled identity stale.
       setShownEssence(undefined);
+      setEssenceNotice("");
+      setEssenceError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setSavingBusy(false);
     }
   };
 
   const saveName = async (): Promise<void> => {
     const next = nameDraft.trim().slice(0, limits.name);
     if (next === name) return;
-    setBusy(true);
+    setSavingBusy(true);
     setError("");
     try {
       await onSaveName(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setSavingBusy(false);
     }
   };
 
   const add = async (): Promise<void> => {
     const text = draft.trim().slice(0, limits.note);
-    if (!text || busy) return;
+    if (!text || operationBusy) return;
     if (list.some((n) => n.text.toLowerCase() === text.toLowerCase())) {
       setError("That note is already there.");
       return;
@@ -152,7 +221,7 @@ export const SoulPanel = memo(function SoulPanel({
   };
 
   const saveEdit = async (): Promise<void> => {
-    if (editingAt === undefined || busy) return;
+    if (editingAt === undefined || operationBusy) return;
     const text = editText.trim().slice(0, limits.note);
     if (!text) {
       await persist(list.filter((n) => n.at !== editingAt));
@@ -169,20 +238,44 @@ export const SoulPanel = memo(function SoulPanel({
   const remove = (at: number): void => void persist(list.filter((n) => n.at !== at));
 
   const refreshEssence = async (): Promise<void> => {
-    if (!onRefreshEssence || busy) return;
-    setBusy(true);
-    setError("");
+    if (!onRefreshEssence || operationBusy) return;
+    setEssenceSubmitting(true);
+    setEssenceStartedAt(Date.now());
+    setEssenceNotice("");
+    setEssenceError("");
     try {
-      setShownEssence(await onRefreshEssence());
+      const generated = await onRefreshEssence();
+      setShownEssence(generated);
+      if (generated) setEssenceNotice("Everyday essence generated and saved.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof Error && e.name === "AbortError") {
+        setEssenceNotice("Generation cancelled.");
+      } else {
+        setEssenceError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setBusy(false);
+      setEssenceSubmitting(false);
+      setEssenceStartedAt(undefined);
+    }
+  };
+
+  const cancelEssence = async (): Promise<void> => {
+    if (!onCancelEssence || !essenceBusy || cancellingEssence) return;
+    setCancellingEssence(true);
+    setEssenceError("");
+    setEssenceNotice("Cancellation requested\u2026");
+    try {
+      await onCancelEssence();
+    } catch (e) {
+      setEssenceNotice("");
+      setEssenceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCancellingEssence(false);
     }
   };
 
   const persistPics = async (next: SoulImage[]): Promise<void> => {
-    setBusy(true);
+    setSavingBusy(true);
     setError("");
     try {
       if (!onSaveImages) return;
@@ -191,7 +284,7 @@ export const SoulPanel = memo(function SoulPanel({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setSavingBusy(false);
     }
   };
   const addImageFiles = async (files: FileList | null): Promise<void> => {
@@ -229,6 +322,32 @@ export const SoulPanel = memo(function SoulPanel({
     }
   };
   const removeImage = (i: number): void => void persistPics(pics.filter((_, idx) => idx !== i));
+
+  const progressPhase = essenceProgress?.phase;
+  const essenceNoticeIsCancellation =
+    essenceNotice.startsWith("Cancellation") || essenceNotice.startsWith("Generation cancelled");
+  const cancellationNotice = essenceBusy && essenceNoticeIsCancellation;
+  const essenceStatusText = essenceError
+    ? essenceError
+    : cancellationNotice
+      ? essenceNotice
+      : essenceProgress?.message?.trim() ||
+        (progressPhase ? ESSENCE_PHASE_LABELS[progressPhase] : "") ||
+        (essenceBusy ? "Starting Soul integration\u2026" : essenceNotice);
+  const essenceStatusIsError = Boolean(essenceError) || progressPhase === "error";
+  const essenceStatusIsComplete =
+    !essenceBusy &&
+    (progressPhase === "complete" || (Boolean(essenceNotice) && !essenceNoticeIsCancellation));
+  const progressPass =
+    essenceProgress?.pass !== undefined && Number.isFinite(essenceProgress.pass)
+      ? Math.max(1, Math.floor(essenceProgress.pass))
+      : undefined;
+  const progressTotal =
+    essenceProgress?.total !== undefined && Number.isFinite(essenceProgress.total)
+      ? Math.max(1, Math.floor(essenceProgress.total))
+      : undefined;
+  const elapsed =
+    essenceBusy && activeStartedAt !== undefined ? formatElapsed(clock - activeStartedAt) : undefined;
 
   return (
     <ModalShell title={copy.title} onClose={onClose}>
@@ -277,21 +396,88 @@ export const SoulPanel = memo(function SoulPanel({
               Everyday essence
             </strong>
             {onRefreshEssence ? (
-              <button
-                type="button"
-                style={btn}
-                disabled={busy || list.length === 0}
-                onClick={() => void refreshEssence()}
-                aria-label={`${shownEssence ? "Refresh" : "Generate"} everyday essence`}
-              >
-                {shownEssence ? "Refresh" : "Generate"}
-              </button>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  type="button"
+                  style={btn}
+                  disabled={operationBusy || list.length === 0}
+                  onClick={() => void refreshEssence()}
+                  aria-label={
+                    essenceBusy
+                      ? "Everyday essence generation in progress"
+                      : `${shownEssence ? "Refresh" : "Generate"} everyday essence`
+                  }
+                >
+                  {essenceBusy ? "Generating\u2026" : shownEssence ? "Refresh" : "Generate"}
+                </button>
+                {essenceBusy && progressPhase !== "saving" && onCancelEssence ? (
+                  <button
+                    type="button"
+                    style={btn}
+                    disabled={cancellingEssence}
+                    onClick={() => void cancelEssence()}
+                  >
+                    {cancellingEssence ? "Canceling\u2026" : "Cancel"}
+                  </button>
+                ) : null}
+              </span>
             ) : null}
           </div>
           <p style={{ fontSize: 11, opacity: 0.68, margin: 0, lineHeight: 1.45 }}>
             Ordinary chat uses this integrated identity. The original notes below remain authoritative,
             and creative work or a specific identity question can still consult those sources.
           </p>
+
+          {essenceStatusText ? (
+            <div
+              role={essenceStatusIsError ? "alert" : "status"}
+              aria-live={essenceStatusIsError ? "assertive" : "polite"}
+              aria-atomic="true"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 5,
+                padding: "8px 9px",
+                borderRadius: 6,
+                border: essenceStatusIsError
+                  ? `1px solid ${DANGER_RED}`
+                  : essenceStatusIsComplete
+                    ? "1px solid rgba(98,210,145,0.42)"
+                    : "1px solid rgba(130,170,255,0.4)",
+                background: essenceStatusIsError
+                  ? "rgba(190,45,45,0.12)"
+                  : essenceStatusIsComplete
+                    ? "rgba(60,160,105,0.1)"
+                    : "rgba(80,120,210,0.11)",
+              }}
+            >
+              <strong style={{ fontSize: 12, lineHeight: 1.35 }}>{essenceStatusText}</strong>
+              {essenceBusy ? (
+                <>
+                  <span style={{ display: "flex", flexWrap: "wrap", gap: "3px 10px", fontSize: 10, opacity: 0.72 }}>
+                    {progressPass !== undefined ? (
+                      <span>
+                        Pass {progressPass}
+                        {progressTotal !== undefined ? ` of ${progressTotal}` : ""}
+                      </span>
+                    ) : null}
+                    {essenceProgress?.tokens !== undefined && Number.isFinite(essenceProgress.tokens) ? (
+                      <span>{Math.max(0, Math.floor(essenceProgress.tokens)).toLocaleString()} tokens</span>
+                    ) : null}
+                    {elapsed ? <span>Elapsed {elapsed}</span> : null}
+                  </span>
+                  {progressTotal !== undefined ? (
+                    <progress
+                      aria-label="Soul integration progress"
+                      value={Math.min(progressPass ?? 0, progressTotal)}
+                      max={progressTotal}
+                      style={{ width: "100%", height: 5, accentColor: "#8aa8ff" }}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
           {shownEssence ? (
             <>
@@ -379,7 +565,11 @@ export const SoulPanel = memo(function SoulPanel({
               if (e.key === "Enter") void add();
             }}
           />
-          <button style={btnPrimary} onClick={() => void add()} disabled={busy || full || !draft.trim()}>
+          <button
+            style={btnPrimary}
+            onClick={() => void add()}
+            disabled={operationBusy || full || !draft.trim()}
+          >
             + Add
           </button>
         </div>
@@ -412,7 +602,7 @@ export const SoulPanel = memo(function SoulPanel({
                       }
                     }}
                   />
-                  <button style={btn} onClick={() => void saveEdit()} disabled={busy}>
+                  <button style={btn} onClick={() => void saveEdit()} disabled={operationBusy}>
                     Save
                   </button>
                   <button
@@ -439,7 +629,7 @@ export const SoulPanel = memo(function SoulPanel({
                     >
                       Edit
                     </button>
-                    <button style={btn} onClick={() => remove(n.at)} disabled={busy}>
+                    <button style={btn} onClick={() => remove(n.at)} disabled={operationBusy}>
                       Delete
                     </button>
                   </span>
@@ -473,13 +663,13 @@ export const SoulPanel = memo(function SoulPanel({
                   decoding="async"
                   style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
                 />
-                <button style={removeBadge} onClick={() => removeImage(i)} disabled={busy} title="Remove" aria-label="Remove reference photo">
+                <button style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
                   ×
                 </button>
               </div>
             ))}
             {pics.length < MAX_SOUL_IMAGES ? (
-              <button style={addThumb} onClick={() => fileInput.current?.click()} disabled={busy}>
+              <button style={addThumb} onClick={() => fileInput.current?.click()} disabled={operationBusy}>
                 + Photo
               </button>
             ) : null}
@@ -502,7 +692,11 @@ export const SoulPanel = memo(function SoulPanel({
           <span>
             {list.length}/{limits.max} notes
           </span>
-          {error ? <span style={{ color: DANGER_RED, opacity: 1 }}>{error}</span> : <span>{busy ? "Saving…" : ""}</span>}
+          {error ? (
+            <span style={{ color: DANGER_RED, opacity: 1 }}>{error}</span>
+          ) : (
+            <span>{savingBusy ? "Saving\u2026" : ""}</span>
+          )}
         </div>
     </ModalShell>
   );

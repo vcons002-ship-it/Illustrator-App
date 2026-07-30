@@ -60,6 +60,15 @@ interface ChatStreamEvent {
   choices?: { delta?: { content?: string } }[];
 }
 
+function jsonResponseFormat(
+  schema?: Record<string, unknown>,
+  name = "chat_response",
+): Record<string, unknown> {
+  return schema
+    ? { type: "json_schema", json_schema: { name, strict: true, schema } }
+    : { type: "json_object" };
+}
+
 export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapable {
   readonly id = "openai";
   private readonly transport: Transport;
@@ -83,7 +92,12 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
         { role: "system", content: extractionSystemFor(input.contentMode) },
         { role: "user", content: extractionUserContent(input) },
       ],
-      { json: true, ...(input.signal ? { signal: input.signal } : {}) },
+      {
+        json: true,
+        jsonSchema: EXTRACTION_JSON_SCHEMA,
+        jsonSchemaName: "visual_bible",
+        ...(input.signal ? { signal: input.signal } : {}),
+      },
     );
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };
     try {
@@ -117,6 +131,9 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
           messages,
           max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
           stream: true,
+          ...(opts.responseFormat === "json"
+            ? { response_format: jsonResponseFormat(opts.jsonSchema) }
+            : {}),
         },
         ...(opts.signal ? { signal: opts.signal } : {}),
         onEvent: (e) => {
@@ -132,7 +149,8 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       return text.trim();
     }
     const text = await this.complete(messages, {
-      json: false,
+      json: opts.responseFormat === "json",
+      ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
@@ -175,7 +193,13 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
 
   private async complete(
     messages: { role: "system" | "user" | "assistant"; content: string }[],
-    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number },
+    opts: {
+      json: boolean;
+      jsonSchema?: Record<string, unknown>;
+      jsonSchemaName?: string;
+      signal?: AbortSignal;
+      maxTokens?: number;
+    },
   ): Promise<string> {
     const res = await this.transport.send({
       url: `${this.baseUrl}/chat/completions`,
@@ -187,12 +211,7 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
         messages,
         ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
         ...(opts.json
-          ? {
-              response_format: {
-                type: "json_schema",
-                json_schema: { name: "visual_bible", strict: true, schema: EXTRACTION_JSON_SCHEMA },
-              },
-            }
+          ? { response_format: jsonResponseFormat(opts.jsonSchema, opts.jsonSchemaName) }
           : {}),
       },
     });
