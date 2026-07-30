@@ -4,7 +4,7 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
 import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
-import { TOOLSETS, TOOLSET_IDS, isToolAvailable, toolsetIndexBlock } from "./toolsets.js";
+import { TOOLSETS, TOOLSET_IDS, isToolAvailable, toolsetAvailable, toolsetIndexBlock } from "./toolsets.js";
 import { formatExtraction } from "../files/document-extraction.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
@@ -743,7 +743,7 @@ const MAX_READ_FILE_CHARS = 60_000;
  * coding manual would advertise something that cannot work. Read from the caller's raw flags, before
  * on-demand gating turns them off. PURE. */
 function availableToolsets(raw: Record<string, unknown>): string[] {
-  return TOOLSETS.filter((t) => t.flags.some((f) => raw[f] !== false)).map((t) => t.id);
+  return TOOLSETS.filter((t) => toolsetAvailable(t, raw)).map((t) => t.id);
 }
 
 /** Every capability a toolset owns, off unless that toolset is loaded. Absent `loadedToolsets` keeps
@@ -1054,6 +1054,11 @@ export function buildBuddySystemPrompt(raw: {
       "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first. " +
       "NEVER say a file was saved or a command/script RAN until write_file / run_command actually " +
       "RETURNS a result — do not narrate success in advance or claim an output you didn't receive.\n"
+    : raw.canRunCommands
+    ? // Allowed, merely not documented yet — same rule as Google: a deferred manual is not a missing
+      // ability, and the model must not tell the reader it can't do something it can.
+      'YOU CAN SAVE FILES AND RUN CODE here — load the "coding" toolset for how, then do it. Do not tell ' +
+      "the reader you're unable to.\n"
     : "YOU CANNOT SAVE FILES OR RUN CODE in this chat — you have no file-writing or command-running " +
       "tool in your toolkit here (the reader hasn't turned the ability on). If the reader asks you to " +
       "SAVE a file, RUN python/code, or EXECUTE a command, do NOT pretend you did it and do NOT claim " +
@@ -1161,9 +1166,15 @@ export function buildBuddySystemPrompt(raw: {
         : "Before you CREATE an event or task, confirm the details (title, date/time) with the reader in plain words — " +
           "don't write to their calendar/list on a vague request; ask if anything's ambiguous. You only read and create " +
           "— you cannot send email or delete anything.\n")
-    : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
-      // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
-      "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
+    : raw.canGoogle
+      ? // CONNECTED, but the details are merely deferred this turn. Saying nothing was not safe: the
+        // "not connected" branch below then fired on a gated flag and told the reader, in capitals,
+        // that their linked account was not linked. Deferring documentation must never change a FACT.
+        'GOOGLE IS CONNECTED (Gmail, Calendar, Google Tasks) — say so if asked. Load the "google" toolset ' +
+        "for the tools to read or write them; never claim you checked before you actually have.\n"
+      : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
+        // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
+        "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
       "reader's email, calendar, or Google to-dos (there are no gmail_search / list_events / list_tasks tools right " +
       "now). NEVER say or imply you checked them, and NEVER invent emails, events, or to-dos. If the reader asks about " +
       'their mail, schedule, or Google tasks, tell them plainly that Google isn\'t connected and offer to connect it — ' +
@@ -1376,6 +1387,12 @@ export function buildBuddySystemPrompt(raw: {
       ? ""
       : `${toolsetIndexBlock(availableToolsets(raw), opts.loadedToolsets)}\n\n`) +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
+    (opts.omitToolsetIndex || !opts.loadedToolsets
+      ? ""
+      : `- {"tool":"load_toolset","name":"…"} — LOAD one of the tool groups listed just above, when a ` +
+        `request needs an ability you don't see in this list. One of: ${TOOLSET_IDS.join(", ")}. Do this ` +
+        `BEFORE saying you can't do something — the ability probably exists, you just don't have its ` +
+        `instructions in front of you yet.\n`) +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
     "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
     "linear algebra (det, inv, [[1,2],[3,4]]*[[5],[6]]); CALCULUS + algebra (derivative('x^2','x'), " +
@@ -2433,6 +2450,17 @@ export function ollamaToolSchemas(opts: {
   loadedToolsets?: readonly string[];
 }): ToolSchema[] {
   const t: ToolSchema[] = [
+    // FIRST, and never gated. The loader is the one tool whose absence is unrecoverable: a model
+    // driving through native tool-calling sees only this list, so leaving it out meant the on-demand
+    // sets could not be reached AT ALL — the index told it to call something it had no way to call.
+    toolFn(
+      "load_toolset",
+      `Load the full instructions for a group of tools you don't currently have. Groups: ${TOOLSET_IDS.join(", ")}. ` +
+        "Call this FIRST when a request needs an ability that isn't in your current tool list — " +
+        "then make the real call.",
+      { name: strParam(`Which group to load — one of: ${TOOLSET_IDS.join(", ")}.`) },
+      ["name"],
+    ),
     toolFn(
       "generate_image",
       "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something.",
@@ -2684,8 +2712,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return path ? { tool, path, ...(from ? { from } : {}), ...(to ? { to } : {}) } : undefined;
   }
   if (tool === "load_toolset") {
+    // An unknown group is PARSED, not dropped. A dropped call vanishes and the model learns nothing;
+    // a parsed one comes back as "there's no toolset called X" with the real list, which it can act on.
     const name = (strArg(obj.name ?? obj.toolset ?? obj.id, 40) || "").toLowerCase();
-    return name && TOOLSET_IDS.includes(name) ? { tool, name } : undefined;
+    return name ? { tool, name } : undefined;
   }
   if (tool === "extract_from_document") {
     const path = strArg(obj.path, 2000);

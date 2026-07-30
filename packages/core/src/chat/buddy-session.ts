@@ -25,7 +25,7 @@ import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
-import { isToolAvailable, toolsetForTool } from "./toolsets.js";
+import { TOOLSET_IDS, isToolAvailable, toolsetForTool } from "./toolsets.js";
 import {
   MIN_CHUNKED_DOCUMENT_CHARS,
   chunkDocument,
@@ -647,6 +647,7 @@ export async function runBuddyTurn(opts: {
         const already = id ? loadedToolsets.includes(id) : false;
         if (id && !already) loadedToolsets = [...loadedToolsets, id];
         const doc = id && opts.toolsetDoc ? opts.toolsetDoc(id) : "";
+        const known = id ? TOOLSET_IDS.includes(id) : false;
         const result: BuddyToolResultPayload = doc
           ? {
               toolsetLoaded: {
@@ -655,7 +656,11 @@ export async function runBuddyTurn(opts: {
                 ...(call.tool === "load_toolset" ? {} : { retry: call.tool as string }),
               },
             }
-          : { error: `there's no toolset called "${id ?? call.tool}".` };
+          : {
+              error: known
+                ? `the "${id}" tools aren't available on this device.`
+                : `there's no toolset called "${id ?? call.tool}" — the groups are: ${TOOLSET_IDS.join(", ")}.`,
+            };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
         feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
