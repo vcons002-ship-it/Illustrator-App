@@ -5,6 +5,7 @@ import {
   MAX_BUDDY_TOOL_ROUNDS,
   describeBuddyToolActivity,
   formatBuddyToolResult,
+  readFileWindow,
   isRetryableError,
   looksLikeToolJson,
   parseBuddyToolCalls,
@@ -23,7 +24,12 @@ import { buildTradingScript, scriptLanguage } from "./trading-scripts.js";
 import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
-import { jsonGatedTokenSink } from "./chat-session.js";
+import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
+import {
+  MIN_CHUNKED_DOCUMENT_CHARS,
+  chunkDocument,
+  extractFromDocument,
+} from "../files/document-extraction.js";
 import { allowedInCreativeIdle } from "./tool-approval.js";
 
 /**
@@ -353,6 +359,13 @@ export async function runBuddyTurn(opts: {
   cachePrefix?: string;
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
+  /**
+   * Total characters the model can take (system + conversation + tool results). The turn's messages
+   * are re-bounded against this before EVERY call — see {@link trimTurnMessages} — because tool
+   * results arrive mid-turn and are what actually overflows a window. Unset = no bound (sub-agents
+   * and tests, which run a round or two on small inputs).
+   */
+  contextChars?: number;
   deps: BuddyDeps;
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
@@ -440,7 +453,13 @@ export async function runBuddyTurn(opts: {
     const noteContent = () => {
       sawContent = true;
     };
-    const settled = opts.llm.chat(messages, {
+    // Re-bound before every call: the loop below appends tool results, and a single large
+    // one can exceed the whole window. Pins the system prompt and the request that started
+    // the turn, which is what a plain drop-oldest policy would delete first.
+    const sent = opts.contextChars
+      ? trimTurnMessages(messages, opts.history.length, opts.contextChars)
+      : messages;
+    const settled = opts.llm.chat(sent, {
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => {
@@ -578,7 +597,7 @@ export async function runBuddyTurn(opts: {
         };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
-        feedbacks.push(formatBuddyToolResult(call, result));
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
         continue;
       }
       // Parallel fan-out: run the independent subtasks as concurrent read-only sub-agents (the host
@@ -591,7 +610,21 @@ export async function runBuddyTurn(opts: {
           : { error: "parallel sub-agents aren't available here" };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
-        feedbacks.push(formatBuddyToolResult(call, result));
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
+        lastWasCompleteStep = false; // real work happened
+        continue;
+      }
+      // Sweep a whole document. Handled HERE rather than in the auto-run executor because it needs
+      // what only the turn has: the model itself. The loop is code-driven — the document is read in
+      // chunks the model never has to hold, and only the findings come back. See document-extraction.
+      if (call.tool === "extract_from_document") {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const result = await runDocumentExtraction(call, opts, (done, total) =>
+          opts.onEvent?.({ kind: "activity", text: `Reading section ${done} of ${total}…` }),
+        );
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
         lastWasCompleteStep = false; // real work happened
         continue;
       }
@@ -603,7 +636,7 @@ export async function runBuddyTurn(opts: {
           const result = await opts.runHostTool(call);
           toolResults.push({ call, result });
           opts.onEvent?.({ kind: "toolResult", round, call, result });
-          feedbacks.push(formatBuddyToolResult(call, result));
+          feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
           lastWasCompleteStep = false; // a render/command is real work — the next check-off is earned
           continue;
         }
@@ -643,7 +676,7 @@ export async function runBuddyTurn(opts: {
       }
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
-      feedbacks.push(formatBuddyToolResult(call, result));
+      feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }
@@ -666,10 +699,55 @@ export async function runBuddyTurn(opts: {
   }
 }
 
+/**
+ * Read a whole document and return only what was asked for.
+ *
+ * Declines rather than degrades in two cases, both of which say WHY. Without a file reader it cannot
+ * run at all; and for a document small enough to simply read, chunked extraction is pure overhead —
+ * a slower, lossier way to reach an answer the model could have read for itself — so it says so and
+ * points at `read`, instead of quietly doing the expensive thing.
+ */
+async function runDocumentExtraction(
+  call: { path: string; question: string },
+  opts: { llm: ChatCapable; deps: BuddyDeps; contextChars?: number; signal?: AbortSignal },
+  onProgress: (done: number, total: number) => void,
+): Promise<BuddyToolResultPayload> {
+  if (!opts.deps.readFile) {
+    return { error: "reading local files isn't enabled (turn on file pulling in Settings, on desktop)." };
+  }
+  let text: string;
+  try {
+    text = await opts.deps.readFile(call.path);
+  } catch (err) {
+    return { error: `couldn't read ${call.path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const window = readFileWindow(opts.contextChars);
+  if (text.length <= Math.max(MIN_CHUNKED_DOCUMENT_CHARS, window)) {
+    return {
+      error:
+        `${call.path} is small enough to read directly (${text.length} characters) — use ` +
+        `{"tool":"read","source":"file","ref":"${call.path}"} instead. Sweeping it in sections would be slower ` +
+        "and would give you findings where you could have had the text.",
+    };
+  }
+  const state = await extractFromDocument({
+    text,
+    question: call.question,
+    // One chunk has to leave room for the question, the already-found block and the reply.
+    chunkChars: Math.max(2_000, Math.floor(window * 0.7)),
+    model: {
+      chat: (messages, o) => opts.llm.chat(messages, { ...(o?.maxTokens ? { maxTokens: o.maxTokens } : {}), ...(o?.signal ? { signal: o.signal } : {}) }),
+    },
+    onProgress,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+  return { documentExtraction: { question: call.question, ...state, chunks: chunkDocument(text, Math.max(2_000, Math.floor(window * 0.7))).length } };
+}
+
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
+  call: Exclude<BuddyToolCall, { tool: "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

@@ -140,6 +140,95 @@ export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn
   return start === 0 ? history : history.slice(start);
 }
 
+/** Marker left where messages were dropped, so the model knows its view is partial rather than
+ * believing the conversation simply began there. */
+export const TRIMMED_MARKER = "[Earlier messages in this turn were trimmed to fit the context window.]";
+
+/** Marker inside a single oversized tool result. */
+export const TRUNCATED_RESULT_MARKER = "\n\n[… this result was cut to fit the context window …]\n\n";
+
+/**
+ * Bound the messages of a turn IN PROGRESS, keeping the system prompt and the request that started
+ * the turn no matter what else goes.
+ *
+ * The pre-turn `trimChatHistory` bounds what the conversation contributes, and then the tool loop
+ * appends without limit: one `read_file` can add 60,000 characters, which on an 8k-window local model
+ * is FOUR TIMES the entire input allowance. What happens next is the bug people actually see. The
+ * prompt overflows, and a local server truncates from the FRONT — dropping the system prompt and the
+ * oldest messages, which is precisely where the task instruction and the reader's explicit request
+ * live. The assistant reads a large file and immediately no longer knows what it was doing, because
+ * literally it no longer has it.
+ *
+ * So the trimming happens here, where what matters can be protected:
+ *
+ *  - The SYSTEM prompt is pinned. It is who the assistant is and what it can do.
+ *  - The message that STARTED the turn is pinned. Everything in the turn is in service of it, and
+ *    dropping-oldest — the obvious policy — deletes exactly that first.
+ *  - What goes is the middle: older conversation, then older tool results, oldest first.
+ *  - The newest result is kept even when it alone exceeds the budget, truncated in the middle with a
+ *    marker. Dropping it entirely would answer "read this file" with nothing, which is a different
+ *    failure and no better.
+ *
+ * `pinnedIndex` is the position of the turn's originating message (the caller's history length — its
+ * last entry is the new user message). PURE.
+ */
+export function trimTurnMessages(messages: ChatTurn[], pinnedIndex: number, maxChars: number): ChatTurn[] {
+  if (!(maxChars > 0) || messages.length === 0) return messages;
+  const total = messages.reduce((n, m) => n + m.content.length, 0);
+  if (total <= maxChars) return messages;
+
+  const pinned = new Set<number>([0]);
+  if (pinnedIndex > 0 && pinnedIndex < messages.length) pinned.add(pinnedIndex);
+  // The marker itself costs context, so it comes out of the budget rather than being added on top —
+  // a bound that is quietly exceeded by its own bookkeeping is not a bound.
+  const budget = Math.max(0, maxChars - TRIMMED_MARKER.length);
+  let used = 0;
+  for (const i of pinned) used += messages[i]!.content.length;
+
+  // A contiguous tail, newest first — a coherent recent conversation beats a denser scattered one.
+  const keep = new Set(pinned);
+  let lastFits = true;
+  for (let i = messages.length - 1; i > 0; i--) {
+    if (keep.has(i)) continue;
+    const len = messages[i]!.content.length;
+    if (used + len > budget) {
+      // The newest message alone doesn't fit: keep it, cut its middle.
+      if (i === messages.length - 1) lastFits = false;
+      break;
+    }
+    used += len;
+    keep.add(i);
+  }
+
+  const out: ChatTurn[] = [];
+  let dropped = false;
+  let saidSo = false; // one marker is enough — the model needs to know THAT it was trimmed, not where
+  for (let i = 0; i < messages.length; i++) {
+    const isLast = i === messages.length - 1;
+    if (!keep.has(i) && !(isLast && !lastFits)) {
+      dropped = true;
+      continue;
+    }
+    if (dropped && !saidSo) {
+      out.push({ role: "user", content: TRIMMED_MARKER });
+      saidSo = true;
+    }
+    dropped = false;
+    const msg = messages[i]!;
+    out.push(isLast && !lastFits ? { ...msg, content: cutMiddle(msg.content, Math.max(0, budget - used)) } : msg);
+  }
+  return out;
+}
+
+/** Keep a value's head and tail, cutting the middle — the ends of a file or a search result carry
+ * more than its centre, and the model is told the cut happened. PURE. */
+function cutMiddle(text: string, budget: number): string {
+  if (budget <= TRUNCATED_RESULT_MARKER.length || text.length <= budget) return text;
+  const room = budget - TRUNCATED_RESULT_MARKER.length;
+  const head = Math.ceil(room * 0.6);
+  return text.slice(0, head) + TRUNCATED_RESULT_MARKER + text.slice(text.length - (room - head));
+}
+
 export async function runChatTurn(opts: {
   llm: ChatCapable;
   system: string;
@@ -147,6 +236,13 @@ export async function runChatTurn(opts: {
   cachePrefix?: string;
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
+  /**
+   * Total characters the model can take (system + conversation + tool results). The turn's messages
+   * are re-bounded against this before EVERY call — see {@link trimTurnMessages} — because tool
+   * results arrive mid-turn and are what actually overflows a window. Unset = no bound (sub-agents
+   * and tests, which run a round or two on small inputs).
+   */
+  contextChars?: number;
   tools: ChatToolDeps;
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
@@ -178,7 +274,13 @@ export async function runChatTurn(opts: {
     const noteContent = () => {
       sawContent = true;
     };
-    const settled = opts.llm.chat(messages, {
+    // Re-bound before every call: the loop below appends tool results, and a single large
+    // one can exceed the whole window. Pins the system prompt and the request that started
+    // the turn, which is what a plain drop-oldest policy would delete first.
+    const sent = opts.contextChars
+      ? trimTurnMessages(messages, opts.history.length, opts.contextChars)
+      : messages;
+    const settled = opts.llm.chat(sent, {
       // Fresh gate per round: a tool-JSON round streams nothing; the prose round streams live.
       ...(opts.onEvent
         ? {

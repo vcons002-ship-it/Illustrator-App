@@ -2316,6 +2316,12 @@ interface ContextBudgets {
   reply: number;
   /** The model's context window in tokens, when known. */
   maxTokens?: number;
+  /**
+   * Total characters one turn may send — system prompt, conversation AND the tool results that
+   * arrive mid-turn. `book`/`history` bound what is assembled BEFORE a turn starts; this bounds the
+   * turn as it runs, which is where a 60,000-character file read actually overflows the window.
+   */
+  input: number;
 }
 
 /**
@@ -2358,11 +2364,15 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     // The book section is now a RECENT window only (the model pulls the rest on
     // demand via search_book), so it stays small even on huge cloud contexts —
     // a simple request no longer pays to re-read the whole book every turn.
+    const window = CLOUD_MAX_TOKENS[llmId];
     return {
       book: 24_000,
       history: 60_000,
       reply: CLOUD_REPLY_TOKENS,
-      ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}),
+      // Cloud windows are large, so the turn bound is generous — it exists to stop a runaway tool
+      // loop, not to ration a conversation.
+      input: window ? Math.floor(window * CHARS_PER_TOKEN * 0.45) : 120_000,
+      ...(window ? { maxTokens: window } : {}),
     };
   }
   if (ctxTokens && ctxTokens > 0) {
@@ -2371,6 +2381,7 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     return {
       book: Math.floor(inputChars * 0.7),
       history: Math.floor(inputChars * 0.3),
+      input: inputChars,
       // ~30% of the window per reply (floored so tiny windows still answer; ceilinged at
       // MAX_LOCAL_REPLY_TOKENS so ONE generation stays tractable). A 100k window → ~30k per pass, and
       // the chat/buddy loop AUTO-CONTINUES beyond even that — total output is effectively unbounded.
@@ -2378,7 +2389,7 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
       maxTokens: usable,
     };
   }
-  return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000, reply: 1024 };
+  return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000, reply: 1024, input: CHAT_CONTEXT_BUDGET_CHARS + 8_000 };
 }
 
 /**
@@ -2676,6 +2687,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       cachePrefix: chatSystemCachePrefix(sections),
       history,
       maxTokens: budgets.reply,
+      contextChars: budgets.input,
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
@@ -3640,6 +3652,7 @@ async function handleCodingAgents(msg: Extract<MainToWorker, { type: "runCodingA
           deps,
           runHostTool: (call) => runHostToolViaMain(msg.runId, idx, call, agent.dir),
           maxTokens: budgets.reply,
+          contextChars: budgets.input,
           signal: ac.signal,
         });
         return { title: agent.title, result: out.text || "(no summary returned)" };
@@ -4542,6 +4555,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
       }
+      if (slash.call.tool === "extract_from_document") {
+        // Sweeping a document is a model-driven loop, so it needs a turn to run in — a slash command
+        // has no LLM here. Same shape as spawn_agents below.
+        post({
+          type: "buddyDone",
+          requestId: msg.requestId,
+          text: "Ask me in chat to find something in that document — I'll read it through section by section.",
+          transcript: [],
+        });
+        return;
+      }
       if (slash.call.tool === "spawn_agents") {
         // Parallel fan-out only makes sense inside an LLM turn (the model writes the subtasks) — not
         // as a one-shot slash command, which has no runSubAgents orchestration here.
@@ -4808,6 +4832,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
+      contextChars: budgets.input,
       // The hard limit for an unattended creative run — enforced in the loop, independent of what the
       // prompt above happens to advertise.
       ...(msg.creativeIdle ? { creativeIdle: true } : {}),
@@ -4854,6 +4879,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             history: [{ role: "user", content: "Complete the subtask above and report back concisely." }],
             deps, // read-only by instruction; no runSubAgents ⇒ no nested fan-out
             maxTokens: budgets.reply,
+            contextChars: budgets.input,
             signal: ac.signal,
           });
         // LIVE STATUS: parallel sub-agents are invisible (they don't stream into the chat), so report
