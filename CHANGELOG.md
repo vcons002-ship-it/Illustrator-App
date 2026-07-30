@@ -7,6 +7,18 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **The conversation now actually fits** — the previous attempt at this measured the space properly
+  but was still working inside a ceiling that was too low to matter. The room set aside for everything
+  the model reads was a flat 45% of what it can hold — and on a real setup the assistant's own setup
+  text (its role, its tools, its identity notes, memories and skills) came to more than that on its
+  own, about 66,000 characters. So the space "left over" for the conversation was less than nothing,
+  and it fell to a token minimum of one exchange. That's the screenshot: a long conversation on screen
+  and an assistant replying "the first message I see in this chat is your current question."
+  Two changes. The input room is now the model's window minus what it needs to write its reply, rather
+  than an arbitrary fraction — on a 32k model that's 82,000 characters instead of 59,000. And the
+  conversation has a guaranteed floor of a fifth of that room, so however much the setup text grows it
+  can never squeeze the conversation to nothing again. On the reported setup the conversation goes from
+  about 2,000 characters to about 16,500 — from a single message to a few thousand words.
 - **A phone that reloads gets its conversation back** — the chat on a linked phone lives on the
   desktop, not the phone, so after a reload the phone asks the desktop to send it over. Two things
   stopped that arriving. The phone treated *any* message from the desktop as proof it had been heard —

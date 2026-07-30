@@ -129,9 +129,20 @@ export interface ChatTurnOutcome {
  * newest turn is always kept, however large.
  */
 /**
- * However little is left, keep at least this much conversation. `trimChatHistory` already guarantees
- * the newest turn survives; this keeps a couple of exchanges around it.
+ * The conversation's guaranteed share of the input allowance, however big the system prompt gets.
+ *
+ * A flat floor was the wrong shape. It was 2,000 characters — about one exchange — and on a real
+ * setup the system prompt (role, tools, identity notes, memories, skills) came to ~66,000 characters,
+ * more than the whole input allowance on its own. "Whatever is left over" was therefore nothing, the
+ * floor was all the conversation ever got, and the assistant answered "the first message I see in
+ * this chat is your current question" while the screen showed a long conversation above it.
+ *
+ * Leftovers cannot be the only rule when the thing taking them has no ceiling. The conversation is
+ * the task; the enrichment around it is not. So it gets a floor proportional to the window: a fifth,
+ * which on a 32k-token model is ~16,000 characters — a few thousand words of actual conversation.
  */
+export const MIN_HISTORY_SHARE = 0.2;
+/** Absolute backstop for a tiny window, where a fifth of very little is still nothing. */
 export const MIN_HISTORY_CHARS = 2_000;
 
 /**
@@ -146,10 +157,14 @@ export const MIN_HISTORY_CHARS = 2_000;
  * been said, which is not a subtle degradation but the thing people report as "it forgets".
  *
  * Measuring beats guessing: the system prompt is built before the history is trimmed in every path,
- * so its real size is known. Whatever it did not use belongs to the conversation. PURE.
+ * so its real size is known, and whatever it did not use belongs to the conversation. But leftovers
+ * alone are not enough — a system prompt with no ceiling can leave none — so the conversation also
+ * has a guaranteed share (see {@link MIN_HISTORY_SHARE}), and takes whichever is larger. PURE.
  */
 export function historyBudget(inputChars: number, systemChars: number): number {
-  return Math.max(MIN_HISTORY_CHARS, inputChars - systemChars);
+  const leftover = inputChars - systemChars;
+  const guaranteed = Math.floor(Math.max(0, inputChars) * MIN_HISTORY_SHARE);
+  return Math.max(MIN_HISTORY_CHARS, guaranteed, leftover);
 }
 
 export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn[] {

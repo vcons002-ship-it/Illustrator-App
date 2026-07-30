@@ -398,11 +398,29 @@ describe("historyBudget (what the conversation actually gets)", () => {
     expect(historyBudget(input, 2_500)).toBeGreaterThan(oldFixed * 2);
   });
 
-  it("still leaves a floor when the system prompt has taken everything", async () => {
-    // An in-book turn with a large book section. trimChatHistory keeps the newest turn regardless;
-    // this keeps a couple of exchanges around it.
+  it("guarantees the conversation a share when the system prompt takes everything", async () => {
+    // The reported case, from a screenshot: a 32k-token model, a ~66,000-character system prompt
+    // (role + tools + identity notes + memories + skills), and an assistant answering "the first
+    // message I see in this chat is your current question" under a visibly long conversation.
+    // Leftovers were negative, so a flat floor was all the conversation ever got.
+    const { historyBudget, MIN_HISTORY_SHARE } = await import("./chat-session.js");
+    const input = 82_576; // a 32k window, less the reply
+    // Thousands of words of conversation, not one turn. (Against the OLD allowance of 58,982 the
+    // leftover was negative and this was 2,000.)
+    expect(historyBudget(input, 66_000)).toBeGreaterThan(16_000);
+    // And when the system prompt is bigger still, the guarantee is what stops it reaching zero.
+    expect(historyBudget(input, 80_000)).toBe(Math.floor(input * MIN_HISTORY_SHARE));
+    expect(historyBudget(input, 200_000)).toBe(Math.floor(input * MIN_HISTORY_SHARE));
+  });
+
+  it("takes the leftover when it is larger than the guaranteed share", async () => {
+    const { historyBudget } = await import("./chat-session.js");
+    expect(historyBudget(82_576, 10_000)).toBe(72_576);
+  });
+
+  it("still has an absolute backstop on a tiny window", async () => {
     const { historyBudget, MIN_HISTORY_CHARS } = await import("./chat-session.js");
-    expect(historyBudget(10_000, 50_000)).toBe(MIN_HISTORY_CHARS);
+    expect(historyBudget(1_000, 50_000)).toBe(MIN_HISTORY_CHARS);
   });
 });
 
