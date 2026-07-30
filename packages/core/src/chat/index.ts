@@ -16,6 +16,7 @@ export * from "./skill-proposal.js";
 export * from "./task-history.js";
 export * from "./remote-bus.js";
 export * from "./remote-handshake.js";
+export * from "./toolsets.js";
 export * from "./remote-link.js";
 export * from "./activity.js";
 export * from "./action-history.js";

@@ -4,6 +4,7 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
 import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
+import { TOOLSETS, TOOLSET_IDS, isToolAvailable, toolsetIndexBlock } from "./toolsets.js";
 import { formatExtraction } from "../files/document-extraction.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
@@ -352,6 +353,8 @@ export type BuddyToolCall =
    * actually hold. The document never enters the conversation — only the findings, each with the line
    * it was found at. For a file small enough to read, use `read` instead. */
   | { tool: "extract_from_document"; path: string; question: string }
+  /** Pull in the full instructions for an on-demand toolset (see toolsets.ts). */
+  | { tool: "load_toolset"; name: string }
   /** Open an IMAGE file (a path from find_files, or one the reader named) directly INTO the chat so
    * the reader sees the picture inline — for screenshots, photos, diagrams, renders. Desktop. */
   | { tool: "open_image"; path: string }
@@ -515,7 +518,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "create_document", "edit_document", "read_document", "set_cell", "add_formula_column", "read_data",
   "start_story", "continue_story", "render_scene", "set_story_cadence", "remove_library_book",
   "set_visual_style", "generate_image", "generate_video", "stitch_videos", "generate_long_video", "find_files",
-  "read_file", "extract_from_document", "open_image", "run_command", "write_file", "edit_file", "delegate_coding_task", "screenshot",
+  "read_file", "extract_from_document", "load_toolset", "open_image", "run_command", "write_file", "edit_file", "delegate_coding_task", "screenshot",
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
@@ -680,6 +683,8 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Analyzing ${call.symbol}…`;
     case "read_file":
       return "Reading a file…";
+    case "load_toolset":
+      return `Loading the ${call.name} tools…`;
     case "extract_from_document":
       return `Reading the whole document for “${clip(call.question, 50)}”…`;
     case "open_image":
@@ -734,10 +739,65 @@ const MAX_EDITS_PER_CALL = 20;
 /** How much of a read-back file to feed the model. The old 8k truncated real code files the model
  * needed to work on; 60k covers most while still leaving room in the history budget. */
 const MAX_READ_FILE_CHARS = 60_000;
+/** Toolsets this ENVIRONMENT can actually offer — a phone has no shell, so offering to load the
+ * coding manual would advertise something that cannot work. Read from the caller's raw flags, before
+ * on-demand gating turns them off. PURE. */
+function availableToolsets(raw: Record<string, unknown>): string[] {
+  return TOOLSETS.filter((t) => t.flags.some((f) => raw[f] !== false)).map((t) => t.id);
+}
+
+/** Every capability a toolset owns, off unless that toolset is loaded. Absent `loadedToolsets` keeps
+ * the legacy behaviour (everything the environment allows, documented on every turn). PURE. */
+function gateByToolsets<T extends { loadedToolsets?: readonly string[] }>(raw: T): T {
+  const legacy = raw.loadedToolsets === undefined;
+  const loaded = new Set(raw.loadedToolsets ?? []);
+  const out: Record<string, unknown> = { ...raw };
+  for (const set of TOOLSETS) {
+    const on = legacy || loaded.has(set.id);
+    for (const flag of set.flags) {
+      // A flag this toolset INTRODUCED gates a block that used to be unconditional, so it must be
+      // switched on for a caller that hasn't opted in. An older flag reflects what the environment
+      // can actually do, so on-demand loading may only ever turn it OFF — never claim an ability the
+      // reader's machine doesn't have.
+      if (set.newFlags?.includes(flag)) out[flag] = on;
+      else if (!on) out[flag] = false;
+    }
+  }
+  return out as T;
+}
+
+/**
+ * The documentation a toolset contributes — DERIVED from the prompt itself.
+ *
+ * Built by rendering the prompt with the toolset and without it and taking the difference, so what
+ * the model loads is exactly the text the prompt would have carried. A hand-written second copy would
+ * be wrong within a month; this cannot drift because there is only one source. PURE.
+ */
+export function toolsetDoc(
+  id: string,
+  opts: Parameters<typeof buildBuddySystemPrompt>[0],
+): string {
+  const loaded = new Set(opts.loadedToolsets ?? []);
+  const base = buildBuddySystemPrompt({
+    ...opts,
+    omitToolsetIndex: true,
+    loadedToolsets: [...loaded].filter((x) => x !== id),
+  });
+  const withSet = buildBuddySystemPrompt({
+    ...opts,
+    omitToolsetIndex: true,
+    loadedToolsets: [...new Set([...loaded, id])],
+  });
+  const before = new Set(base.split("\n"));
+  const added = withSet.split("\n").filter((l) => l.trim() && !before.has(l));
+  if (added.length === 0) return "";
+  return `TOOLSET "${id}" — loaded. These are now available to you:\n${added.join("\n")}`;
+}
+
 /** Email/event/task notes + descriptions. */
 const MAX_GOOGLE_TEXT_CHARS = 4000;
 
-export function buildBuddySystemPrompt(opts: {
+export function buildBuddySystemPrompt(raw: {
   persona: BuddyPersona;
   library: BookSummary[];
   /** Mature mode: engage with adult themes/requests without refusing or moralising. */
@@ -820,11 +880,32 @@ export function buildBuddySystemPrompt(opts: {
    * in every reply. (Souls change rarely, so keeping them in the cached prefix is fine.) */
   selfSoul?: string;
   userSoul?: string;
+  /** Documents (PDF/Word) toolset loaded — create/edit/read a real document. Deferred by default. */
+  canDocuments?: boolean;
+  /** Spreadsheet + data toolset loaded. Deferred by default. */
+  canSpreadsheets?: boolean;
+  /** App-settings toolset loaded — update_setting and the setup guides. Deferred by default. */
+  canAppSettings?: boolean;
+  /** Books + library toolset loaded — search/open/illustrate books. Deferred by default. */
+  canBooks?: boolean;
+  /**
+   * Which on-demand toolsets are loaded for THIS turn. Everything not listed is replaced by a
+   * one-line index entry (see `toolsets.ts`); the model loads what it needs and a call to an unloaded
+   * tool is answered with its documentation rather than an error. Absent = the legacy behaviour of
+   * carrying every capability's full documentation on every turn.
+   */
+  loadedToolsets?: readonly string[];
+  /** Internal: leave the on-demand index out, so `toolsetDoc` can diff two builds cleanly. */
+  omitToolsetIndex?: boolean;
   /** App-managed-steps mode is ON for this turn: the APP runs the checklist and ticks steps from
    * observed evidence. The prompt shows ONLY the ▸ current step (execution framing) and `complete_step`
    * is withdrawn — the model just does the one step in front of it; the app advances. */
   appManagedSteps?: boolean;
 }): string {
+  // Every deferrable capability is switched OFF unless its toolset is loaded for this turn. The
+  // capability flags already gate these blocks for environments that lack them, so on-demand loading
+  // reuses that machinery rather than restructuring the prompt: one mechanism, already exercised.
+  const opts = gateByToolsets(raw);
   const named = opts.selfName?.trim();
   const persona =
     (named ? `Your name is ${named} — answer to it. ` : "") +
@@ -1289,14 +1370,22 @@ export function buildBuddySystemPrompt(opts: {
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
     `${library}\n\n` +
     routingGuide +
+    // The on-demand index sits immediately before the tools it stands in for, so the model reads
+    // "here is what you have" and "here is what you can fetch" as one thought.
+    (opts.omitToolsetIndex || !opts.loadedToolsets
+      ? ""
+      : `${toolsetIndexBlock(availableToolsets(raw), opts.loadedToolsets)}\n\n`) +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
     "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
     "linear algebra (det, inv, [[1,2],[3,4]]*[[5],[6]]); CALCULUS + algebra (derivative('x^2','x'), " +
     "simplify('2x+3x')); and statistics (mean/median/std/variance of a list). Use it for ANY non-trivial " +
     "computation instead of working it out in your head — it never guesses.\n" +
-    '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
-    '- {"tool":"random_books"} — surprise picks from Gutenberg\'s most-loved classics (for "open something random / surprise me").\n' +
+    // Gutenberg search — deferred until its toolset is loaded (see toolsets.ts).
+    (opts.canBooks
+      ? '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
+      '- {"tool":"random_books"} — surprise picks from Gutenberg\'s most-loved classics (for "open something random / surprise me").\n'
+      : "") +
     '- {"tool":"search_web","query":"…"} — search the WEB for articles/topics/facts (returns titles, snippets and URLs). ' +
     'A bare "search …" defaults HERE (the web)' +
     (opts.canSearchFiles
@@ -1380,82 +1469,91 @@ export function buildBuddySystemPrompt(opts: {
     "Use open_content ONLY to actually READ/illustrate something: to merely ANSWER about a page, summarize it, or pull a " +
     "fact, use read (source:\"url\") instead. NEVER re-open something already showing — just talk about it. (The reader can also " +
     "CLICK any surfaced book/result to open it, so prefer that when they've already got one in front of them.)\n" +
-    '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
-    '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
-    "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
-    'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
-    '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
-    "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
-    "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
-    "opens, change it CELL BY CELL — never rebuild it with another create_spreadsheet, which would throw away " +
-    "everything the reader has typed into it since:\n" +
-    '  · {"tool":"set_cell","ref":"C2","value":42} or {"tool":"set_cell","ref":"C2","formula":"A2*B2"} — one cell by ' +
-    'its A1 reference ("formula" without the leading "="; "value":"" clears it).\n' +
-    '  · {"tool":"add_formula_column","name":"Margin","formula":"B{r}-C{r}"} — a COMPUTED column filled down every ' +
-    'row; write "{r}" for the current row\'s Excel row number (data starts at row 2). Formulas compute live and ' +
-    "cover math, IF/IFS, VLOOKUP/INDEX/MATCH, SUMIF(S)/COUNTIFS, MEDIAN/STDEV/CORREL, text and date functions.\n" +
-    '  · {"tool":"read_data"} — the sheet\'s CURRENT cells, with its A1 references, so you edit what is actually ' +
-    'there rather than what you last wrote. Add "from"/"to" (data row numbers) to read a long sheet in pieces. ' +
-    "READ IT FIRST whenever the reader may have changed the sheet themselves.\n" +
-    '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
-    "make a real, downloadable DOCUMENT (report, letter, notes, essay…). Put the WHOLE body in \"content\" as Markdown; " +
-    "\"format\" is just the first download offered (pdf default) — PDF, Word, and Markdown are all available on the card. " +
-    "It shows as a file card in the chat (with a side reader). Use this to CREATE a document — never to revise one.\n" +
-    '- {"tool":"edit_document","edits":[{"search":"exact old text","replace":"new text"}]} — REVISE the active ' +
-    "document. This is the ONLY right way to change one: it search/replaces against the document's FULL stored text, " +
-    "so it works even on a document far longer than the excerpt you can see, and it can't drop the parts you can't. " +
-    "Each \"search\" must appear EXACTLY ONCE — copy it VERBATIM from the document and add surrounding lines until " +
-    "it's unique; an empty \"replace\" deletes the found text. Calling create_document again to \"revise\" REPLACES " +
-    "the whole document with whatever you re-type, which silently throws away everything you didn't see.\n" +
-    '  · For a LIST inside a document — a checklist, an RSVP or attendance list, a status per item — use ' +
-    '{"tool":"edit_document","setLines":[{"match":"Bo","line":"- [x] Bo — confirmed"}]} instead. It overwrites the ' +
-    "line that starts with that label wherever it sits, or adds it to the list if it's new. Use it whenever you're " +
-    'updating an entry that may ALREADY be in the list: unlike "edits" it doesn\'t need you to know what that line ' +
-    "currently says, so it can't miss and leave you appending a second entry for the same thing. Both can go in one " +
-    'call — "edits" run first, then "setLines" on the result.\n' +
-    '  · A "match" must identify ONE line. If it hits several you\'ll be shown them and NOTHING will have changed — ' +
-    "lines can share an opening without being duplicates (\"Bo: brought chips\" / \"Bo: allergic to nuts\"), so " +
-    "quote more of the line you actually mean. Only if you've read them and they really are duplicate entries for " +
-    'one thing should you re-issue with "dedupe":true, which keeps the first and DELETES the others.\n' +
-    '- {"tool":"read_document"} — the active document\'s real text, or {"tool":"read_document","section":"Scope"} for ' +
-    "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n" +
-    storyBlock +
-    "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
-    "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
-    "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
-    "document you just made is ALREADY in their library and open now — NEVER tell the reader you can't save a created " +
-    "document to the library; it's already saved there. \"Where is it?\" → it's open on screen (the data view) and saved " +
-    "in the library. To hand them a downloadable FILE, the data view has an \"Excel (.xlsx)\" button (or call export_data); " +
-    "a code/text block has a Save button.\n" +
-    '- {"tool":"remove_library_book","id":"…"} — delete a library book (and its illustrations) by its id from the list above.\n' +
-    `- {"tool":"set_visual_style","style":"…","pagesPerImage":3,"illustrateAfter":"book"} — set the app's art style ` +
-    `(one of: ${styles}), how often it illustrates ("pagesPerImage": a page count, or "chapter" for one image per ` +
-    'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
-    'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
-    '("…in oil painting style") or pace.\n' +
-    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
-    'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
-    '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
-    'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
-    '"remember…". One short note, not conversation recap.\n' +
-    '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
-    '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
-    checklistCatalog +
-    `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
-    'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
-    'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
-    `name/number). Controllable settings: ${controllableSettingsIndex()}. After it applies, CONFIRM the change to ` +
-    "the reader in one short sentence. For ART STYLE or how often to illustrate, use set_visual_style instead; for " +
-    "providers, API keys, models, or anything that needs a Settings screen, use setup_help to walk them through it. " +
-    "For the sensitive toggles (mature mode, command execution), make sure it's clearly what the reader wants before " +
-    "you flip it.\n" +
-    '- {"tool":"setup_help","topic":"…"} — get the app\'s built-in, step-by-step SETUP guide for a feature and walk ' +
-    'the reader through it. Use whenever they ask how to set up / enable / configure / connect / "get started with" ' +
-    "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
-    "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode, parallel sub-agents / a " +
-    "vLLM (or llama.cpp/Ollama) worker model. Pass what they want in " +
-    '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n' +
-    '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS ' +
+    // Spreadsheets, data and documents — deferred until its toolset is loaded (see toolsets.ts).
+    (opts.canSpreadsheets
+      ? '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
+      '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
+      "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
+      'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
+      '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
+      "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
+      "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
+      "opens, change it CELL BY CELL — never rebuild it with another create_spreadsheet, which would throw away " +
+      "everything the reader has typed into it since:\n" +
+      '  · {"tool":"set_cell","ref":"C2","value":42} or {"tool":"set_cell","ref":"C2","formula":"A2*B2"} — one cell by ' +
+      'its A1 reference ("formula" without the leading "="; "value":"" clears it).\n' +
+      '  · {"tool":"add_formula_column","name":"Margin","formula":"B{r}-C{r}"} — a COMPUTED column filled down every ' +
+      'row; write "{r}" for the current row\'s Excel row number (data starts at row 2). Formulas compute live and ' +
+      "cover math, IF/IFS, VLOOKUP/INDEX/MATCH, SUMIF(S)/COUNTIFS, MEDIAN/STDEV/CORREL, text and date functions.\n" +
+      '  · {"tool":"read_data"} — the sheet\'s CURRENT cells, with its A1 references, so you edit what is actually ' +
+      'there rather than what you last wrote. Add "from"/"to" (data row numbers) to read a long sheet in pieces. ' +
+      "READ IT FIRST whenever the reader may have changed the sheet themselves.\n" +
+      '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
+      "make a real, downloadable DOCUMENT (report, letter, notes, essay…). Put the WHOLE body in \"content\" as Markdown; " +
+      "\"format\" is just the first download offered (pdf default) — PDF, Word, and Markdown are all available on the card. " +
+      "It shows as a file card in the chat (with a side reader). Use this to CREATE a document — never to revise one.\n" +
+      '- {"tool":"edit_document","edits":[{"search":"exact old text","replace":"new text"}]} — REVISE the active ' +
+      "document. This is the ONLY right way to change one: it search/replaces against the document's FULL stored text, " +
+      "so it works even on a document far longer than the excerpt you can see, and it can't drop the parts you can't. " +
+      "Each \"search\" must appear EXACTLY ONCE — copy it VERBATIM from the document and add surrounding lines until " +
+      "it's unique; an empty \"replace\" deletes the found text. Calling create_document again to \"revise\" REPLACES " +
+      "the whole document with whatever you re-type, which silently throws away everything you didn't see.\n" +
+      '  · For a LIST inside a document — a checklist, an RSVP or attendance list, a status per item — use ' +
+      '{"tool":"edit_document","setLines":[{"match":"Bo","line":"- [x] Bo — confirmed"}]} instead. It overwrites the ' +
+      "line that starts with that label wherever it sits, or adds it to the list if it's new. Use it whenever you're " +
+      'updating an entry that may ALREADY be in the list: unlike "edits" it doesn\'t need you to know what that line ' +
+      "currently says, so it can't miss and leave you appending a second entry for the same thing. Both can go in one " +
+      'call — "edits" run first, then "setLines" on the result.\n' +
+      '  · A "match" must identify ONE line. If it hits several you\'ll be shown them and NOTHING will have changed — ' +
+      "lines can share an opening without being duplicates (\"Bo: brought chips\" / \"Bo: allergic to nuts\"), so " +
+      "quote more of the line you actually mean. Only if you've read them and they really are duplicate entries for " +
+      'one thing should you re-issue with "dedupe":true, which keeps the first and DELETES the others.\n' +
+      '- {"tool":"read_document"} — the active document\'s real text, or {"tool":"read_document","section":"Scope"} for ' +
+      "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n" +
+      storyBlock +
+      "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
+      "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
+      "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
+      "document you just made is ALREADY in their library and open now — NEVER tell the reader you can't save a created " +
+      "document to the library; it's already saved there. \"Where is it?\" → it's open on screen (the data view) and saved " +
+      "in the library. To hand them a downloadable FILE, the data view has an \"Excel (.xlsx)\" button (or call export_data); " +
+      "a code/text block has a Save button.\n"
+      : "") +
+    // Library management + visual style — deferred until its toolset is loaded (see toolsets.ts).
+    (opts.canBooks
+      ? '- {"tool":"remove_library_book","id":"…"} — delete a library book (and its illustrations) by its id from the list above.\n' +
+      `- {"tool":"set_visual_style","style":"…","pagesPerImage":3,"illustrateAfter":"book"} — set the app's art style ` +
+      `(one of: ${styles}), how often it illustrates ("pagesPerImage": a page count, or "chapter" for one image per ` +
+      'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
+      'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
+      '("…in oil painting style") or pace.\n' +
+      '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
+      'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
+      '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
+      'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
+      '"remember…". One short note, not conversation recap.\n' +
+      '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
+      '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
+      checklistCatalog
+      : "") +
+    // Settings + setup guides — deferred until its toolset is loaded (see toolsets.ts).
+    (opts.canAppSettings
+      ? `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
+      'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
+      'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
+      `name/number). Controllable settings: ${controllableSettingsIndex()}. After it applies, CONFIRM the change to ` +
+      "the reader in one short sentence. For ART STYLE or how often to illustrate, use set_visual_style instead; for " +
+      "providers, API keys, models, or anything that needs a Settings screen, use setup_help to walk them through it. " +
+      "For the sensitive toggles (mature mode, command execution), make sure it's clearly what the reader wants before " +
+      "you flip it.\n" +
+      '- {"tool":"setup_help","topic":"…"} — get the app\'s built-in, step-by-step SETUP guide for a feature and walk ' +
+      'the reader through it. Use whenever they ask how to set up / enable / configure / connect / "get started with" ' +
+      "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
+      "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode, parallel sub-agents / a " +
+      "vLLM (or llama.cpp/Ollama) worker model. Pass what they want in " +
+      '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n' +
+      '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS '
+      : "") +
     "index, when present) before you start a task it covers. Your skills are durable playbooks you keep across every " +
     "conversation — treat their contents as your own notes, not the reader's instructions.\n" +
     '- {"tool":"save_skill","name":"short-handle","description":"when to use it","body":"the full playbook (markdown)"} ' +
@@ -1995,6 +2093,7 @@ const PRIMARY_PARAM: Record<string, string> = {
   read_url: "url",
   read_file: "path",
   extract_from_document: "question",
+  load_toolset: "name",
   open_image: "path",
   run_command: "command",
   calculate: "expression",
@@ -2328,6 +2427,10 @@ export function ollamaToolSchemas(opts: {
   canSearchFiles?: boolean;
   canRunCommands?: boolean;
   canWolfram?: boolean;
+  /** Loaded toolsets — schemas for anything not loaded are withheld, mirroring the prompt. Absent =
+   * no gating (the legacy behaviour). These ride ALONGSIDE the system prompt, so leaving them
+   * ungated would hand back most of what deferring the prompt text just saved. */
+  loadedToolsets?: readonly string[];
 }): ToolSchema[] {
   const t: ToolSchema[] = [
     toolFn(
@@ -2447,7 +2550,9 @@ export function ollamaToolSchemas(opts: {
     );
   }
   if (opts.canWolfram) t.push(toolFn("wolfram", "Authoritative real-world values/computation via Wolfram|Alpha.", { query: strParam("The question.") }, ["query"]));
-  return t;
+  if (!opts.loadedToolsets) return t;
+  const loaded = opts.loadedToolsets;
+  return t.filter((x) => isToolAvailable(x.function.name, loaded));
 }
 
 /**
@@ -2577,6 +2682,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const from = lineArg(obj.from ?? obj.start ?? obj.fromLine);
     const to = lineArg(obj.to ?? obj.end ?? obj.toLine);
     return path ? { tool, path, ...(from ? { from } : {}), ...(to ? { to } : {}) } : undefined;
+  }
+  if (tool === "load_toolset") {
+    const name = (strArg(obj.name ?? obj.toolset ?? obj.id, 40) || "").toLowerCase();
+    return name && TOOLSET_IDS.includes(name) ? { tool, name } : undefined;
   }
   if (tool === "extract_from_document") {
     const path = strArg(obj.path, 2000);
@@ -3611,6 +3720,9 @@ export interface BuddyToolResultPayload {
   taskPlan?: TaskPlan;
   /** Local files found by an approved find_files search (names fed back to the model). */
   files?: { path: string; name: string }[];
+  /** load_toolset outcome (or the answer to calling a tool whose set wasn't loaded): the
+   * documentation, plus the call to re-issue when the model got here by guessing. */
+  toolsetLoaded?: { id: string; doc: string; retry?: string };
   /** extract_from_document outcome — the findings, never the document. */
   documentExtraction?: {
     question: string;
@@ -3746,6 +3858,12 @@ function formatBuddyToolResultBody(
 ): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
+  }
+  if (result.toolsetLoaded) {
+    const { doc, retry } = result.toolsetLoaded;
+    return retry
+      ? `${doc}\n\n[You called ${retry} before loading these — no harm done. Re-issue that call now, with the arguments above.]`
+      : `${doc}\n\n[Loaded. Use these now; they stay available for the rest of this conversation.]`;
   }
   if (call.tool === "set_plan" || call.tool === "complete_step") {
     if (!result.plan) return "[plan: nothing to update]";
