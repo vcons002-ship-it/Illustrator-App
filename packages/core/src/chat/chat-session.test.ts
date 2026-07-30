@@ -360,6 +360,39 @@ describe("trimTurnMessages (the context a turn actually sends)", () => {
     expect(out.some((m) => m.content === TRIMMED_MARKER)).toBe(true);
   });
 
+  it("does NOT delete the conversation when the system prompt alone busts the budget", async () => {
+    // The reported failure, reproduced. A ~66,000-character system prompt against a 58,982-character
+    // allowance: every message was dropped, the marker went in its place, and the model reported to
+    // the reader that the conversation had evaporated — while the screen showed it right there.
+    // Dropping it achieved nothing, because the overflow was the system prompt.
+    const { trimTurnMessages } = await import("./chat-session.js");
+    const messages = [
+      { role: "system" as const, content: "S".repeat(66_000) },
+      { role: "user" as const, content: "first thing I said" },
+      { role: "assistant" as const, content: "my reply" },
+      { role: "user" as const, content: "second thing" },
+      { role: "assistant" as const, content: "second reply" },
+      { role: "user" as const, content: "What have we been talking about?" },
+    ];
+    const kept = trimTurnMessages(messages, 5, 58_982).map((m) => m.content);
+    expect(kept).toContain("first thing I said");
+    expect(kept).toContain("second reply");
+    expect(kept).toContain("What have we been talking about?");
+  });
+
+  it("still bounds the conversation to its share when the pinned content is oversized", async () => {
+    const { trimTurnMessages, MIN_HISTORY_SHARE } = await import("./chat-session.js");
+    const messages = [
+      { role: "system" as const, content: "S".repeat(50_000) },
+      ...Array.from({ length: 40 }, (_, i) => ({ role: "user" as const, content: `m${i}:${"x".repeat(500)}` })),
+    ];
+    const out = trimTurnMessages(messages, 1, 10_000);
+    const conversation = out.filter((m) => m.content.startsWith("m")).reduce((n, m) => n + m.content.length, 0);
+    // Bounded — a share of the budget, not everything — but emphatically not zero.
+    expect(conversation).toBeGreaterThan(1_000);
+    expect(conversation).toBeLessThanOrEqual(10_000 * MIN_HISTORY_SHARE + 600);
+  });
+
   it("leaves a turn that fits completely alone", async () => {
     const { trimTurnMessages } = await import("./chat-session.js");
     const messages = turnAfterFileRead(100);
@@ -398,11 +431,29 @@ describe("historyBudget (what the conversation actually gets)", () => {
     expect(historyBudget(input, 2_500)).toBeGreaterThan(oldFixed * 2);
   });
 
-  it("still leaves a floor when the system prompt has taken everything", async () => {
-    // An in-book turn with a large book section. trimChatHistory keeps the newest turn regardless;
-    // this keeps a couple of exchanges around it.
+  it("guarantees the conversation a share when the system prompt takes everything", async () => {
+    // The reported case, from a screenshot: a 32k-token model, a ~66,000-character system prompt
+    // (role + tools + identity notes + memories + skills), and an assistant answering "the first
+    // message I see in this chat is your current question" under a visibly long conversation.
+    // Leftovers were negative, so a flat floor was all the conversation ever got.
+    const { historyBudget, MIN_HISTORY_SHARE } = await import("./chat-session.js");
+    const input = 82_576; // a 32k window, less the reply
+    // Thousands of words of conversation, not one turn. (Against the OLD allowance of 58,982 the
+    // leftover was negative and this was 2,000.)
+    expect(historyBudget(input, 66_000)).toBeGreaterThan(16_000);
+    // And when the system prompt is bigger still, the guarantee is what stops it reaching zero.
+    expect(historyBudget(input, 80_000)).toBe(Math.floor(input * MIN_HISTORY_SHARE));
+    expect(historyBudget(input, 200_000)).toBe(Math.floor(input * MIN_HISTORY_SHARE));
+  });
+
+  it("takes the leftover when it is larger than the guaranteed share", async () => {
+    const { historyBudget } = await import("./chat-session.js");
+    expect(historyBudget(82_576, 10_000)).toBe(72_576);
+  });
+
+  it("still has an absolute backstop on a tiny window", async () => {
     const { historyBudget, MIN_HISTORY_CHARS } = await import("./chat-session.js");
-    expect(historyBudget(10_000, 50_000)).toBe(MIN_HISTORY_CHARS);
+    expect(historyBudget(1_000, 50_000)).toBe(MIN_HISTORY_CHARS);
   });
 });
 

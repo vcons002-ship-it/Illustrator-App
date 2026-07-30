@@ -3016,7 +3016,20 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
   }
   if (ctxTokens && ctxTokens > 0) {
     const usable = Math.min(ctxTokens, MAX_TRUSTED_CONTEXT_TOKENS);
-    const inputChars = Math.min(Math.floor(usable * CHARS_PER_TOKEN * 0.45), MAX_LOCAL_INPUT_CHARS);
+    const replyTokens = Math.min(MAX_LOCAL_REPLY_TOKENS, Math.max(512, Math.floor(usable * LOCAL_REPLY_FRACTION)));
+    // What is left for INPUT after the reply, not an arbitrary fraction of the whole window.
+    //
+    // 45% was too small to be a bound on anything: on a 32k-token model it allowed 58,982 characters
+    // of input while the system prompt alone — role, tools, identity notes, memories, skills — came to
+    // about 66,000. The allowance was smaller than the thing it was supposed to be allocating, so the
+    // conversation's share of it was negative and it fell to the floor. The reader saw a long chat on
+    // screen and an assistant that could see only their current message.
+    //
+    // The window minus the reply, minus a tenth for tokenizer variance, is what is actually available.
+    const inputChars = Math.min(
+      Math.floor(Math.max(usable - replyTokens, Math.floor(usable * 0.3)) * CHARS_PER_TOKEN * 0.9),
+      MAX_LOCAL_INPUT_CHARS,
+    );
     return {
       book: Math.floor(inputChars * 0.7),
       history: Math.floor(inputChars * 0.3),
@@ -3024,7 +3037,7 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
       // ~30% of the window per reply (floored so tiny windows still answer; ceilinged at
       // MAX_LOCAL_REPLY_TOKENS so ONE generation stays tractable). A 100k window → ~30k per pass, and
       // the chat/buddy loop AUTO-CONTINUES beyond even that — total output is effectively unbounded.
-      reply: Math.min(MAX_LOCAL_REPLY_TOKENS, Math.max(512, Math.floor(usable * LOCAL_REPLY_FRACTION))),
+      reply: replyTokens,
       maxTokens: usable,
     };
   }
