@@ -31,6 +31,62 @@ function char(name: string, over: Partial<Character> = {}): Character {
   };
 }
 
+import { repairTruncatedJson } from "./extraction.js";
+import { parseExtraction } from "./webllm-provider.js";
+
+describe("repairTruncatedJson (a cut-off answer is still an answer)", () => {
+  it("closes a document cut mid-object, keeping every complete element", () => {
+    // What a response truncated at the token ceiling actually looks like.
+    const cut = '{"summary":"s","characters":[{"name":"Lyra"},{"name":"Nico"},{"name":"Sa';
+    const parsed = JSON.parse(repairTruncatedJson(cut)) as { summary: string; characters: { name: string }[] };
+    expect(parsed.summary).toBe("s");
+    expect(parsed.characters.map((c) => c.name)).toEqual(["Lyra", "Nico"]);
+  });
+
+  it("discards a partial element rather than guessing at it", () => {
+    const cut = '{"keyEvents":[{"imagePrompt":{"text":"a"}},{"imagePrompt":{"text":"b';
+    const parsed = JSON.parse(repairTruncatedJson(cut)) as { keyEvents: unknown[] };
+    expect(parsed.keyEvents).toHaveLength(1);
+  });
+
+  it("is not fooled by braces or commas inside a string", () => {
+    const cut = '{"summary":"a, b {not real} c","characters":[{"name":"Lyra"},{"nam';
+    const parsed = JSON.parse(repairTruncatedJson(cut)) as { summary: string; characters: unknown[] };
+    expect(parsed.summary).toBe("a, b {not real} c");
+    expect(parsed.characters).toHaveLength(1);
+  });
+
+  it("handles an escaped quote before the cut", () => {
+    const cut = '{"summary":"she said \\"go\\" and left","characters":[{"name":"Lyra"},{';
+    const parsed = JSON.parse(repairTruncatedJson(cut)) as { summary: string };
+    expect(parsed.summary).toBe('she said "go" and left');
+  });
+
+  it("gives back nothing when there is no complete element to keep", () => {
+    expect(repairTruncatedJson('{"summary":"half')).toBe("");
+    expect(repairTruncatedJson("no json here")).toBe("");
+  });
+});
+
+describe("parseExtraction salvages a truncated response", () => {
+  it("keeps the summary and the scene prompts that arrived", () => {
+    // Before, one missing brace cost the chapter its summary, its cast, and every prompt it had
+    // already produced — and the chapter was then marked done, so nothing went back for it.
+    const cut =
+      '{"summary":"They meet in the diner.","keyMoment":"m","characters":[{"name":"Lyra","aliases":[],' +
+      '"persistentTraits":[],"outfits":[]}],"keyEvents":[{"imagePrompt":{"text":"one"}},{"imagePrompt":{"text":"tw';
+    const raw = parseExtraction(cut);
+    expect(raw.summary).toBe("They meet in the diner.");
+    expect(raw.characters.map((c) => c.name)).toEqual(["Lyra"]);
+    expect(raw.keyEvents).toHaveLength(1);
+  });
+
+  it("still reports nothing usable when the response is genuinely empty", () => {
+    expect(parseExtraction("").summary).toBeFalsy();
+    expect(parseExtraction("").characters).toEqual([]);
+  });
+});
+
 describe("stripThink", () => {
   it("removes a paired <think> block, keeping the answer", () => {
     expect(stripThink("<think>let me reason\nabout this</think>\nthe answer")).toBe("the answer");

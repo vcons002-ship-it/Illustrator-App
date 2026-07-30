@@ -28,6 +28,24 @@ import {
 } from "./buddy-tools.js";
 import { routePendingTool } from "./tool-approval.js";
 
+import { readFileWindow } from "./buddy-tools.js";
+
+describe("readFileWindow (how much of a file one read may return)", () => {
+  it("scales to the turn's allowance — a third of it, so several results coexist", () => {
+    expect(readFileWindow(30_000)).toBe(10_000);
+  });
+
+  it("never returns more than the ceiling, or so little that a read says nothing", () => {
+    expect(readFileWindow(10_000_000)).toBe(60_000);
+    expect(readFileWindow(600)).toBe(2_000);
+  });
+
+  it("falls back to the ceiling when no budget is known", () => {
+    expect(readFileWindow(undefined)).toBe(60_000);
+    expect(readFileWindow(0)).toBe(60_000);
+  });
+});
+
 describe("parseBuddyToolCall — set_plan steps", () => {
   it("accepts bare-string steps (legacy) with no stepDetails", () => {
     expect(parseBuddyToolCall('{"tool":"set_plan","goal":"count","steps":["Say 1","Say 2"]}')).toEqual({

@@ -2297,6 +2297,7 @@ export function inferContentMode(sample: string): "fiction" | "technical" {
 export { nativeToolCallsToText, type NativeToolCall } from "../providers/llm/chat.js";
 
 const strParam = (description: string) => ({ type: "string", description });
+const numParam = (description: string) => ({ type: "integer", description });
 function toolFn(
   name: string,
   description: string,
@@ -2365,7 +2366,22 @@ export function ollamaToolSchemas(opts: {
   ];
   if (opts.canSearchFiles) {
     t.push(toolFn("find_files", "Search the reader's OWN COMPUTER for a file by name.", { query: strParam("Distinctive filename words (+ a type like md/pdf).") }, ["query"]));
-    t.push(toolFn("read_file", "Read a local file's text into the chat.", { path: strParam("Absolute path to the file.") }, ["path"]));
+    // `from`/`to` are the whole reason a large file is workable: one read returns a window and says
+    // which line it stopped at, and the model reads on. The JSON-tool path has always accepted them;
+    // omitting them HERE meant a function-calling model could only ever ask for the start of a file
+    // and had no way to reach the rest.
+    t.push(
+      toolFn(
+        "read_file",
+        "Read a local file's text into the chat. Large files come back a window at a time — the result says which line it stopped at; call again with `from` set to that line to read on.",
+        {
+          path: strParam("Absolute path to the file."),
+          from: numParam("First line to read (1-based). Omit to start at the beginning."),
+          to: numParam("Last line to read. Omit to read as far as the window allows."),
+        },
+        ["path"],
+      ),
+    );
   }
   if (opts.canRunCommands) {
     t.push(
@@ -3646,7 +3662,31 @@ export function renderPlanLines(plan: BuddyPlan): string {
 }
 
 /** Render a buddy tool's outcome as the user-role turn that continues the loop. */
-export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResultPayload): string {
+/**
+ * How much of a file one read may return, given the whole turn's character allowance.
+ *
+ * A flat ceiling cannot be right: 60,000 characters is a reasonable read on a 200k-token cloud model
+ * and four times the entire input allowance on an 8k local one. Oversizing it doesn't just waste
+ * context — it defeats the paging that makes a large file workable, because the turn trimmer then
+ * cuts the result blindly and the model loses the "stopped at line N, read on from N+1" instruction
+ * that tells it how to continue.
+ *
+ * A third of the turn, so several rounds of results coexist, and never more than the old ceiling.
+ * PURE.
+ */
+export function readFileWindow(contextChars?: number): number {
+  if (!contextChars || contextChars <= 0) return MAX_READ_FILE_CHARS;
+  return Math.min(MAX_READ_FILE_CHARS, Math.max(MIN_READ_FILE_CHARS, Math.floor(contextChars / 3)));
+}
+
+/** Never return less than this, however small the window — below it a read tells you nothing. */
+const MIN_READ_FILE_CHARS = 2_000;
+
+export function formatBuddyToolResult(
+  call: BuddyToolCall,
+  result: BuddyToolResultPayload,
+  opts?: { readFileChars?: number },
+): string {
   // WARN-don't-silently-truncate: when the parse had to cut an arg bound for an external program (a
   // shell command, a written file, an image/coding prompt) to fit its cap, prepend a notice so the
   // model knows the result below ran on TRIMMED input — and can resend shorter / in chunks.
@@ -3655,10 +3695,14 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       ? "[⚠ Your input ran past the size limit and was CUT before running — the result below used the trimmed input. " +
         "If detail was lost, resend it shorter or split it (a big file: write_file with append:true; a long task/prompt: tighten it).]\n"
       : "";
-  return warn + formatBuddyToolResultBody(call, result);
+  return warn + formatBuddyToolResultBody(call, result, opts);
 }
 
-function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultPayload): string {
+function formatBuddyToolResultBody(
+  call: BuddyToolCall,
+  result: BuddyToolResultPayload,
+  opts?: { readFileChars?: number },
+): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
   }
@@ -4220,7 +4264,7 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     const body = ranged ? all.slice(from - 1, Math.max(to, from)).join("\n") : t;
     // Line numbers are deliberately NOT prefixed onto the text — edit_file copies this verbatim as its
     // search anchor, and a "12| " prefix would make every anchor miss.
-    const shown = body.slice(0, MAX_READ_FILE_CHARS);
+    const shown = body.slice(0, opts?.readFileChars ?? MAX_READ_FILE_CHARS);
     const cutInRange = body.length > shown.length;
     const shownTo = ranged ? from + shown.split("\n").length - 1 : shown.split("\n").length;
     const where = ranged || cutInRange ? ` lines ${ranged ? from : 1}–${shownTo} of ${total}` : "";

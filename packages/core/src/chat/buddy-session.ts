@@ -5,6 +5,7 @@ import {
   MAX_BUDDY_TOOL_ROUNDS,
   describeBuddyToolActivity,
   formatBuddyToolResult,
+  readFileWindow,
   isRetryableError,
   looksLikeToolJson,
   parseBuddyToolCalls,
@@ -591,7 +592,7 @@ export async function runBuddyTurn(opts: {
         };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
-        feedbacks.push(formatBuddyToolResult(call, result));
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
         continue;
       }
       // Parallel fan-out: run the independent subtasks as concurrent read-only sub-agents (the host
@@ -604,7 +605,7 @@ export async function runBuddyTurn(opts: {
           : { error: "parallel sub-agents aren't available here" };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
-        feedbacks.push(formatBuddyToolResult(call, result));
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
         lastWasCompleteStep = false; // real work happened
         continue;
       }
@@ -616,7 +617,7 @@ export async function runBuddyTurn(opts: {
           const result = await opts.runHostTool(call);
           toolResults.push({ call, result });
           opts.onEvent?.({ kind: "toolResult", round, call, result });
-          feedbacks.push(formatBuddyToolResult(call, result));
+          feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
           lastWasCompleteStep = false; // a render/command is real work — the next check-off is earned
           continue;
         }
@@ -656,7 +657,7 @@ export async function runBuddyTurn(opts: {
       }
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
-      feedbacks.push(formatBuddyToolResult(call, result));
+      feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }
