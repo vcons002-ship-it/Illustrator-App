@@ -165,6 +165,9 @@ export interface ChatBuddyPanelProps {
    * so the dock collapses to a thin composer beneath the reader. The caret in the header toggles it
    * via `onToggleHistory`. Undefined → no caret (history always visible, e.g. the home-screen hero). */
   historyCollapsed?: boolean;
+  /** Linked phone only: the desktop's conversation hasn't arrived yet, so an empty list means
+   * "not handed over" rather than "nothing here". */
+  awaitingSync?: boolean;
   onToggleHistory?: () => void;
 }
 
@@ -503,7 +506,17 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       )}
 
       <div ref={scrollRef} onScroll={trackNearBottom} style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}>
-        {props.messages.length === 0 && !props.streamingText && (
+        {props.messages.length === 0 && !props.streamingText && props.awaitingSync && (
+          // A linked phone keeps no chat of its own — the desktop owns it and sends it over. Until it
+          // arrives, showing the "ask me anything" intro states something false: that this is a fresh
+          // empty conversation, when it is an existing one that hasn't been handed over yet. That is
+          // what "everything is lost on reload" looks like from the phone.
+          <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
+            Waiting for your desktop to send this conversation… It'll appear as soon as the desktop is
+            awake and linked. Nothing has been lost — the chat lives there, not on this device.
+          </div>
+        )}
+        {props.messages.length === 0 && !props.streamingText && !props.awaitingSync && (
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
             {props.persona === "planning"
               ? "Tell me what you want to build or write and I'll help you PLAN it first — a coding project or a complex deliverable. I'll ask a couple of questions, then lay out the approach, the steps, and the milestones, and offer to turn it into tasks (or kick off the work). Try “help me plan a budgeting web app” or “plan a 10-page report on coral reefs”."
