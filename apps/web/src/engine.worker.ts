@@ -81,6 +81,18 @@ import {
   forgetSoul,
   selfSoulPromptBlock,
   userSoulPromptBlock,
+  selfSoulEssencePromptBlock,
+  userSoulEssencePromptBlock,
+  buildSoulEssenceDistillationPrompt,
+  buildSoulEssenceMergePrompt,
+  partitionSoulNotes,
+  parseSoulEssence,
+  parseSoulEssenceMerge,
+  validateSoulEssence,
+  loadSoulEssence,
+  saveSoulEssence,
+  soulSourceFingerprint,
+  soulEvidencePromptBlock,
   selfPortraitPrompt,
   userPortraitPrompt,
   isSelfPortraitRequest,
@@ -209,10 +221,15 @@ import {
   type BuddyOpenedInfo,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  type ChatTurn,
   type ChatToolDeps,
   type FigureSearch,
   type ImageProvider,
   type LLMProvider,
+  type SoulEssence,
+  type SoulEssenceDigestInput,
+  type SoulKind,
+  type SoulNote,
   type TierConfig,
   isNonFiction,
   type ToolCall,
@@ -548,7 +565,7 @@ async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise
   await restoreChatLlm();
   const eng = engine;
   const yieldBible =
-    (llmId === "local-server" || llmId === "webllm") &&
+    (llmId === "local-server" || llmId === "local" || llmId === "webllm") &&
     eng !== undefined &&
     bibleActive &&
     !eng.isBiblePaused();
@@ -1386,6 +1403,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "summarize":
       void handleSummarize(msg);
       break;
+    case "soulEssenceRefresh":
+      void handleSoulEssenceRefresh(msg);
+      break;
     case "googleConnect":
       void handleGoogleConnect(msg);
       break;
@@ -1674,7 +1694,12 @@ async function doWarmChatModel(): Promise<void> {
   if (chatLlmFreed) await restoreChatLlm();
   try {
     const { llm } = chatProviders();
-    if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
+    if (
+      !supportsChat(llm) ||
+      (llm.id !== "local-server" && llm.id !== "local" && llm.id !== "webllm")
+    ) {
+      return;
+    }
     await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
   } catch {
     /* no chat provider yet / not initialised — nothing to warm */
@@ -1745,6 +1770,483 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
 }
 
 /**
+ * Soul notes are the authoritative ledger; the compact essence is a disposable cache derived from
+ * that ledger. One in-flight map prevents home chat + book chat from independently distilling the
+ * same revision, while a failure cooldown prevents a small model returning malformed JSON from
+ * adding another invisible LLM call to every later message. Transient failures can still recover;
+ * changing notes or models changes the key immediately.
+ */
+const soulEssenceInFlight = new Map<string, Promise<SoulEssence | undefined>>();
+const soulEssenceFailedUntil = new Map<string, number>();
+const SOUL_ESSENCE_RETRY_MS = 10 * 60_000;
+const SOUL_ESSENCE_MAX_TOKENS = 1_400;
+const MIN_SOUL_DISTILLATION_CONTEXT_TOKENS = 4_096;
+const MIN_SOUL_SOURCE_CHUNK_CHARS = 3_000;
+const MAX_SOUL_SOURCE_CHUNK_CHARS = 48_000;
+const MAX_INLINE_SOUL_DISTILLATION_CHUNKS = 1;
+const SOUL_DIGEST_CACHE_LIMIT = 512;
+const SOUL_DIGEST_CACHE_MAX_CHARS = 1_000_000;
+const SOUL_DIGEST_CACHE_KEY: Record<SoulKind, string> = {
+  self: "self-soul-essence-digests-v1",
+  user: "about-you-soul-essence-digests-v1",
+};
+
+interface SoulDigestCacheEntry {
+  fingerprint: string;
+  essence: SoulEssence;
+  touchedAt: number;
+}
+
+interface SoulDigestCacheEnvelope {
+  modelKey: string;
+  entries: SoulDigestCacheEntry[];
+}
+
+function soulDistillationFitsContext(contextTokens?: number): boolean {
+  return (contextTokens ?? OLLAMA_DEFAULT_LOADED_TOKENS) >= MIN_SOUL_DISTILLATION_CONTEXT_TOKENS;
+}
+
+async function loadSoulDigestCache(
+  kind: SoulKind,
+  modelKey: string,
+): Promise<Map<string, SoulDigestCacheEntry>> {
+  try {
+    const raw = await memoryStore().getMemo?.(SOUL_DIGEST_CACHE_KEY[kind]);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+    const envelope = parsed as Partial<SoulDigestCacheEnvelope>;
+    if (envelope.modelKey !== modelKey || !Array.isArray(envelope.entries)) return new Map();
+    return new Map(
+      envelope.entries
+        .filter((entry): entry is SoulDigestCacheEntry => {
+          if (!entry || typeof entry !== "object") return false;
+          const candidate = entry as Partial<SoulDigestCacheEntry>;
+          return (
+            typeof candidate.fingerprint === "string" &&
+            typeof candidate.touchedAt === "number" &&
+            !!candidate.essence &&
+            typeof candidate.essence === "object"
+          );
+        })
+        .slice(0, SOUL_DIGEST_CACHE_LIMIT)
+        .map((entry) => [entry.fingerprint, entry]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function saveSoulDigestCache(
+  kind: SoulKind,
+  modelKey: string,
+  cache: ReadonlyMap<string, SoulDigestCacheEntry>,
+): Promise<void> {
+  try {
+    const candidates = [...cache.values()]
+      .sort((a, b) => b.touchedAt - a.touchedAt)
+      .slice(0, SOUL_DIGEST_CACHE_LIMIT);
+    const entries: SoulDigestCacheEntry[] = [];
+    let used = JSON.stringify({ modelKey, entries: [] }).length;
+    for (const entry of candidates) {
+      const cost = JSON.stringify(entry).length + 1;
+      if (used + cost > SOUL_DIGEST_CACHE_MAX_CHARS) continue;
+      entries.push(entry);
+      used += cost;
+    }
+    const envelope: SoulDigestCacheEnvelope = { modelKey, entries };
+    await memoryStore().putMemo?.(SOUL_DIGEST_CACHE_KEY[kind], JSON.stringify(envelope));
+  } catch {
+    // A digest cache only saves regeneration work; failure never affects the authoritative notes.
+  }
+}
+
+function soulEssenceModelKey(llm: LLMProvider): string {
+  if (!settings) return llm.id;
+  const active = chatSettingsOf(settings);
+  return [
+    llm.id,
+    active.textProvider,
+    active.localTextBackend ?? "",
+    active.localServerTextModel ?? "",
+    active.localTextModel ?? "",
+  ].join(":");
+}
+
+function soulDistillationSourceBudget(contextTokens?: number): number {
+  const tokens = contextTokens && contextTokens > 0 ? contextTokens : OLLAMA_DEFAULT_LOADED_TOKENS;
+  return Math.max(
+    MIN_SOUL_SOURCE_CHUNK_CHARS,
+    Math.min(
+      MAX_SOUL_SOURCE_CHUNK_CHARS,
+      Math.floor(tokens * CHARS_PER_TOKEN * 0.28),
+    ),
+  );
+}
+
+function soulDistillationOutputBudget(contextTokens?: number): number {
+  const tokens = contextTokens && contextTokens > 0 ? contextTokens : OLLAMA_DEFAULT_LOADED_TOKENS;
+  // Reserve most of a small local window for system + grounded input. Merge evidence IDs are
+  // restored deterministically, so even a 200-note final result does not need an enormous output.
+  return Math.min(
+    SOUL_ESSENCE_MAX_TOKENS,
+    Math.max(512, Math.floor(tokens * 0.3)),
+  );
+}
+
+async function completeSoulEssence(
+  llm: LLMProvider,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  prompt: ReturnType<typeof buildSoulEssenceDistillationPrompt>,
+  maxTokens: number,
+  signal?: AbortSignal,
+  digests?: readonly SoulEssenceDigestInput[],
+): Promise<SoulEssence | undefined> {
+  if (!supportsChat(llm)) return undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const system = attempt === 0
+      ? prompt.system
+      : `${prompt.system}\n\nREPAIR ATTEMPT: The prior response failed strict validation. Re-read every requirement, copy the exact fingerprint/kind/schema, obey the prompt's evidence-link rules, preserve every required facet, and return one complete JSON object.`;
+    const raw = await llm.chat(
+      [
+        { role: "system", content: system },
+        { role: "user", content: prompt.user },
+      ],
+      {
+        maxTokens,
+        reasoningEffort: "none",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const parsed = digests
+      ? parseSoulEssenceMerge(raw, kind, notes, digests, Date.now())
+      : parseSoulEssence(raw, kind, notes, Date.now());
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function groupSoulDigests(
+  digests: readonly SoulEssenceDigestInput[],
+  budget: number,
+): SoulEssenceDigestInput[][] {
+  const groups: SoulEssenceDigestInput[][] = [];
+  let current: SoulEssenceDigestInput[] = [];
+  let used = 2;
+  for (const digest of digests) {
+    const cost =
+      JSON.stringify(Object.values(digest.essence.facets).map((facet) => facet.text)).length +
+      (current.length ? 1 : 0);
+    if (current.length > 0 && used + cost > budget) {
+      groups.push(current);
+      current = [];
+      used = 2;
+    }
+    current.push(digest);
+    used += cost;
+  }
+  if (current.length > 0) groups.push(current);
+
+  // A particularly wordy digest can fill the budget by itself. Pair singletons anyway so recursive
+  // reduction always makes progress; each facet is already hard-capped, so a pair remains bounded.
+  if (groups.length === digests.length && digests.length > 1) {
+    const pairs: SoulEssenceDigestInput[][] = [];
+    for (let index = 0; index < digests.length; index += 2) {
+      pairs.push(digests.slice(index, index + 2) as SoulEssenceDigestInput[]);
+    }
+    return pairs;
+  }
+  return groups;
+}
+
+async function distillSoulEssence(
+  llm: LLMProvider,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  sourceBudget: number,
+  outputBudget: number,
+  reuseCache: boolean,
+  signal?: AbortSignal,
+): Promise<SoulEssence | undefined> {
+  const modelKey = soulEssenceModelKey(llm);
+  const cache = await loadSoulDigestCache(kind, modelKey);
+  const rootFingerprint = soulSourceFingerprint(notes);
+  let cacheDirty = false;
+  const digest = async (
+    scopeNotes: readonly SoulNote[],
+    prompt: ReturnType<typeof buildSoulEssenceDistillationPrompt>,
+    children?: readonly SoulEssenceDigestInput[],
+  ): Promise<SoulEssence | undefined> => {
+    const fingerprint = soulSourceFingerprint(scopeNotes);
+    // Explicit Refresh should rebuild the final integration, but it can safely reuse every unchanged
+    // validated child digest. A one-chunk Soul has no children, so it is regenerated in full.
+    if (reuseCache && fingerprint !== rootFingerprint) {
+      const cached = cache.get(fingerprint);
+      const valid = cached
+        ? validateSoulEssence(cached.essence, kind, scopeNotes)
+        : undefined;
+      if (valid) {
+        cached!.touchedAt = Date.now();
+        cacheDirty = true;
+        return valid;
+      }
+    }
+    const essence = await completeSoulEssence(
+      llm,
+      kind,
+      scopeNotes,
+      prompt,
+      outputBudget,
+      signal,
+      children,
+    );
+    if (essence && fingerprint !== rootFingerprint) {
+      // Appearance/directions are reconstructed deterministically from scopeNotes during cache
+      // validation, so do not duplicate potentially large exact arrays in every child digest.
+      const compactEssence: SoulEssence = {
+        ...essence,
+        facets: {
+          ...essence.facets,
+          personalityDirections: { text: "", sourceIds: [] },
+        },
+        exactAppearance: [],
+        exactPersonalityDirections: [],
+      };
+      cache.set(fingerprint, { fingerprint, essence: compactEssence, touchedAt: Date.now() });
+      cacheDirty = true;
+    }
+    return essence;
+  };
+  const flushCache = async () => {
+    if (!cacheDirty) return;
+    cacheDirty = false;
+    await saveSoulDigestCache(kind, modelKey, cache);
+  };
+
+  try {
+    let digests: SoulEssenceDigestInput[] = [];
+    for (const chunk of partitionSoulNotes(notes, sourceBudget)) {
+      const essence = await digest(
+        chunk,
+        buildSoulEssenceDistillationPrompt(kind, chunk),
+      );
+      if (!essence) {
+        return undefined;
+      }
+      digests.push({ notes: chunk, essence });
+    }
+    await flushCache();
+
+    while (digests.length > 1) {
+      const next: SoulEssenceDigestInput[] = [];
+      for (const group of groupSoulDigests(digests, sourceBudget)) {
+        if (group.length === 1) {
+          next.push(group[0]!);
+          continue;
+        }
+        const scopeNotes = group.flatMap((digest) => [...digest.notes]);
+        const essence = await digest(
+          scopeNotes,
+          buildSoulEssenceMergePrompt(kind, scopeNotes, group),
+          group,
+        );
+        if (!essence) {
+          return undefined;
+        }
+        next.push({ notes: scopeNotes, essence });
+      }
+      await flushCache();
+      digests = next;
+    }
+    await flushCache();
+    return digests[0]?.essence;
+  } finally {
+    // Abort between leaves/merges still persists every completed child digest, so the next idle or
+    // manual run resumes instead of repeating already-paid generations.
+    await flushCache();
+  }
+}
+
+async function ensureSoulEssence(
+  llm: LLMProvider,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  opts: {
+    force?: boolean;
+    signal?: AbortSignal;
+    onActivity?: () => void;
+    contextTokens?: number;
+    sourceBudget?: number;
+    outputBudget?: number;
+  } = {},
+): Promise<SoulEssence | undefined> {
+  if (
+    notes.length === 0 ||
+    !supportsChat(llm) ||
+    !soulDistillationFitsContext(opts.contextTokens)
+  ) {
+    return undefined;
+  }
+  const store = memoryStore();
+  if (!opts.force) {
+    const stored = await loadSoulEssence(store, kind, notes);
+    if (stored) return stored;
+    // An ordinary turn may build one bounded digest inline. Larger ledgers are rebuilt by the
+    // visible Generate/Refresh action so conversation never launches a silent multi-call job.
+    if (
+      partitionSoulNotes(
+        notes,
+        opts.sourceBudget ?? soulDistillationSourceBudget(),
+      ).length > MAX_INLINE_SOUL_DISTILLATION_CHUNKS
+    ) {
+      return undefined;
+    }
+  }
+
+  const key = `${soulEssenceModelKey(llm)}:${kind}:${soulSourceFingerprint(notes)}`;
+  if (opts.force) soulEssenceFailedUntil.delete(key);
+  const retryAt = soulEssenceFailedUntil.get(key) ?? 0;
+  if (retryAt > Date.now()) return undefined;
+  soulEssenceFailedUntil.delete(key);
+  const running = soulEssenceInFlight.get(key);
+  if (running) return running;
+
+  const work = (async (): Promise<SoulEssence | undefined> => {
+    let activityTimer: ReturnType<typeof setInterval> | undefined;
+    try {
+      opts.onActivity?.();
+      activityTimer = setInterval(() => opts.onActivity?.(), 30_000);
+      const essence = await distillSoulEssence(
+        llm,
+        kind,
+        notes,
+        opts.sourceBudget ?? soulDistillationSourceBudget(),
+        opts.outputBudget ?? soulDistillationOutputBudget(),
+        true,
+        opts.signal,
+      );
+      if (!essence) {
+        soulEssenceFailedUntil.set(key, Date.now() + SOUL_ESSENCE_RETRY_MS);
+        return undefined;
+      }
+      const fingerprint = soulSourceFingerprint(notes);
+      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) return undefined;
+      const saved = await saveSoulEssence(store, kind, essence, notes);
+      // A note may have changed while storage was committing. Never let an in-flight turn embody an
+      // essence from a revision that is no longer authoritative.
+      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) return undefined;
+      post({ type: "soulEssenceUpdated", kind, notes: [...notes], essence: saved });
+      return saved;
+    } catch (error) {
+      const aborted =
+        opts.signal?.aborted === true ||
+        (error instanceof DOMException && error.name === "AbortError");
+      if (!aborted) soulEssenceFailedUntil.set(key, Date.now() + SOUL_ESSENCE_RETRY_MS);
+      return undefined;
+    } finally {
+      if (activityTimer) clearInterval(activityTimer);
+      soulEssenceInFlight.delete(key);
+    }
+  })();
+  soulEssenceInFlight.set(key, work);
+  return work;
+}
+
+async function soulPromptFor(
+  llm: LLMProvider,
+  kind: SoulKind,
+  opts: {
+    deepSourceAccess?: boolean;
+    queryContext?: string;
+    signal?: AbortSignal;
+    onActivity?: () => void;
+    contextTokens?: number;
+    sourceBudget?: number;
+    outputBudget?: number;
+  } = {},
+): Promise<string> {
+  const store = memoryStore();
+  const [notes, name] = await Promise.all([loadSoul(store, kind), loadSoulName(store, kind)]);
+  const raw = kind === "self"
+    ? selfSoulPromptBlock(notes, name)
+    : userSoulPromptBlock(notes, name);
+  const ordinaryRawFallback = raw
+    ? [
+        raw,
+        "TEMPORARY SOUL-SOURCE FALLBACK: Integrate these notes silently as identity evidence. " +
+          "Do not recite this list, repeatedly mention its interests/thought examples, or steer " +
+          "unrelated conversation toward them. Use a specific item only when directly relevant or requested.",
+      ].join("\n\n")
+    : "";
+  const cachedEssence =
+    notes.length > 0
+      ? await loadSoulEssence(store, kind, notes)
+      : undefined;
+  const evidenceFor = (essence?: SoulEssence) =>
+    opts.queryContext
+      ? soulEvidencePromptBlock(kind, notes, opts.queryContext, undefined, essence)
+      : "";
+  if (opts.deepSourceAccess || notes.length === 0) {
+    return [raw, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+  }
+
+  const compactCached = kind === "self"
+    ? selfSoulEssencePromptBlock(cachedEssence, name)
+    : userSoulEssencePromptBlock(cachedEssence, name);
+  if (compactCached) {
+    return [compactCached, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+  }
+
+  // Cloud preparation calls are billable and can retry on malformed JSON. Generate/Refresh is the
+  // explicit consent surface there; local providers may create a one-pass essence automatically.
+  if (CLOUD_LLM_IDS.has(llm.id)) {
+    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+  }
+
+  const sourceBudget = opts.sourceBudget ?? soulDistillationSourceBudget(opts.contextTokens);
+  const outputBudget = opts.outputBudget ?? soulDistillationOutputBudget(opts.contextTokens);
+  if (!soulDistillationFitsContext(opts.contextTokens)) {
+    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+  }
+  if (
+    partitionSoulNotes(notes, sourceBudget).length >
+    MAX_INLINE_SOUL_DISTILLATION_CHUNKS
+  ) {
+    // A maximum ledger can require many hierarchical calls. The Soul panel's explicit action runs
+    // that cached rebuild visibly; this turn uses the guarded raw fallback without hidden latency.
+    return [ordinaryRawFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
+  }
+
+  const essence = await ensureSoulEssence(llm, kind, notes, {
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    ...(opts.onActivity ? { onActivity: opts.onActivity } : {}),
+    ...(opts.contextTokens ? { contextTokens: opts.contextTokens } : {}),
+    sourceBudget,
+    outputBudget,
+  });
+  const compact = kind === "self"
+    ? selfSoulEssencePromptBlock(essence, name)
+    : userSoulEssencePromptBlock(essence, name);
+  if (!compact) {
+    return [ordinaryRawFallback, evidenceFor(cachedEssence)]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  return [compact, evidenceFor(essence)].filter(Boolean).join("\n\n");
+}
+
+function soulEvidenceQueryContext(history: readonly ChatTurn[], userText: string): string {
+  const priorUserText = [...history]
+    .reverse()
+    .find((turn) => turn.role === "user")
+    ?.content.trim();
+  return priorUserText
+    ? `PRIOR USER REQUEST:\n${priorUserText}\nCURRENT USER REQUEST:\n${userText}`
+    : userText;
+}
+
+/**
  * When the chat model CHANGES, ask Ollama to evict the PREVIOUS local model (keep_alive 0) so two
  * models don't sit in VRAM at once — otherwise a freshly-loaded big model has to share the GPU with
  * the one it replaced (switching e.g. gemma → a 27B left BOTH resident, starving the new one and
@@ -1800,7 +2302,7 @@ async function freeSwitchedImageEngine(prev: ReaderSettings | undefined, next: R
 const CLOUD_LLM_IDS = new Set(["claude", "gemini", "openai"]);
 /** Cloud models bill per call, so a long auto-run tool streak PAUSES for a "keep going?" check this
  * often (the reader gets a Continue button) instead of running to the big local backstop. Local/free
- * models (local-server / webllm) don't pass this, so they run uninterrupted. */
+ * models (local-server / local WebLLM) don't pass this, so they run uninterrupted. */
 const CLOUD_TOOL_PAUSE_ROUNDS = 10;
 /** Approximate context windows (tokens) for the donut's "X / Y" readout — cloud
  * models don't report it; these are the families' standard sizes. */
@@ -2076,8 +2578,37 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     // The assistant's identity ("soul") — emitted as the FIRST section of the book chat too (and kept
     // in the cached prefix), so the companion stays in character here, not just in the home chat.
-    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
-    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
+    // A co-written story is a creative/deep context: keep its original source notes available so
+    // roleplay can use specific traits rather than only the everyday synthesis.
+    const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
+    const deepSoul = book.kind === "story";
+    const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
+    const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
+    const identityActivity = () =>
+      post({ type: "chatActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
+    const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
+      // Distillation can load a substantial local model. Do the two identities serially inside one
+      // priority lease so they never compete with each other for the same model/VRAM.
+      const nextSelfSoul = await soulPromptFor(llm, "self", {
+        deepSourceAccess: deepSoul,
+        queryContext: soulQueryContext,
+        signal: ac.signal,
+        onActivity: identityActivity,
+        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+        sourceBudget: soulSourceBudget,
+        outputBudget: soulOutputBudget,
+      });
+      const nextUserSoul = await soulPromptFor(llm, "user", {
+        deepSourceAccess: deepSoul,
+        queryContext: soulQueryContext,
+        signal: ac.signal,
+        onActivity: identityActivity,
+        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+        sourceBudget: soulSourceBudget,
+        outputBudget: soulOutputBudget,
+      });
+      return [nextSelfSoul, nextUserSoul] as const;
+    });
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
@@ -2914,6 +3445,51 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
   }
 }
 
+async function handleSoulEssenceRefresh(
+  msg: Extract<MainToWorker, { type: "soulEssenceRefresh" }>,
+): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    const store = memoryStore();
+    const notes = await loadSoul(store, msg.kind);
+    if (notes.length === 0) {
+      post({ type: "soulEssenceRefreshed", requestId: msg.requestId, ok: true });
+      return;
+    }
+    const contextTokens = await localContextTokens(llm.id);
+    const budgets = contextBudgets(llm.id, contextTokens);
+    if (!soulDistillationFitsContext(budgets.maxTokens)) {
+      throw new Error(
+        `Soul Essence generation needs at least a ${MIN_SOUL_DISTILLATION_CONTEXT_TOKENS.toLocaleString()}-token text-model context window. Increase the local context setting; the original Soul notes remain intact.`,
+      );
+    }
+    const sourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
+    const outputBudget = soulDistillationOutputBudget(budgets.maxTokens);
+    const essence = await withChatPriority(llm.id, () =>
+      ensureSoulEssence(llm, msg.kind, notes, {
+        force: true,
+        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+        sourceBudget,
+        outputBudget,
+      }),
+    );
+    if (!essence) throw new Error("the text model could not produce a grounded Soul Essence");
+    post({
+      type: "soulEssenceRefreshed",
+      requestId: msg.requestId,
+      ok: true,
+      essence,
+    });
+  } catch (err) {
+    post({
+      type: "soulEssenceRefreshed",
+      requestId: msg.requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * Faithful document polish (two stages). Mirrors handleSummarize: a one-shot
  * `chat()` over the provider-neutral seam, available with no book open. "understand"
@@ -3696,7 +4272,50 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               // story rather than opening a fresh one.
               ...(call.soFar ? { soFar: call.soFar } : {}),
             });
-            const reply = (await llm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 600 })).trim();
+            // The Story setup owns this marker and only sets it for its "You & me" cast. Character
+            // descriptions above deliberately contain LOOKS only (for the Visual Bible); the opening
+            // writer also needs the source identities so beat one reflects their voices, values,
+            // personality directions, and manner instead of waiting for a later story turn.
+            let soulCharacterization = "";
+            if (call.soulCast) {
+              const [selfNotes, storedSelfName, userNotes, storedUserName] = await Promise.all([
+                loadSoul(store, "self"),
+                loadSoulName(store, "self"),
+                loadSoul(store, "user"),
+                loadSoulName(store, "user"),
+              ]);
+              // Story Setup permits editing the played names. Bind each source document to that
+              // selected story name, while retaining the stored name as a fallback.
+              const storySelfName = call.roleplay?.you ?? cast[0]?.name ?? storedSelfName;
+              const storyUserName = call.roleplay?.me ?? cast[1]?.name ?? storedUserName;
+              const [selfEssence, userEssence] = await Promise.all([
+                loadSoulEssence(store, "self", selfNotes),
+                loadSoulEssence(store, "user", userNotes),
+              ]);
+              const sourceBlocks = [
+                selfSoulEssencePromptBlock(selfEssence, storySelfName),
+                selfSoulPromptBlock(selfNotes, storySelfName),
+                userSoulEssencePromptBlock(userEssence, storyUserName),
+                userSoulPromptBlock(userNotes, storyUserName),
+              ].filter(Boolean);
+              if (sourceBlocks.length) {
+                soulCharacterization = [
+                  "SOURCE IDENTITIES FOR THIS \"YOU & ME\" CAST:",
+                  ...sourceBlocks,
+                  "Use these notes as characterization evidence for the two people: their manner, " +
+                    "voice, choices, values, personality directions, and physical continuity. Weave " +
+                    "only what is relevant naturally into the scene. Never list, quote, or discuss " +
+                    "the notes, and do not force every stored interest or thought into the opening.",
+                ].join("\n\n");
+              }
+            }
+            const openingSystem = soulCharacterization
+              ? `${system}\n\n${soulCharacterization}`
+              : system;
+            const reply = (await llm.chat(
+              [{ role: "system", content: openingSystem }, { role: "user", content: user }],
+              { maxTokens: 600 },
+            )).trim();
             const parsed = parseStoryOpening(reply);
             if (parsed.opening) opening = parsed.opening;
             if (!call.title?.trim() && parsed.title) title = parsed.title;
@@ -3956,8 +4575,36 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
     const selfName = await loadSoulName(store, "self");
-    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), selfName);
-    const userSoul = userSoulPromptBlock(await loadSoul(store, "user"), await loadSoulName(store, "user"));
+    const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
+    const deepSoul =
+      msg.creativeIdle === true ||
+      msg.creativeSession === true ||
+      currentBook?.kind === "story";
+    const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
+    const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
+    const identityActivity = () =>
+      post({ type: "buddyActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
+    const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
+      const nextSelfSoul = await soulPromptFor(llm, "self", {
+        deepSourceAccess: deepSoul,
+        queryContext: soulQueryContext,
+        signal: ac.signal,
+        onActivity: identityActivity,
+        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+        sourceBudget: soulSourceBudget,
+        outputBudget: soulOutputBudget,
+      });
+      const nextUserSoul = await soulPromptFor(llm, "user", {
+        deepSourceAccess: deepSoul,
+        queryContext: soulQueryContext,
+        signal: ac.signal,
+        onActivity: identityActivity,
+        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+        sourceBudget: soulSourceBudget,
+        outputBudget: soulOutputBudget,
+      });
+      return [nextSelfSoul, nextUserSoul] as const;
+    });
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.

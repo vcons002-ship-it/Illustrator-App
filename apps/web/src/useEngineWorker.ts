@@ -38,6 +38,9 @@ import type {
   Indicators,
   ImportStats,
   PolishMode,
+  SoulEssence,
+  SoulKind,
+  SoulNote,
   TaskCandidate,
   TaskPlan,
   TaskSource,
@@ -327,11 +330,21 @@ export interface EngineWorkerApi {
     /** Unattended creative run: the worker narrows the prompt AND the tool loop refuses anything
      * outside CREATIVE_IDLE_TOOLS. */
     creativeIdle?: boolean,
+    /** The dedicated Creative conversation gets deeper source-soul context on every turn. */
+    creativeSession?: boolean,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
   /** Compact a chat: summarize the model-facing turns into a continuation brief. */
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
+  /** Rebuild one derived everyday Soul Essence from its complete authoritative note list. */
+  refreshSoulEssence: (
+    kind: SoulKind,
+  ) => Promise<{ essence?: SoulEssence; error?: string }>;
+  /** Most recent automatic/manual persisted essence, including the exact source-note revision. */
+  soulEssenceUpdate:
+    | { kind: SoulKind; notes: SoulNote[]; essence: SoulEssence }
+    | undefined;
   /** Finish Google OAuth in the worker (exchange the consent code for tokens). */
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
   /** Exchange a pasted Schwab consent code for tokens (manual connect). */
@@ -408,7 +421,7 @@ export type BuddyStreamEvent =
       removed?: string;
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
-      memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       error?: string;
@@ -475,7 +488,7 @@ export type ChatStreamEvent =
       passages?: BookPassage[];
       /** lookup_bible detail (slash commands render this in the panel). */
       bibleDetail?: string;
-      memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** A grounded analyze_data result table (rendered inline). */
       analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
       error?: string;
@@ -555,6 +568,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     images: false,
   });
   const [importResult, setImportResult] = useState<ImportResult | undefined>();
+  const [soulEssenceUpdate, setSoulEssenceUpdate] = useState<
+    { kind: SoulKind; notes: SoulNote[]; essence: SoulEssence } | undefined
+  >();
   // In-flight getCharacterReference requests, resolved by `characterReference` replies.
   const refRequests = useRef<
     Map<number, (image: { bytes: ArrayBuffer; mimeType: string } | undefined) => void>
@@ -612,6 +628,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
     new Map(),
   );
+  // In-flight manual Soul-Essence rebuilds, resolved by `soulEssenceRefreshed`.
+  const soulEssenceRequests = useRef<
+    Map<number, (r: { essence?: SoulEssence; error?: string }) => void>
+  >(new Map());
   // In-flight Google OAuth exchanges, resolved by `googleConnected`.
   const googleConnectRequests = useRef<Map<number, (r: { ok: boolean; email?: string; error?: string }) => void>>(
     new Map(),
@@ -666,6 +686,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     drain(chatToolRequests, (r) => r.resolve({ error }));
     drain(buddyRequests, (r) => r.resolve({ text: "", transcript: [], error }));
     drain(summarizeRequests, (resolve) => resolve({ error }));
+    drain(soulEssenceRequests, (resolve) => resolve({ error }));
     drain(googleConnectRequests, (resolve) => resolve({ ok: false, error }));
     drain(schwabConnectRequests, (resolve) => resolve({ ok: false, error }));
     drain(schwabOrderRequests, (resolve) => resolve({ ok: false, error }));
@@ -1186,6 +1207,23 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
           break;
         }
+        case "soulEssenceRefreshed": {
+          const resolve = soulEssenceRequests.current.get(msg.requestId);
+          soulEssenceRequests.current.delete(msg.requestId);
+          resolve?.(
+            msg.ok
+              ? { ...(msg.essence ? { essence: msg.essence } : {}) }
+              : { error: msg.error ?? "Soul Essence refresh failed." },
+          );
+          break;
+        }
+        case "soulEssenceUpdated":
+          setSoulEssenceUpdate({
+            kind: msg.kind,
+            notes: msg.notes,
+            essence: msg.essence,
+          });
+          break;
         case "googleConnected": {
           const resolve = googleConnectRequests.current.get(msg.requestId);
           googleConnectRequests.current.delete(msg.requestId);
@@ -1971,6 +2009,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       plan?: BuddyPlan,
       appManagedSteps?: boolean,
       creativeIdle?: boolean,
+      creativeSession?: boolean,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -2001,7 +2040,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}) });
       }),
     [],
   );
@@ -2030,6 +2069,25 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           resolve(r);
         });
         send({ type: "summarize", requestId, turns });
+      }),
+    [],
+  );
+  const refreshSoulEssence = useCallback(
+    (kind: SoulKind): Promise<{ essence?: SoulEssence; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (soulEssenceRequests.current.delete(requestId)) {
+            resolve({ error: "Soul Essence refresh timed out — try again." });
+          }
+        // A maximum-size Soul is deliberately distilled through several bounded passes. On a local
+        // model that can take longer than an ordinary one-shot request without being stuck.
+        }, 600_000);
+        soulEssenceRequests.current.set(requestId, (result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        });
+        send({ type: "soulEssenceRefresh", requestId, kind });
       }),
     [],
   );
@@ -2401,6 +2459,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyChat,
     buddyCancel,
     summarize,
+    refreshSoulEssence,
+    soulEssenceUpdate,
     googleConnect,
     schwabConnect,
     schwabPlaceOrder,

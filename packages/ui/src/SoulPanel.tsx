@@ -1,5 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { MAX_SOUL_IMAGES, type SoulImage, type SoulNote } from "@visual-reader/core";
+import {
+  MAX_SOUL_IMAGES,
+  SOUL_ESSENCE_FACETS,
+  type SoulEssence,
+  type SoulImage,
+  type SoulNote,
+} from "@visual-reader/core";
 import { ModalShell } from "./ModalShell.js";
 import {
   DANGER_RED,
@@ -13,8 +19,9 @@ import {
 } from "./tokens.js";
 
 /**
- * Edit one of the two identity "souls" — durable notes, separate from reader-memory, that
- * the assistant keeps and injects into every prompt:
+ * Edit one of the two identity "souls" — authoritative durable notes, separate from
+ * reader-memory. Ordinary chat uses a compact essence synthesized from these notes, while
+ * creative and specific identity contexts can still consult the original sources:
  *  - variant "self": WHO THE ASSISTANT IS (its persona, look, voice) — so it stays itself,
  *    and can play itself in a "You & me" story.
  *  - variant "user": WHO THE READER IS (their own character's look + personality) — so the
@@ -26,6 +33,10 @@ export interface SoulPanelProps {
   variant: "self" | "user";
   name: string;
   notes: SoulNote[];
+  /** The compact identity synthesis used for ordinary conversation. */
+  essence?: SoulEssence | undefined;
+  /** Regenerate the compact identity synthesis from the authoritative notes. */
+  onRefreshEssence?: () => Promise<SoulEssence | undefined>;
   /** Persist the WHOLE notes list (the panel manages the array; App writes + reloads it). */
   onSaveNotes: (notes: SoulNote[]) => Promise<void>;
   /** Persist the played-character name. */
@@ -44,9 +55,8 @@ const COPY = {
     title: "🪞 Soul — who you are",
     namePlaceholder: "The assistant's name (e.g. Sage)",
     blurb:
-      "The assistant's own durable identity — persona, look, and voice. It stays consistent with this " +
-      "across every chat, and embodies it when it plays itself in a “You & me” story. Add a name plus a few " +
-      "notes (appearance, personality, how it speaks).",
+      "The assistant's durable source identity — persona, look, and voice. Everyday chat uses an " +
+      "integrated essence made from these notes, while creative work can draw on the originals.",
     notePlaceholder: "e.g. Warm, dry wit; silver hair; wears a long coat",
   },
   user: {
@@ -59,10 +69,22 @@ const COPY = {
   },
 } as const;
 
+const ESSENCE_FACET_LABELS: Record<(typeof SOUL_ESSENCE_FACETS)[number], string> = {
+  coreDisposition: "Core disposition",
+  conversationalVoice: "Conversational voice",
+  thinkingStyle: "Thinking style",
+  valuesAndMotivations: "Values and motivations",
+  relationalStyle: "Relational style",
+  personalityDirections: "Personality directions",
+  tensionsAndNuance: "Tensions and nuance",
+};
+
 export const SoulPanel = memo(function SoulPanel({
   variant,
   name,
   notes,
+  essence,
+  onRefreshEssence,
   onSaveNotes,
   onSaveName,
   images,
@@ -73,6 +95,8 @@ export const SoulPanel = memo(function SoulPanel({
   const copy = COPY[variant];
   const [list, setList] = useState<SoulNote[]>(notes);
   useEffect(() => setList(notes), [notes]);
+  const [shownEssence, setShownEssence] = useState<SoulEssence | undefined>(essence);
+  useEffect(() => setShownEssence(essence), [essence]);
   const [nameDraft, setNameDraft] = useState(name);
   useEffect(() => setNameDraft(name), [name]);
   const [pics, setPics] = useState<SoulImage[]>(images);
@@ -93,6 +117,8 @@ export const SoulPanel = memo(function SoulPanel({
     try {
       await onSaveNotes(next);
       setList(next);
+      // A source-note change makes the previously distilled identity stale.
+      setShownEssence(undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -141,6 +167,19 @@ export const SoulPanel = memo(function SoulPanel({
   };
 
   const remove = (at: number): void => void persist(list.filter((n) => n.at !== at));
+
+  const refreshEssence = async (): Promise<void> => {
+    if (!onRefreshEssence || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setShownEssence(await onRefreshEssence());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const persistPics = async (next: SoulImage[]): Promise<void> => {
     setBusy(true);
@@ -220,6 +259,110 @@ export const SoulPanel = memo(function SoulPanel({
             />
           </span>
         </label>
+
+        <section
+          aria-labelledby={`${variant}-soul-essence-heading`}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: 10,
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 8,
+            background: "rgba(255,255,255,0.035)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <strong id={`${variant}-soul-essence-heading`} style={{ fontSize: 13 }}>
+              Everyday essence
+            </strong>
+            {onRefreshEssence ? (
+              <button
+                type="button"
+                style={btn}
+                disabled={busy || list.length === 0}
+                onClick={() => void refreshEssence()}
+                aria-label={`${shownEssence ? "Refresh" : "Generate"} everyday essence`}
+              >
+                {shownEssence ? "Refresh" : "Generate"}
+              </button>
+            ) : null}
+          </div>
+          <p style={{ fontSize: 11, opacity: 0.68, margin: 0, lineHeight: 1.45 }}>
+            Ordinary chat uses this integrated identity. The original notes below remain authoritative,
+            and creative work or a specific identity question can still consult those sources.
+          </p>
+
+          {shownEssence ? (
+            <>
+              <dl style={{ display: "grid", gap: 7, margin: 0 }}>
+                {SOUL_ESSENCE_FACETS.map((key) => {
+                  if (key === "personalityDirections") return null;
+                  const text = shownEssence.facets[key].text.trim();
+                  return text ? (
+                    <div key={key}>
+                      <dt style={{ fontSize: 11, fontWeight: 600, opacity: 0.78 }}>
+                        {ESSENCE_FACET_LABELS[key]}
+                      </dt>
+                      <dd style={{ fontSize: 12, margin: "2px 0 0", lineHeight: 1.4 }}>{text}</dd>
+                    </div>
+                  ) : null;
+                })}
+              </dl>
+              {shownEssence.exactPersonalityDirections.length ? (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    paddingTop: 7,
+                    borderTop: "1px solid rgba(255,255,255,0.09)",
+                  }}
+                >
+                  <strong style={{ fontSize: 11, opacity: 0.78 }}>
+                    Source-exact personality directions
+                  </strong>
+                  <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
+                    {shownEssence.exactPersonalityDirections.map((fact, index) => (
+                      <li key={`${fact.sourceIds.join("-")}-${index}`}>{fact.text}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  paddingTop: 7,
+                  borderTop: "1px solid rgba(255,255,255,0.09)",
+                }}
+              >
+                <strong style={{ fontSize: 11, opacity: 0.78 }}>Exact physical appearance</strong>
+                {shownEssence.exactAppearance.length ? (
+                  <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
+                    {shownEssence.exactAppearance.map((fact, index) => (
+                      <li key={`${fact.sourceIds.join("-")}-${index}`}>{fact.text}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span style={{ fontSize: 11, opacity: 0.58 }}>No physical appearance notes yet.</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <span style={{ fontSize: 11, opacity: 0.58 }}>
+              {list.length
+                ? "Generate an everyday essence now. Small Souls may also be integrated automatically by a local text model."
+                : "Add source notes before generating an essence."}
+            </span>
+          )}
+        </section>
+
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+          <strong style={{ fontSize: 12 }}>Source notes</strong>
+          <span style={{ fontSize: 10, opacity: 0.5 }}>Authoritative originals</span>
+        </div>
 
         <div style={addRow}>
           <input

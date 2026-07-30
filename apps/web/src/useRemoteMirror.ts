@@ -14,6 +14,7 @@ import {
   type MemoryNote,
   type ScheduledTask,
   type Skill,
+  type SoulEssence,
   type SoulKind,
   type SoulNote,
   type StoredChatMessage,
@@ -70,8 +71,8 @@ export interface RemoteMirrorDeps {
   engineInventory: EngineInventory;
   memories: MemoryNote[];
   skills: Skill[];
-  /** The two identity souls (notes + name) mirrored down to the phone's Soul panels. */
-  souls: Record<SoulKind, { name: string; notes: SoulNote[] }>;
+  /** The two identity souls (notes, name, and derived essence) mirrored to the phone's Soul panels. */
+  souls: Record<SoulKind, { name: string; notes: SoulNote[]; essence?: SoulEssence }>;
   /** The desktop's scheduled/periodic tasks (mirrored down; the phone has no scheduler of its own). */
   scheduled: ScheduledTask[];
   book: BookSource | undefined;
@@ -85,8 +86,10 @@ export interface RemoteMirrorDeps {
   setMemories: (notes: MemoryNote[]) => void;
   setSkills: (skills: Skill[]) => void;
   /** PHONE: adopt a desktop soul push. DESKTOP: re-read the saved soul after a phone edit. */
-  applySoul: (kind: SoulKind, name: string, notes: SoulNote[]) => void;
+  applySoul: (kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence) => void;
   refreshSoul: (kind: SoulKind) => void;
+  /** DESKTOP: rebuild an Essence with the model/store that owns the authoritative Soul. */
+  generateSoulEssence: (kind: SoulKind) => Promise<{ essence?: SoulEssence; error?: string }>;
   /** PHONE: adopt the desktop's scheduled tasks (the phone has no scheduler of its own). */
   setScheduled: (tasks: ScheduledTask[]) => void;
   setBook: (book: BookSource | undefined) => void;
@@ -141,6 +144,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     setSkills,
     applySoul,
     refreshSoul,
+    generateSoulEssence,
     setScheduled,
     setBook,
     setBible,
@@ -210,6 +214,17 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   // through this per-requestId map.
   const runHostToolForRemoteRef = useRef<(call: BuddyToolCall, cwd?: string) => Promise<BuddyToolResultPayload>>(async () => ({}));
   const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
+  // PHONE: explicit Essence rebuilds awaiting the desktop's model result. This cannot use the
+  // phone's worker because its local store intentionally has no mirrored Soul notes.
+  const soulEssenceRefreshPending = useRef(
+    new Map<
+      number,
+      {
+        timer: ReturnType<typeof setTimeout>;
+        resolve: (result: { essence?: SoulEssence; error?: string }) => void;
+      }
+    >(),
+  );
   // PHONE: lazy image-card fetches awaiting the desktop's vrsync:fileData reply, keyed by reqId.
   const fileFetchPending = useRef(new Map<number, (r: { bytes?: ArrayBuffer; mime?: string }) => void>());
   // Partial chunks of an in-flight chunked file fetch (vrsync:fileData), keyed by reqId.
@@ -220,6 +235,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const fetchingImageIds = useRef(new Set<string>());
   const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
+  const soulEssenceRefreshReqId = useRef(0);
 
   // Live scheduled tasks for the snapshot builder (which is read from a ref by the once-registered
   // relay handler, so it must not close over a stale array).
@@ -254,8 +270,20 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
       { type: "vrsync:chat", ...chatMirrorRef.current },
       // Their own frames rather than fields on vrsync:state — souls are small, but the state frame is
       // already the one carrying everything else, and a soul is worth landing even if that one is lost.
-      { type: "vrsync:soul", kind: "self", name: souls.self.name, notes: souls.self.notes },
-      { type: "vrsync:soul", kind: "user", name: souls.user.name, notes: souls.user.notes },
+      {
+        type: "vrsync:soul",
+        kind: "self",
+        name: souls.self.name,
+        notes: souls.self.notes,
+        ...(souls.self.essence ? { essence: souls.self.essence } : {}),
+      },
+      {
+        type: "vrsync:soul",
+        kind: "user",
+        name: souls.user.name,
+        notes: souls.user.notes,
+        ...(souls.user.essence ? { essence: souls.user.essence } : {}),
+      },
       // ALWAYS sent, even with nothing open: a re-sync must be able to CLEAR a book the phone still
       // shows but the desktop has since closed (the old combined snapshot carried `book: undefined`
       // for that; omitting the frame entirely would strand the stale book on the phone).
@@ -315,8 +343,20 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             setSkills(msg.skills);
             break;
           case "vrsync:soul":
-            applySoul(msg.kind, msg.name, msg.notes);
+            applySoul(msg.kind, msg.name, msg.notes, msg.essence);
             break;
+          case "vrsync:soulEssenceResult": {
+            const pending = soulEssenceRefreshPending.current.get(msg.requestId);
+            if (pending) {
+              soulEssenceRefreshPending.current.delete(msg.requestId);
+              clearTimeout(pending.timer);
+              pending.resolve({
+                ...(msg.essence ? { essence: msg.essence } : {}),
+                ...(msg.error ? { error: msg.error } : {}),
+              });
+            }
+            break;
+          }
           case "vrsync:scheduled":
             setScheduled(msg.scheduled);
             break;
@@ -461,7 +501,23 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
           case "vrcmd:soulName":
             void saveSoulName(libraryStore, msg.kind, msg.name).then(() => refreshSoul(msg.kind)).catch(() => {});
             break;
+          case "vrcmd:soulEssenceRefresh":
+            void generateSoulEssence(msg.kind)
+              .catch((err): { essence?: SoulEssence; error?: string } => ({
+                error: err instanceof Error ? err.message : String(err),
+              }))
+              .then((result) =>
+                sendAppSync({
+                  type: "vrsync:soulEssenceResult",
+                  requestId: msg.requestId,
+                  kind: msg.kind,
+                  ...(result.essence ? { essence: result.essence } : {}),
+                  ...(result.error ? { error: result.error } : {}),
+                }),
+              );
+            break;
           case "vrcmd:chatSend":
+          case "vrcmd:storyStart":
           case "vrcmd:chatSwitch":
           case "vrcmd:chatClose":
           case "vrcmd:chatReopen":
@@ -585,6 +641,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     setRemoteVram,
     setRemoteHost,
     refreshSkills,
+    generateSoulEssence,
     clearBuddyPlan,
     bookRef,
     phoneExitedBookId,
@@ -619,8 +676,20 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     // Mirror both identity souls so the phone's Soul panels show what the assistant actually is,
     // rather than the phone's own (always empty) store.
     if (isRemoteClient) return;
-    sendAppSync({ type: "vrsync:soul", kind: "self", name: souls.self.name, notes: souls.self.notes });
-    sendAppSync({ type: "vrsync:soul", kind: "user", name: souls.user.name, notes: souls.user.notes });
+    sendAppSync({
+      type: "vrsync:soul",
+      kind: "self",
+      name: souls.self.name,
+      notes: souls.self.notes,
+      ...(souls.self.essence ? { essence: souls.self.essence } : {}),
+    });
+    sendAppSync({
+      type: "vrsync:soul",
+      kind: "user",
+      name: souls.user.name,
+      notes: souls.user.notes,
+      ...(souls.user.essence ? { essence: souls.user.essence } : {}),
+    });
   }, [isRemoteClient, sendAppSync, souls]);
   useEffect(() => {
     // Mirror the desktop's scheduled tasks so the phone's ⏰ Scheduled panel isn't empty — it has no
@@ -652,6 +721,31 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     [isRemoteClient, sendAppSync, setSettings, settingsRef],
   );
 
+  /** PHONE: ask the desktop to rebuild one Essence and await its concrete success/error result. */
+  const requestSoulEssenceRefresh = useCallback(
+    (kind: SoulKind): Promise<{ essence?: SoulEssence; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = soulEssenceRefreshReqId.current++;
+        const timer = setTimeout(() => {
+          if (soulEssenceRefreshPending.current.delete(requestId)) {
+            resolve({ error: "The desktop did not finish the Soul Essence refresh. Check the phone link and try again." });
+          }
+        // The desktop worker has its own 10-minute ceiling. Leave relay margin so its specific
+        // success/error can arrive before the phone reports a generic link timeout.
+        }, 660_000);
+        soulEssenceRefreshPending.current.set(requestId, { timer, resolve });
+        sendAppSync({ type: "vrcmd:soulEssenceRefresh", requestId, kind });
+      }),
+    [sendAppSync],
+  );
+  useEffect(
+    () => () => {
+      for (const pending of soulEssenceRefreshPending.current.values()) clearTimeout(pending.timer);
+      soulEssenceRefreshPending.current.clear();
+    },
+    [],
+  );
+
   return {
     plannerMirrorRef,
     applyPlannerRef,
@@ -680,6 +774,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     fetchingImageIds,
     fileFetchSeq,
     hostToolReqId,
+    requestSoulEssenceRefresh,
     onSettingsChange,
   };
 }

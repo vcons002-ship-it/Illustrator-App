@@ -191,10 +191,9 @@ export function storySoFarFromChat(
  * further. Story rendering is one image per beat, so collapsing a seven-response story into one beat
  * made analysis write one prompt and left six requested images with no render unit to attach to.
  *
- * Direct-mode imports retain their transcript labels. Roleplay imports instead store the assistant's
- * already-woven narrative response as the beat: retaining the raw steer would duplicate its action,
- * while retaining "Reader:" / "Assistant:" makes extraction mistake transport roles for characters.
- * An unanswered final steer is kept without a label only when no generated continuation replaced it.
+ * Direct-mode imports retain their transcript labels. Roleplay imports remove those transport labels
+ * but preserve both sides as natural prose. A carried chat predates Story mode, so an assistant reply
+ * cannot be assumed to have woven in (or even acknowledged) the reader's preceding contribution.
  */
 export function storyStartBeats(
   opening: string,
@@ -283,9 +282,11 @@ function carriedStoryBeats(
     const sections = assistantSections(assistantText);
     sections.forEach((section, i) => {
       if (opts.roleplay) {
-        // The roleplay writer has already woven the reader's contribution into this finished prose.
-        // Storing the raw steer too duplicates the action and leaves transcript metadata in the book.
-        if (section.trim()) beats.push(section.trim());
+        const lead = i === 0
+          ? readerTurns.map(naturalStoryProse).filter(Boolean)
+          : [];
+        const prose = [...lead, section.trim()].filter(Boolean).join("\n\n");
+        if (prose) beats.push(prose);
       } else {
         const lead = i === 0 ? readerTurns.map((text) => `Reader: ${text}`) : [];
         beats.push([...lead, `Assistant: ${section}`].join("\n"));
@@ -294,7 +295,7 @@ function carriedStoryBeats(
     readerTurns = [];
   }
   // A final reader turn still belongs to the imported story even if the assistant had not answered.
-  if (readerTurns.length && (!opts.roleplay || !opts.hasContinuation)) {
+  if (readerTurns.length) {
     beats.push(
       opts.roleplay
         ? readerTurns.map(naturalStoryProse).filter(Boolean).join("\n\n")

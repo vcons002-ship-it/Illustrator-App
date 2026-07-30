@@ -69,6 +69,26 @@ export function isTransientCharacterDetail(value: string): boolean {
   );
 }
 
+/** Split a conjunction only when at least one side is independently transient. */
+function splitTransientConjunctions(value: string): string[] {
+  const tokens = value.split(/(\s+(?:and|while)\s+)/i);
+  if (tokens.length < 3) return [value];
+  const parts: string[] = [];
+  let current = tokens[0] ?? "";
+  for (let index = 1; index < tokens.length; index += 2) {
+    const separator = tokens[index] ?? " and ";
+    const next = tokens[index + 1] ?? "";
+    if (isTransientCharacterDetail(current) || isTransientCharacterDetail(next)) {
+      if (current.trim()) parts.push(current.trim());
+      current = next;
+    } else {
+      current += separator + next;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
 /**
  * A whole sentence about one feature — "Her hair is auburn", "His eyes are grey".
  *
@@ -95,9 +115,17 @@ export function unwrapAppearancePhrase(value: string): string {
 export function stripTransientCharacterDetails(value: string): string {
   const detail = value.trim();
   if (!detail) return "";
-  const clauses = detail.split(/\s*(?:;|\r?\n|,\s+)\s*/).map((p) => p.trim()).filter(Boolean);
-  const kept = clauses.filter((p) => !isTransientCharacterDetail(p)).map(unwrapAppearancePhrase).filter(Boolean);
-  if (kept.length === clauses.length && kept.every((p, i) => p === clauses[i])) return detail;
+  const parts = detail
+    .split(/\s*(?:;|\r?\n|,\s+)\s*/)
+    .flatMap(splitTransientConjunctions)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const kept = parts
+    .filter((part) => !isTransientCharacterDetail(part))
+    .map(unwrapAppearancePhrase)
+    .filter(Boolean);
+  // Preserve exact formatting when nothing was removed or unwrapped.
+  if (kept.length === parts.length && kept.every((part, index) => part === parts[index])) return detail;
   return kept.join(", ");
 }
 

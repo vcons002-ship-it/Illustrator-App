@@ -98,6 +98,7 @@ describe("parseBuddySlashCommand", () => {
       opening: "Rain hammers the alley as Vex ducks under an awning.",
       characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
       roleplay: { me: "Vex", you: "Mara" },
+      soulCast: true,
     });
     const r = parseBuddySlashCommand(`/story ${payload}`, library);
     expect(r).toMatchObject({
@@ -106,6 +107,7 @@ describe("parseBuddySlashCommand", () => {
         opening: "Rain hammers the alley as Vex ducks under an awning.",
         characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
         roleplay: { me: "Vex", you: "Mara" },
+        soulCast: true,
       },
     });
     // Malformed JSON falls back to the usage hint rather than throwing.

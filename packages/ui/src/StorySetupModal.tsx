@@ -19,6 +19,9 @@ export interface StoryStartPayload {
   title?: string;
   characters?: { name: string; description?: string }[];
   roleplay?: { me?: string; you?: string };
+  /** App-owned marker: this cast is the stored You + Me pair, so story generation may use both
+   * complete Soul documents for characterization. Never set for a custom cast. */
+  soulCast?: true;
   /** The conversation so far, when the reader chose to bring this chat into the story. */
   soFar?: string;
 }
@@ -72,6 +75,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
     if (cast === "you-and-me") {
       const me = (meName.trim() || "Me");
       const you = (youName.trim() || "You");
+      payload.soulCast = true;
       payload.characters = [
         { name: you, ...(self.note ? { description: self.note } : {}) },
         { name: me, ...(user.note ? { description: user.note } : {}) },
