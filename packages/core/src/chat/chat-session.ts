@@ -221,16 +221,33 @@ export function trimTurnMessages(messages: ChatTurn[], pinnedIndex: number, maxC
   // The marker itself costs context, so it comes out of the budget rather than being added on top —
   // a bound that is quietly exceeded by its own bookkeeping is not a bound.
   const budget = Math.max(0, maxChars - TRIMMED_MARKER.length);
-  let used = 0;
-  for (const i of pinned) used += messages[i]!.content.length;
+  let pinnedChars = 0;
+  for (const i of pinned) pinnedChars += messages[i]!.content.length;
+
+  /**
+   * Room for everything that is NOT pinned.
+   *
+   * Normally that is what the pinned content leaves. But the pinned content can exceed the budget on
+   * its own — a system prompt of role, tools, identity notes, memories and skills routinely runs to
+   * tens of thousands of characters — and when it does, throwing the conversation away CANNOT bring
+   * the prompt under the limit. It is pure loss: the overflow is still there and the conversation is
+   * gone. That is not a hypothetical; it deleted every message of even a three-turn chat and left the
+   * model reading the "earlier messages were trimmed" marker, which it then reported to the reader as
+   * the conversation having evaporated.
+   *
+   * So when trimming cannot help, it doesn't happen at the conversation's expense: a guaranteed share
+   * survives, and the prompt is over budget either way.
+   */
+  const room = Math.max(budget - pinnedChars, Math.floor(budget * MIN_HISTORY_SHARE));
 
   // A contiguous tail, newest first — a coherent recent conversation beats a denser scattered one.
   const keep = new Set(pinned);
+  let used = 0;
   let lastFits = true;
   for (let i = messages.length - 1; i > 0; i--) {
     if (keep.has(i)) continue;
     const len = messages[i]!.content.length;
-    if (used + len > budget) {
+    if (used + len > room) {
       // The newest message alone doesn't fit: keep it, cut its middle.
       if (i === messages.length - 1) lastFits = false;
       break;
@@ -254,7 +271,7 @@ export function trimTurnMessages(messages: ChatTurn[], pinnedIndex: number, maxC
     }
     dropped = false;
     const msg = messages[i]!;
-    out.push(isLast && !lastFits ? { ...msg, content: cutMiddle(msg.content, Math.max(0, budget - used)) } : msg);
+    out.push(isLast && !lastFits ? { ...msg, content: cutMiddle(msg.content, Math.max(0, room - used)) } : msg);
   }
   return out;
 }

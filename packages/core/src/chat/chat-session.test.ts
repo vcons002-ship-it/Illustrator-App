@@ -360,6 +360,39 @@ describe("trimTurnMessages (the context a turn actually sends)", () => {
     expect(out.some((m) => m.content === TRIMMED_MARKER)).toBe(true);
   });
 
+  it("does NOT delete the conversation when the system prompt alone busts the budget", async () => {
+    // The reported failure, reproduced. A ~66,000-character system prompt against a 58,982-character
+    // allowance: every message was dropped, the marker went in its place, and the model reported to
+    // the reader that the conversation had evaporated — while the screen showed it right there.
+    // Dropping it achieved nothing, because the overflow was the system prompt.
+    const { trimTurnMessages } = await import("./chat-session.js");
+    const messages = [
+      { role: "system" as const, content: "S".repeat(66_000) },
+      { role: "user" as const, content: "first thing I said" },
+      { role: "assistant" as const, content: "my reply" },
+      { role: "user" as const, content: "second thing" },
+      { role: "assistant" as const, content: "second reply" },
+      { role: "user" as const, content: "What have we been talking about?" },
+    ];
+    const kept = trimTurnMessages(messages, 5, 58_982).map((m) => m.content);
+    expect(kept).toContain("first thing I said");
+    expect(kept).toContain("second reply");
+    expect(kept).toContain("What have we been talking about?");
+  });
+
+  it("still bounds the conversation to its share when the pinned content is oversized", async () => {
+    const { trimTurnMessages, MIN_HISTORY_SHARE } = await import("./chat-session.js");
+    const messages = [
+      { role: "system" as const, content: "S".repeat(50_000) },
+      ...Array.from({ length: 40 }, (_, i) => ({ role: "user" as const, content: `m${i}:${"x".repeat(500)}` })),
+    ];
+    const out = trimTurnMessages(messages, 1, 10_000);
+    const conversation = out.filter((m) => m.content.startsWith("m")).reduce((n, m) => n + m.content.length, 0);
+    // Bounded — a share of the budget, not everything — but emphatically not zero.
+    expect(conversation).toBeGreaterThan(1_000);
+    expect(conversation).toBeLessThanOrEqual(10_000 * MIN_HISTORY_SHARE + 600);
+  });
+
   it("leaves a turn that fits completely alone", async () => {
     const { trimTurnMessages } = await import("./chat-session.js");
     const messages = turnAfterFileRead(100);
