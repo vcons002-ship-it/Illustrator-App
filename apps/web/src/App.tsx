@@ -50,6 +50,8 @@ import {
   MAX_NOTE_CHARS,
   MAX_MEMORY_NOTES,
   loadSoul,
+  loadSoulEssence,
+  soulSourceFingerprint,
   saveSoul,
   loadSoulName,
   visualSoulNotes,
@@ -150,6 +152,7 @@ import {
   type Skill,
   type MemoryNote,
   type SoulNote,
+  type SoulEssence,
   type SoulKind,
   type SoulImage,
   resolveViewAs,
@@ -742,6 +745,8 @@ export function App() {
     buddyChat,
     buddyCancel,
     summarize,
+    refreshSoulEssence,
+    soulEssenceUpdate,
     googleConnect,
     planTask,
     scanInbox,
@@ -889,21 +894,73 @@ export function App() {
   const [selfSoulName, setSelfSoulName] = useState("");
   const [userSoulNotes, setUserSoulNotes] = useState<SoulNote[]>([]);
   const [userSoulName, setUserSoulName] = useState("");
+  const [selfSoulEssence, setSelfSoulEssence] = useState<SoulEssence | undefined>();
+  const [userSoulEssence, setUserSoulEssence] = useState<SoulEssence | undefined>();
   const [selfSoulImages, setSelfSoulImages] = useState<SoulImage[]>([]);
   const [userSoulImages, setUserSoulImages] = useState<SoulImage[]>([]);
+  const selfSoulNotesRef = useRef(selfSoulNotes);
+  const userSoulNotesRef = useRef(userSoulNotes);
+  selfSoulNotesRef.current = selfSoulNotes;
+  userSoulNotesRef.current = userSoulNotes;
+  const soulSaveWaiters = useRef<
+    Map<SoulKind, { fingerprint: string; timer: ReturnType<typeof setTimeout>; resolve: () => void }>
+  >(new Map());
   const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
   const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
+  const setSoulEssence = (kind: SoulKind, essence: SoulEssence | undefined) =>
+    (kind === "self" ? setSelfSoulEssence(essence) : setUserSoulEssence(essence));
   const setSoulImagesState = (kind: SoulKind, im: SoulImage[]) => (kind === "self" ? setSelfSoulImages(im) : setUserSoulImages(im));
+  useEffect(() => {
+    if (!soulEssenceUpdate) return;
+    const { kind, notes, essence } = soulEssenceUpdate;
+    if (essence.sourceFingerprint !== soulSourceFingerprint(notes)) return;
+    const pendingSave = soulSaveWaiters.current.get(kind);
+    if (pendingSave && pendingSave.fingerprint !== essence.sourceFingerprint) return;
+    const currentNotes = kind === "self" ? selfSoulNotesRef.current : userSoulNotesRef.current;
+    if (isRemoteClient) {
+      // Phone notes are authoritative only once mirrored by the desktop. Never let an older worker
+      // completion roll an optimistic or newly mirrored edit backward.
+      if (soulSourceFingerprint(currentNotes) !== essence.sourceFingerprint) return;
+      if (kind === "self") setSelfSoulEssence(essence);
+      else setUserSoulEssence(essence);
+      return;
+    }
+    // On desktop, re-read the store: a save can land between the worker's final check and this event.
+    void loadSoul(libraryStore, kind).then((storedNotes) => {
+      if (soulSourceFingerprint(storedNotes) !== essence.sourceFingerprint) return;
+      if (kind === "self") {
+        if (soulSourceFingerprint(currentNotes) !== essence.sourceFingerprint) {
+          setSelfSoulNotes(storedNotes);
+        }
+        setSelfSoulEssence(essence);
+      } else {
+        if (soulSourceFingerprint(currentNotes) !== essence.sourceFingerprint) {
+          setUserSoulNotes(storedNotes);
+        }
+        setUserSoulEssence(essence);
+      }
+    }).catch(() => {});
+  }, [
+    soulEssenceUpdate,
+    isRemoteClient,
+    libraryStore,
+  ]);
   /** Load a soul from the store into state. NOT on the phone: it owns no store, and reading its own
    * empty one would clobber the desktop's mirrored soul with blanks — the same guard as Memory/Tasks. */
   const refreshSoul = useCallback(
     async (kind: SoulKind) => {
       if (isRemoteClient) return;
-      await Promise.all([
-        loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
-        loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
-        loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
-      ]).catch(() => {});
+      try {
+        const notes = await loadSoul(libraryStore, kind);
+        setSoulNotes(kind, notes);
+        await Promise.all([
+          loadSoulEssence(libraryStore, kind, notes).then((essence) => setSoulEssence(kind, essence)),
+          loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
+          loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
+        ]);
+      } catch {
+        // The notes remain independently editable if one optional identity field failed to load.
+      }
     },
     [libraryStore, isRemoteClient],
   );
@@ -915,11 +972,27 @@ export function App() {
     [refreshSoul],
   );
   /** PHONE: adopt a soul pushed down by the desktop (which owns the store the assistant reads). */
-  const applySoul = useCallback((kind: SoulKind, name: string, notes: SoulNote[]) => {
+  const applySoul = useCallback((kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence) => {
+    const fingerprint = soulSourceFingerprint(notes);
+    const waiter = soulSaveWaiters.current.get(kind);
+    if (waiter && waiter.fingerprint !== fingerprint) return;
+    if (waiter?.fingerprint === fingerprint) {
+      clearTimeout(waiter.timer);
+      soulSaveWaiters.current.delete(kind);
+      waiter.resolve();
+    }
+    // Preserve an already mirrored essence only when an older frame omitted it and the source notes
+    // are unchanged. A supplied essence is authoritative, but is never adopted for different notes.
+    const nextEssence = (current: SoulEssence | undefined): SoulEssence | undefined => {
+      const candidate = essence ?? current;
+      return candidate?.sourceFingerprint === fingerprint ? candidate : undefined;
+    };
     if (kind === "self") {
+      setSelfSoulEssence(nextEssence);
       setSelfSoulName(name);
       setSelfSoulNotes(notes);
     } else {
+      setUserSoulEssence(nextEssence);
       setUserSoulName(name);
       setUserSoulNotes(notes);
     }
@@ -930,18 +1003,50 @@ export function App() {
    * closure — and this is display-only, so it must never be a reason to re-run a turn.
    */
   const identityRef = useRef<{ notes: string[]; names: string[] }>({ notes: [], names: [] });
+  const essenceIdentityText = [selfSoulEssence, userSoulEssence].flatMap((essence) =>
+    essence
+      ? [
+          ...Object.values(essence.facets).map((facet) => facet.text),
+          ...essence.exactAppearance.map((fact) => fact.text),
+          ...essence.exactPersonalityDirections.map((fact) => fact.text),
+        ].filter(Boolean)
+      : [],
+  );
   identityRef.current = {
-    notes: [...selfSoulNotes, ...userSoulNotes].map((n) => n.text),
+    notes: [
+      ...selfSoulNotes.map((note) => note.text),
+      ...userSoulNotes.map((note) => note.text),
+      ...essenceIdentityText,
+    ],
     names: [selfSoulName, userSoulName].filter(Boolean),
   };
   // Memoised: this is a mirror-push dependency, and a fresh object each render would re-send both
   // souls down the relay on every render.
   const souls = useMemo(
     () => ({
-      self: { name: selfSoulName, notes: selfSoulNotes },
-      user: { name: userSoulName, notes: userSoulNotes },
+      self: {
+        name: selfSoulName,
+        notes: selfSoulNotes,
+        ...(selfSoulEssence?.sourceFingerprint === soulSourceFingerprint(selfSoulNotes)
+          ? { essence: selfSoulEssence }
+          : {}),
+      },
+      user: {
+        name: userSoulName,
+        notes: userSoulNotes,
+        ...(userSoulEssence?.sourceFingerprint === soulSourceFingerprint(userSoulNotes)
+          ? { essence: userSoulEssence }
+          : {}),
+      },
     }),
-    [selfSoulName, selfSoulNotes, userSoulName, userSoulNotes],
+    [
+      selfSoulName,
+      selfSoulNotes,
+      selfSoulEssence,
+      userSoulName,
+      userSoulNotes,
+      userSoulEssence,
+    ],
   );
   // Load BOTH souls at startup, like memories/skills/tasks. They used to load only when the panel was
   // opened, which meant a desktop that never opened it mirrored an EMPTY soul to the phone — and the
@@ -2249,6 +2354,7 @@ export function App() {
     fetchingImageIds,
     fileFetchSeq,
     hostToolReqId,
+    requestSoulEssenceRefresh,
     onSettingsChange,
   } = useRemoteMirror({
     isRemoteClient,
@@ -2272,6 +2378,7 @@ export function App() {
     setSkills,
     applySoul,
     refreshSoul,
+    generateSoulEssence: refreshSoulEssence,
     setScheduled: setScheduledTasks,
     setBook,
     setBible,
@@ -3684,7 +3791,11 @@ export function App() {
                 role: "tool",
                 text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
               });
-              refreshMemories(); // shared memory — keep the Memory panel in sync with in-book chat edits
+              if (e.memory.about === "self" || e.memory.about === "user") {
+                void refreshSoul(e.memory.about);
+              } else {
+                refreshMemories(); // shared memory — keep the Memory panel in sync with in-book chat edits
+              }
             } else if (e.passages?.length) {
               // Slash-command /book results (model-driven searches consume these
               // silently as feedback; a direct command shows them to the reader).
@@ -3762,7 +3873,18 @@ export function App() {
         });
       }
     },
-    [book, chatMessages, chat, activePageIndex, activeParagraphId, isTechnical, allowSpoilers, hasSearchKey],
+    [
+      book,
+      chatMessages,
+      chat,
+      activePageIndex,
+      activeParagraphId,
+      isTechnical,
+      allowSpoilers,
+      hasSearchKey,
+      refreshMemories,
+      refreshSoul,
+    ],
   );
 
   const onApproveChatTool = useCallback(async () => {
@@ -6087,7 +6209,11 @@ export function App() {
             role: "tool",
             text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
           });
-          refreshMemories(); // keep the Memory panel + list current with the buddy's own edits
+          if (e.memory.about === "self" || e.memory.about === "user") {
+            void refreshSoul(e.memory.about);
+          } else {
+            refreshMemories(); // keep the Memory panel + list current with the buddy's own edits
+          }
         } else if (e.removed) {
           appendBuddy({ role: "tool", text: `🗑 Removed “${e.removed}” from the library.` });
         } else if (e.call.tool === "search_images") {
@@ -6101,7 +6227,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -6332,12 +6458,17 @@ export function App() {
     user: { name: "" },
   });
   const startStoryAsYouGo = useCallback(async () => {
-    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
-      loadSoulName(libraryStore, "self"),
-      loadSoul(libraryStore, "self"),
-      loadSoulName(libraryStore, "user"),
-      loadSoul(libraryStore, "user"),
-    ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    // A linked phone deliberately owns no Soul store; use the desktop-mirrored state there. On the
+    // desktop, read the authoritative store at click time so an edit made moments ago is included.
+    const soulSeed: [string, SoulNote[], string, SoulNote[]] = isRemoteClient
+      ? [selfSoulName, selfSoulNotes, userSoulName, userSoulNotes]
+      : await Promise.all([
+          loadSoulName(libraryStore, "self"),
+          loadSoul(libraryStore, "self"),
+          loadSoulName(libraryStore, "user"),
+          loadSoul(libraryStore, "user"),
+        ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    const [selfName, selfNotes, userName, userNotes] = soulSeed;
     // Only the notes that describe a LOOK. This used to join every note and cut at 200 characters,
     // so a soul full of "I'm drawn to problems where the obvious answer is wrong" became the played
     // character's visual description — and, at beat one, the ONLY thing the image model had to go on
@@ -6353,7 +6484,14 @@ export function App() {
     // becomes a Story-as-you-go once it's running; the setup can now offer to bring it along.
     setStorySoFar(storySoFarFromChat(buddyMessagesRef.current));
     setShowStorySetup(true);
-  }, [libraryStore]);
+  }, [
+    isRemoteClient,
+    libraryStore,
+    selfSoulName,
+    selfSoulNotes,
+    userSoulName,
+    userSoulNotes,
+  ]);
   // Dispatch the setup as a deterministic /story call (carrying the cast/roleplay as JSON) through the
   // normal buddy turn, with a friendly chat bubble instead of the raw payload.
   const startStoryFromSetup = useCallback(
@@ -6366,6 +6504,7 @@ export function App() {
         ? `${payload.soFar ? "✍️ Continuing our story" : "✍️ Starting a story"} — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`
         : "✍️ Continuing our story here — carrying this conversation into it.";
       const command = `/story ${JSON.stringify(payload)}`;
+      const label = `Story · ${payload.title || payload.opening.slice(0, 24) || "continued"}`.slice(0, 60);
       // Remember where we came from so exiting the story returns us there (history intact).
       storyReturnSessionRef.current = activeBuddyIdRef.current;
       // On a linked phone the session + engine live on the DESKTOP. Relay the story start the same way
@@ -6373,15 +6512,13 @@ export function App() {
       // opened book + each beat back): make a fresh session, then send the /story command into it. This
       // gives mobile the same clean dedicated chat as desktop, and the book/beats sync back via vrsync.
       if (isRemoteClient) {
-        sendAppSync({ type: "vrcmd:chatNew" });
-        sendAppSync({ type: "vrcmd:chatSend", text: command });
+        sendAppSync({ type: "vrcmd:storyStart", command, bubble, label });
         return;
       }
       // Open the story in a FRESH, dedicated book-only chat. A clean (empty) writer context is what
       // makes the model reliably reply with beat prose — which the worker then lands in the book —
       // instead of conversational filler inherited from whatever chat we were just in.
       const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
-      const label = `Story · ${payload.title || payload.opening.slice(0, 24) || "continued"}`.slice(0, 60);
       // The book doesn't exist yet (the worker creates it), so the binding is completed when it
       // arrives — see the story-chat effect.
       pendingStoryChat.current = sid;
@@ -6394,6 +6531,8 @@ export function App() {
       setActiveBuddyId(sid);
       activeBuddyIdRef.current = sid; // synchronous: the dispatch below must run against the new session
       setBuddyMessages([]);
+      createdFilesRef.current = [];
+      setFileLedger([]);
       void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
       void dispatchBuddyTurn([], command, bubble); // empty history → clean story context
     },
@@ -7075,6 +7214,7 @@ export function App() {
       return next;
     });
     setActiveBuddyId(id);
+    activeBuddyIdRef.current = id;
     setBuddyMessages([]);
     createdFilesRef.current = []; // a brand-new session starts with an empty file ledger
     setFileLedger([]);
@@ -7305,6 +7445,27 @@ export function App() {
         case "vrcmd:chatSend":
           void runBuddyTurnWithAttachments(c.text, c.attachments ?? []);
           break;
+        case "vrcmd:storyStart": {
+          // One relay frame owns both operations. Creating and sending as separate commands raced
+          // React's session state and could dispatch /story into the phone's previous chat.
+          storyReturnSessionRef.current = activeBuddyIdRef.current;
+          const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+          pendingStoryChat.current = sid;
+          resetBuddyView();
+          setBuddySessions((prev) => {
+            const next = [...prev, { id: sid, workingDir: "", label: c.label }];
+            persistSessions(next);
+            return next;
+          });
+          setActiveBuddyId(sid);
+          activeBuddyIdRef.current = sid;
+          setBuddyMessages([]);
+          createdFilesRef.current = [];
+          setFileLedger([]);
+          void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
+          void dispatchBuddyTurn([], c.command, c.bubble);
+          break;
+        }
         case "vrcmd:chatSwitch":
           onSwitchBuddySession(c.id);
           break;
@@ -7356,7 +7517,23 @@ export function App() {
           break;
       }
     },
-    [runBuddyTurnWithAttachments, onSwitchBuddySession, onNewBuddySession, onDeleteBuddySession, onRenameBuddySession, onClearBuddy, buddyCancel, onAllowBuddyAlways, onApproveBuddyPendingTool, onDismissBuddyPendingTool],
+    [
+      runBuddyTurnWithAttachments,
+      onSwitchBuddySession,
+      onNewBuddySession,
+      onDeleteBuddySession,
+      onRenameBuddySession,
+      onClearBuddy,
+      buddyCancel,
+      onAllowBuddyAlways,
+      onApproveBuddyPendingTool,
+      onDismissBuddyPendingTool,
+      resetBuddyView,
+      persistSessions,
+      setFileLedger,
+      libraryStore,
+      dispatchBuddyTurn,
+    ],
   );
   useEffect(() => {
     chatCommandRef.current = runChatCommand;
@@ -9236,6 +9413,7 @@ export function App() {
           variant={showSoul}
           name={showSoul === "self" ? selfSoulName : userSoulName}
           notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
+          essence={showSoul === "self" ? selfSoulEssence : userSoulEssence}
           images={showSoul === "self" ? selfSoulImages : userSoulImages}
           limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
           // On a linked phone the DESKTOP owns the store the assistant actually reads its identity
@@ -9244,12 +9422,43 @@ export function App() {
           onSaveNotes={async (notes) => {
             const kind = showSoul;
             if (isRemoteClient) {
+              setSoulEssence(kind, undefined);
               setSoulNotes(kind, notes); // optimistic; the desktop's push confirms it
-              sendAppSync({ type: "vrcmd:soulSave", kind, notes });
+              await new Promise<void>((resolve, reject) => {
+                const previous = soulSaveWaiters.current.get(kind);
+                if (previous) clearTimeout(previous.timer);
+                const timer = setTimeout(() => {
+                  soulSaveWaiters.current.delete(kind);
+                  reject(new Error("The desktop did not confirm the Soul update. Check the phone link and try again."));
+                }, 20_000);
+                soulSaveWaiters.current.set(kind, {
+                  fingerprint: soulSourceFingerprint(notes),
+                  timer,
+                  resolve,
+                });
+                sendAppSync({ type: "vrcmd:soulSave", kind, notes });
+              });
               return;
             }
             const saved = await saveSoul(libraryStore, kind, notes);
             setSoulNotes(kind, saved);
+            setSoulEssence(kind, undefined);
+          }}
+          onRefreshEssence={async () => {
+            const kind = showSoul;
+            const result = isRemoteClient
+              ? await requestSoulEssenceRefresh(kind)
+              : await refreshSoulEssence(kind);
+            if (result.error) throw new Error(result.error);
+            const currentNotes = kind === "self" ? selfSoulNotes : userSoulNotes;
+            if (
+              result.essence &&
+              result.essence.sourceFingerprint !== soulSourceFingerprint(currentNotes)
+            ) {
+              throw new Error("The Soul notes changed while the essence was being generated. Try again.");
+            }
+            setSoulEssence(kind, result.essence);
+            return result.essence;
           }}
           onSaveName={async (name) => {
             const kind = showSoul;

@@ -265,6 +265,9 @@ export type BuddyToolCall =
        * the one YOU (the assistant) play. "me and you" / "us" means the reader and the
        * assistant ARE the two characters. */
       roleplay?: { you?: string; me?: string };
+      /** App-owned marker that `characters` is the stored assistant + reader pair. It lets the
+       * opening writer use their Soul source notes, and is deliberately absent for custom casts. */
+      soulCast?: true;
       /** The conversation this story has already been growing in, when the reader chose to bring it
        * with them (the Story setup's "continue from this chat"). Set by the APP from the chat it was
        * started in — never written by the model. It is stored as the book's first beat, and the
@@ -3378,6 +3381,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(strArg(obj.style, MAX_NAME_CHARS) ? { style: strArg(obj.style, MAX_NAME_CHARS)! } : {}),
       ...(characters && characters.length ? { characters } : {}),
       ...(roleplay ? { roleplay } : {}),
+      ...(obj.soulCast === true ? { soulCast: true as const } : {}),
       ...(carried ? { soFar: carried } : {}),
     };
   }

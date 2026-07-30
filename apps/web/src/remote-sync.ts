@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, SoulKind, SoulNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, SoulEssence, SoulKind, SoulNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -202,9 +202,12 @@ export type SyncToPhone =
   | ({ type: "vrsync:chatLive" } & ChatLive)
   | { type: "vrsync:memories"; memories: MemoryNote[] } // the assistant's remembered notes → phone Memory panel
   | { type: "vrsync:skills"; skills: Skill[] } // the assistant's saved skills/playbooks → phone Skills panel
-  // The two identity souls → the phone's Soul panels. Notes + name only: the reference PHOTOS are
-  // base64 and would put megabytes into a snapshot frame, so they stay on the computer that owns them.
-  | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[] }
+  // The two identity souls → the phone's Soul panels. The derived essence is compact enough to ride
+  // with the notes; reference PHOTOS are base64, so they stay on the computer that owns them.
+  | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[]; essence?: SoulEssence }
+  // Result of an explicit Essence rebuild requested on the PHONE. The desktop owns both the Soul
+  // store and the text model, so the phone cannot correctly run this operation in its own worker.
+  | { type: "vrsync:soulEssenceResult"; requestId: number; kind: SoulKind; essence?: SoulEssence; error?: string }
   | { type: "vrsync:scheduled"; scheduled: ScheduledTask[] } // the desktop's scheduled tasks → phone ⏰ Scheduled panel
   | { type: "vrsync:vram"; vram?: EngineVram } // desktop GPU VRAM tick → phone status-bar indicator (frequent, lightweight; not folded into the heavier inventory push)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
@@ -244,6 +247,7 @@ export type CmdToDesktop =
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
   | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[] } // phone typed a message (+ files) → run the turn on the desktop
+  | { type: "vrcmd:storyStart"; command: string; bubble: string; label: string } // atomically create/bind a clean desktop story chat, then dispatch /story
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
   | { type: "vrcmd:chatClose"; id: string } // close (hide, KEEP history) — not a delete
   | { type: "vrcmd:chatReopen"; id: string } // bring a closed session back into the switcher
@@ -257,6 +261,7 @@ export type CmdToDesktop =
   // so a phone-local write would change nothing and be clobbered by the next vrsync:soul).
   | { type: "vrcmd:soulSave"; kind: SoulKind; notes: SoulNote[] }
   | { type: "vrcmd:soulName"; kind: SoulKind; name: string }
+  | { type: "vrcmd:soulEssenceRefresh"; requestId: number; kind: SoulKind }
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop

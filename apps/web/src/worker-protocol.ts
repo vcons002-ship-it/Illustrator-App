@@ -29,6 +29,9 @@ import type {
   TaskPlan,
   TaskSource,
   ToolCall,
+  SoulEssence,
+  SoulKind,
+  SoulNote,
   VideoModelFiles,
   VideoRenderParams,
   VisualBible,
@@ -187,6 +190,8 @@ export type MainToWorker =
   | { type: "agentToolResult"; callId: number; result: BuddyToolResultPayload }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
+  /** Rebuild one derived Soul Essence from its complete authoritative note list. */
+  | { type: "soulEssenceRefresh"; requestId: number; kind: SoulKind }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
   | { type: "googleConnect"; requestId: number; code: string; redirectUri: string; codeVerifier: string }
   /** Plan a task: research it, produce a structured TaskPlan, and persist it (worker has
@@ -286,6 +291,9 @@ export type MainToWorker =
       /** This turn is an UNATTENDED creative run: the tool loop refuses everything outside
        * CREATIVE_IDLE_TOOLS, and the prompt drops the workspace/desktop capabilities entirely. */
       creativeIdle?: boolean;
+      /** This conversation is the dedicated Creative window. It remains true for reader-authored
+       * turns there, while `creativeIdle` only marks the unattended run itself. */
+      creativeSession?: boolean;
     };
 
 export type WorkerToMain =
@@ -366,7 +374,7 @@ export type WorkerToMain =
       passages?: BookPassage[];
       /** lookup_bible detail (slash commands render this in the panel). */
       bibleDetail?: string;
-      memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** A grounded analyze_data result table (rendered inline in the chat). */
       analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
       error?: string;
@@ -400,7 +408,7 @@ export type WorkerToMain =
       removed?: string;
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
-      memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       error?: string;
@@ -468,6 +476,10 @@ export type WorkerToMain =
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */
   | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
+  /** Reply to `soulEssenceRefresh`. */
+  | { type: "soulEssenceRefreshed"; requestId: number; ok: boolean; essence?: SoulEssence; error?: string }
+  /** A current derived essence was persisted (automatic or manual), with its exact source revision. */
+  | { type: "soulEssenceUpdated"; kind: SoulKind; notes: SoulNote[]; essence: SoulEssence }
   | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }
   | { type: "planProgress"; requestId: number; phase: "research" | "plan"; note?: string }
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }

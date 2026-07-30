@@ -206,8 +206,8 @@ describe("storyStartBeats", () => {
     expect(
       storyStartBeats("Reader: The tower shuddered around them.", soFar, { mode: "roleplay" }),
     ).toEqual([
-      "Mara drew the old sword, steel whispering against leather.",
-      "“Run,” Mara told Vex as the gate began to buckle.",
+      "I draw my sword.\n\nMara drew the old sword, steel whispering against leather.",
+      "I tell Vex to run.\n\n“Run,” Mara told Vex as the gate began to buckle.",
       "The tower shuddered around them.",
     ]);
   });
@@ -218,14 +218,17 @@ describe("storyStartBeats", () => {
     ).toEqual(["I step through the gate."]);
   });
 
-  it("lets generated prose replace an unanswered raw steer instead of duplicating it", () => {
+  it("preserves an unanswered raw steer even when a generated continuation follows", () => {
     expect(
       storyStartBeats(
         "Mara stepped through the gate into a wash of winter light.",
         "Reader: I step through the gate.",
         { mode: "roleplay" },
       ),
-    ).toEqual(["Mara stepped through the gate into a wash of winter light."]);
+    ).toEqual([
+      "I step through the gate.",
+      "Mara stepped through the gate into a wash of winter light.",
+    ]);
   });
 });
 

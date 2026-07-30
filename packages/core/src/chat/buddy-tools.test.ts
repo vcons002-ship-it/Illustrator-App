@@ -1696,6 +1696,7 @@ describe("story as you go tools", () => {
           style: "storybook illustration",
           characters: ["Mira", { name: "Toll", description: "tall, salt-and-pepper beard" }, "", { name: "" }],
           roleplay: { you: "Mira", me: "Toll" },
+          soulCast: true,
         }),
       ),
     ).toEqual({
@@ -1705,7 +1706,12 @@ describe("story as you go tools", () => {
       style: "storybook illustration",
       characters: [{ name: "Mira" }, { name: "Toll", description: "tall, salt-and-pepper beard" }],
       roleplay: { you: "Mira", me: "Toll" },
+      soulCast: true,
     });
+    // Only literal true survives parsing; ordinary/custom story calls do not gain Soul access.
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "start_story", opening: "A custom tale.", soulCast: false })),
+    ).not.toHaveProperty("soulCast");
     // No opening → not a valid start.
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
   });
