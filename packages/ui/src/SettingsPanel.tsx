@@ -270,6 +270,19 @@ export interface ReaderSettings {
    */
   allowMature?: boolean;
   /**
+   * Which voice reads replies aloud when the chat's 🔊 toggle is on. The Web Speech API exposes no
+   * gender field, so this is matched against the installed voices BY NAME (see `pickVoice`) — an
+   * inference, and the reason the reader can also leave it on the system default.
+   */
+  voiceGender?: "feminine" | "masculine" | "system";
+  /**
+   * Which engine speaks. "system" uses the voices the device already has (instant, offline, and as
+   * good or bad as the OS shipped). "natural" downloads an open-source model (Kokoro-82M,
+   * Apache-2.0, ~80MB, cached after the first fetch) that sounds the same everywhere and states its
+   * voices' gender, so the choice above stops being a guess. Off by default — it costs a download.
+   */
+  voiceEngine?: "system" | "natural";
+  /**
    * Desktop only, OFF by default: let the chat assistant propose shell commands to
    * run in its workspace (install deps, run tests, execute code it wrote). Even
    * when on, EVERY command is shown and must be approved before it runs. Enables
@@ -1660,6 +1673,44 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
+          </Group>
+
+          <Group
+            q={query}
+            order={52}
+            title="🔊 Spoken replies"
+            keywords="voice speech speak aloud tts read out loud female male feminine masculine narrator"
+          >
+          <label style={rowStyle}>
+            <span>Reading voice</span>
+            <select
+              value={value.voiceGender ?? "feminine"}
+              onChange={(e) => set({ voiceGender: e.target.value as "feminine" | "masculine" | "system" })}
+            >
+              <option value="feminine">Feminine</option>
+              <option value="masculine">Masculine</option>
+              <option value="system">System default</option>
+            </select>
+          </label>
+          <label style={rowStyle}>
+            <span>Voice quality</span>
+            <select
+              value={value.voiceEngine ?? "system"}
+              onChange={(e) => set({ voiceEngine: e.target.value as "system" | "natural" })}
+            >
+              <option value="system">Your device's voices (instant)</option>
+              <option value="natural">Natural voice — downloads once (~80MB)</option>
+            </select>
+          </label>
+          <span style={{ opacity: 0.55, fontSize: 11 }}>
+            Your device's voices work offline straight away, but they're whatever your operating
+            system happens to ship — and most don't say whether they're male or female, so the choice
+            above has to be matched by name and can miss (Android especially). The natural voice is
+            an open-source model (Kokoro-82M, Apache-2.0) that runs on this device, sounds the same
+            on your computer and your phone, and states each voice's gender so the setting above is
+            exact. It downloads about 80MB the first time you use it and is cached after that; if it
+            can't be fetched, replies are read in your device's voice instead and the chat says so.
+          </span>
           </Group>
 
           <Group
