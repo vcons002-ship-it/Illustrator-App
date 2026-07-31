@@ -2462,7 +2462,7 @@ function buildAppearanceAxis(slot: string): string {
 }
 
 const NON_APPEARANCE_LOOK_IDIOMS =
-  /\b(?:(?:keep(?:s|ing)?|kept|has|have|had)\s+)?(?:an?|one|the)?\s*eye\s+(?:on|for)\b|\btall order\b/gi;
+  /\b(?:(?:keep(?:s|ing)?|kept|has|have|had)\s+)?(?:an?|one|the)?\s*eye\s+(?:on|for)\b|\bfresh(?:\s+pair\s+of)?\s+eyes?\b|\b(?:through|in|from)\s+the\s+eyes?\s+of\b|\btall order\b/gi;
 
 function isLookNote(text: string): boolean {
   const literal = text.replace(NON_APPEARANCE_LOOK_IDIOMS, " ").replace(/\s+/g, " ").trim();
@@ -2568,6 +2568,27 @@ const EYE_COLOR_WITH_ANCHOR = new RegExp(
   `\\b${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?(?:\\s+(?:almond-shaped|round|narrow|wide-set|close-set|deep-set|large|small|hooded))?\\s+(?:eyes?|irises?|pupils?)\\b|\\b${APPEARANCE_COLOR}[- ]eyed\\b`,
   "i",
 );
+const EYE_DETAIL_WORDS =
+  /\b(?:textures?|patterns?|flecks?|specks?|streaks?|rings?|striations?|veins?|mottling|marbling|flecked|speckled|streaked|ringed|striated|veined)\b/i;
+const EYE_APPEARANCE_ANALOGY =
+  /\b(?:as if|as though|resembling|reminiscent of|evoking)\b/i;
+// This natural-light comparison is a deliberate, stable part of the source appearance rather than
+// the lighting of a particular scene. Keep this family narrow: ordinary neon, moonlight, gaze, and
+// expression comparisons must continue through the shared transient-detail filter.
+const SOURCE_EXACT_EYE_COMPARISON =
+  /\b(?:as if|as though)\b[^.;]*\bsunlight\b[^.;]*\bfiltering\s+through\b[^.;]*\b(?:forest|canopy|leaves|foliage)\b/i;
+const TRANSIENT_EYE_ANALOGY_STATE =
+  /\b(?:narrow(?:s|ed|ing)|widen(?:s|ed|ing)?|glar(?:e|es|ed|ing)|smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|frown(?:s|ed|ing)?|scowl(?:s|ed|ing)?|cry(?:ing|ies|ied)?|tears?|angry|anger|rage|sad(?:ness)?|happy|happiness|fear(?:ful)?|surpris(?:e|ed)|worried|anxious|excited)\b/i;
+const EYE_COLOR_QUALIFIER =
+  "(?:deep|dark|light|pale|bright|vivid|rich|mossy|forest|emerald|sea|ocean|steel|stormy|warm|cool|muted|soft|icy|smoky|smokey|dusky|clear|luminous)";
+const EYE_SHAPE_OR_SIZE =
+  /\b(?:almond-shaped|round|narrow|wide-set|close-set|deep-set|large|small|hooded)\b/i;
+const SUPPLEMENTAL_EYE_COLOR_ONLY =
+  /^(?:aquamarine|burgundy|cerulean|chartreuse|cobalt|cyan|indigo|jade|magenta|maroon|navy|ochre|sapphire|ultramarine)$/i;
+const QUALIFIED_EYE_COLOR_ONLY = new RegExp(
+  `^\\s*(?:(?:a|an|the)\\s+)?(?:${EYE_COLOR_QUALIFIER}\\s*,?\\s*){0,3}${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?\\s*[.!]?\\s*$`,
+  "i",
+);
 const SKIN_COLOR_WITH_ANCHOR = new RegExp(
   `\\b${APPEARANCE_COLOR}(?:[- ]${APPEARANCE_COLOR})?\\s+(?:skin|complexion)\\b`,
   "i",
@@ -2585,6 +2606,144 @@ function isStandaloneAppearanceDescriptor(text: string): boolean {
 
 function exactMatch(text: string, pattern: RegExp): string {
   return text.match(pattern)?.[0]?.trim() ?? "";
+}
+
+function isSupplementalEyeColor(text: string): boolean {
+  const candidate = text.replace(/^(?:a|an|the)\s+/i, "").trim();
+  return SUPPLEMENTAL_EYE_COLOR_ONLY.test(candidate);
+}
+
+/** A real iris base color, excluding colors that only qualify flecks, rings, or texture. */
+function exactEyeBaseColor(text: string, labelledSlot: string): string {
+  const anchored = text.match(EYE_COLOR_WITH_ANCHOR);
+  if (anchored?.[0]) {
+    const before = text.slice(0, anchored.index ?? 0);
+    const qualifiers = before.match(
+      new RegExp(`((?:${EYE_COLOR_QUALIFIER}\\s*,?\\s*){1,3})$`, "i"),
+    )?.[1] ?? "";
+    return `${qualifiers}${anchored[0]}`.trim();
+  }
+  const eyeGrounded =
+    labelledSlot.startsWith("eyes.") ||
+    /\b(?:eyes?|irises?|pupils?)\b/i.test(text);
+  if (!eyeGrounded) return "";
+
+  const standalone = text.replace(/^(?:a|an|the)\s+/i, "").replace(/[.!\s]+$/, "");
+  if (labelledSlot.startsWith("eyes.") && SUPPLEMENTAL_EYE_COLOR_ONLY.test(standalone)) {
+    return standalone;
+  }
+
+  if (labelledSlot.startsWith("eyes.") && EYE_DETAIL_WORDS.test(text)) {
+    const beforeDetail = text.match(/^(.+?)\s*,?\s+with\s+(.+)$/i);
+    const candidate = beforeDetail?.[1]?.trim() ?? "";
+    const detail = beforeDetail?.[2]?.trim() ?? "";
+    if (
+      candidate &&
+      detail &&
+      EYE_DETAIL_WORDS.test(detail) &&
+      !EYE_DETAIL_WORDS.test(candidate) &&
+      !EYE_SHAPE_OR_SIZE.test(candidate) &&
+      (labelledSlot === "eyes.color" || isSupplementalEyeColor(candidate))
+    ) {
+      return candidate.replace(/^(?:a|an|the)\s+/i, "").trim();
+    }
+  }
+
+  const colors = [...text.matchAll(new RegExp(`\\b${APPEARANCE_COLOR}\\b`, "gi"))];
+  for (const match of colors) {
+    const color = match[0]!;
+    const index = match.index ?? 0;
+    const before = text.slice(0, index);
+    const after = text.slice(index + color.length);
+    const precedingWith = before.match(/\bwith\b[^.;]*$/i)?.[0] ?? "";
+    const insideWithDetail =
+      !!precedingWith &&
+      EYE_DETAIL_WORDS.test(`${precedingWith}${color}${after}`);
+    const qualifiesDetail =
+      insideWithDetail ||
+      /^\s*(?:-(?:flecked|speckled|streaked|ringed|striated|veined)\b|[- ]?(?:(?:colou?red|tinted)\s+)?(?:fine\s+|tiny\s+|subtle\s+|bright\s+|iridescent\s+)?(?:textures?|patterns?|flecks?|specks?|streaks?|rings?|striations?|veins?|mottling|marbling)\b)/i.test(
+        after,
+      ) ||
+      /\b(?:flecked|speckled|streaked|ringed|striated|veined)\s+(?:with|in)\s*$/i.test(
+        before,
+      );
+    if (qualifiesDetail) continue;
+
+    // An explicit Eye color field is authoritative and can contain punctuation or uncommon
+    // modifiers that are still part of the source-exact color phrase.
+    if (
+      labelledSlot === "eyes.color" &&
+      !EYE_DETAIL_WORDS.test(text) &&
+      !EYE_APPEARANCE_ANALOGY.test(text)
+    ) {
+      return text.trim();
+    }
+    const qualifiers = before.match(
+      new RegExp(`((?:${EYE_COLOR_QUALIFIER}\\s*,?\\s*){1,3})$`, "i"),
+    )?.[1] ?? "";
+    return `${qualifiers}${color}`.trim();
+  }
+  return "";
+}
+
+/** Source-exact iris texture/pattern wording, without treating its accent colors as base color. */
+function exactEyeDetail(text: string): string {
+  if (!EYE_DETAIL_WORDS.test(text) && !EYE_APPEARANCE_ANALOGY.test(text)) return "";
+  const patternedWithAccent = text.match(
+    /\b((?:flecked|speckled|streaked|ringed|striated|veined)\s+(?:with|in)\s+.+)$/i,
+  )?.[1]?.trim();
+  const withDetail = text.match(/^(.+?)\bwith\s+(.+)$/i);
+  const beforeWith = withDetail?.[1]?.trim() ?? "";
+  const afterWith = withDetail?.[2]?.trim() ?? "";
+  const afterPossession = text.match(
+    /\b(?:have|has|show|shows|showing|contain|contains|containing|feature|features|featuring)\s+(.+)$/i,
+  )?.[1]?.trim();
+  const hyphenated = text.match(
+    new RegExp(
+      `\\b(?:${APPEARANCE_COLOR})[- ](?:flecked|speckled|streaked|ringed|striated|veined)\\b`,
+      "i",
+    ),
+  )?.[0]?.trim();
+  const detail =
+    patternedWithAccent ||
+    (afterWith && EYE_DETAIL_WORDS.test(afterWith) && !EYE_DETAIL_WORDS.test(beforeWith)
+      ? afterWith
+      : afterPossession && EYE_DETAIL_WORDS.test(afterPossession)
+        ? afterPossession
+        : hyphenated || text.trim());
+  return detail.replace(/[.;,\s]+$/, "").trim();
+}
+
+function eyeShapeSource(text: string): string {
+  const analogy = text.match(EYE_APPEARANCE_ANALOGY);
+  const withDetail = text.match(/\bwith\b/i);
+  const withStartsDetail =
+    withDetail?.index !== undefined &&
+    (
+      EYE_DETAIL_WORDS.test(text.slice(withDetail.index)) ||
+      EYE_APPEARANCE_ANALOGY.test(text.slice(withDetail.index))
+    );
+  const cutoffs = [
+    analogy?.index,
+    withStartsDetail ? withDetail?.index : undefined,
+  ].filter((index): index is number => index !== undefined);
+  return cutoffs.length > 0 ? text.slice(0, Math.min(...cutoffs)) : text;
+}
+
+function exactEyeShape(text: string): string {
+  const source = eyeShapeSource(text);
+  const detailModifier = new RegExp(
+    "^[\\s,/-]*(?:(?:[\\p{L}-]+)[\\s,/-]+){0,2}" +
+      "(?:textures?|patterns?|flecks?|specks?|streaks?|rings?|striations?|veins?|mottling|marbling)\\b",
+    "iu",
+  );
+  const matches = source.matchAll(new RegExp(EYE_SHAPE_OR_SIZE.source, "gi"));
+  for (const match of matches) {
+    const shape = match[0];
+    const after = source.slice((match.index ?? 0) + shape.length);
+    if (!detailModifier.test(after)) return shape.trim();
+  }
+  return "";
 }
 
 function appearanceSlotPriority(slot: string): number {
@@ -2802,12 +2961,28 @@ function appearanceContributions(
       /\bright(?:\s+eye)?\b/i.test(eyeContext) ? "right" :
       pairedEyeSide ||
       "";
-    const color = exactMatch(value, EYE_COLOR_WITH_ANCHOR) ||
-      (labelledSlot.startsWith("eyes.") ? exactMatch(value, COLOR_ONLY) : "");
-    const shape = exactMatch(value, /\b(?:almond-shaped|round|narrow|wide-set|close-set|deep-set|large|small|hooded)\b/i);
+    const color = exactEyeBaseColor(value, labelledSlot);
+    const shape = exactEyeShape(value);
+    const extractedDetail = exactEyeDetail(value);
+    const detail =
+      extractedDetail &&
+      !color &&
+      !shape &&
+      labelledSlot.startsWith("eyes.") &&
+      /^.+?\bwith\s+.+$/i.test(value)
+        ? value.replace(/[.;,\s]+$/, "").trim()
+        : extractedDetail;
     if (color) add(`eyes.color${side ? `.${side}` : ""}`, color);
     if (shape) add(`eyes.shape${side ? `.${side}` : ""}`, shape);
-    if (!color && !shape) add(labelledSlot.startsWith("eyes.") ? labelledSlot : `eyes.other${side ? `.${side}` : ""}`);
+    if (detail) {
+      add(
+        `eyes.detail${side ? `.${side}` : ""}`,
+        detail,
+        true,
+        `eyes:detail:${side}:${appearanceDetailIdentity(detail)}`,
+      );
+    }
+    if (!color && !shape && !detail) add(labelledSlot.startsWith("eyes.") ? labelledSlot : `eyes.other${side ? `.${side}` : ""}`);
   }
 
   const skinMention =
@@ -3008,14 +3183,58 @@ function appearanceContributions(
   return contributions;
 }
 
-function splitAppearanceAtoms(value: string, forceAppearance: boolean): string[] {
-  const durable = stripTransientCharacterDetailsExact(value).trim();
+function isAtomicNaturalEyeDetail(text: string): boolean {
+  return (
+    (EYE_DETAIL_WORDS.test(text) || EYE_APPEARANCE_ANALOGY.test(text)) &&
+    /\b(?:eyes?|irises?|pupils?)\b(?:(?:\s*,[^.;]*,)?\s*)(?:with|have|has|showing|featuring|containing)\b/i.test(
+      text,
+    )
+  );
+}
+
+function stripNonDurableEyeAnalogy(text: string): string {
+  const analogy = text.match(EYE_APPEARANCE_ANALOGY);
+  if (analogy?.index === undefined) return text;
+  const suffix = text.slice(analogy.index);
+  if (
+    !TRANSIENT_EYE_ANALOGY_STATE.test(suffix) &&
+    !NONVISUAL_SOUL_WORDS.test(suffix)
+  ) return text;
+  return text.slice(0, analogy.index).replace(/[,\s]+$/, "").trim();
+}
+
+function splitAppearanceAtoms(value: string, forceAppearance: boolean, label = ""): string[] {
+  const labelledSlot = label ? appearanceFieldSlot(label) : "";
+  const eyeGrounded =
+    labelledSlot.startsWith("eyes.") ||
+    /\b(?:eyes?|irises?|pupils?)\b/i.test(value);
+  const stableValue = eyeGrounded ? stripNonDurableEyeAnalogy(value) : value;
+  // In a Soul appearance note, an explicit comparison can be part of the source-exact visual
+  // description ("amber flecks, as if catching forest-filtered sunlight"). Preserve that richer
+  // appearance wording here; the shared Visual-Bible sanitizer still removes actual scene lighting.
+  const preserveEyeAnalogy =
+    eyeGrounded &&
+    EYE_DETAIL_WORDS.test(stableValue) &&
+    SOURCE_EXACT_EYE_COMPARISON.test(stableValue);
+  const durable = (
+    preserveEyeAnalogy
+      ? stableValue.trim()
+      : stripTransientCharacterDetailsExact(stableValue).trim()
+  );
   if (!durable) return [];
   let parts = durable
     .split(/\s*(?:;|\r?\n)\s*|(?<=[.!?])\s+/)
     .map((part) => part.trim())
     .filter(Boolean);
   parts = parts.flatMap((part) => {
+    const atomicEyeDescription =
+      labelledSlot === "eyes.color" ||
+      (labelledSlot.startsWith("eyes.") &&
+        (EYE_DETAIL_WORDS.test(part) ||
+          EYE_APPEARANCE_ANALOGY.test(part) ||
+          QUALIFIED_EYE_COLOR_ONLY.test(part))) ||
+      isAtomicNaturalEyeDetail(part);
+    if (atomicEyeDescription) return [part];
     const pieces = part.split(/\s*,\s*/).map((piece) => piece.trim()).filter(Boolean);
     if (pieces.length < 2) return [part];
     if (buildDescriptionMatches(part).length > 1) return [part];
@@ -3029,6 +3248,17 @@ function splitAppearanceAtoms(value: string, forceAppearance: boolean): string[]
   });
   const splitConjunctions: string[] = [];
   for (const part of parts) {
+    if (
+      labelledSlot === "eyes.color" ||
+      (labelledSlot.startsWith("eyes.") &&
+        (EYE_DETAIL_WORDS.test(part) ||
+          EYE_APPEARANCE_ANALOGY.test(part) ||
+          QUALIFIED_EYE_COLOR_ONLY.test(part))) ||
+      isAtomicNaturalEyeDetail(part)
+    ) {
+      splitConjunctions.push(part);
+      continue;
+    }
     const match = part.match(/^(.+?)\s+(?:and|but|while)\s+(.+)$/i);
     const left = match?.[1]?.trim() ?? "";
     const right = match?.[2]?.trim() ?? "";
@@ -3215,7 +3445,7 @@ function analyseAppearanceNote(
         ? "remove"
         : "set");
     const positiveSegment = segment.replace(/\s*,\s*not\b.*$/i, "").trim();
-    const atoms = splitAppearanceAtoms(positiveSegment, forceAppearance || !!label);
+    const atoms = splitAppearanceAtoms(positiveSegment, forceAppearance || !!label, label);
     let found = false;
     for (const atom of atoms) {
       const visual =
@@ -3537,8 +3767,12 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
     handledOrigins.add(fact.originKey);
     const activeGroup = currentByOrigin.get(fact.originKey) ?? [fact];
     const completeGroup = contributionsByOrigin.get(fact.originKey) ?? [];
+    const separatesEyeColorAndDetail =
+      completeGroup.some((candidate) => candidate.slot.startsWith("eyes.color")) &&
+      completeGroup.some((candidate) => candidate.slot.startsWith("eyes.detail"));
     if (
       completeGroup.length > 0 &&
+      !separatesEyeColorAndDetail &&
       completeGroup.every((candidate) => currentSet.has(candidate))
     ) {
       const outputFact = { ...fact, text: fact.originText };
