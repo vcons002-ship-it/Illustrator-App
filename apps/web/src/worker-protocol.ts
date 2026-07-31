@@ -190,8 +190,16 @@ export type MainToWorker =
   | { type: "agentToolResult"; callId: number; result: BuddyToolResultPayload }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
-  /** Rebuild one derived Soul Essence from its complete authoritative note list. */
-  | { type: "soulEssenceRefresh"; requestId: number; kind: SoulKind }
+  /** Rebuild one derived Soul Essence from its complete authoritative note list. Background jobs
+   * retain normal retry cooldowns, may use multiple resumable passes, and are discarded if the
+   * authoritative revision no longer matches `expectedFingerprint`. */
+  | {
+      type: "soulEssenceRefresh";
+      requestId: number;
+      kind: SoulKind;
+      background?: boolean;
+      expectedFingerprint?: string;
+    }
   /** Cancel that exact manual rebuild without touching ordinary chat or the authoritative notes. */
   | { type: "soulEssenceCancel"; requestId: number }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */

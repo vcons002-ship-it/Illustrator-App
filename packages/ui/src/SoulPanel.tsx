@@ -3,6 +3,8 @@ import {
   MAX_SOUL_IMAGES,
   renderSoulAppearanceFact,
   SOUL_ESSENCE_FACETS,
+  soulEssenceViewForNotes,
+  soulSourceFingerprint,
   type SoulEssence,
   type SoulImage,
   type SoulNote,
@@ -177,6 +179,8 @@ export const SoulPanel = memo(function SoulPanel({
     // Cancel the local row edit rather than applying its now-stale array index to a different note.
     setEditingIndex(undefined);
     setEditText("");
+    setEssenceNotice("");
+    setEssenceError("");
   }, [notes]);
 
   const sorted = useMemo(() => soulNoteRows(list), [list]);
@@ -184,6 +188,18 @@ export const SoulPanel = memo(function SoulPanel({
   const essenceBusy = essenceSubmitting || Boolean(essenceProgress?.active);
   const operationBusy = savingBusy || essenceBusy;
   const activeStartedAt = essenceProgress?.startedAt ?? essenceStartedAt;
+  const essenceIsStale = Boolean(
+    shownEssence && shownEssence.sourceFingerprint !== soulSourceFingerprint(list),
+  );
+  // A stale synthesis remains useful as a personality baseline while its replacement is queued,
+  // but old exact identity facts must never survive a source edit. Re-project those deterministic
+  // fields from the current authoritative notes for both display and any in-flight refresh state.
+  const visibleEssence = useMemo(
+    () => shownEssence && essenceIsStale
+      ? soulEssenceViewForNotes(shownEssence, list)
+      : shownEssence,
+    [shownEssence, list, essenceIsStale],
+  );
 
   useEffect(() => {
     if (!essenceBusy || activeStartedAt === undefined) return;
@@ -198,8 +214,9 @@ export const SoulPanel = memo(function SoulPanel({
     try {
       await onSaveNotes(next);
       setList(next);
-      // A source-note change makes the previously distilled identity stale.
-      setShownEssence(undefined);
+      // Keep the previous synthesis visible and active while its idle replacement is prepared.
+      // `visibleEssence` immediately re-projects exact identity from `next`, so only the generalized
+      // synthesis/support remain stale during that short window.
       setEssenceNotice("");
       setEssenceError("");
     } catch (e) {
@@ -260,8 +277,10 @@ export const SoulPanel = memo(function SoulPanel({
     setEssenceError("");
     try {
       const generated = await onRefreshEssence();
-      setShownEssence(generated);
-      if (generated) setEssenceNotice("Everyday essence generated and saved.");
+      if (generated) {
+        setShownEssence(generated);
+        setEssenceNotice("Everyday essence generated and saved.");
+      }
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
         setEssenceNotice("Generation cancelled.");
@@ -342,13 +361,18 @@ export const SoulPanel = memo(function SoulPanel({
   const essenceNoticeIsCancellation =
     essenceNotice.startsWith("Cancellation") || essenceNotice.startsWith("Generation cancelled");
   const cancellationNotice = essenceBusy && essenceNoticeIsCancellation;
+  const staleEssenceNotice = essenceIsStale
+    ? list.length > 0
+      ? "Previous Essence remains active and will refresh automatically when the text model is idle."
+      : "Previous Essence is retained, but there are no Soul items to regenerate it from."
+    : "";
   const essenceStatusText = essenceError
     ? essenceError
     : cancellationNotice
       ? essenceNotice
       : essenceProgress?.message?.trim() ||
         (progressPhase ? ESSENCE_PHASE_LABELS[progressPhase] : "") ||
-        (essenceBusy ? "Starting Soul integration\u2026" : essenceNotice);
+        (essenceBusy ? "Starting Soul integration\u2026" : essenceNotice || staleEssenceNotice);
   const essenceStatusIsError = Boolean(essenceError) || progressPhase === "error";
   const essenceStatusIsComplete =
     !essenceBusy &&
@@ -495,9 +519,9 @@ export const SoulPanel = memo(function SoulPanel({
             </div>
           ) : null}
 
-          {shownEssence ? (
+          {visibleEssence ? (
             <>
-              {shownEssence.generalizedEssence.text ? (
+              {visibleEssence.generalizedEssence.text ? (
                 <p
                   aria-label="Generalized everyday essence"
                   style={{
@@ -510,14 +534,14 @@ export const SoulPanel = memo(function SoulPanel({
                     background: "rgba(130,170,255,0.1)",
                   }}
                 >
-                  {shownEssence.generalizedEssence.text}
+                  {visibleEssence.generalizedEssence.text}
                 </p>
               ) : (
                 <span style={{ fontSize: 11, opacity: 0.58 }}>
                   No generalized personality traits; exact identity details remain below.
                 </span>
               )}
-              {shownEssence.exactPersonalityDirections.length ? (
+              {visibleEssence.exactPersonalityDirections.length ? (
                 <div
                   style={{
                     display: "flex",
@@ -531,7 +555,7 @@ export const SoulPanel = memo(function SoulPanel({
                     Source-exact personality directions
                   </strong>
                   <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
-                    {shownEssence.exactPersonalityDirections.map((fact, index) => (
+                    {visibleEssence.exactPersonalityDirections.map((fact, index) => (
                       <li key={`${fact.sourceIds.join("-")}-${index}`}>{fact.text}</li>
                     ))}
                   </ul>
@@ -547,9 +571,9 @@ export const SoulPanel = memo(function SoulPanel({
                 }}
               >
                 <strong style={{ fontSize: 11, opacity: 0.78 }}>Exact physical appearance</strong>
-                {shownEssence.exactAppearance.length ? (
+                {visibleEssence.exactAppearance.length ? (
                   <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
-                    {shownEssence.exactAppearance.map((fact, index) => (
+                    {visibleEssence.exactAppearance.map((fact, index) => (
                       <li key={`${fact.sourceIds.join("-")}-${index}`}>
                         {renderSoulAppearanceFact(fact)}
                       </li>
@@ -576,7 +600,7 @@ export const SoulPanel = memo(function SoulPanel({
                   {SOUL_ESSENCE_FACETS
                     .filter((key) => key !== "personalityDirections")
                     .map((key) => {
-                    const text = shownEssence.facets[key].text.trim();
+                    const text = visibleEssence.facets[key].text.trim();
                     return text ? (
                       <div key={key}>
                         <dt style={{ fontSize: 11, fontWeight: 600, opacity: 0.78 }}>
@@ -592,7 +616,7 @@ export const SoulPanel = memo(function SoulPanel({
           ) : (
             <span style={{ fontSize: 11, opacity: 0.58 }}>
               {list.length
-                ? "Generate the generalized everyday essence now (or regenerate once after an app update). Until then, ordinary chat uses only source-exact identity details—not the raw interests/thought list."
+                ? "The generalized everyday essence will generate automatically when the text model is idle; use Generate to build it now. Until then, ordinary chat uses only source-exact identity details—not the raw interests/thought list."
                 : "Add source notes before generating an essence."}
             </span>
           )}
