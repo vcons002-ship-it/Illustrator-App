@@ -2238,7 +2238,7 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
  * worn, and colour — the things an image model can draw.
  */
 const LOOK_WORDS =
-  /\b(appearance|physical\s+(?:description|appearance|traits?|features?|build)|looks?\s+like|physique|hair(?:ed)?|eyes?|eyed|irises?|pupils?|eyebrows?|brows?|eyelashes?|beard|moustache|stubble|skin(?:ned)?|complexion|freckles?|scars?|tattoos?|vitiligo|facial\s+features?|height|weight|weighs?|tall|slim|slender|stocky|wiry|heavyset|muscular|athletic|petite|curvy|plump|gaunt|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|jaw|cheekbones?|nose|lips|fingers?|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|necklace|bracelet|earrings?|braid|ponytail|shaved|bald|curly|wavy|blonde?|brunette|auburn|ginger|tanned|freckled)\b/i;
+  /\b(appearance|physical\s+(?:description|appearance|traits?|features?|build)|looks?\s+like|physique|hair(?:ed)?|eyes?|eyed|irises?|pupils?|eyebrows?|brows?|eyelashes?|beard|moustache|stubble|skin(?:ned)?|complexion|freckles?|scars?|tattoos?|vitiligo|facial\s+features?|height|weight|weighs?|tall|thin|slim|slender|stocky|wiry|heavyset|muscular|athletic|petite|curvy|plump|gaunt|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|jaw|cheekbones?|nose|lips|fingers?|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|necklace|bracelet|earrings?|braid|ponytail|shaved|bald|curly|wavy|blonde?|brunette|auburn|ginger|tanned|freckled)\b/i;
 const LOOK_CONTEXT_WORDS =
   /\b(?:(?:short|long|straight|lean|broad)\s+(?:hair|build|frame|body|shoulders?|face|features?)|(?:body|build|frame|shoulders?)\s*(?:is|are|:)?\s*(?:short|tall|slim|slender|stocky|wiry|lean|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt))\b/i;
 const LOOK_STRUCTURED_FACTS =
@@ -2246,7 +2246,220 @@ const LOOK_STRUCTURED_FACTS =
 const LOOK_STANDALONE_GENDER =
   /^(?:(?:a|an)\s+)?(?:woman|man|female|male|nonbinary|androgynous(?:\s+person)?)\.?$/i;
 const LOOK_ADDITIONAL_WORDS =
-  /\b(?:birthmarks?|piercings?|vitiligo|dimples?|jawline|chin|cheeks?|mouth|teeth|fangs?|ears?|arms?|hands?|legs?|feet|dress|gown|rings?|accessories?|clothing|outfit|species|nonhuman|wings?|horns?|antlers?|tail|scales?|fur|feathers?|claws?|hooves?|antennae?|tentacles?|fins?|gills?|halo|cybernetic|prosthetic)\b/i;
+  /\b(?:birthmarks?|piercings?|vitiligo|dimples?|jawline|chin|cheeks?|mouth|teeth|fangs?|ears?|arms?|hands?|legs?|feet|dress|gown|rings?|accessories?|clothing|outfit|species|nonhuman|wings?|horns?|antlers?|tail|fur|feathers?|claws?|hooves?|antennae?|tentacles?|fins?|gills?|halo|cybernetic|prosthetic)\b/i;
+const PHYSICAL_BUST_DETAIL =
+  "(?:(?:small|large|full|natural|prominent|modest)\\s+){1,4}(?:bust|breasts?)";
+const LOOK_PHYSICAL_BUST = new RegExp(
+  [
+    `\\b(?:i|you|she|he|they|the reader|the assistant|the character)\\s+(?:has|have)\\s+(?:a\\s+)?${PHYSICAL_BUST_DETAIL}\\b(?!\\s+of\\b)`,
+    `\\b(?:my|your|her|his|their)\\s+${PHYSICAL_BUST_DETAIL}\\b(?!\\s+of\\b)`,
+    `^\\s*(?:a\\s+)?${PHYSICAL_BUST_DETAIL}\\b(?!\\s+of\\b)[.!]?\\s*$`,
+  ].join("|"),
+  "i",
+);
+const PHYSICAL_SCALE_DETAIL =
+  "(?:iridescent|reptilian|dragon|fishlike|overlapping|shimmering|metallic|translucent|armou?red|rough|smooth|fine|tiny|small|large|red|green|blue|bronze|silver|golden|black|white)";
+const PHYSICAL_SCALE_LOCUS =
+  "(?:skin|body|torso|abdomen|spine|face|cheeks?|jaw|chin|neck|shoulders?|chest|back|waist|hips?|arms?|forearms?|hands?|fingers?|legs?|thighs?|feet|tail|wings?)";
+const PHYSICAL_SCALE_TRAILING_CONTEXT =
+  `(?=\\s*(?:[.!?]|$)|\\s+(?:on|over|along|across|covering)\\s+(?:(?:her|his|their|my|your|the)\\s+)?(?:entire\\s+)?${PHYSICAL_SCALE_LOCUS}\\b)`;
+const LOOK_PHYSICAL_SCALE = new RegExp(
+  [
+    `\\b(?:i|you|she|he|they|the reader|the assistant|the character|(?:a|an|the)\\s+(?:woman|man|person|dragon|reptile|creature))\\s+(?:has|have)\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales\\b(?!\\s+of\\b)${PHYSICAL_SCALE_TRAILING_CONTEXT}`,
+    `^\\s*(?:has\\s+)?(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales\\s*[.!]?\\s*$`,
+    `\\bcovered\\s+(?:in|with)\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales\\b(?!\\s+of\\b)`,
+    `\\b(?:my|your|her|his|their)\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales\\b(?!\\s+of\\b)`,
+    `\\bscales\\s+(?:cover|covered|covering|line|coat)\\s+(?:(?:her|his|their|my|your|the)\\s+)?(?:entire\\s+)?${PHYSICAL_SCALE_LOCUS}\\b(?!\\s+of\\b)`,
+    `\\bscales\\s+(?:run|extend|grow)\\s+(?:on|over|along|across|from|down)\\s+(?:(?:her|his|their|my|your|the)\\s+)?(?:entire\\s+)?${PHYSICAL_SCALE_LOCUS}\\b(?!\\s+of\\b)`,
+    `\\bwith\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales\\s+(?:on|over|along|covering)\\s+(?:(?:her|his|their|my|your|the)\\s+)?(?:entire\\s+)?${PHYSICAL_SCALE_LOCUS}\\b(?!\\s+of\\b)`,
+    `\\b(?:a|an|one|single)\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scale\\s+(?:on|over|along|beneath|near)\\s+(?:(?:her|his|their|my|your|the)\\s+)?(?:entire\\s+)?${PHYSICAL_SCALE_LOCUS}\\b(?!\\s+of\\b)`,
+    `\\b(?:no\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales|without\\s+(?:any\\s+)?(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales|no\\s+longer\\s+(?:has|have)\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales|(?:i|you|she|he|they|the reader|the assistant|the character)\\s+(?:has|have)\\s+no\\s+(?:${PHYSICAL_SCALE_DETAIL}\\s+){0,2}scales)\\b(?!\\s+of\\b)`,
+    `\\b(?:my|your|her|his|their)\\s+scales\\s+(?:are|were|look|appear)\\s+(?:${PHYSICAL_SCALE_DETAIL})\\b`,
+  ].join("|"),
+  "i",
+);
+
+const BUILD_DESCRIPTOR_WORD =
+  "(?:average|medium|thin|slim|slender|stocky|wiry|lean|rangy|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt)";
+const BUILD_NOUN = "(?:build|frame|body|physique)";
+const BUILD_PERSON_NOUN =
+  "(?:woman|man|person|female|male|figure|human|character|reader|assistant|girl|boy|dragon|reptile|creature|android|robot|cyborg|elf|fae|fairy|demon|angel|alien|vampire|werewolf)";
+const BUILD_PERSON_SUBJECT =
+  `(?:i|you|she|he|they|the reader|the assistant|the character|this\\s+${BUILD_PERSON_NOUN}|(?:a|an|the)\\s+${BUILD_PERSON_NOUN})`;
+const BUILD_LEADING_MODIFIER =
+  "(?:cute|pretty|beautiful|handsome|attractive|striking|plain|natural|soft|delicate)";
+const QUALIFIED_BUILD_DESCRIPTOR =
+  `(?:(?:very|extremely|quite|notably)\\s+)?${BUILD_DESCRIPTOR_WORD}`;
+const BUILD_DESCRIPTOR_SEQUENCE =
+  `${QUALIFIED_BUILD_DESCRIPTOR}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+(?:and|but)\\s+)${QUALIFIED_BUILD_DESCRIPTOR})*`;
+
+function buildDescriptorTokens(text: string): string[] {
+  return [...text.matchAll(new RegExp(`\\b${QUALIFIED_BUILD_DESCRIPTOR}\\b`, "gi"))]
+    .map((match) => match[0]!.trim());
+}
+
+function hasPersonalBuildNounContext(text: string, matchIndex: number): boolean {
+  const prefix = text.slice(0, matchIndex).trim();
+  if (/^(?:no|without(?:\s+(?:a|an|the|any))?)$/i.test(prefix)) {
+    return true;
+  }
+  if (
+    new RegExp(
+      `^(?:(?:a|an|the|my|your|her|his|their|its)(?:\\s+|$))?(?:${BUILD_LEADING_MODIFIER}\\s*,?\\s*)*$`,
+      "i",
+    ).test(prefix)
+  ) {
+    return true;
+  }
+  if (
+    new RegExp(
+      `^${BUILD_PERSON_SUBJECT}\\s+(?:have|has|am|are|is)\\s+(?:(?:a|an)(?:\\s+|$))?(?:${BUILD_LEADING_MODIFIER}\\s*,?\\s*)*$`,
+      "i",
+    ).test(prefix)
+  ) {
+    return true;
+  }
+  if (
+    new RegExp(
+      `\\b${BUILD_PERSON_NOUN}\\b\\s+(?:and|with)\\s+(?:(?:a|an)\\s*)?$`,
+      "i",
+    ).test(prefix)
+  ) {
+    return true;
+  }
+  return /^[\p{Lu}][\p{L}'’-]*(?:\s+[\p{Lu}][\p{L}'’-]*)*\s+(?:has|have|is|are)\s+(?:(?:a|an)\s*)?$/u.test(
+    prefix,
+  );
+}
+
+function buildDescriptionMatches(text: string): string[] {
+  const matches: string[] = [];
+  const add = (value: string) => {
+    const clean = value.trim();
+    if (clean && !matches.some((match) => match.toLowerCase() === clean.toLowerCase())) {
+      matches.push(clean);
+    }
+  };
+
+  const beforeNoun = new RegExp(
+    `\\b(${BUILD_DESCRIPTOR_SEQUENCE})\\s+(${BUILD_NOUN})(?!\\s+(?:of|hair|fur|feathers?|scales?|paint|language|image|armou?r|glasses?|spectacles?|eyeglasses?|sunglasses?|monocles?|rate|buffer|surrounds?|around|for|pipeline|process|system|configuration|artifact|output|job)\\b)`,
+    "gi",
+  );
+  for (const match of text.matchAll(beforeNoun)) {
+    if (!hasPersonalBuildNounContext(text, match.index ?? 0)) continue;
+    const descriptors = buildDescriptorTokens(match[1]!);
+    descriptors.forEach((descriptor, index) =>
+      add(index === descriptors.length - 1 ? `${descriptor} ${match[2]!}` : descriptor)
+    );
+  }
+
+  const afterNoun = new RegExp(
+    `\\b(${BUILD_NOUN})\\s*(?:is|are|:)\\s*(${BUILD_DESCRIPTOR_SEQUENCE})\\b`,
+    "gi",
+  );
+  for (const match of text.matchAll(afterNoun)) {
+    if (!hasPersonalBuildNounContext(text, match.index ?? 0)) continue;
+    const descriptors = buildDescriptorTokens(match[2]!);
+    descriptors.forEach((descriptor, index) =>
+      add(index === 0 ? `${match[1]!} is ${descriptor}` : descriptor)
+    );
+  }
+
+  for (const match of text.matchAll(
+    /\bbroad(?:[- ]shouldered|\s+(?:across\s+the\s+)?shoulders?)\b/gi,
+  )) {
+    add(match[0]!);
+  }
+
+  const standaloneSequence = text.match(
+    new RegExp(
+      `^\\s*(?:(?:a|an)\\s+)?(${BUILD_DESCRIPTOR_SEQUENCE})\\.?\\s*$`,
+      "i",
+    ),
+  );
+  if (standaloneSequence) {
+    for (const descriptor of buildDescriptorTokens(standaloneSequence[1]!)) add(descriptor);
+  }
+
+  const humanCopula = text.match(
+    new RegExp(
+      `^\\s*(?:i(?:\\s+am|['’]m)|you(?:\\s+are|['’]re)|(?:she|he|they|the reader|the assistant|the character|this\\s+${BUILD_PERSON_NOUN}|(?:a|an|the)\\s+${BUILD_PERSON_NOUN})\\s+(?:is|are))\\s+(?:(?:a|an)\\s+)?(${BUILD_DESCRIPTOR_SEQUENCE})(?:\\s+(?:young|adult|older|elderly|middle-aged))?(?:\\s+${BUILD_PERSON_NOUN})?\\.?\\s*$`,
+      "i",
+    ),
+  );
+  if (humanCopula) {
+    for (const descriptor of buildDescriptorTokens(humanCopula[1]!)) add(descriptor);
+  }
+
+  const humanDescription = text.match(
+    new RegExp(
+      `\\b(${BUILD_DESCRIPTOR_SEQUENCE})(?:\\s+(?:young|adult|older|elderly|middle-aged)){0,2}\\s+${BUILD_PERSON_NOUN}\\b`,
+      "i",
+    ),
+  );
+  const humanDescriptionStart = humanDescription?.index ?? -1;
+  const beforeHumanDescription =
+    humanDescriptionStart >= 0 ? text.slice(0, humanDescriptionStart).trim() : "";
+  const afterHumanDescription =
+    humanDescription && humanDescriptionStart >= 0
+      ? text.slice(humanDescriptionStart + humanDescription[0].length).trim()
+      : "";
+  const explicitSelfDescription =
+    /^i\s+see\s+myself\s+as\s+(?:(?:a|an)\s+)?(?:(?:cute|pretty|beautiful|handsome|attractive|striking|plain|natural|soft-featured)\s*,?\s*)*$/i.test(
+      beforeHumanDescription,
+    );
+  const standaloneHumanDescription =
+    /^(?:a|an)?$/i.test(beforeHumanDescription) &&
+    (
+      !afterHumanDescription ||
+      /^[.!?]$/.test(afterHumanDescription) ||
+      /^(?:and|with)\s+.+\b(?:build|body|frame|physique|shoulders?)\b\.?$/i.test(
+        afterHumanDescription,
+      )
+    );
+  if (humanDescription && (explicitSelfDescription || standaloneHumanDescription)) {
+    for (const descriptor of buildDescriptorTokens(humanDescription[1]!)) add(descriptor);
+  }
+
+  const bodied = text.match(
+    new RegExp(
+      `^\\s*(?:(?:i(?:\\s+am|['’]m)|you(?:\\s+are|['’]re)|(?:she|he|they|the reader|the assistant|the character|this\\s+${BUILD_PERSON_NOUN}|(?:a|an|the)\\s+${BUILD_PERSON_NOUN})\\s+(?:is|are))\\s+)?(?:(?:a|an)\\s+)?(${BUILD_DESCRIPTOR_WORD}[- ](?:built|bodied|framed))(?:\\s+(?:young|adult|older|elderly|middle-aged))?(?:\\s+${BUILD_PERSON_NOUN})?\\.?\\s*$`,
+      "i",
+    ),
+  );
+  if (bodied) add(bodied[1]!);
+
+  return matches;
+}
+
+function buildDescriptionMatch(text: string): string {
+  return buildDescriptionMatches(text)[0] ?? "";
+}
+
+function buildAppearanceSlot(text: string, labelledSlot: string): string {
+  if (labelledSlot === "build" || /\b(?:average|medium)\b/i.test(text)) return "build";
+  if (/\bbroad(?:[- ]shouldered|\s+(?:across\s+the\s+)?shoulders?)\b/i.test(text)) {
+    return "build.shoulders.broad";
+  }
+  const descriptor =
+    text.match(new RegExp(`\\b(${BUILD_DESCRIPTOR_WORD})\\b`, "i"))?.[1]?.toLowerCase() ??
+    "other";
+  if (/\b(?:thin|slim|slender|stocky|wiry|lean|broad|heavyset|curvy|plump|gaunt)\b/i.test(text)) {
+    return `build.mass.${descriptor}`;
+  }
+  if (/\b(?:petite|rangy)\b/i.test(text)) return `build.stature.${descriptor}`;
+  if (/\b(?:muscular|athletic)\b/i.test(text)) {
+    return `build.composition.${descriptor}`;
+  }
+  return "build";
+}
+
+function buildAppearanceAxis(slot: string): string {
+  const parts = slot.split(".");
+  return parts.length >= 3 && parts[0] === "build"
+    ? `${parts[0]}.${parts[1]}`
+    : "";
+}
 
 const NON_APPEARANCE_LOOK_IDIOMS =
   /\b(?:(?:keep(?:s|ing)?|kept|has|have|had)\s+)?(?:an?|one|the)?\s*eye\s+(?:on|for)\b|\btall order\b/gi;
@@ -2259,7 +2472,10 @@ function isLookNote(text: string): boolean {
     LOOK_CONTEXT_WORDS.test(literal) ||
     LOOK_STRUCTURED_FACTS.test(literal) ||
     LOOK_STANDALONE_GENDER.test(literal) ||
-    LOOK_ADDITIONAL_WORDS.test(literal)
+    LOOK_ADDITIONAL_WORDS.test(literal) ||
+    LOOK_PHYSICAL_BUST.test(literal) ||
+    LOOK_PHYSICAL_SCALE.test(literal) ||
+    !!buildDescriptionMatch(literal)
   );
 }
 
@@ -2334,9 +2550,9 @@ const HISTORICAL_APPEARANCE_WORDS =
   /\b(?:used to|formerly|previously|in the past|old (?:physical )?(?:description|appearance|look)|before (?:that|this)|once (?:had|was|wore)|as a child)\b/i;
 const CURRENT_APPEARANCE_WORDS = /\b(?:but\s+)?(?:now|currently|these days|today)\b/i;
 const APPEARANCE_REMOVAL_WORDS =
-  /\b(?:no longer|not anymore|without|removed?|(?:do not|does not|don['’]t|doesn['’]t) (?:have|wear)|stopped wearing|lost (?:the|his|her|their|my)|no\s+(?:visible\s+)?(?:scars?|tattoos?|birthmarks?|piercings?|freckles?|burns?|marks?|glasses|spectacles|mask|hat|cap|hood|scarf|gloves?|necklace|bracelet|earrings?|ring|jewell?ery))\b/i;
+  /\b(?:no longer|not anymore|without|removed?|(?:do not|does not|don['’]t|doesn['’]t) (?:have|wear)|stopped wearing|lost (?:the|his|her|their|my)|no\s+(?:[a-z-]+\s+){0,2}scales?|no\s+(?:visible\s+)?(?:scars?|tattoos?|birthmarks?|piercings?|freckles?|burns?|marks?|glasses|spectacles|mask|hat|cap|hood|scarf|gloves?|necklace|bracelet|earrings?|ring|jewell?ery))\b/i;
 const NONVISUAL_SOUL_WORDS =
-  /\b(?:values?|belie(?:f|fs|ves)|thinks?|thoughts?|interests?|curiosity|personality|voice|speaks?|responds?|conversation|honesty|ethics?|morals?|prefers?|enjoys?|loves?|hates?|drawn to|cares? about)\b/i;
+  /\b(?:values?|belie(?:f|fs|ves)|thinks?|thoughts?|interests?|curiosity|curious|intellectual(?:ly)?|personality|voice|speaks?|responds?|conversation|honesty|ethics?|morals?|prefers?|enjoys?|loves?|hates?|drawn to|cares? about)\b/i;
 const EMPTY_APPEARANCE_VALUE =
   /^(?:unknown|unspecified|unclear|unchanged|same as before|not (?:specified|described|known|provided)|tbd|none|n\/?a|null|undefined|[-–—]+|\?+)$/i;
 const EXPLICIT_EMPTY_APPEARANCE_VALUE =
@@ -2378,7 +2594,8 @@ function appearanceSlotPriority(slot: string): number {
   if (slot === "age") return 30;
   if (slot === "height") return 40;
   if (slot === "weight") return 45;
-  if (slot === "build") return 50;
+  if (slot === "build" || slot.startsWith("build.")) return 50;
+  if (slot.startsWith("body.")) return 55;
   if (slot.startsWith("skin.")) return 60;
   if (slot.startsWith("hair.")) return 70;
   if (slot.startsWith("eyes.")) return 80;
@@ -2665,14 +2882,27 @@ function appearanceContributions(
     labelledSlot === "weight" ||
     (!constrainedSlot && !!weightText)
   ) add("weight", weightText || value);
-  const buildText = exactMatch(
-    value,
-    /\b(?:lean\s+and\s+rangy|broad[- ]shouldered|average|medium|slim|slender|stocky|wiry|lean|rangy|heavyset|muscular|athletic|petite|curvy|plump|gaunt)(?:\s+(?:build|frame|body))?\b/i,
-  );
-  if (
-    labelledSlot === "build" ||
-    (!constrainedSlot && (!!buildText || /\b(?:build|frame|physique)\b/i.test(value)))
-  ) add("build", buildText || value);
+  const bustText = LOOK_PHYSICAL_BUST.test(value)
+    ? exactMatch(
+      value,
+      /\b(?:(?:small|large|full|natural|prominent|modest)\s+){1,4}(?:bust|breasts?)\b/i,
+    )
+    : "";
+  if (!constrainedSlot && bustText) add("body.bust", bustText);
+  const buildTexts = buildDescriptionMatches(value);
+  if (labelledSlot === "build") {
+    if (buildTexts.length > 0) {
+      for (const buildText of buildTexts) {
+        add(buildAppearanceSlot(buildText, ""), buildText);
+      }
+    } else {
+      add("build", value);
+    }
+  } else if (!constrainedSlot && buildTexts.length > 0) {
+    for (const buildText of buildTexts) {
+      add(buildAppearanceSlot(buildText, labelledSlot), buildText);
+    }
+  }
   const speciesText = exactMatch(
     value,
     /\b(?:human|android|robot|cyborg|elf|fae|fairy|demon|angel|alien|dragon|vampire|werewolf)\b/i,
@@ -2788,6 +3018,7 @@ function splitAppearanceAtoms(value: string, forceAppearance: boolean): string[]
   parts = parts.flatMap((part) => {
     const pieces = part.split(/\s*,\s*/).map((piece) => piece.trim()).filter(Boolean);
     if (pieces.length < 2) return [part];
+    if (buildDescriptionMatches(part).length > 1) return [part];
     if (forceAppearance) return pieces;
     const independentlyVisual = pieces.every(
       (piece) =>
@@ -2798,18 +3029,17 @@ function splitAppearanceAtoms(value: string, forceAppearance: boolean): string[]
   });
   const splitConjunctions: string[] = [];
   for (const part of parts) {
-    const match = part.match(/^(.+?)\s+(?:and|while)\s+(.+)$/i);
+    const match = part.match(/^(.+?)\s+(?:and|but|while)\s+(.+)$/i);
     const left = match?.[1]?.trim() ?? "";
     const right = match?.[2]?.trim() ?? "";
     const visual = (side: string) =>
       isLookNote(side) || isStandaloneAppearanceDescriptor(side);
     const nonVisual = (side: string) =>
       NONVISUAL_SOUL_WORDS.test(side) || isPersonalityDirectionNote(side);
+    const wholeBuildMatches = buildDescriptionMatches(part);
     const sameBuild =
       !!match &&
-      [left, right].every((side) =>
-        /\b(?:build|frame|body|shoulders?|lean|rangy|slim|slender|stocky|wiry|broad|heavyset|muscular|athletic|petite|curvy|plump|gaunt)\b/i.test(side),
-      );
+      wholeBuildMatches.length > 1;
     const independentlySeparated =
       (visual(left) && visual(right)) ||
       (visual(left) && nonVisual(right)) ||
@@ -2868,6 +3098,30 @@ function analyseAppearanceNote(
   ) => {
     const segment = raw.trim();
     if (!segment) return;
+    const personalBuildContrast = segment.match(
+      /^(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+(?:not|no longer)\s+(.+?)\s+but\s+(.+?)[.!]?$/i,
+    );
+    if (
+      personalBuildContrast &&
+      buildDescriptionMatches(personalBuildContrast[1]!).length > 0 &&
+      buildDescriptionMatches(personalBuildContrast[2]!).length > 0
+    ) {
+      accounted = true;
+      visit(personalBuildContrast[1]!, "", true, "remove");
+      visit(personalBuildContrast[2]!, "", true);
+      return;
+    }
+    const personalBuildRemoval = segment.match(
+      /^(?:i(?:\s+am|['’]m)|you(?:\s+are|['’]re)|(?:she|he|they|the reader|the assistant)\s+(?:is|are))\s+(?:not|no longer)\s+(.+?)(?:\s+anymore)?[.!]?$/i,
+    );
+    if (
+      personalBuildRemoval &&
+      buildDescriptionMatches(personalBuildRemoval[1]!).length > 0
+    ) {
+      accounted = true;
+      visit(personalBuildRemoval[1]!, "", true, "remove");
+      return;
+    }
     const appearanceGrounded =
       forceAppearance ||
       !!label ||
@@ -2878,7 +3132,7 @@ function analyseAppearanceNote(
       return;
     }
     const subjectNotAnymore = segment.match(
-      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+(.+?)\s+anymore[.!]?$/i,
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|body(?:\s+type)?|frame|physique|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+(.+?)\s+anymore[.!]?$/i,
     );
     if (subjectNotAnymore) {
       accounted = true;
@@ -2892,7 +3146,7 @@ function analyseAppearanceNote(
       return;
     }
     const subjectRemoval = segment.match(
-      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:is|are|has|have)\s+(?:now\s+)?no longer\s+(.+)$/i,
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|body(?:\s+type)?|frame|physique|face)\s+(?:is|are|has|have)\s+(?:now\s+)?no longer\s+(.+)$/i,
     );
     if (subjectRemoval) {
       accounted = true;
@@ -2901,7 +3155,7 @@ function analyseAppearanceNote(
       return;
     }
     const subjectContrastCorrection = segment.match(
-      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+.+?\s+but\s+(.+)$/i,
+      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|body(?:\s+type)?|frame|physique|face)\s+(?:(?:is|are)\s+not|isn['’]t|aren['’]t)\s+(.+?)\s+but\s+(.+)$/i,
     );
     if (subjectContrastCorrection) {
       accounted = true;
@@ -2910,12 +3164,24 @@ function analyseAppearanceNote(
         subjectContrastCorrection[2]!.trim(),
         subjectContrastCorrection[1]!,
         true,
+        "remove",
+      );
+      visit(
+        subjectContrastCorrection[3]!.trim(),
+        subjectContrastCorrection[1]!,
+        true,
       );
       return;
     }
-    const subjectCorrection = segment.match(
-      /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|face)\s+(?:is|are|has|have)\s+(?:now\s+)?(.+)$/i,
-    );
+    const bodySurfaceFeature =
+      /\bbody\s+(?:is|are|has|have)\s+(?:now\s+)?(?:covered|coated|lined)\b.*\b(?:scales?|fur|feathers?)\b/i.test(
+        segment,
+      );
+    const subjectCorrection = bodySurfaceFeature
+      ? null
+      : segment.match(
+        /\b(?:(?:my|your|his|her|their|its)\s+)?(hair(?:\s+(?:color|colour|style|texture|length))?|(?:(?:left|right)\s+)?eyes?(?:\s+(?:color|colour|shape))?|skin(?:\s+(?:color|colour|tone))?|complexion|height|weight|build|body(?:\s+type)?|frame|physique|face)\s+(?:is|are|has|have)\s+(?:now\s+)?(.+)$/i,
+      );
     if (subjectCorrection) {
       accounted = true;
       implicitFieldLabel = subjectCorrection[1]!;
@@ -3020,6 +3286,11 @@ function analyseAppearanceNote(
       if (EXPLICIT_EMPTY_APPEARANCE_VALUE.test(field[2]!.trim())) {
         resetPrefixes.push(appearanceFieldResetPrefix(field[1]!));
       } else {
+        if (/^build$/i.test(field[1]!.trim())) {
+          // An explicit Build field is authoritative as a whole, but its parsed dimensions remain
+          // independently patchable by later Body/build details.
+          resetPrefixes.push("build");
+        }
         visit(field[2]!, field[1]!, true);
       }
       if (
@@ -3114,6 +3385,20 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
       }
     }
   };
+  const retireBuildAxis = (fact: SoulAppearanceContribution) => {
+    const axis = buildAppearanceAxis(fact.slot);
+    if (!axis) return false;
+    for (const [slot, prior] of singleton) {
+      if (
+        (slot === "build" || slot.startsWith(`${axis}.`)) &&
+        prior.originKey !== fact.originKey
+      ) {
+        retire(prior);
+        singleton.delete(slot);
+      }
+    }
+    return true;
+  };
   for (const { source, note, index } of chronologicalSoulSources(notes)) {
     const analysis = analyseAppearanceNote(note, source, index);
     if (analysis.nonVisualText) nonVisualTextBySourceId[source.id] = analysis.nonVisualText;
@@ -3148,8 +3433,19 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
     for (const fact of analysis.contributions) {
       if (fact.operation === "remove") {
         if (fact.additive) {
+          const scaleRemovalTarget =
+            fact.slot === "feature:detail" && /\bscales?\b/i.test(fact.text)
+              ? fact.text.replace(
+                /^(?:(?:i|you|she|he|they|the reader|the assistant|the character)\s+(?:has|have)\s+no|no\s+longer\s+(?:has|have)|without(?:\s+any)?|no)\s+/i,
+                "",
+              )
+              : fact.text;
           const removeByCategory =
-            fact.slot.startsWith("mark:") && isBroadMarkRemoval(fact.text);
+            (fact.slot.startsWith("mark:") && isBroadMarkRemoval(fact.text)) ||
+            (
+              fact.slot === "feature:detail" &&
+              /^scales?[.!]?$/i.test(scaleRemovalTarget.trim())
+            );
           const categoryPrefix = fact.key.split(":").slice(0, 2).join(":");
           const identityPrefix = additiveIdentityPrefix(fact.key);
           const candidates = [...additive].filter(([key]) =>
@@ -3161,7 +3457,7 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
           if (removeByCategory) {
             removals = candidates;
           } else if (removals.length === 0) {
-            const targetTokens = distinctiveAppearanceTokens(fact.text);
+            const targetTokens = distinctiveAppearanceTokens(scaleRemovalTarget);
             const qualified = candidates.filter(([, prior]) => {
               const priorTokens = new Set(distinctiveAppearanceTokens(prior.text));
               return targetTokens.length > 0 &&
@@ -3175,9 +3471,11 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
             additive.delete(key);
           }
         } else {
-          const broadEyeField =
-            fact.slot === "eyes.color" || fact.slot === "eyes.shape";
-          retireSingleton(fact.slot, broadEyeField);
+          const broadSingletonField =
+            fact.slot === "eyes.color" ||
+            fact.slot === "eyes.shape" ||
+            fact.slot === "build";
+          retireSingleton(fact.slot, broadSingletonField);
         }
         continue;
       }
@@ -3195,9 +3493,13 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
         }
         additive.set(fact.key, fact);
       } else {
-        const broadEyeField =
-          fact.slot === "eyes.color" || fact.slot === "eyes.shape";
-        retireSingleton(fact.slot, broadEyeField, true);
+        const broadSingletonField =
+          fact.slot === "eyes.color" ||
+          fact.slot === "eyes.shape" ||
+          fact.slot === "build";
+        if (!retireBuildAxis(fact)) {
+          retireSingleton(fact.slot, broadSingletonField, true);
+        }
         const prior = singleton.get(fact.slot);
         if (prior && prior.text !== fact.text) retire(prior);
         if (prior?.text === fact.text) {
@@ -3323,6 +3625,9 @@ export function renderSoulAppearanceFact(fact: SoulEssenceAppearanceFact): strin
   }
   if (slot.startsWith("face.") && !/\b(?:face|facial features?|jaw|chin|cheeks?|cheekbones?|nose|lips?|mouth)\b/i.test(text)) {
     return `face ${slot.slice("face.".length)}: ${text}`;
+  }
+  if (slot.startsWith("build.") && !/\b(?:build|body|frame|physique|shoulders?)\b/i.test(text)) {
+    return `build: ${text}`;
   }
   const scalarLabel: Record<string, string> = {
     age: "age",

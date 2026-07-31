@@ -333,6 +333,379 @@ describe("Soul appearance reconciliation", () => {
     );
   });
 
+  it("keeps an abstract reflection about scale out of the reported physical profile", () => {
+    const reflection =
+      "I am drawn to the way scale can dissolve boundaries, particularly when the distinction between " +
+      "'observer' and 'observed' becomes a matter of physical entanglement.";
+    const notes = [
+      note("I see myself as a cute, pretty, petite young woman.", 1),
+      note(
+        "Cute natural face, soft facial features, smooth skin, soft pouty lips, long lashes.",
+        2,
+      ),
+      note("I have a thin body.", 3),
+      note("I have a large natural bust, auburn hair", 4),
+      note("Eyes: complex, organic textures and subtle amber flecks", 5),
+      note("Lightly freckled cheeks.", 6),
+      note(reflection, 7),
+    ];
+    const reflectionSource = soulNoteSources(notes)[6]!;
+    const projection = reconcileSoulAppearance(notes);
+    const current = visualSoulNotes(notes, 2_000);
+
+    expect(current).toMatch(/\bpetite\b/i);
+    expect(current).toMatch(/\bthin body\b/i);
+    expect(current).toMatch(/\blarge natural bust\b/i);
+    expect(current).toMatch(/\bauburn hair\b/i);
+    expect(current).toMatch(/\bfreckled cheeks\b/i);
+    expect(current).toMatch(/\bcomplex\b/i);
+    expect(current).toMatch(/\bamber flecks\b/i);
+    expect(current).not.toMatch(/dissolve boundaries|observer|physical entanglement/i);
+    expect(projection.nonVisualTextBySourceId[reflectionSource.id]).toBe(reflection);
+    expect(buildSoulEssenceDistillationPrompt("self", notes).user).toContain(reflection);
+  });
+
+  it.each([
+    "thin body",
+    "a thin build",
+    "very thin frame",
+    "thin-bodied",
+    "Body is thin.",
+    "I have a thin body.",
+    "I have an extremely thin body.",
+    "I have a cute, thin body.",
+    "I have a soft thin body.",
+    "I am thin.",
+    "I am extremely thin.",
+    "A woman has a thin body.",
+    "The woman has a thin body.",
+    "This character has a thin body.",
+    "The elf has a thin body.",
+    "The android is thin.",
+    "I am a thin-bodied young woman.",
+    "A petite woman.",
+    "An athletic woman.",
+  ])("recognizes a grounded build description in human or body context: %s", (description) => {
+    const expected = description.match(/\b(?:thin|petite|athletic)\b/i)?.[0] ?? "";
+    expect(visualSoulNotes([note(description)])).toMatch(
+      new RegExp(`\\b${expected}\\b`, "i"),
+    );
+  });
+
+  it("keeps compatible stature and leanness while replacing the same build dimension", () => {
+    const compatible = visualSoulNotes([
+      note("I am a petite young woman.", 1),
+      note("I have a thin body.", 2),
+    ], 2_000);
+    expect(compatible).toMatch(/\bpetite\b/i);
+    expect(compatible).toMatch(/\bthin body\b/i);
+
+    const corrected = visualSoulNotes([
+      note("slender build", 1),
+      note("thin body", 2),
+    ], 2_000);
+    expect(corrected).toMatch(/\bthin body\b/i);
+    expect(corrected).not.toMatch(/\bslender\b/i);
+
+    const broadCorrection = visualSoulNotes([
+      note("petite young woman", 1),
+      note("thin body", 2),
+      note("Build: athletic", 3),
+    ], 2_000);
+    expect(broadCorrection).toMatch(/\bathletic\b/i);
+    expect(broadCorrection).not.toMatch(/\bpetite\b|\bthin\b/i);
+  });
+
+  it.each([
+    "petite and thin",
+    "I am thin and petite.",
+    "I am petite and thin.",
+    "I am thin and wiry.",
+    "I am thin and curvy.",
+    "I am athletic and muscular.",
+    "I am thin but wiry.",
+    "muscular and athletic",
+    "petite and rangy",
+    "curvy and plump",
+    "lean and slim",
+    "I have a petite, thin body.",
+    "I have a thin, petite, and athletic body.",
+  ])("retains each compatible descriptor in a compound build: %s", (description) => {
+    const current = visualSoulNotes([note(description)], 2_000);
+    const descriptors =
+      description.match(
+        /\b(?:petite|thin|wiry|curvy|athletic|muscular|rangy|plump|lean|slim)\b/gi,
+      ) ?? [];
+
+    for (const descriptor of descriptors) {
+      expect(current).toMatch(new RegExp(`\\b${descriptor}\\b`, "i"));
+    }
+  });
+
+  it("corrects one dimension of a compound build without dropping the others", () => {
+    const shoulders = visualSoulNotes([
+      note("lean build and broad shoulders", 1),
+      note("thin body", 2),
+    ], 2_000);
+    expect(shoulders).toMatch(/\bthin body\b/i);
+    expect(shoulders).toMatch(/\bbroad shoulders\b/i);
+    expect(shoulders).not.toMatch(/\blean\b/i);
+
+    const stature = visualSoulNotes([
+      note("petite young woman and a thin body", 1),
+      note("slender build", 2),
+    ], 2_000);
+    expect(stature).toMatch(/\bpetite\b/i);
+    expect(stature).toMatch(/\bslender build\b/i);
+    expect(stature).not.toMatch(/\bthin\b/i);
+
+    const mass = visualSoulNotes([
+      note("I have a thin, petite body.", 1),
+      note("I have a heavyset body.", 2),
+    ], 2_000);
+    expect(mass).toMatch(/\bpetite\b/i);
+    expect(mass).toMatch(/\bheavyset body\b/i);
+    expect(mass).not.toMatch(/\bthin\b/i);
+
+    const wiry = visualSoulNotes([
+      note("thin and wiry", 1),
+      note("stocky body", 2),
+    ], 2_000);
+    expect(wiry).toMatch(/\bstocky body\b/i);
+    expect(wiry).not.toMatch(/\bthin\b|\bwiry\b/i);
+
+    const nonhuman = visualSoulNotes([
+      note("A thin elf.", 1),
+      note("stocky body", 2),
+    ], 2_000);
+    expect(nonhuman).toMatch(/\belf\b/i);
+    expect(nonhuman).toMatch(/\bstocky body\b/i);
+    expect(nonhuman).not.toMatch(/\bthin\b/i);
+  });
+
+  it("treats a structured Body value as one build dimension, not a full-build reset", () => {
+    const current = visualSoulNotes([
+      note("I am a petite young woman.", 1),
+      note("Body: thin", 2),
+    ], 2_000);
+
+    expect(current).toMatch(/\bpetite\b/i);
+    expect(current).toMatch(/\bthin\b/i);
+
+    const structured = visualSoulNotes([
+      note("Build: athletic", 1),
+      note("Body: thin", 2),
+    ], 2_000);
+    expect(structured).toMatch(/\bathletic\b/i);
+    expect(structured).toMatch(/\bthin\b/i);
+  });
+
+  it("removes a named build dimension without erasing compatible dimensions", () => {
+    for (const removal of [
+      "My build is no longer slender.",
+      "My body is no longer slender.",
+      "I'm no longer slender.",
+      "I am not slender anymore.",
+      "No slender body.",
+    ]) {
+      const current = visualSoulNotes([
+        note("petite and slender", 1),
+        note(removal, 2),
+      ], 2_000);
+      expect(current, removal).toMatch(/\bpetite\b/i);
+      expect(current, removal).not.toMatch(/\bslender\b/i);
+    }
+  });
+
+  it("applies both sides of a build contrast correction", () => {
+    for (const [before, correction, removed, added] of [
+      ["slender body", "My body is not slender but athletic.", "slender", "athletic"],
+      ["thin body", "My body is not thin but muscular.", "thin", "muscular"],
+      ["petite", "My body is not petite but thin.", "petite", "thin"],
+      ["slender body", "I'm not slender but athletic.", "slender", "athletic"],
+    ] as const) {
+      const current = visualSoulNotes([
+        note(before, 1),
+        note(correction, 2),
+      ], 2_000);
+      expect(current, correction).not.toMatch(new RegExp(`\\b${removed}\\b`, "i"));
+      expect(current, correction).toMatch(new RegExp(`\\b${added}\\b`, "i"));
+    }
+  });
+
+  it("separates a thin-build fact from a personality clause", () => {
+    for (const text of [
+      "I have a thin body and am intellectually curious.",
+      "I am thin and intellectually curious.",
+    ]) {
+      const notes = [note(text)];
+      const source = soulNoteSources(notes)[0]!;
+      const projection = reconcileSoulAppearance(notes);
+      const current = visualSoulNotes(notes, 2_000);
+
+      expect(current, text).toMatch(/\bthin\b/i);
+      expect(current, text).not.toMatch(/intellectual|curious/i);
+      expect(projection.nonVisualTextBySourceId[source.id]).toMatch(
+        /intellectual|curious/i,
+      );
+    }
+  });
+
+  it.each([
+    "The evidence is thin.",
+    "That is a thin argument.",
+    "A slim chance is still worth examining.",
+    "Uses slender reasoning.",
+    "That is a petite problem.",
+    "Thin, careful reasoning helps.",
+    "Average, according to the evidence.",
+    "I study systems at different scales.",
+    "Working at scale changes the tradeoffs.",
+    "I compare ideas with different scales of analysis.",
+    "Fine scales reveal different behavior.",
+    "Scales cover many orders of magnitude.",
+    "Music has scales.",
+    "A blue scale on the chart marks the midpoint.",
+    "I am interested in fine scales of interaction.",
+    "These scales cover several levels of analysis.",
+    "A thin body of evidence supports the claim.",
+    "A very thin body of literature exists here.",
+    "The paper offers a slender body of research.",
+    "I have a thin body of work.",
+    "The thin body of the guitar changes its sound.",
+    "A thin frame surrounds the photograph.",
+    "The average person learns by doing.",
+    "An average person values fairness.",
+    "Medium-bodied wine has a soft finish.",
+    "A thin-bodied sound.",
+    "I admire the average person.",
+    "I often think about the average person.",
+    "I am interested in what the average person thinks.",
+    "I write about a thin man.",
+    "The violin has a thin body.",
+    "The bottle has a slender body.",
+    "The software has a lean build.",
+    "I am drawn to iridescent scales of meaning.",
+    "I have fine scales of analysis.",
+    "Scales cover the body of evidence.",
+    "Scales run along the spine of the argument.",
+    "I have small scales in my workshop.",
+    "She has fine scales for weighing gems.",
+    "I study overlapping scales in complex systems.",
+    "The piano exercise uses overlapping scales.",
+    "Dragon scales fascinate me.",
+    "I am fascinated by reptilian scales.",
+    "I think in iridescent scales.",
+    "I have small scales, which I use for weighing gems.",
+    "I admire the marble bust of Athena.",
+    "My favorite sculpture is a bronze bust.",
+    "The police made a drug bust.",
+    "A bust of Caesar stands in the museum.",
+    "The economic boom went bust.",
+    "I like chicken breasts.",
+    "The recipe uses chicken breast.",
+  ])("does not turn an abstract descriptor into appearance: %s", (text) => {
+    const notes = [note(text)];
+    const source = soulNoteSources(notes)[0]!;
+    const projection = reconcileSoulAppearance(notes);
+
+    expect(projection.activeFacts).toEqual([]);
+    expect(projection.accountedSourceIds).toEqual([]);
+    expect(projection.nonVisualTextBySourceId[source.id]).toBe(text);
+  });
+
+  it("does not retain frame or body as a build when they modify glasses or hair", () => {
+    const glasses = visualSoulNotes([
+      note("thin frame glasses", 1),
+      note("I don't wear glasses.", 2),
+    ], 2_000);
+    expect(glasses).toBe("");
+
+    const hair = visualSoulNotes([
+      note("thin body hair", 1),
+      note("Hair: thick", 2),
+    ], 2_000);
+    expect(hair).toMatch(/\bthick\b/i);
+    expect(hair).not.toMatch(/\bthin body\b/i);
+
+    for (const [description, removal] of [
+      ["thin frame spectacles", "I don't wear spectacles"],
+      ["thin body fur", "No fur"],
+      ["thin body feathers", "No feathers"],
+    ] as const) {
+      expect(
+        visualSoulNotes([note(description, 1), note(removal, 2)], 2_000),
+        description,
+      ).not.toMatch(/\bthin (?:frame|body)\b/i);
+    }
+  });
+
+  it("still recognizes scales when they are explicitly described as a physical feature", () => {
+    const descriptions = [
+      "Scales.",
+      "Has scales.",
+      "Iridescent scales cover her forearms.",
+      "She has small scales.",
+      "She has smooth scales.",
+      "She has red scales.",
+      "She has tiny scales.",
+      "She has translucent scales.",
+      "She has bronze scales.",
+      "She is covered in fine scales.",
+      "Her body is covered in tiny scales.",
+      "Her scales are tiny.",
+      "Scales cover her entire body.",
+      "Scales line her torso.",
+      "Scales cover her abdomen.",
+      "Scales run down her spine.",
+      "Scales covering her body.",
+    ];
+
+    for (const description of descriptions) {
+      expect(visualSoulNotes([note(description)]), description).toContain(description);
+    }
+  });
+
+  it.each([
+    "No scales.",
+    "No longer has scales.",
+    "Without scales.",
+    "She has no scales.",
+  ])("removes a previously stored physical scale trait: %s", (removal) => {
+    expect(visualSoulNotes([
+      note("Scales.", 1),
+      note(removal, 2),
+    ])).toBe("");
+  });
+
+  it("removes a specifically qualified physical scale trait", () => {
+    for (const [description, removal] of [
+      ["Iridescent scales.", "No longer has iridescent scales."],
+      ["Red scales.", "No red scales."],
+      ["Fine scales.", "Without fine scales."],
+      ["She has small scales.", "She has no small scales."],
+    ] as const) {
+      expect(
+        visualSoulNotes([note(description, 1), note(removal, 2)]),
+        removal,
+      ).toBe("");
+    }
+  });
+
+  it("keeps a bust detail independent from a later hair correction", () => {
+    const current = visualSoulNotes([
+      note("I have a large natural bust, auburn hair", 1),
+      note("Hair color: black", 2),
+    ], 2_000);
+
+    expect(current).toMatch(/\blarge natural bust\b/i);
+    expect(current).toMatch(/\bblack\b/i);
+    expect(current).not.toMatch(/\bauburn\b/i);
+    expect(visualSoulNotes([note("I have a large natural bust.")])).toMatch(
+      /\blarge natural bust\b/i,
+    );
+  });
+
   it.each([
     ["Green eyes and values honesty.", "green eyes", "values honesty"],
     ["Blue eyes and loves astronomy.", "blue eyes", "loves astronomy"],
