@@ -14,7 +14,9 @@ import {
 } from "./ChatPanel.js";
 import {
   buddySlashCommands,
-  speakableText,
+  pickVoice,
+  repliesToSpeak,
+  speechChunks,
   type BuddyPersona,
   type BuddyPlan,
   type BuddyToolCall,
@@ -135,6 +137,8 @@ export interface ChatBuddyPanelProps {
   onCompact?: () => void;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
+  /** Which installed voice reads replies aloud (Settings → Spoken replies). Default: feminine. */
+  voiceGender?: ReaderSettings["voiceGender"];
   /** Desktop build: enables the `/find` local-file command. */
   desktop?: boolean;
   /** Linked-phone client: desktop-runtime commands (/find, run) RELAY to the desktop, so the slash
@@ -274,21 +278,59 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     r.start();
     setListening(true);
   };
-  // Speak each NEW assistant message while the toggle is on.
-  const spokenUpto = useRef(props.messages.length);
+  // The installed voices. getVoices() is empty on first call in most browsers and fills in
+  // asynchronously, so the list has to be re-read when the browser says it changed — asking once at
+  // mount is how you end up permanently on the default voice.
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   useEffect(() => {
-    if (!speakOn || !ttsSupported) {
-      spokenUpto.current = props.messages.length;
-      return;
+    if (!ttsSupported) return;
+    const read = () => setVoices(window.speechSynthesis.getVoices());
+    read();
+    window.speechSynthesis.addEventListener?.("voiceschanged", read);
+    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", read);
+  }, [ttsSupported]);
+
+  // Speak each NEW assistant message while the toggle is on. `lastSeen` is the conversation we have
+  // already announced — comparing against it (rather than counting) is what makes a new chat, a
+  // session switch or a cleared history start clean instead of going permanently quiet.
+  const lastSeen = useRef<ChatMessageVM[]>(props.messages);
+  // Chrome drops a queued utterance that nothing else references, stopping the read part-way. Holding
+  // the queue keeps them alive until they've been spoken.
+  const queued = useRef<SpeechSynthesisUtterance[]>([]);
+  useEffect(() => {
+    const fresh = speakOn && ttsSupported ? repliesToSpeak(lastSeen.current, props.messages) : [];
+    lastSeen.current = props.messages;
+    if (fresh.length === 0) return;
+    const gender = props.voiceGender ?? "feminine";
+    const voice = pickVoice(voices, {
+      ...(gender === "system" ? {} : { gender }),
+      lang: (typeof navigator !== "undefined" && navigator.language) || "en-US",
+    });
+    for (const reply of fresh) {
+      // Queued in short pieces: Chrome cuts a long utterance off partway with no error and no
+      // `onend`, which sounds exactly like the feature failing halfway through an answer.
+      for (const chunk of speechChunks(reply)) {
+        const u = new SpeechSynthesisUtterance(chunk);
+        if (voice) {
+          u.voice = voice as SpeechSynthesisVoice;
+          u.lang = voice.lang;
+        }
+        u.onend = () => {
+          queued.current = queued.current.filter((q) => q !== u);
+        };
+        queued.current.push(u);
+        window.speechSynthesis.speak(u);
+      }
     }
-    for (let i = spokenUpto.current; i < props.messages.length; i++) {
-      const m = props.messages[i];
-      if (m?.role === "assistant" && m.text) window.speechSynthesis.speak(new SpeechSynthesisUtterance(speakableText(m.text)));
-    }
-    spokenUpto.current = props.messages.length;
-  }, [props.messages, speakOn, ttsSupported]);
+  }, [props.messages, speakOn, ttsSupported, voices, props.voiceGender]);
+  /** Stop mid-sentence — used when switching the toggle off, and when the reader speaks over it. */
+  const stopSpeaking = () => {
+    if (!ttsSupported) return;
+    window.speechSynthesis.cancel();
+    queued.current = [];
+  };
   const toggleSpeak = () => {
-    if (speakOn && ttsSupported) window.speechSynthesis.cancel();
+    if (speakOn) stopSpeaking();
     setSpeakOn((s) => !s);
   };
 
@@ -298,6 +340,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     const text = draft.trim();
     // Allow sending with only attachments (the host supplies a default ask); never while busy.
     if ((!text && !hasReadyAttachment) || props.busy) return;
+    // Asking something new means you're done listening to the last answer.
+    stopSpeaking();
     setDraft("");
     props.onSend(text);
   };

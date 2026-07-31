@@ -270,6 +270,12 @@ export interface ReaderSettings {
    */
   allowMature?: boolean;
   /**
+   * Which voice reads replies aloud when the chat's 🔊 toggle is on. The Web Speech API exposes no
+   * gender field, so this is matched against the installed voices BY NAME (see `pickVoice`) — an
+   * inference, and the reason the reader can also leave it on the system default.
+   */
+  voiceGender?: "feminine" | "masculine" | "system";
+  /**
    * Desktop only, OFF by default: let the chat assistant propose shell commands to
    * run in its workspace (install deps, run tests, execute code it wrote). Even
    * when on, EVERY command is shown and must be approved before it runs. Enables
@@ -1660,6 +1666,31 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
+          </Group>
+
+          <Group
+            q={query}
+            order={52}
+            title="🔊 Spoken replies"
+            keywords="voice speech speak aloud tts read out loud female male feminine masculine narrator"
+          >
+          <label style={rowStyle}>
+            <span>Reading voice</span>
+            <select
+              value={value.voiceGender ?? "feminine"}
+              onChange={(e) => set({ voiceGender: e.target.value as "feminine" | "masculine" | "system" })}
+            >
+              <option value="feminine">Feminine</option>
+              <option value="masculine">Masculine</option>
+              <option value="system">System default</option>
+            </select>
+          </label>
+          <span style={{ opacity: 0.55, fontSize: 11 }}>
+            Which of your device's installed voices reads replies aloud when you turn on 🔊 in the
+            chat. Voices don't declare a gender, so this is matched by name and picks the most
+            natural-sounding voice in your language — if nothing matches, you get the best voice
+            that does rather than silence.
+          </span>
           </Group>
 
           <Group
