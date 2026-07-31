@@ -63,6 +63,20 @@ describe("repliesToSpeak", () => {
     expect(repliesToSpeak(prev, next)).toEqual(["and here"]);
   });
 
+  it("does not read a conversation that ARRIVES into an empty panel", () => {
+    // An empty list is a prefix of everything, so a history landing at once passes the extension
+    // test. That is the normal state of a linked phone: it owns no conversation and is sent the
+    // desktop's whole chat on connect — which would otherwise be read out from the top.
+    const snapshot = [m("user", "a", 10), m("assistant", "b", 11), m("user", "c", 12), m("assistant", "d", 13)];
+    expect(repliesToSpeak([], snapshot, 100)).toEqual([]);
+    // and the first reply written AFTER the reader asked to be read to is spoken
+    expect(repliesToSpeak(snapshot, [...snapshot, m("assistant", "live", 101)], 100)).toEqual(["live"]);
+  });
+
+  it("speaks everything new when no start time is given", () => {
+    expect(repliesToSpeak([], [m("assistant", "hi", 5)])).toEqual(["hi"]);
+  });
+
   it("skips empty and non-assistant messages", () => {
     const prev: never[] = [];
     const next = [m("user", "hi", 1), m("tool", "ran something", 2), m("assistant", "", 3)];

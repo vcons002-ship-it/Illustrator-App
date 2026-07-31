@@ -42,9 +42,19 @@ export interface VoiceMessageLike {
  *
  * So the question isn't "how many have I seen" but "is this the same conversation, continued". If
  * `next` doesn't extend `prev` it's a different (or reset) conversation and there is nothing NEW in
- * it to announce — adopt it silently. PURE.
+ * it to announce — adopt it silently.
+ *
+ * `since` is the moment the reader asked to be read to, and it settles the case the extension test
+ * can't: an EMPTY list is a prefix of everything, so a history ARRIVING into an empty panel looks
+ * exactly like forty replies landing at once. That is the normal state of a linked phone, which owns
+ * no conversation and is sent the desktop's on connect, and of any session being switched into. A
+ * message written before you asked to be read to is not something to read out. PURE.
  */
-export function repliesToSpeak(prev: readonly VoiceMessageLike[], next: readonly VoiceMessageLike[]): string[] {
+export function repliesToSpeak(
+  prev: readonly VoiceMessageLike[],
+  next: readonly VoiceMessageLike[],
+  since = 0,
+): string[] {
   const extended =
     next.length >= prev.length &&
     // role+at, never text: a message can be rewritten in place (inline images restored on a phone,
@@ -53,7 +63,7 @@ export function repliesToSpeak(prev: readonly VoiceMessageLike[], next: readonly
   if (!extended) return [];
   return next
     .slice(prev.length)
-    .filter((m) => m.role === "assistant" && m.text)
+    .filter((m) => m.role === "assistant" && m.text && (m.at === undefined || m.at > since))
     .map((m) => speakableText(m.text ?? ""))
     .filter((t) => t.length > 0);
 }

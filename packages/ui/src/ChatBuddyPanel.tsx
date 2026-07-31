@@ -297,8 +297,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // Chrome drops a queued utterance that nothing else references, stopping the read part-way. Holding
   // the queue keeps them alive until they've been spoken.
   const queued = useRef<SpeechSynthesisUtterance[]>([]);
+  // When the reader asked to be read to. A linked phone owns no conversation and is sent the
+  // desktop's whole chat on connect; switching sessions loads a history the same way. Neither is
+  // forty replies arriving, and neither should be read out from the top.
+  const speakSince = useRef(0);
   useEffect(() => {
-    const fresh = speakOn && ttsSupported ? repliesToSpeak(lastSeen.current, props.messages) : [];
+    const fresh =
+      speakOn && ttsSupported ? repliesToSpeak(lastSeen.current, props.messages, speakSince.current) : [];
     lastSeen.current = props.messages;
     if (fresh.length === 0) return;
     const gender = props.voiceGender ?? "feminine";
@@ -330,7 +335,15 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     queued.current = [];
   };
   const toggleSpeak = () => {
-    if (speakOn) stopSpeaking();
+    if (speakOn) {
+      stopSpeaking();
+    } else if (ttsSupported) {
+      speakSince.current = Date.now();
+      // Safari (iOS especially) only lets a page speak once it has spoken from a real user gesture.
+      // A silent utterance issued from this click is what makes the FIRST reply audible; without it
+      // the toggle appears to work and nothing is ever heard.
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(" "));
+    }
     setSpeakOn((s) => !s);
   };
 
