@@ -304,6 +304,7 @@ import {
   trackSoulEssenceIdleCandidate,
   type SoulEssenceIdleCandidate,
 } from "./soul-essence-idle.js";
+import { selectMirroredSoulEssence } from "./remote-soul-essence.js";
 import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, EngineVram, PlannerCommand, PlannerMirror, SoulEssenceJobProgress } from "./remote-sync.js";
 import {
   gpuVramUsage,
@@ -1013,19 +1014,8 @@ export function App() {
       soulSaveWaiters.current.delete(kind);
       waiter.resolve();
     }
-    // A stale snapshot is deliberate continuity while the desktop rebuilds in downtime. Prefer a
-    // snapshot current for this frame, then the newest retained snapshot, so a late mirror cannot
-    // roll a freshly regenerated Essence backward.
-    const nextEssence = (current: SoulEssence | undefined): SoulEssence | undefined => {
-      const candidates = [essence, current].filter(
-        (candidate): candidate is SoulEssence => candidate?.kind === kind,
-      );
-      const currentCandidates = candidates.filter(
-        (candidate) => candidate.sourceFingerprint === fingerprint,
-      );
-      return (currentCandidates.length > 0 ? currentCandidates : candidates)
-        .sort((left, right) => right.generatedAt - left.generatedAt)[0];
-    };
+    const nextEssence = (current: SoulEssence | undefined): SoulEssence | undefined =>
+      selectMirroredSoulEssence(kind, fingerprint, essence, current);
     if (kind === "self") {
       setSelfSoulEssence(nextEssence);
       setSelfSoulName(name);
