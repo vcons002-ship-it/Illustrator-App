@@ -75,6 +75,10 @@ export const ALWAYS_ON_TOOLS = [
   "search_images",
   "calculate",
   "load_toolset",
+  // Opening a URL, pasted text or code as something readable is documented UNCONDITIONALLY, so it
+  // must be callable unconditionally too. Listing it under `books` meant the prompt showed the call
+  // and the gate then rejected it — advertise-then-refuse, the same shape as create_document.
+  "open_content",
 ] as const;
 
 export const TOOLSETS: readonly Toolset[] = [
@@ -115,7 +119,7 @@ export const TOOLSETS: readonly Toolset[] = [
     trigger: "find, open, illustrate or manage books and the reader's library",
     flags: ["canBooks"],
     newFlags: ["canBooks"],
-    tools: ["search_books", "random_books", "open_content", "open_library_book", "remove_library_book", "set_visual_style"],
+    tools: ["search_books", "random_books", "open_library_book", "remove_library_book", "set_visual_style"],
   },
   {
     id: "settings",

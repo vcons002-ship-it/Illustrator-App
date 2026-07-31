@@ -1504,8 +1504,14 @@ export function buildBuddySystemPrompt(raw: {
       "cover math, IF/IFS, VLOOKUP/INDEX/MATCH, SUMIF(S)/COUNTIFS, MEDIAN/STDEV/CORREL, text and date functions.\n" +
       '  · {"tool":"read_data"} — the sheet\'s CURRENT cells, with its A1 references, so you edit what is actually ' +
       'there rather than what you last wrote. Add "from"/"to" (data row numbers) to read a long sheet in pieces. ' +
-      "READ IT FIRST whenever the reader may have changed the sheet themselves.\n" +
-      '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
+      "READ IT FIRST whenever the reader may have changed the sheet themselves.\n"
+      : "") +
+    // Real documents (PDF/Word) — deferred until the `documents` toolset is loaded (see toolsets.ts).
+    // These were gated on canSpreadsheets, so canDocuments switched nothing: `load_toolset documents`
+    // diffed two identical prompts, got an empty document back, and reported "those tools aren't
+    // available on this device" — about tools that were sitting in the prompt.
+    (opts.canDocuments
+      ? '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
       "make a real, downloadable DOCUMENT (report, letter, notes, essay…). Put the WHOLE body in \"content\" as Markdown; " +
       "\"format\" is just the first download offered (pdf default) — PDF, Word, and Markdown are all available on the card. " +
       "It shows as a file card in the chat (with a side reader). Use this to CREATE a document — never to revise one.\n" +
@@ -1526,9 +1532,13 @@ export function buildBuddySystemPrompt(raw: {
       "quote more of the line you actually mean. Only if you've read them and they really are duplicate entries for " +
       'one thing should you re-issue with "dedupe":true, which keeps the first and DELETES the others.\n' +
       '- {"tool":"read_document"} — the active document\'s real text, or {"tool":"read_document","section":"Scope"} for ' +
-      "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n" +
-      storyBlock +
-      "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
+      "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n"
+      : "") +
+    // Co-writing a story is not a spreadsheet capability. It was swept inside that branch by the same
+    // edit, so an open story lost its own instructions unless an unrelated toolset happened to be loaded.
+    storyBlock +
+    (opts.canSpreadsheets || opts.canDocuments
+      ? "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
       "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
       "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
       "document you just made is ALREADY in their library and open now — NEVER tell the reader you can't save a created " +

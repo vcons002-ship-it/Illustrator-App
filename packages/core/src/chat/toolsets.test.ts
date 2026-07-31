@@ -172,6 +172,49 @@ describe("the loader is reachable", () => {
   });
 });
 
+describe("the registry describes the prompt it actually gates", () => {
+  // Everything a fully-equipped desktop permits, so every toolset SHOULD have something to hand back.
+  const EQUIPPED = {
+    ...FULL, canGoogle: true, canMarkets: true, canTaskTools: true, canSubAgents: true,
+    loadedToolsets: [],
+  } as unknown as Parameters<typeof toolsetDoc>[1];
+
+  it("hands back a real document for every toolset the environment permits", () => {
+    // `create_document` lived inside the `canSpreadsheets` branch, so `canDocuments` switched nothing.
+    // load_toolset diffed two identical prompts, got "" back, and the dispatcher reported the only
+    // thing an empty document can mean: "the documents tools aren't available on this device" — about
+    // tools that were sitting in the prompt the whole time. An empty doc must mean UNAVAILABLE and
+    // nothing else, or the loader tells the reader a capability was removed when it was mis-wired.
+    for (const set of TOOLSETS) {
+      expect(toolsetDoc(set.id, EQUIPPED), `${set.id} loads nothing — its flag gates no prompt text`)
+        .not.toBe("");
+    }
+  });
+
+  it("does not gate a tool whose documentation is unconditional", () => {
+    // The other half of the same bug: prompt text showing a call the gate then refuses. The model can
+    // only call what it can see, so anything visible must be callable — advertise-then-refuse reads
+    // to the reader as a capability that vanished mid-session.
+    const lean = build({ ...EQUIPPED, loadedToolsets: [] });
+    for (const set of TOOLSETS) {
+      for (const tool of set.tools) {
+        expect(lean, `${tool} is shown while "${set.id}" is unloaded, but calling it is refused`)
+          .not.toContain(`"tool":"${tool}"`);
+      }
+    }
+  });
+
+  it("keeps a story's own instructions out of an unrelated toolset", () => {
+    // storyBlock sat inside the spreadsheets branch, so an open story lost its instructions unless
+    // something irrelevant happened to be loaded.
+    const story = { storyActive: true, storyMode: "direct" };
+    expect(build({ ...story, loadedToolsets: [] })).toContain("STORY MODE (a story is open)");
+    expect(build({ ...story, loadedToolsets: ["spreadsheets"] })).toContain("STORY MODE (a story is open)");
+    // and the how-to-start note when no story is open
+    expect(build({ loadedToolsets: [] })).toContain("CO-WRITING AN ILLUSTRATED STORY");
+  });
+});
+
 describe("deferring documentation never changes a fact", () => {
   // The reported failure: the assistant was CERTAIN Google wasn't connected. It was connected — the
   // host sets canGoogle from real credentials — but the gate switched the flag off because the set
