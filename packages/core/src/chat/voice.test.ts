@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_SPEAK_CHARS,
   MAX_UTTERANCE_CHARS,
+  pickNaturalVoice,
   pickVoice,
   repliesToSpeak,
   speakableText,
@@ -129,6 +130,50 @@ describe("voiceGenderOf", () => {
 
   it("admits when a name says nothing", () => {
     expect(voiceGenderOf("Google US English")).toBeUndefined();
+  });
+});
+
+describe("pickNaturalVoice", () => {
+  // A faithful slice of the table kokoro-js reports at runtime (it exports no VOICES constant, so
+  // this is a copy for the test only — the app reads the real one off the loaded model).
+  const VOICES = {
+    af_heart: { name: "Heart", language: "en-us", gender: "Female", overallGrade: "A" },
+    af_bella: { name: "Bella", language: "en-us", gender: "Female", overallGrade: "A-" },
+    af_jessica: { name: "Jessica", language: "en-us", gender: "Female", overallGrade: "D" },
+    am_michael: { name: "Michael", language: "en-us", gender: "Male", overallGrade: "C+" },
+    am_adam: { name: "Adam", language: "en-us", gender: "Male", overallGrade: "F+" },
+    bf_emma: { name: "Emma", language: "en-gb", gender: "Female", overallGrade: "B-" },
+    bm_george: { name: "George", language: "en-gb", gender: "Male", overallGrade: "C" },
+  };
+
+  it("takes the reader's choice as stated, not inferred", () => {
+    // The whole point of the natural voices: they declare a gender, so this is no longer a guess
+    // from a name — which is what left the Android voice list unmatchable.
+    expect(pickNaturalVoice(VOICES, { gender: "feminine", lang: "en-US" })).toBe("af_heart");
+    expect(pickNaturalVoice(VOICES, { gender: "masculine", lang: "en-US" })).toBe("am_michael");
+  });
+
+  it("prefers the better-graded voice of the requested gender", () => {
+    expect(pickNaturalVoice(VOICES, { gender: "feminine", lang: "en-US" })).not.toBe("af_jessica");
+    expect(pickNaturalVoice(VOICES, { gender: "masculine", lang: "en-US" })).not.toBe("am_adam");
+  });
+
+  it("matches the reader's accent when it can", () => {
+    expect(pickNaturalVoice(VOICES, { gender: "feminine", lang: "en-GB" })).toBe("bf_emma");
+    expect(pickNaturalVoice(VOICES, { gender: "masculine", lang: "en-GB" })).toBe("bm_george");
+  });
+
+  it("puts language ahead of gender, like the system picker", () => {
+    const onlyGb = { bf_emma: VOICES.bf_emma, am_michael: { ...VOICES.am_michael, language: "de-de" } };
+    expect(pickNaturalVoice(onlyGb, { gender: "masculine", lang: "en-GB" })).toBe("bf_emma");
+  });
+
+  it("still returns a voice when no gender was asked for", () => {
+    expect(pickNaturalVoice(VOICES, { lang: "en-US" })).toBe("af_heart");
+  });
+
+  it("has nothing to offer for an empty model", () => {
+    expect(pickNaturalVoice({}, { gender: "feminine" })).toBeUndefined();
   });
 });
 

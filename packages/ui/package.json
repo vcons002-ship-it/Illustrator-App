@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@visual-reader/core": "workspace:*"
+    "@visual-reader/core": "workspace:*",
+    "kokoro-js": "^1.2.1"
   },
   "peerDependencies": {
     "react": "^18.3.0",

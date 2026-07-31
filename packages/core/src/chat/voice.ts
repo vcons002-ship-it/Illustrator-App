@@ -164,6 +164,59 @@ export function voiceGenderOf(name: string): VoiceGender | undefined {
   return undefined;
 }
 
+/**
+ * One of the natural (Kokoro) voices, as the model itself describes it.
+ *
+ * Read from the loaded model at runtime rather than copied here, so the list can't drift from what
+ * is actually installed — and unlike the browser's voices these carry a stated gender and a quality
+ * grade, which is what turns the reader's choice from an inference into a fact.
+ */
+export interface NaturalVoiceLike {
+  name: string;
+  language: string;
+  gender: string;
+  /** The model's own quality grade for this voice: "A", "B-", "C+", "F"… */
+  overallGrade?: string;
+}
+
+/** A letter grade as a number, so the best-sounding voice can be preferred. PURE. */
+function gradeScore(grade: string | undefined): number {
+  const letter = grade?.trim().toUpperCase();
+  if (!letter) return 0;
+  const base = { A: 12, B: 9, C: 6, D: 3, F: 0 }[letter[0] ?? ""];
+  if (base === undefined) return 0;
+  return base + (letter.includes("+") ? 1 : letter.includes("-") ? -1 : 0);
+}
+
+/**
+ * The best natural voice for the reader's choice: right language, requested gender, best grade.
+ *
+ * Same ordering as {@link pickVoice} and for the same reason — a voice reading English in the wrong
+ * accent is a worse answer than one reading it properly. The difference is that gender is no longer
+ * guessed from a name here; the model states it. Returns the voice's id. PURE.
+ */
+export function pickNaturalVoice(
+  voices: Readonly<Record<string, NaturalVoiceLike>>,
+  opts: { gender?: VoiceGender; lang?: string } = {},
+): string | undefined {
+  const want = opts.lang || "en-US";
+  const wantGender = opts.gender === "feminine" ? "female" : opts.gender === "masculine" ? "male" : undefined;
+  let best: string | undefined;
+  let bestScore = -Infinity;
+  for (const [id, v] of Object.entries(voices)) {
+    const stated = v.gender?.toLowerCase();
+    const score =
+      langScore(v.language, want) * 1_000 +
+      (wantGender ? (stated === wantGender ? 200 : 0) : 100) +
+      gradeScore(v.overallGrade);
+    if (score > bestScore) {
+      bestScore = score;
+      best = id;
+    }
+  }
+  return best;
+}
+
 /** Names that mark a voice as one of the modern, natural-sounding ones. */
 const NATURAL_MARKERS = ["natural", "neural", "premium", "enhanced", "siri"];
 /** Names that mark the old robotic fallbacks — worse than any real voice. */

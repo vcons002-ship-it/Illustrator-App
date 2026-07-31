@@ -9489,6 +9489,7 @@ export function App() {
           onOpenLocalFile={onOpenLocalFile}
           fileActions={buddyFileActions}
           {...(settings.voiceGender ? { voiceGender: settings.voiceGender } : {})}
+          {...(settings.voiceEngine ? { voiceEngine: settings.voiceEngine } : {})}
           desktop={isDesktop}
           {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
           onSaveProject={onSaveProject}

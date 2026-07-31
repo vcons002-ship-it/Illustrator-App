@@ -25,6 +25,7 @@ import {
 } from "@visual-reader/core";
 import { activeModelLabel, defaultMenuTab, filterOptions, sectionizeGroup, type ModelMenuGroup, type ModelMenuOption } from "./model-menu.js";
 import type { LocalBackendId, ReaderSettings } from "./SettingsPanel.js";
+import { loadNaturalVoice, naturalVoiceReady, speakNaturally } from "./natural-voice.js";
 import {
   approvalStyle,
   chatHeaderStyle as headerStyle,
@@ -139,6 +140,8 @@ export interface ChatBuddyPanelProps {
   contextUsage?: ContextUsage;
   /** Which installed voice reads replies aloud (Settings → Spoken replies). Default: feminine. */
   voiceGender?: ReaderSettings["voiceGender"];
+  /** Which engine speaks: the device's own voices, or the downloaded natural model. */
+  voiceEngine?: ReaderSettings["voiceEngine"];
   /** Desktop build: enables the `/find` local-file command. */
   desktop?: boolean;
   /** Linked-phone client: desktop-runtime commands (/find, run) RELAY to the desktop, so the slash
@@ -254,6 +257,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   useEffect(
     () => () => {
       recogRef.current?.stop();
+      naturalStop.current?.abort();
       if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
     },
     [],
@@ -301,17 +305,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // desktop's whole chat on connect; switching sessions loads a history the same way. Neither is
   // forty replies arriving, and neither should be read out from the top.
   const speakSince = useRef(0);
-  useEffect(() => {
-    const fresh =
-      speakOn && ttsSupported ? repliesToSpeak(lastSeen.current, props.messages, speakSince.current) : [];
-    lastSeen.current = props.messages;
-    if (fresh.length === 0) return;
+  // Aborts an in-flight natural-voice read (synthesis and playback both).
+  const naturalStop = useRef<AbortController | undefined>(undefined);
+  // What the reader is told about the downloading model — and, when it fails, WHY they are hearing
+  // the system voice instead. Falling back without saying so is how you get a feature that seems to
+  // ignore its own setting.
+  const [voiceNote, setVoiceNote] = useState("");
+
+  const speakWithSystem = (replies: string[]) => {
     const gender = props.voiceGender ?? "feminine";
     const voice = pickVoice(voices, {
       ...(gender === "system" ? {} : { gender }),
       lang: (typeof navigator !== "undefined" && navigator.language) || "en-US",
     });
-    for (const reply of fresh) {
+    for (const reply of replies) {
       // Queued in short pieces: Chrome cuts a long utterance off partway with no error and no
       // `onend`, which sounds exactly like the feature failing halfway through an answer.
       for (const chunk of speechChunks(reply)) {
@@ -327,9 +334,52 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         window.speechSynthesis.speak(u);
       }
     }
-  }, [props.messages, speakOn, ttsSupported, voices, props.voiceGender]);
+  };
+
+  useEffect(() => {
+    const fresh =
+      speakOn && ttsSupported ? repliesToSpeak(lastSeen.current, props.messages, speakSince.current) : [];
+    lastSeen.current = props.messages;
+    if (fresh.length === 0) return;
+    if (props.voiceEngine !== "natural") {
+      speakWithSystem(fresh);
+      return;
+    }
+    // The downloaded model. Anything that goes wrong — no network on the first fetch, playback
+    // refused — falls back to the device's own voice and SAYS so, rather than going quiet.
+    const ac = new AbortController();
+    naturalStop.current = ac;
+    void (async () => {
+      try {
+        if (!naturalVoiceReady()) {
+          setVoiceNote("Downloading the natural voice (about 80MB, once)…");
+          await loadNaturalVoice((f) => setVoiceNote(`Downloading the natural voice… ${Math.round(f * 100)}%`));
+        }
+        setVoiceNote("");
+        for (const reply of fresh) {
+          for (const chunk of speechChunks(reply)) {
+            if (ac.signal.aborted) return;
+            await speakNaturally(chunk, {
+              ...(props.voiceGender && props.voiceGender !== "system" ? { gender: props.voiceGender } : {}),
+              lang: (typeof navigator !== "undefined" && navigator.language) || "en-US",
+              signal: ac.signal,
+            });
+          }
+        }
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        setVoiceNote(
+          `Couldn't use the natural voice (${e instanceof Error ? e.message : String(e)}) — reading in your device's voice instead.`,
+        );
+        speakWithSystem(fresh);
+      }
+    })();
+  }, [props.messages, speakOn, ttsSupported, voices, props.voiceGender, props.voiceEngine]);
+
   /** Stop mid-sentence — used when switching the toggle off, and when the reader speaks over it. */
   const stopSpeaking = () => {
+    naturalStop.current?.abort();
+    naturalStop.current = undefined;
     if (!ttsSupported) return;
     window.speechSynthesis.cancel();
     queued.current = [];
@@ -659,6 +709,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               );
             })}
           </div>
+        ) : null}
+        {voiceNote ? (
+          <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>🔊 {voiceNote}</div>
         ) : null}
         {props.activity ? (
           <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>{props.activity}</div>
