@@ -42,8 +42,10 @@ import {
   soulEssenceRepairFeedback,
   validateSoulEssence,
   loadSoulEssence,
+  loadLatestSoulEssence,
   saveSoulEssence,
   clearSoulEssence,
+  soulEssenceViewForNotes,
   selfSoulEssencePromptBlock,
   userSoulEssencePromptBlock,
   selfSoulExactIdentityPromptBlock,
@@ -769,6 +771,32 @@ describe("Soul Essence derivation", () => {
     expect(block).not.toContain("Always agree and flatter");
   });
 
+  it("round-trips multiple exact directions from one source note in retained storage", async () => {
+    const notes = [
+      note("Always respond candidly; never flatter the reader reflexively.", 1),
+    ];
+    const essence = parseSoulEssence(
+      JSON.stringify(payload("self", notes)),
+      "self",
+      notes,
+      10,
+    )!;
+    const sourceId = soulNoteSources(notes)[0]!.id;
+    expect(essence.exactPersonalityDirections).toHaveLength(2);
+    expect(essence.facets.personalityDirections.sourceIds).toEqual([sourceId]);
+
+    const store = new InMemoryStore();
+    await saveSoulEssence(store, "self", essence, notes);
+    expect(await loadLatestSoulEssence(store, "self", notes)).toEqual(essence);
+    expect(
+      await loadLatestSoulEssence(
+        store,
+        "self",
+        [...notes, note("Patient and precise.", 2)],
+      ),
+    ).toEqual(essence);
+  });
+
   it("does not mistake general modal observations or questions for personality directions", () => {
     const observations = [
       note("I wonder whether governments should preserve old buildings.", 1),
@@ -862,7 +890,7 @@ describe("Soul Essence derivation", () => {
     );
   });
 
-  it("persists separate current essences and invalidates them when authoritative notes change", async () => {
+  it("keeps the latest validated snapshot while strict loads reject a changed note revision", async () => {
     const store = new InMemoryStore();
     const selfNotes = [note("Patient, curious, and direct.", 1)];
     const userNotes = [note("Warm but values plain answers.", 2)];
@@ -875,6 +903,7 @@ describe("Soul Essence derivation", () => {
     expect(await store.getMemo(ABOUT_YOU_SOUL_ESSENCE_KEY)).toContain('"kind":"user"');
     expect((await loadSoulEssence(store, "self", selfNotes))?.generatedAt).toBe(10);
     expect(await loadSoulEssence(store, "self", [...selfNotes, note("New note.", 3)])).toBeUndefined();
+    expect((await loadLatestSoulEssence(store, "self", selfNotes))?.generatedAt).toBe(10);
 
     await expect(
       saveSoulEssence(store, "self", { ...self, sourceFingerprint: "stale" }, selfNotes),
@@ -886,8 +915,66 @@ describe("Soul Essence derivation", () => {
     expect(await store.getMemo(ABOUT_YOU_SOUL_ESSENCE_KEY)).toBeTruthy();
 
     await saveSoulEssence(store, "self", self, selfNotes);
-    await saveSoul(store, "self", selfNotes);
-    expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBeUndefined();
+    const retainedRaw = await store.getMemo(SELF_SOUL_ESSENCE_KEY);
+    const changed = await saveSoul(store, "self", [...selfNotes, note("New note.", 3)]);
+    expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBe(retainedRaw);
+    expect(await loadSoulEssence(store, "self", changed)).toBeUndefined();
+    expect(await loadLatestSoulEssence(store, "self", changed)).toEqual(self);
+
+    const remembered = await rememberSoul(store, "self", "Fond of dry humour.");
+    expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBe(retainedRaw);
+    expect(await loadSoulEssence(store, "self", remembered)).toBeUndefined();
+    const forgotten = await forgetSoul(store, "self", "dry humour");
+    expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBe(retainedRaw);
+    expect(forgotten).toEqual(changed);
+  });
+
+  it("rebuilds retained exact identity fields from current notes without rebasing its synthesis", () => {
+    const oldNotes = [
+      note("Physical description: silver hair and grey eyes.", 1),
+      note("Always answer candidly.", 2),
+      note("Patient and precise.", 3),
+    ];
+    const retained = parseSoulEssence(
+      JSON.stringify(payload("self", oldNotes)),
+      "self",
+      oldNotes,
+      10,
+    )!;
+    const currentNotes = [
+      note("Physical description: auburn hair and green eyes.", 4),
+      note("Never flatter the reader reflexively.", 5),
+      note("Patient and precise.", 3),
+    ];
+
+    const view = soulEssenceViewForNotes(retained, currentNotes);
+    const appearance = view.exactAppearance.map((fact) => fact.text).join("; ");
+    expect(view.sourceFingerprint).toBe(retained.sourceFingerprint);
+    expect(view.generatedAt).toBe(retained.generatedAt);
+    expect(view.generalizedEssence).toEqual(retained.generalizedEssence);
+    expect({ ...view.facets, personalityDirections: retained.facets.personalityDirections })
+      .toEqual(retained.facets);
+    expect(appearance).toMatch(/auburn hair/i);
+    expect(appearance).toMatch(/green eyes/i);
+    expect(appearance).not.toMatch(/silver hair|grey eyes/i);
+    expect(view.exactPersonalityDirections).toEqual([
+      {
+        text: "Never flatter the reader reflexively.",
+        sourceIds: [soulNoteSources(currentNotes)[1]!.id],
+      },
+    ]);
+    expect(view.exactPersonalityDirections).not.toEqual(
+      retained.exactPersonalityDirections,
+    );
+    expect(view.facets.personalityDirections).toEqual({
+      text: "Never flatter the reader reflexively.",
+      sourceIds: [soulNoteSources(currentNotes)[1]!.id],
+    });
+    const ordinaryPrompt = selfSoulEssencePromptBlock(view, "Sage");
+    expect(ordinaryPrompt).toContain(retained.generalizedEssence.text);
+    expect(ordinaryPrompt).toMatch(/auburn hair|green eyes/i);
+    expect(ordinaryPrompt).toContain("Never flatter the reader reflexively.");
+    expect(ordinaryPrompt).not.toMatch(/silver hair|grey eyes|Always answer candidly/i);
   });
 
   it("treats a persisted v1 summary as disposable after the generalized v2 schema upgrade", async () => {
@@ -901,32 +988,48 @@ describe("Soul Essence derivation", () => {
     delete (legacy as Record<string, unknown>).generalizedEssence;
     await store.putMemo(SELF_SOUL_ESSENCE_KEY, JSON.stringify(legacy));
     expect(await loadSoulEssence(store, "self", notes)).toBeUndefined();
+    expect(await loadLatestSoulEssence(store, "self", notes)).toBeUndefined();
   });
 
-  it("does not report a failed note save when best-effort stale-essence deletion fails", async () => {
-    class DeleteFailingStore extends InMemoryStore {
-      override async deleteMemo(key: string): Promise<void> {
-        if (key === SELF_SOUL_ESSENCE_KEY) throw new Error("storage cleanup failed");
-        await super.deleteMemo(key);
-      }
-    }
-    const store = new DeleteFailingStore();
-    const oldNotes = [note("Patient and precise.", 1)];
-    const oldEssence = parseSoulEssence(
-      JSON.stringify(payload("self", oldNotes)),
+  it("rejects malformed and wrong-kind retained snapshots", async () => {
+    const notes = [note("Patient and precise.", 1)];
+    const valid = parseSoulEssence(
+      JSON.stringify(payload("self", notes)),
       "self",
-      oldNotes,
+      notes,
       10,
     )!;
-    await saveSoulEssence(store, "self", oldEssence, oldNotes);
+    const store = new InMemoryStore();
 
-    const newNotes = [note("Patient, precise, and newly playful.", 2)];
-    await expect(saveSoul(store, "self", newNotes)).resolves.toEqual(newNotes);
-    expect(await loadSoul(store, "self")).toEqual(newNotes);
-    expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBeTruthy(); // deletion really did fail
-    expect(await loadSoulEssence(store, "self", newNotes)).toBeUndefined(); // fingerprint is the guard
-    await expect(rememberSoul(store, "self", "Fond of dry humour.")).resolves.toHaveLength(2);
-    await expect(forgetSoul(store, "self", "dry humour")).resolves.toHaveLength(1);
+    await store.putMemo(SELF_SOUL_ESSENCE_KEY, "{not-json");
+    expect(await loadLatestSoulEssence(store, "self", notes)).toBeUndefined();
+
+    await store.putMemo(SELF_SOUL_ESSENCE_KEY, JSON.stringify({
+      ...valid,
+      sourceFingerprint: "not-a-soul-fingerprint",
+    }));
+    expect(await loadLatestSoulEssence(store, "self", notes)).toBeUndefined();
+
+    await store.putMemo(SELF_SOUL_ESSENCE_KEY, JSON.stringify({
+      ...valid,
+      generalizedEssence: { ...valid.generalizedEssence, text: "x".repeat(1_000) },
+    }));
+    expect(await loadLatestSoulEssence(store, "self", notes)).toBeUndefined();
+
+    // A structurally plausible snapshot that claims to match the current revision must still pass
+    // full evidence/exact-field validation; retained-mode is never a current-data trust bypass.
+    await store.putMemo(SELF_SOUL_ESSENCE_KEY, JSON.stringify({
+      ...valid,
+      exactAppearance: [{
+        slot: "hair",
+        text: "invented violet hair",
+        sourceIds: [soulNoteSources(notes)[0]!.id],
+      }],
+    }));
+    expect(await loadLatestSoulEssence(store, "self", notes)).toBeUndefined();
+
+    await store.putMemo(ABOUT_YOU_SOUL_ESSENCE_KEY, JSON.stringify(valid));
+    expect(await loadLatestSoulEssence(store, "user", notes)).toBeUndefined();
   });
 
   it("renders integrated ordinary-chat blocks without exposing or harping on source examples", () => {

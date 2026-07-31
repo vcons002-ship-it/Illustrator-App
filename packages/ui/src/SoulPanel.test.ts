@@ -3,14 +3,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   SOUL_ESSENCE_SCHEMA_VERSION,
+  soulSourceFingerprint,
   type SoulEssence,
 } from "@visual-reader/core";
 import { SoulPanel, type SoulPanelProps } from "./SoulPanel.js";
 
+const DEFAULT_NOTES = [{ text: "Warm and curious", at: 1 }];
+
 const ESSENCE = {
   schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
   kind: "self",
-  sourceFingerprint: `soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-panel`,
+  sourceFingerprint: soulSourceFingerprint(DEFAULT_NOTES),
   generatedAt: 123,
   generalizedEssence: {
     text: "Intellectually curious, warm, and quietly playful.",
@@ -39,7 +42,7 @@ function renderPanel(overrides: Partial<SoulPanelProps> = {}): string {
   const props: SoulPanelProps = {
     variant: "self",
     name: "Sage",
-    notes: [{ text: "Warm and curious", at: 1 }],
+    notes: DEFAULT_NOTES,
     onRefreshEssence: async () => undefined,
     onSaveNotes: async () => undefined,
     onSaveName: async () => undefined,
@@ -120,5 +123,59 @@ describe("SoulPanel everyday essence presentation", () => {
     expect(html).toContain(
       "The Creative window and explicit identity questions may consult the authoritative originals.",
     );
+  });
+
+  it("keeps a stale synthesis visible while showing exact identity from the current notes", () => {
+    const html = renderPanel({
+      notes: [
+        { text: "Physical description: auburn hair and deep green eyes.", at: 2 },
+        { text: "Never flatter the reader reflexively.", at: 3 },
+      ],
+      essence: {
+        ...ESSENCE,
+        sourceFingerprint: `soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-previous`,
+      },
+    });
+    const essenceSection = html.slice(
+      html.indexOf('<section aria-labelledby="self-soul-essence-heading"'),
+      html.indexOf("</section>"),
+    );
+
+    expect(essenceSection).toContain("Intellectually curious, warm, and quietly playful.");
+    expect(essenceSection).toContain("Grounding support that should remain secondary.");
+    expect(essenceSection).toContain(
+      "Previous Essence remains active and will refresh automatically when the text model is idle.",
+    );
+    expect(essenceSection).toContain(">Refresh</button>");
+    expect(essenceSection).toContain("auburn hair");
+    expect(essenceSection).toContain("deep green eyes");
+    expect(essenceSection).toContain("Never flatter the reader reflexively.");
+    expect(essenceSection).not.toContain("silver hair");
+    expect(essenceSection).not.toContain("eye color: green");
+  });
+
+  it("keeps the previous synthesis visible during an active automatic refresh", () => {
+    const html = renderPanel({
+      notes: [{ text: "Physical description: auburn hair.", at: 2 }],
+      essence: {
+        ...ESSENCE,
+        sourceFingerprint: `soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-previous`,
+      },
+      essenceProgress: {
+        active: true,
+        phase: "analyzing",
+        message: "Refreshing the updated Soul Essence…",
+      },
+    });
+    const essenceSection = html.slice(
+      html.indexOf('<section aria-labelledby="self-soul-essence-heading"'),
+      html.indexOf("</section>"),
+    );
+
+    expect(essenceSection).toContain("Intellectually curious, warm, and quietly playful.");
+    expect(essenceSection).toContain("auburn hair");
+    expect(essenceSection).toContain("Refreshing the updated Soul Essence");
+    expect(essenceSection).toContain("Generating…");
+    expect(essenceSection).not.toContain("silver hair");
   });
 });

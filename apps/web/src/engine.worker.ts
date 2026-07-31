@@ -97,6 +97,8 @@ import {
   partitionSoulNotes,
   validateSoulEssence,
   loadSoulEssence,
+  loadLatestSoulEssence,
+  soulEssenceViewForNotes,
   saveSoulEssence,
   soulSourceFingerprint,
   soulEvidencePromptBlock,
@@ -293,6 +295,48 @@ const chatAborts = new Map<number, AbortController>();
 const soulEssenceAborts = new Map<number, AbortController>();
 /** The validated essence is crossing its atomic persistence boundary; cancellation waits for success. */
 const soulEssenceCommits = new Set<number>();
+/** At most one low-priority Essence rebuild may occupy the text-model lane during app downtime. */
+let idleSoulEssenceRequestId: number | undefined;
+
+const IDLE_SOUL_PREEMPTING_REQUESTS = new Set<MainToWorker["type"]>([
+  "init",
+  "open",
+  "start",
+  "resume",
+  "resumeBible",
+  "resumeImages",
+  "regenerateStoryboard",
+  "storyRenderLatest",
+  "rebuildPrompts",
+  "regenerateAllImages",
+  "regenerateImage",
+  "completeBook",
+  "paintForward",
+  "testRender",
+  "chat",
+  "buddyChat",
+  "runCodingAgents",
+  "resolveConflicts",
+  "summarize",
+  "planTask",
+  "scanInbox",
+  "polish",
+  "chatTool",
+  "chatVideo",
+  "assessImage",
+  "warmLlm",
+]);
+
+function preemptIdleSoulEssence(msg: MainToWorker): void {
+  const requestId = idleSoulEssenceRequestId;
+  if (requestId === undefined || soulEssenceCommits.has(requestId)) return;
+  if (
+    IDLE_SOUL_PREEMPTING_REQUESTS.has(msg.type) ||
+    (msg.type === "soulEssenceRefresh" && msg.background !== true)
+  ) {
+    soulEssenceAborts.get(requestId)?.abort();
+  }
+}
 
 /**
  * Story "as you go" session — the OPEN story (one at a time). `beats` is every beat's prose
@@ -1660,6 +1704,9 @@ function postWorkflow(): void {
 
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   const msg = event.data;
+  // Idle synthesis must yield to the reader, regardless of whether the main thread's cancellation
+  // message wins the race with this foreground request.
+  preemptIdleSoulEssence(msg);
   switch (msg.type) {
     case "init": {
       const prevSettings = settings;
@@ -2765,6 +2812,8 @@ async function ensureSoulEssence(
   notes: readonly SoulNote[],
   opts: {
     force?: boolean;
+    /** Background downtime work may traverse the complete resumable ledger without becoming force. */
+    allowMultiPass?: boolean;
     signal?: AbortSignal;
     onActivity?: () => void;
     contextTokens?: number;
@@ -2787,8 +2836,9 @@ async function ensureSoulEssence(
     const stored = await loadSoulEssence(store, kind, notes);
     if (stored) return stored;
     // An ordinary turn may build one bounded digest inline. Larger ledgers are rebuilt by the
-    // visible Generate/Refresh action so conversation never launches a silent multi-call job.
+    // visible Refresh action or the preemptible downtime scheduler.
     if (
+      !opts.allowMultiPass &&
       partitionSoulNotes(
         notes,
         opts.sourceBudget ?? soulDistillationSourceBudget(),
@@ -2830,7 +2880,7 @@ async function ensureSoulEssence(
         opts.sourceBudget ?? soulDistillationSourceBudget(),
         opts.outputBudget ?? soulDistillationOutputBudget(),
         true,
-        opts.force === true,
+        opts.force === true || opts.allowMultiPass === true,
         opts.signal,
         opts.onProgress,
         opts.onToken,
@@ -2904,10 +2954,18 @@ async function soulPromptFor(
   const exactFallback = kind === "self"
     ? selfSoulExactIdentityPromptBlock(notes, name)
     : userSoulExactIdentityPromptBlock(notes, name);
+  const latestEssence = notes.length > 0
+    ? await loadLatestSoulEssence(store, kind, notes)
+    : undefined;
   const cachedEssence =
-    notes.length > 0
-      ? await loadSoulEssence(store, kind, notes)
+    latestEssence?.sourceFingerprint === soulSourceFingerprint(notes)
+      ? latestEssence
       : undefined;
+  // Preserve the last generalized baseline while an idle rebuild is pending, but deterministically
+  // replace every exact identity field from the current notes before it can reach a prompt.
+  const retainedEssence = latestEssence
+    ? soulEssenceViewForNotes(latestEssence, notes)
+    : undefined;
   const evidenceFor = (essence?: SoulEssence) =>
     mode !== "story" && opts.queryContext
       ? soulEvidencePromptBlock(kind, notes, opts.queryContext, undefined, essence)
@@ -2925,13 +2983,13 @@ async function soulPromptFor(
       : kind === "self"
         ? selfSoulEssencePromptBlock(essence, name)
         : userSoulEssencePromptBlock(essence, name);
-  const compactCached = compactFor(cachedEssence);
+  const compactCached = compactFor(retainedEssence);
   if (compactCached) {
     return [compactCached, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
   }
 
-  // Cloud preparation calls are billable and can retry on malformed JSON. Generate/Refresh is the
-  // explicit consent surface there; local providers may create a bounded essence automatically.
+  // Never add a billable preparation call to the latency of the user's active cloud chat. Manual
+  // Refresh and the separately scheduled/preemptible downtime job use the dedicated refresh path.
   if (CLOUD_LLM_IDS.has(llm.id)) {
     if (mode === "story") return "";
     return [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
@@ -4234,6 +4292,13 @@ async function handleSoulEssenceRefresh(
   const ac = new AbortController();
   soulEssenceAborts.get(msg.requestId)?.abort();
   soulEssenceAborts.set(msg.requestId, ac);
+  if (msg.background) {
+    const previous = idleSoulEssenceRequestId;
+    if (previous !== undefined && previous !== msg.requestId) {
+      soulEssenceAborts.get(previous)?.abort();
+    }
+    idleSoulEssenceRequestId = msg.requestId;
+  }
   const startedAt = Date.now();
   let tokens = 0;
   let lastTokenPost = 0;
@@ -4289,6 +4354,15 @@ async function handleSoulEssenceRefresh(
     report("loading", "Preparing the chat text model…");
     const store = memoryStore();
     const notes = await loadSoul(store, msg.kind);
+    if (
+      msg.expectedFingerprint &&
+      soulSourceFingerprint(notes) !== msg.expectedFingerprint
+    ) {
+      // The edit was superseded before its idle slot began. This is a successful no-op; the app's
+      // newer fingerprint remains dirty and will be considered by a later sweep.
+      post({ type: "soulEssenceRefreshed", requestId: msg.requestId, ok: true });
+      return;
+    }
     if (notes.length === 0) {
       post({ type: "soulEssenceRefreshed", requestId: msg.requestId, ok: true });
       return;
@@ -4326,7 +4400,8 @@ async function handleSoulEssenceRefresh(
         const sourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
         const outputBudget = soulDistillationOutputBudget(budgets.maxTokens);
         return ensureSoulEssence(llm, msg.kind, notes, {
-          force: true,
+          force: msg.background !== true,
+          ...(msg.background ? { allowMultiPass: true } : {}),
           signal: ac.signal,
           ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
           sourceBudget,
@@ -4371,6 +4446,7 @@ async function handleSoulEssenceRefresh(
     if (tokenTimer) clearTimeout(tokenTimer);
     soulEssenceCommits.delete(msg.requestId);
     if (soulEssenceAborts.get(msg.requestId) === ac) soulEssenceAborts.delete(msg.requestId);
+    if (idleSoulEssenceRequestId === msg.requestId) idleSoulEssenceRequestId = undefined;
   }
 }
 
@@ -5154,8 +5230,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         let resolvedSoulCast:
           | { self: string; user: string; source: "you-and-me-setup-v1" }
           | undefined;
-        let soulSelfNotes: SoulNote[] = [];
-        let soulUserNotes: SoulNote[] = [];
         const requestedSoulCast = createStorySoulCast(msg.storySoulCast);
         const castNames = new Set(cast.map((character) => character.name.trim().toLocaleLowerCase()));
         if (
@@ -5163,12 +5237,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           castNames.has(requestedSoulCast.self.toLocaleLowerCase()) &&
           castNames.has(requestedSoulCast.user.toLocaleLowerCase())
         ) {
-          const [selfNotes, userNotes] = await Promise.all([
-            loadSoul(store, "self"),
-            loadSoul(store, "user"),
-          ]);
-          soulSelfNotes = selfNotes;
-          soulUserNotes = userNotes;
           resolvedSoulCast = requestedSoulCast;
         }
         // The reader's setup text is a PREMISE, not the opening prose: let the AI write the actual
@@ -5197,9 +5265,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             // while raw notes, evidence retrieval, and exact conversational directions stay out.
             let soulCharacterization = "";
             if (resolvedSoulCast) {
+              const [selfNotes, userNotes] = await Promise.all([
+                loadSoul(store, "self"),
+                loadSoul(store, "user"),
+              ]);
               const [selfEssence, userEssence] = await Promise.all([
-                loadSoulEssence(store, "self", soulSelfNotes),
-                loadSoulEssence(store, "user", soulUserNotes),
+                selfNotes.length > 0
+                  ? loadLatestSoulEssence(store, "self", selfNotes)
+                  : Promise.resolve(undefined),
+                userNotes.length > 0
+                  ? loadLatestSoulEssence(store, "user", userNotes)
+                  : Promise.resolve(undefined),
               ]);
               soulCharacterization = storySoulCharacterizationPromptBlock({
                 ...(selfEssence ? { selfEssence } : {}),

@@ -111,19 +111,16 @@ export async function saveSoul(
   notes: readonly SoulNote[],
 ): Promise<SoulNote[]> {
   const saved = await saveNotes(store, SPECS[kind], notes);
-  await invalidateSoulEssence(store, kind);
   return saved;
 }
 
 export async function rememberSoul(store: VisualReaderStore, kind: SoulKind, text: string): Promise<SoulNote[]> {
   const saved = await rememberIn(store, SPECS[kind], text);
-  await invalidateSoulEssence(store, kind);
   return saved;
 }
 
 export async function forgetSoul(store: VisualReaderStore, kind: SoulKind, match: string): Promise<SoulNote[]> {
   const saved = await forgetIn(store, SPECS[kind], match, FORGET_LABEL[kind]);
-  await invalidateSoulEssence(store, kind);
   return saved;
 }
 
@@ -138,8 +135,9 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
 
 /**
  * A Soul Essence is a derived, compact interpretation of the authoritative SoulNote[].
- * It is deliberately disposable: the source fingerprint makes an essence invalid as soon as any
- * source note changes, and every distilled assertion points back to the notes that support it.
+ * Its source fingerprint distinguishes a current Essence from the last validated snapshot after the
+ * notes change. The old snapshot remains available while an updated one is prepared, and every
+ * distilled assertion points back to the notes that supported that historical synthesis.
  */
 export const SOUL_ESSENCE_SCHEMA_VERSION = 3 as const;
 export const MAX_SOUL_ESSENCE_FACET_CHARS = 420;
@@ -1019,7 +1017,7 @@ function normaliseSoulEssence(
           exactDirections.map((fact) => fact.text),
           MAX_SOUL_ESSENCE_FACET_CHARS,
         ),
-        sourceIds: exactDirections.flatMap((fact) => fact.sourceIds),
+        sourceIds: [...new Set(exactDirections.flatMap((fact) => fact.sourceIds))],
       }
     : { text: "", sourceIds: [] };
 
@@ -1686,6 +1684,195 @@ export async function loadSoulEssence(
   }
 }
 
+const RETAINED_SOUL_SOURCE_ID = /^sn_[0-9a-f]{16}(?:_[1-9][0-9]*)?$/;
+const RETAINED_SOUL_FINGERPRINT = new RegExp(
+  `^soul-v${SOUL_ESSENCE_SCHEMA_VERSION}-[0-9a-f]{16}$`,
+);
+const MAX_RETAINED_SOUL_ESSENCE_JSON_CHARS = 1_000_000;
+const MAX_RETAINED_SOUL_EXACT_FACTS = MAX_SOUL_NOTES * 64;
+
+function retainedSourceIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_RETAINED_SOUL_EXACT_FACTS) {
+    return undefined;
+  }
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !RETAINED_SOUL_SOURCE_ID.test(item)) {
+      return undefined;
+    }
+    if (!ids.includes(item)) ids.push(item);
+    if (ids.length > MAX_SOUL_NOTES) return undefined;
+  }
+  return ids;
+}
+
+function retainedFacet(
+  value: unknown,
+  maxChars: number,
+): SoulEssenceFacet | undefined {
+  const record = objectRecord(value);
+  if (!record || typeof record.text !== "string") return undefined;
+  const text = record.text;
+  if (text !== text.trim() || text.length > maxChars) return undefined;
+  const sourceIds = retainedSourceIds(record.sourceIds);
+  if (!sourceIds || (!!text !== (sourceIds.length > 0))) return undefined;
+  return { text, sourceIds };
+}
+
+function retainedExactFacts(
+  value: unknown,
+  allowSlot: boolean,
+): SoulEssenceAppearanceFact[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_RETAINED_SOUL_EXACT_FACTS) {
+    return undefined;
+  }
+  const facts: SoulEssenceAppearanceFact[] = [];
+  for (const item of value) {
+    const record = objectRecord(item);
+    if (!record || typeof record.text !== "string") return undefined;
+    const text = record.text;
+    if (!text || text !== text.trim() || text.length > MAX_SOUL_NOTE_CHARS) {
+      return undefined;
+    }
+    const sourceIds = retainedSourceIds(record.sourceIds);
+    if (!sourceIds?.length) return undefined;
+    const slot = record.slot;
+    if (
+      slot !== undefined &&
+      (
+        !allowSlot ||
+        typeof slot !== "string" ||
+        !/^[a-z][a-z0-9_.:-]{0,79}$/i.test(slot)
+      )
+    ) {
+      return undefined;
+    }
+    facts.push({ text, sourceIds, ...(typeof slot === "string" ? { slot } : {}) });
+  }
+  return facts;
+}
+
+/**
+ * Parse the last snapshot without pretending that it is current for today's notes. Every value at
+ * this key was written only after strict source validation; this deliberately conservative shape
+ * check protects callers from corrupt/tampered storage without retaining deleted source notes just
+ * to revalidate a historical synthesis.
+ */
+function parseLatestSoulEssence(raw: string, kind: SoulKind): SoulEssence | undefined {
+  if (raw.length > MAX_RETAINED_SOUL_ESSENCE_JSON_CHARS) return undefined;
+  const envelope = parseJsonObject(raw);
+  const record = objectRecord(envelope?.essence) ?? envelope;
+  if (
+    !record ||
+    record.schemaVersion !== SOUL_ESSENCE_SCHEMA_VERSION ||
+    record.kind !== kind ||
+    typeof record.sourceFingerprint !== "string" ||
+    !RETAINED_SOUL_FINGERPRINT.test(record.sourceFingerprint) ||
+    typeof record.generatedAt !== "number" ||
+    !Number.isFinite(record.generatedAt) ||
+    record.generatedAt < 0
+  ) {
+    return undefined;
+  }
+
+  const generalizedEssence = retainedFacet(
+    record.generalizedEssence,
+    MAX_SOUL_GENERALIZED_ESSENCE_CHARS,
+  );
+  const rawFacets = objectRecord(record.facets);
+  if (!generalizedEssence || !rawFacets) return undefined;
+  const facets = {} as SoulEssenceFacets;
+  for (const key of SOUL_ESSENCE_FACETS) {
+    const facet = retainedFacet(rawFacets[key], MAX_SOUL_ESSENCE_FACET_CHARS);
+    if (!facet) return undefined;
+    facets[key] = facet;
+  }
+  const hasGeneralizableSupport = SOUL_GENERALIZABLE_FACETS.some(
+    (key) => !!facets[key].text,
+  );
+  if (hasGeneralizableSupport !== !!generalizedEssence.text) return undefined;
+  const supportIds = new Set(
+    SOUL_GENERALIZABLE_FACETS.flatMap((key) => facets[key].sourceIds),
+  );
+  if (generalizedEssence.sourceIds.some((id) => !supportIds.has(id))) {
+    return undefined;
+  }
+
+  const exactAppearance = retainedExactFacts(record.exactAppearance, true);
+  const exactPersonalityDirections = retainedExactFacts(
+    record.exactPersonalityDirections,
+    false,
+  );
+  if (!exactAppearance || !exactPersonalityDirections) return undefined;
+  return {
+    schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
+    kind,
+    sourceFingerprint: record.sourceFingerprint,
+    generatedAt: record.generatedAt,
+    generalizedEssence,
+    facets,
+    exactAppearance,
+    exactPersonalityDirections,
+  };
+}
+
+/**
+ * Load the most recently validated snapshot even when its fingerprint no longer matches the current
+ * notes. Use `loadSoulEssence` whenever currentness matters; retained snapshots are for continuity
+ * while an automatic refresh is pending.
+ */
+export async function loadLatestSoulEssence(
+  store: VisualReaderStore,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+): Promise<SoulEssence | undefined> {
+  try {
+    const raw = await store.getMemo?.(ESSENCE_KEY[kind]);
+    if (!raw) return undefined;
+    const current = parseSoulEssence(raw, kind, notes);
+    if (current) return current;
+    const retained = parseLatestSoulEssence(raw, kind);
+    // Structural validation exists only for a genuinely older revision. A snapshot that claims to
+    // be current but failed full evidence/exact-field validation is corrupt, not continuity.
+    return retained?.sourceFingerprint !== soulSourceFingerprint(notes)
+      ? retained
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Make a retained snapshot safe to show or provisionally inject beside a newer note revision. Its
+ * generalized synthesis and grounding facets stay historical, including the old fingerprint, while
+ * exact appearance and behavioral directions are rebuilt solely from the authoritative notes now.
+ * No historical exact field can leak through this view.
+ */
+export function soulEssenceViewForNotes(
+  essence: SoulEssence,
+  notes: readonly SoulNote[],
+): SoulEssence {
+  const sources = soulNoteSources(notes);
+  const directions = exactPersonalityDirections(notes, sources);
+  return {
+    ...essence,
+    facets: {
+      ...essence.facets,
+      personalityDirections: directions.length
+        ? {
+            text: boundedExactTexts(
+              directions.map((fact) => fact.text),
+              MAX_SOUL_ESSENCE_FACET_CHARS,
+            ),
+            sourceIds: [...new Set(directions.flatMap((fact) => fact.sourceIds))],
+          }
+        : { text: "", sourceIds: [] },
+    },
+    exactAppearance: reconcileSoulAppearance(notes).activeFacts,
+    exactPersonalityDirections: directions,
+  };
+}
+
 /** Persist only an essence validated against the current authoritative notes. */
 export async function saveSoulEssence(
   store: VisualReaderStore,
@@ -1701,19 +1888,6 @@ export async function saveSoulEssence(
 
 export async function clearSoulEssence(store: VisualReaderStore, kind: SoulKind): Promise<void> {
   await store.deleteMemo?.(ESSENCE_KEY[kind]);
-}
-
-/**
- * Note persistence has already succeeded when this runs, so cache cleanup must never turn that
- * success into a visible failure. loadSoulEssence independently checks the source fingerprint and
- * will reject an undeleted stale memo.
- */
-async function invalidateSoulEssence(store: VisualReaderStore, kind: SoulKind): Promise<void> {
-  try {
-    await clearSoulEssence(store, kind);
-  } catch {
-    // Best-effort cache cleanup only.
-  }
 }
 
 /** Exact behavioral directions get their own standing allowance instead of competing with looks. */

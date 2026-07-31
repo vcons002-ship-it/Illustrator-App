@@ -351,6 +351,7 @@ export interface EngineWorkerApi {
     kind: SoulKind,
     onProgress?: (progress: SoulEssenceJobProgress) => void,
     onRequestId?: (requestId: number) => void,
+    options?: { background?: boolean; expectedFingerprint?: string },
   ) => Promise<{ essence?: SoulEssence; error?: string }>;
   /** Cancel the active manual essence rebuild for this Soul, without cancelling chat. */
   cancelSoulEssence: (kind: SoulKind) => void;
@@ -656,12 +657,14 @@ export function useEngineWorker(
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
     new Map(),
   );
-  // In-flight manual Soul-Essence rebuilds, resolved by `soulEssenceRefreshed`.
+  // In-flight manual or preemptible idle Soul-Essence rebuilds, resolved by
+  // `soulEssenceRefreshed`. Only manual work owns the visible progress lane.
   const soulEssenceRequests = useRef<
     Map<
       number,
       {
         kind: SoulKind;
+        background: boolean;
         onProgress?: (progress: SoulEssenceJobProgress) => void;
         resetWatchdog: () => void;
         finish: (r: { essence?: SoulEssence; error?: string }) => void;
@@ -1285,7 +1288,10 @@ export function useEngineWorker(
           if (!request) break;
           request.resetWatchdog();
           request.onProgress?.(msg.progress);
-          if (activeSoulEssenceRequests.current.get(msg.kind) === msg.requestId) {
+          if (
+            !request.background &&
+            activeSoulEssenceRequests.current.get(msg.kind) === msg.requestId
+          ) {
             setSoulEssenceProgress({
               active: true,
               requestId: msg.requestId,
@@ -2198,16 +2204,22 @@ export function useEngineWorker(
       kind: SoulKind,
       onProgress?: (progress: SoulEssenceJobProgress) => void,
       onRequestId?: (requestId: number) => void,
+      options: { background?: boolean; expectedFingerprint?: string } = {},
     ): Promise<{ essence?: SoulEssence; error?: string }> => {
-      // This is one foreground utility lane (and usually one local model). Starting another Soul
-      // rebuild supersedes any older one, even for the other panel, so progress/cancel never point
-      // at two competing jobs.
-      for (const previous of [...activeSoulEssenceRequests.current.values()]) {
-        cancelSoulEssenceRequest(previous);
+      const background = options.background === true;
+      // A background refresh never displaces visible/manual work. A manual refresh does the
+      // opposite: it preempts the idle job and becomes the one visible utility lane.
+      if (background && activeSoulEssenceRequests.current.size > 0) {
+        return Promise.resolve({ error: "Another Soul Essence refresh is already running." });
       }
-      // Old requests remain privately correlated until their exact cancellation acknowledgement,
-      // but they no longer own the one visible foreground-progress lane.
-      activeSoulEssenceRequests.current.clear();
+      if (!background) {
+        for (const previous of [...activeSoulEssenceRequests.current.values()]) {
+          cancelSoulEssenceRequest(previous);
+        }
+        // Old requests remain privately correlated until their exact cancellation acknowledgement,
+        // but they no longer own the one visible foreground-progress lane.
+        activeSoulEssenceRequests.current.clear();
+      }
 
       const requestId = nextRefRequestId.current++;
       onRequestId?.(requestId);
@@ -2220,18 +2232,21 @@ export function useEngineWorker(
         tokens: 0,
       };
       onProgress?.(initialProgress);
-      setSoulEssenceProgress({
-        active: true,
-        requestId,
-        kind,
-        ...initialProgress,
-      });
+      if (!background) {
+        setSoulEssenceProgress({
+          active: true,
+          requestId,
+          kind,
+          ...initialProgress,
+        });
+      }
 
       return new Promise((resolve) => {
         let settled = false;
         let watchdog: ReturnType<typeof setTimeout> | undefined;
         let request!: {
           kind: SoulKind;
+          background: boolean;
           onProgress?: (progress: SoulEssenceJobProgress) => void;
           resetWatchdog: () => void;
           finish: (result: { essence?: SoulEssence; error?: string }) => void;
@@ -2265,6 +2280,7 @@ export function useEngineWorker(
         };
         request = {
           kind,
+          background,
           ...(onProgress ? { onProgress } : {}),
           resetWatchdog,
           finish,
@@ -2276,7 +2292,15 @@ export function useEngineWorker(
         // asks this main thread to launch the bundled LLM and relays that launch's progress back here.
         if (soulEssenceRequests.current.get(requestId) === request) {
           resetWatchdog();
-          send({ type: "soulEssenceRefresh", requestId, kind });
+          send({
+            type: "soulEssenceRefresh",
+            requestId,
+            kind,
+            ...(background ? { background: true } : {}),
+            ...(options.expectedFingerprint
+              ? { expectedFingerprint: options.expectedFingerprint }
+              : {}),
+          });
         }
       });
     },

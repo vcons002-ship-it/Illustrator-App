@@ -51,7 +51,8 @@ import {
   MAX_NOTE_CHARS,
   MAX_MEMORY_NOTES,
   loadSoul,
-  loadSoulEssence,
+  loadLatestSoulEssence,
+  soulEssenceViewForNotes,
   soulSourceFingerprint,
   saveSoul,
   loadSoulName,
@@ -296,7 +297,14 @@ import { useEngineWorker, type ImportResult, type TestRenderResult } from "./use
 import { useRemoteMirror, type UpdateResult } from "./useRemoteMirror.js";
 import { useLocalEngine } from "./useLocalEngine.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, EngineVram, PlannerCommand, PlannerMirror } from "./remote-sync.js";
+import {
+  SOUL_ESSENCE_IDLE_SWEEP_MS,
+  markSoulEssenceIdleAttempt,
+  selectSoulEssenceIdleCandidate,
+  trackSoulEssenceIdleCandidate,
+  type SoulEssenceIdleCandidate,
+} from "./soul-essence-idle.js";
+import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, EngineVram, PlannerCommand, PlannerMirror, SoulEssenceJobProgress } from "./remote-sync.js";
 import {
   gpuVramUsage,
   restartApp,
@@ -978,7 +986,7 @@ export function App() {
         const notes = await loadSoul(libraryStore, kind);
         setSoulNotes(kind, notes);
         await Promise.all([
-          loadSoulEssence(libraryStore, kind, notes).then((essence) => setSoulEssence(kind, essence)),
+          loadLatestSoulEssence(libraryStore, kind, notes).then((essence) => setSoulEssence(kind, essence)),
           loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
           loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
         ]);
@@ -1005,11 +1013,18 @@ export function App() {
       soulSaveWaiters.current.delete(kind);
       waiter.resolve();
     }
-    // Preserve an already mirrored essence only when an older frame omitted it and the source notes
-    // are unchanged. A supplied essence is authoritative, but is never adopted for different notes.
+    // A stale snapshot is deliberate continuity while the desktop rebuilds in downtime. Prefer a
+    // snapshot current for this frame, then the newest retained snapshot, so a late mirror cannot
+    // roll a freshly regenerated Essence backward.
     const nextEssence = (current: SoulEssence | undefined): SoulEssence | undefined => {
-      const candidate = essence ?? current;
-      return candidate?.sourceFingerprint === fingerprint ? candidate : undefined;
+      const candidates = [essence, current].filter(
+        (candidate): candidate is SoulEssence => candidate?.kind === kind,
+      );
+      const currentCandidates = candidates.filter(
+        (candidate) => candidate.sourceFingerprint === fingerprint,
+      );
+      return (currentCandidates.length > 0 ? currentCandidates : candidates)
+        .sort((left, right) => right.generatedAt - left.generatedAt)[0];
     };
     if (kind === "self") {
       setSelfSoulEssence(nextEssence);
@@ -1027,7 +1042,10 @@ export function App() {
    * closure — and this is display-only, so it must never be a reason to re-run a turn.
    */
   const identityRef = useRef<{ notes: string[]; names: string[] }>({ notes: [], names: [] });
-  const essenceIdentityText = [selfSoulEssence, userSoulEssence].flatMap((essence) =>
+  const essenceIdentityText = [
+    selfSoulEssence ? soulEssenceViewForNotes(selfSoulEssence, selfSoulNotes) : undefined,
+    userSoulEssence ? soulEssenceViewForNotes(userSoulEssence, userSoulNotes) : undefined,
+  ].flatMap((essence) =>
     essence
       ? [
           essence.generalizedEssence.text,
@@ -1052,15 +1070,15 @@ export function App() {
       self: {
         name: selfSoulName,
         notes: selfSoulNotes,
-        ...(selfSoulEssence?.sourceFingerprint === soulSourceFingerprint(selfSoulNotes)
-          ? { essence: selfSoulEssence }
+        ...(selfSoulEssence
+          ? { essence: soulEssenceViewForNotes(selfSoulEssence, selfSoulNotes) }
           : {}),
       },
       user: {
         name: userSoulName,
         notes: userSoulNotes,
-        ...(userSoulEssence?.sourceFingerprint === soulSourceFingerprint(userSoulNotes)
-          ? { essence: userSoulEssence }
+        ...(userSoulEssence
+          ? { essence: soulEssenceViewForNotes(userSoulEssence, userSoulNotes) }
           : {}),
       },
     }),
@@ -1096,10 +1114,60 @@ export function App() {
   // user actions (NOT raw clicks/scrolling); `processActiveRef` mirrors the in-flight signals so the
   // 90s sweep can read both without re-subscribing. `markUserRequest` is called from each user entry.
   const lastRequestAt = useRef(Date.now());
+  const idleSoulEssenceRequest = useRef<
+    { requestId: number; kind: SoulKind; fingerprint: string } | undefined
+  >();
+  const idleSoulEssenceCandidates = useRef<
+    Record<SoulKind, SoulEssenceIdleCandidate | undefined>
+  >({ self: undefined, user: undefined });
+  const [idleSoulEssenceProgress, setIdleSoulEssenceProgress] = useState<
+    ({ kind: SoulKind } & SoulEssenceJobProgress) | undefined
+  >();
   const markUserRequest = useCallback(() => {
     lastRequestAt.current = Date.now();
-  }, []);
+    const idleRequest = idleSoulEssenceRequest.current;
+    if (idleRequest) cancelSoulEssenceRequest(idleRequest.requestId);
+  }, [cancelSoulEssenceRequest]);
   const processActiveRef = useRef(false);
+
+  // Track each dirty revision independently from the polling timer. Rapid edits coalesce under the
+  // newest fingerprint, while a startup-loaded stale snapshot gets the same quiet-period treatment.
+  useEffect(() => {
+    const now = Date.now();
+    idleSoulEssenceCandidates.current.self = trackSoulEssenceIdleCandidate(
+      idleSoulEssenceCandidates.current.self,
+      {
+        kind: "self",
+        noteCount: selfSoulNotes.length,
+        notesFingerprint: soulSourceFingerprint(selfSoulNotes),
+        essenceFingerprint: selfSoulEssence?.sourceFingerprint,
+      },
+      now,
+    );
+    idleSoulEssenceCandidates.current.user = trackSoulEssenceIdleCandidate(
+      idleSoulEssenceCandidates.current.user,
+      {
+        kind: "user",
+        noteCount: userSoulNotes.length,
+        notesFingerprint: soulSourceFingerprint(userSoulNotes),
+        essenceFingerprint: userSoulEssence?.sourceFingerprint,
+      },
+      now,
+    );
+    const active = idleSoulEssenceRequest.current;
+    const activeRevision = active
+      ? idleSoulEssenceCandidates.current[active.kind]
+      : undefined;
+    if (active && activeRevision?.notesFingerprint !== active.fingerprint) {
+      cancelSoulEssenceRequest(active.requestId);
+    }
+  }, [
+    selfSoulNotes,
+    selfSoulEssence,
+    userSoulNotes,
+    userSoulEssence,
+    cancelSoulEssenceRequest,
+  ]);
   /**
    * When a background sweep that OWNS the screen last did anything — the scheduled runner or the
    * task-step runner, at either phase (opening its chat, or sending its turn).
@@ -6539,6 +6607,7 @@ export function App() {
   // normal buddy turn, with a friendly chat bubble instead of the raw payload.
   const startStoryFromSetup = useCallback(
     (payload: StoryStartPayload) => {
+      markUserRequest();
       setShowStorySetup(false);
       setShowChat(true);
       // Carrying the chat with no premise typed is a CONTINUATION, and saying "starting a story" over
@@ -6588,7 +6657,7 @@ export function App() {
     },
     // resetBuddyView is intentionally omitted — it's defined later in this component; referencing it
     // in the dep array would evaluate before initialization (TDZ). It's stable, so this is safe.
-    [buddyMessages, isRemoteClient, libraryStore, persistSessions],
+    [buddyMessages, isRemoteClient, libraryStore, persistSessions, markUserRequest],
   );
 
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
@@ -7496,6 +7565,7 @@ export function App() {
           void runBuddyTurnWithAttachments(c.text, c.attachments ?? []);
           break;
         case "vrcmd:storyStart": {
+          markUserRequest();
           // One relay frame owns both operations. Creating and sending as separate commands raced
           // React's session state and could dispatch /story into the phone's previous chat.
           storyReturnSessionRef.current = activeBuddyIdRef.current;
@@ -7583,6 +7653,7 @@ export function App() {
       setFileLedger,
       libraryStore,
       dispatchBuddyTurn,
+      markUserRequest,
     ],
   );
   useEffect(() => {
@@ -7788,8 +7859,129 @@ export function App() {
   // Mirror the "a process is in flight" signals into the ref the idle sweeps read each tick: a chat
   // turn, planning, a manual scan, or genuine illustration work. While any is true the app is NOT idle.
   useEffect(() => {
-    processActiveRef.current = buddyBusy || planningCount > 0 || scanningNow || engineWorking;
-  }, [buddyBusy, planningCount, scanningNow, engineWorking]);
+    processActiveRef.current =
+      chatBusy ||
+      buddyBusy ||
+      Boolean(buddyPendingTool) ||
+      planningCount > 0 ||
+      scanningNow ||
+      engineWorking ||
+      Boolean(soulEssenceProgress?.active) ||
+      Boolean(idleSoulEssenceProgress);
+  }, [
+    chatBusy,
+    buddyBusy,
+    buddyPendingTool,
+    planningCount,
+    scanningNow,
+    engineWorking,
+    soulEssenceProgress,
+    idleSoulEssenceProgress,
+  ]);
+
+  // Desktop owns the authoritative Soul store and text model. During a real lull it rebuilds one
+  // dirty revision at a time; the phone simply keeps receiving the retained snapshot and eventual
+  // atomic replacement through the existing mirror. A foreground request cancels this exact job.
+  useEffect(() => {
+    if (isRemoteClient) return;
+
+    const sweep = (): void => {
+      const candidate = selectSoulEssenceIdleCandidate(
+        [
+          idleSoulEssenceCandidates.current.self,
+          idleSoulEssenceCandidates.current.user,
+        ].filter((value): value is SoulEssenceIdleCandidate => value !== undefined),
+        {
+          now: Date.now(),
+          lastUserRequestAt: lastRequestAt.current,
+          isRemoteClient,
+          processActive: processActiveRef.current,
+          essenceActive: idleSoulEssenceRequest.current !== undefined,
+        },
+      );
+      if (!candidate) return;
+
+      idleSoulEssenceCandidates.current[candidate.kind] = markSoulEssenceIdleAttempt(
+        candidate,
+        Date.now(),
+      );
+      const startedAt = Date.now();
+      setIdleSoulEssenceProgress({
+        kind: candidate.kind,
+        phase: "queued",
+        message: "Refreshing automatically while the app is idle…",
+        startedAt,
+      });
+      let requestId: number | undefined;
+      void refreshSoulEssence(
+        candidate.kind,
+        (progress) => setIdleSoulEssenceProgress({ kind: candidate.kind, ...progress }),
+        (id) => {
+          requestId = id;
+          idleSoulEssenceRequest.current = {
+            requestId: id,
+            kind: candidate.kind,
+            fingerprint: candidate.notesFingerprint,
+          };
+        },
+        { background: true, expectedFingerprint: candidate.notesFingerprint },
+      )
+        .then((result) => {
+          if (result.essence) {
+            const currentNotes = candidate.kind === "self"
+              ? selfSoulNotesRef.current
+              : userSoulNotesRef.current;
+            if (
+              result.essence.kind === candidate.kind &&
+              result.essence.sourceFingerprint === soulSourceFingerprint(currentNotes)
+            ) {
+              if (candidate.kind === "self") setSelfSoulEssence(result.essence);
+              else setUserSoulEssence(result.essence);
+            }
+          }
+          // Cancellation is ordinary preemption, not a failed model attempt. Let this same revision
+          // retry after the next user-idle window instead of imposing the model-failure cooldown.
+          if (result.error && /cancelled/i.test(result.error)) {
+            const latest = idleSoulEssenceCandidates.current[candidate.kind];
+            if (latest?.notesFingerprint === candidate.notesFingerprint) {
+              idleSoulEssenceCandidates.current[candidate.kind] = {
+                ...latest,
+                lastAttemptAt: null,
+              };
+            }
+          } else if (result.error) {
+            const latest = idleSoulEssenceCandidates.current[candidate.kind];
+            if (latest?.notesFingerprint === candidate.notesFingerprint) {
+              idleSoulEssenceCandidates.current[candidate.kind] = {
+                ...latest,
+                lastAttemptAt: Date.now(),
+              };
+            }
+          }
+        })
+        .finally(() => {
+          if (
+            requestId !== undefined &&
+            idleSoulEssenceRequest.current?.requestId === requestId
+          ) {
+            idleSoulEssenceRequest.current = undefined;
+          }
+          setIdleSoulEssenceProgress(undefined);
+        });
+    };
+
+    sweep();
+    const timer = window.setInterval(sweep, SOUL_ESSENCE_IDLE_SWEEP_MS);
+    return () => {
+      window.clearInterval(timer);
+      const active = idleSoulEssenceRequest.current;
+      if (active) cancelSoulEssenceRequest(active.requestId);
+    };
+  }, [
+    isRemoteClient,
+    refreshSoulEssence,
+    cancelSoulEssenceRequest,
+  ]);
   // Rough ETA for the remaining images (two render concurrently in the buffer).
   const remainingEta =
     avgRenderMs > 0 && totalUnits > settledCount
@@ -9467,7 +9659,19 @@ export function App() {
           essence={showSoul === "self" ? selfSoulEssence : userSoulEssence}
           essenceProgress={(() => {
             const progress = isRemoteClient ? remoteSoulEssenceProgress : soulEssenceProgress;
-            return progress?.kind === showSoul ? progress : undefined;
+            if (progress?.kind === showSoul) return progress;
+            if (!isRemoteClient && idleSoulEssenceProgress?.kind === showSoul) {
+              return {
+                active: true,
+                phase: idleSoulEssenceProgress.phase,
+                message: idleSoulEssenceProgress.message,
+                pass: idleSoulEssenceProgress.pass,
+                total: idleSoulEssenceProgress.total,
+                tokens: idleSoulEssenceProgress.tokens,
+                startedAt: idleSoulEssenceProgress.startedAt,
+              };
+            }
+            return undefined;
           })()}
           images={showSoul === "self" ? selfSoulImages : userSoulImages}
           limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
@@ -9475,9 +9679,9 @@ export function App() {
           // from, so an edit here is relayed there and comes back as a vrsync:soul push — saving
           // locally would have written to the phone's own store, where nothing ever reads it.
           onSaveNotes={async (notes) => {
+            markUserRequest();
             const kind = showSoul;
             if (isRemoteClient) {
-              setSoulEssence(kind, undefined);
               setSoulNotes(kind, notes); // optimistic; the desktop's push confirms it
               await new Promise<void>((resolve, reject) => {
                 const previous = soulSaveWaiters.current.get(kind);
@@ -9497,9 +9701,9 @@ export function App() {
             }
             const saved = await saveSoul(libraryStore, kind, notes);
             setSoulNotes(kind, saved);
-            setSoulEssence(kind, undefined);
           }}
           onRefreshEssence={async () => {
+            markUserRequest();
             const kind = showSoul;
             const result = isRemoteClient
               ? await requestSoulEssenceRefresh(kind)
@@ -9517,7 +9721,7 @@ export function App() {
             ) {
               throw new Error("The Soul notes changed while the essence was being generated. Try again.");
             }
-            setSoulEssence(kind, result.essence);
+            if (result.essence) setSoulEssence(kind, result.essence);
             return result.essence;
           }}
           onCancelEssence={() => {
