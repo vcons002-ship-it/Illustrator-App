@@ -479,6 +479,13 @@ function persistStoryConfig(): void {
  * is cleared, since a fresh conversation is a fresh set of needs.
  */
 const loadedToolsetsBySession = new Map<string, string[]>();
+/**
+ * Deliberately UNBOUNDED. A cap would have to evict by load ORDER, since a loaded set is used without
+ * passing through the loader again and so leaves no trace of recency — meaning a set in constant use
+ * would be dropped for one loaded once and forgotten. That is a mid-conversation reset with no reason
+ * the reader can see, which is the exact defect fixed above. A conversation that has genuinely needed
+ * five capabilities is a conversation that needs five capabilities; the common case is one or two.
+ */
 
 /** The prompt options that decide what this ENVIRONMENT can offer, shared by the prompt and the
  * per-toolset documents so the two can never disagree about what exists. */
@@ -5656,7 +5663,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // On-demand tool documentation: the prompt carries a one-line index and the model loads what a
     // request actually needs (see chat/toolsets.ts). Held per session so a coding conversation pays
     // for the coding document once, not once a turn.
-    const sessionKey = msg.taskPlanId ?? "buddy";
+    // Keyed on the CONVERSATION, not on what the conversation is currently working on. taskPlanId is
+    // "the task this chat is working" — it appears and disappears mid-thread, so keying on it reset
+    // the loaded set twice per task, in the middle of one continuous chat, for no reason the reader
+    // could see.
+    const sessionKey = "buddy";
     const loadedToolsets = loadedToolsetsBySession.get(sessionKey) ?? [];
     const promptOpts = {
         persona: msg.persona,

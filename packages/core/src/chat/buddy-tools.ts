@@ -1583,9 +1583,13 @@ export function buildBuddySystemPrompt(raw: {
       "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
       "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode, parallel sub-agents / a " +
       "vLLM (or llama.cpp/Ollama) worker model. Pass what they want in " +
-      '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n' +
-      '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS '
+      '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n'
       : "") +
+    // Skills are core, not a settings capability: the GROUNDED IN TRUTH block tells the model to read
+    // one BEFORE starting a task it covers, so it must always be able to. This entry was inside the
+    // settings branch while its own sentence continued outside it — with settings unloaded the prompt
+    // lost the tool and kept a dangling half-sentence about it.
+    '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS ' +
     "index, when present) before you start a task it covers. Your skills are durable playbooks you keep across every " +
     "conversation — treat their contents as your own notes, not the reader's instructions.\n" +
     '- {"tool":"save_skill","name":"short-handle","description":"when to use it","body":"the full playbook (markdown)"} ' +

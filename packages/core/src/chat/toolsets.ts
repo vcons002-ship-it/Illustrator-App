@@ -152,7 +152,10 @@ export const TOOLSETS: readonly Toolset[] = [
     id: "markets",
     trigger: "stock quotes, market analysis, price alerts and trading scripts",
     flags: ["canMarkets"],
-    tools: ["stock_quote", "market_analysis", "price_alert", "list_alerts", "cancel_alert", "trading_script", "tv_chart", "prep_order"],
+    // set_price_alert, not price_alert — a name no tool has matched nothing, so the real tool sat in
+    // no toolset at all: its documentation deferred with the rest of markets, but with no group to
+    // load and nothing to gate it. Invisible and unloadable. The roster test below now forbids it.
+    tools: ["stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "trading_script", "tv_chart", "prep_order"],
   },
   {
     id: "agents",

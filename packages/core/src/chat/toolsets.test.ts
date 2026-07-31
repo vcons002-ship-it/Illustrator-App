@@ -7,7 +7,7 @@ import {
   toolsetForTool,
   toolsetIndexBlock,
 } from "./toolsets.js";
-import { buildBuddySystemPrompt, ollamaToolSchemas, toolsetDoc } from "./buddy-tools.js";
+import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, ollamaToolSchemas, toolsetDoc } from "./buddy-tools.js";
 
 /** Everything a fully-equipped desktop can do. */
 const FULL = {
@@ -201,6 +201,31 @@ describe("the registry describes the prompt it actually gates", () => {
         expect(lean, `${tool} is shown while "${set.id}" is unloaded, but calling it is refused`)
           .not.toContain(`"tool":"${tool}"`);
       }
+    }
+  });
+
+  it("only names tools that exist", () => {
+    // `price_alert` was listed under markets; the real tool is `set_price_alert`. A name no tool has
+    // matches nothing, so the gate silently stopped applying to the tool it was meant to cover.
+    for (const set of TOOLSETS) {
+      for (const tool of set.tools) {
+        expect(BUDDY_TOOL_NAMES.has(tool as never), `"${tool}" (in ${set.id}) is not a real tool`).toBe(true);
+      }
+    }
+  });
+
+  it("leaves no tool deferred with no group to load it from", () => {
+    // The hole the two bugs above fell through, stated over the REAL roster rather than a hand list:
+    // a tool whose documentation disappears when nothing is loaded, but which belongs to no toolset,
+    // is invisible AND unloadable. `set_price_alert` and `read_skill` were both in that state — the
+    // model could neither see them nor ask for them, and nothing in the prompt admitted they existed.
+    const equipped = { ...EQUIPPED, canSchwab: true, canTvBridge: true } as Record<string, unknown>;
+    const loadedAll = build({ ...equipped, loadedToolsets: TOOLSET_IDS });
+    const loadedNone = build({ ...equipped, loadedToolsets: [] });
+    const homed = new Set([...TOOLSETS.flatMap((s) => s.tools), ...ALWAYS_ON_TOOLS]);
+    for (const tool of BUDDY_TOOL_NAMES) {
+      const deferred = loadedAll.includes(`"tool":"${tool}"`) && !loadedNone.includes(`"tool":"${tool}"`);
+      if (deferred) expect(homed.has(tool), `${tool}'s docs are deferred but no toolset loads them`).toBe(true);
     }
   });
 
