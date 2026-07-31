@@ -9,6 +9,7 @@ import {
   buildSoulEssenceDistillationPrompt,
   parseSoulEssence,
   reconcileSoulAppearance,
+  selfSoulEssencePromptBlock,
   selfSoulPromptBlock,
   soulEvidencePromptBlock,
   soulNoteSources,
@@ -113,6 +114,168 @@ describe("Soul appearance reconciliation", () => {
     expect(projection.supersededSourceIds).toContain(
       soulNoteSources([note("blue eyes", 1), note("green eyes", 2)])[0]!.id,
     );
+  });
+
+  it("keeps an eye's base color separate from its texture and colored flecks", () => {
+    const description =
+      "My eyes are deep, mossy green, with complex, organic textures and subtle amber flecks, " +
+      "as if catching sunlight filtering through a dense forest canopy.";
+    const exactNotes = [note(description)];
+    const exact = visualSoulNotes(exactNotes, 2_000);
+    const exactEssence = parseSoulEssence(
+      JSON.stringify(emptyEssencePayload("self", exactNotes)),
+      "self",
+      exactNotes,
+    );
+    const exactPrompt = selfSoulEssencePromptBlock(exactEssence);
+
+    expect(exact).toBe(
+      "eye color: deep, mossy green; eye detail: complex, organic textures and subtle amber flecks, " +
+        "as if catching sunlight filtering through a dense forest canopy",
+    );
+    expect(exact).toMatch(/\bdeep, mossy green\b/i);
+    expect(exact).toMatch(/\bcomplex, organic textures\b/i);
+    expect(exact).toMatch(/\bsubtle amber flecks\b/i);
+    expect(exact).toMatch(/as if catching sunlight filtering through a dense forest canopy/i);
+    expect(exactEssence?.exactAppearance.map((fact) => fact.slot)).toEqual([
+      "eyes.color",
+      "eyes.detail",
+    ]);
+    expect(exactPrompt).toContain(exact);
+
+    const notes = [
+      note("Eye color: deep, mossy green", 1),
+      note("Eyes: complex, organic textures and subtle amber flecks", 2),
+    ];
+    const projection = reconcileSoulAppearance(notes);
+    const current = visualSoulNotes(notes, 2_000);
+    const colorFacts = projection.activeFacts.filter((fact) => fact.slot === "eyes.color");
+    const detailFacts = projection.activeFacts.filter((fact) => fact.slot === "eyes.detail");
+
+    expect(current).toMatch(/\bdeep, mossy green\b/i);
+    expect(current).toMatch(/\bcomplex, organic textures and subtle amber flecks\b/i);
+    expect(colorFacts.map((fact) => fact.text).join("; ")).toMatch(/\bdeep, mossy green\b/i);
+    expect(colorFacts.map((fact) => fact.text).join("; ")).not.toMatch(/amber|flecks|textures/i);
+    expect(detailFacts.map((fact) => fact.text).join("; ")).toMatch(/amber flecks/i);
+  });
+
+  it.each([
+    ["Eyes: amber-flecked green.", /eye color: green/i, /eye detail: amber-flecked/i],
+    ["Eye colour: ultramarine with gold flecks.", /eye color: ultramarine/i, /eye detail: gold flecks/i],
+    ["Eye color: blue-green with gold flecks.", /eye color: blue-green/i, /eye detail: gold flecks/i],
+    ["My eyes, a vivid green, have amber flecks.", /eye color: vivid green/i, /eye detail: amber flecks/i],
+    ["Eyes: blue flecked with amber.", /eye color: blue/i, /eye detail: flecked with amber/i],
+    ["Eyes: green ringed with gold.", /eye color: green/i, /eye detail: ringed with gold/i],
+    ["Eyes: ultramarine with gold flecks.", /eye color: ultramarine/i, /eye detail: gold flecks/i],
+    ["Eye color: tangerine with gold flecks.", /eye color: tangerine/i, /eye detail: gold flecks/i],
+  ])("separates base eye color from accent detail in %s", (description, color, detail) => {
+    const current = visualSoulNotes([note(description)], 2_000);
+
+    expect(current).toMatch(color);
+    expect(current).toMatch(detail);
+  });
+
+  it.each(["glossy", "cloudy", "glassy", "reflective", "heterochromatic"])(
+    "keeps the generic eye descriptor %s as detail rather than inventing a base color",
+    (descriptor) => {
+      const projection = reconcileSoulAppearance([
+        note(`Eyes: ${descriptor} with gold flecks.`),
+      ]);
+      const current = visualSoulNotes([
+        note(`Eyes: ${descriptor} with gold flecks.`),
+      ], 2_000);
+
+      expect(current).toMatch(new RegExp(`eye detail: ${descriptor} with gold flecks`, "i"));
+      expect(projection.activeFacts.some((fact) => fact.slot === "eyes.color")).toBe(false);
+    },
+  );
+
+  it("does not use an accent inside a generic detail clause as the base eye color", () => {
+    const notes = [note("Eyes: heterochromatic with blue and gold flecks.")];
+    const projection = reconcileSoulAppearance(notes);
+    const current = visualSoulNotes(notes, 2_000);
+
+    expect(current).toMatch(/eye detail: heterochromatic with blue and gold flecks/i);
+    expect(projection.activeFacts.some((fact) => fact.slot === "eyes.color")).toBe(false);
+  });
+
+  it("recognizes a curated uncommon color in a generic Eyes field", () => {
+    expect(visualSoulNotes([note("Eyes: ultramarine.")], 2_000)).toMatch(
+      /eye color: ultramarine/i,
+    );
+  });
+
+  it("keeps a qualified natural eye color together without a spurious eye-other fact", () => {
+    const projection = reconcileSoulAppearance([note("Her eyes are a deep, mossy green.")]);
+    const current = visualSoulNotes([note("Her eyes are a deep, mossy green.")], 2_000);
+
+    expect(current).toMatch(/eye color: (?:a )?deep, mossy green/i);
+    expect(projection.activeFacts).toHaveLength(1);
+    expect(projection.activeFacts[0]?.slot).toBe("eyes.color");
+  });
+
+  it.each([
+    ["My eyes are green, as if lit by neon light.", /lit by|neon light/i],
+    ["My eyes have amber flecks, as if narrowed in anger.", /narrowed|anger/i],
+    ["My eyes have amber flecks, as though glaring with rage.", /glaring|rage/i],
+    ["My eyes have amber flecks, as if reflecting moonlight.", /reflecting|moonlight/i],
+  ])("does not make a transient eye state permanent: %s", (description, transient) => {
+    expect(visualSoulNotes([note(description)], 2_000)).not.toMatch(transient);
+  });
+
+  it("keeps a philosophical eye analogy out of exact appearance", () => {
+    const current = visualSoulNotes([
+      note("My eyes have complex patterns, evoking my curiosity about technology."),
+    ], 2_000);
+
+    expect(current).toMatch(/complex patterns/i);
+    expect(current).not.toMatch(/curiosity|technology/i);
+  });
+
+  it.each([
+    "amber flecks, resembling neon light reflected on water",
+    "amber flecks, reminiscent of moonlight reflected in glass",
+    "amber flecks, evoking the glow of firelight",
+    "amber flecks, as if viewed through neon light",
+    "amber flecks, as though seen through moonlight",
+    "amber flecks, resembling a determined stare",
+    "amber flecks, reminiscent of a gaze of intense sorrow",
+  ])("filters a scene or bearing comparison from durable eye detail: %s", (detail) => {
+    const current = visualSoulNotes([note(`Eyes: ${detail}.`)], 2_000);
+
+    expect(current).not.toMatch(/neon|moonlight|firelight|determined stare|intense sorrow/i);
+  });
+
+  it.each([
+    ["green with a pattern resembling a narrow golden ring", /narrow golden ring/i],
+    ["green with small amber flecks", /small amber flecks/i],
+    ["green with large gold rings", /large gold rings/i],
+    ["green, narrow golden rings", /narrow golden rings/i],
+    ["green, small amber flecks", /small amber flecks/i],
+    ["green and large gold rings", /large gold rings/i],
+  ])("does not confuse an eye-detail adjective with eye shape: %s", (description, detail) => {
+    const projection = reconcileSoulAppearance([note(`Eyes: ${description}.`)]);
+    const current = visualSoulNotes([note(`Eyes: ${description}.`)], 2_000);
+
+    expect(current).toMatch(detail);
+    expect(projection.activeFacts.some((fact) => fact.slot === "eyes.shape")).toBe(false);
+  });
+
+  it("still recognizes an actual eye shape before a detail clause", () => {
+    const projection = reconcileSoulAppearance([
+      note("Eyes: almond-shaped and green with small amber flecks."),
+    ]);
+
+    expect(projection.activeFacts.some(
+      (fact) => fact.slot === "eyes.shape" && /almond-shaped/i.test(fact.text),
+    )).toBe(true);
+  });
+
+  it.each([
+    "I look for patterns with fresh eyes.",
+    "I see complex patterns through the eyes of history.",
+  ])("does not turn an eye idiom into permanent texture: %s", (description) => {
+    expect(visualSoulNotes([note(description)])).toBe("");
   });
 
   it("patches only the corrected eye colour while preserving hair, eye shape, build, and marks", () => {
@@ -363,6 +526,37 @@ describe("Soul appearance reconciliation", () => {
     expect(current).not.toMatch(/dissolve boundaries|observer|physical entanglement/i);
     expect(projection.nonVisualTextBySourceId[reflectionSource.id]).toBe(reflection);
     expect(buildSoulEssenceDistillationPrompt("self", notes).user).toContain(reflection);
+  });
+
+  it("retains thin and hourglass build details from the reported combined profile note", () => {
+    const notes = [
+      note(
+        "I see myself as a cute, pretty, petite young woman. " +
+          "I have a thin body with pronounced hourglass silhouette. " +
+          "I have a large natural bust, auburn hair and lightly freckled cheeks.",
+      ),
+    ];
+    const current = visualSoulNotes(notes, 2_000);
+    const essence = parseSoulEssence(
+      JSON.stringify(emptyEssencePayload("self", notes)),
+      "self",
+      notes,
+    );
+    const exactEssenceAppearance = essence?.exactAppearance
+      .map((fact) => fact.text)
+      .join("; ") ?? "";
+    const everydayPrompt = selfSoulEssencePromptBlock(essence);
+
+    expect(current).toMatch(/\bpetite\b/i);
+    expect(current).toMatch(/\bthin body\b/i);
+    expect(current).toMatch(/\bpronounced hourglass silhouette\b/i);
+    expect(current).toMatch(/\blarge natural bust\b/i);
+    expect(current).toMatch(/\bauburn hair\b/i);
+    expect(current).toMatch(/\blightly freckled cheeks\b/i);
+    expect(exactEssenceAppearance).toMatch(/\bthin body\b/i);
+    expect(exactEssenceAppearance).toMatch(/\bpronounced hourglass silhouette\b/i);
+    expect(everydayPrompt).toMatch(/\bthin body\b/i);
+    expect(everydayPrompt).toMatch(/\bpronounced hourglass silhouette\b/i);
   });
 
   it.each([

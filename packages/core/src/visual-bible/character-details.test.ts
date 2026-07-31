@@ -29,6 +29,16 @@ describe("transient character details", () => {
     expect(isTransientCharacterDetail("auburn hair and a scar over one eyebrow")).toBe(false);
   });
 
+  it("distinguishes a durable body silhouette from scene silhouette lighting", () => {
+    const bodyShape = "I have a thin body with pronounced hourglass silhouette.";
+
+    expect(isTransientCharacterDetail(bodyShape)).toBe(false);
+    expect(stripTransientCharacterDetailsExact(bodyShape)).toBe(bodyShape);
+    expect(isTransientCharacterDetail("silhouetted against moonlight")).toBe(true);
+    expect(isTransientCharacterDetail("Her silhouette is highlighted by neon light")).toBe(true);
+    expect(isTransientCharacterDetail("a silhouette in front of the firelight")).toBe(true);
+  });
+
   it("removes only the transient clauses from mixed extracted prose", () => {
     expect(stripTransientCharacterDetails("auburn hair; a broad grin")).toBe("auburn hair");
     expect(stripTransientCharacterDetails("green eyes, smiling warmly, freckled skin")).toBe(

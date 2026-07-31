@@ -32,7 +32,7 @@ const EXPRESSION_SHAPED_MARK =
  * fresh for every image and is exactly where "light reflecting in her eyes" is worth saying.
  */
 const SCENE_LIGHTING_DETAIL =
-  /\b(?:reflect(?:s|ed|ing)?|refract(?:s|ed|ing)?|lit(?: by| from)?|illuminat(?:es|ed|ing)|highlighted|silhouett?e(?:d)?|backlit|underlit|bathed in|washed in|glow(?:s|ing) (?:in|on|against)|catch(?:es|ing) the light|cast(?:s|ing)? (?:a )?shadows?|shadowed by|haloed|rim light|neon light|firelight|lamplight|candlelight|moonlight|sunlight)\b/i;
+  /\b(?:reflect(?:s|ed|ing)?|refract(?:s|ed|ing)?|lit(?: by| from)?|illuminat(?:es|ed|ing)|highlighted|silhouett?ed|silhouett?e\s+(?:against|before|beneath|under|in front of)|backlit|underlit|bathed in|washed in|glow(?:s|ing) (?:in|on|against)|catch(?:es|ing) the light|cast(?:s|ing)? (?:a )?shadows?|shadowed by|haloed|rim light|neon light|firelight|lamplight|candlelight|moonlight|sunlight)\b/i;
 
 /**
  * Gaze, expression, and bearing — the mood of a moment written as a feature.
