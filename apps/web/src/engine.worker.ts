@@ -81,14 +81,7 @@ import {
   loadSoulImages,
   rememberSoul,
   forgetSoul,
-  selfSoulPromptBlock,
-  userSoulPromptBlock,
-  selfSoulEssencePromptBlock,
-  userSoulEssencePromptBlock,
-  selfSoulExactIdentityPromptBlock,
-  userSoulExactIdentityPromptBlock,
-  selfStorySoulEssencePromptBlock,
-  userStorySoulEssencePromptBlock,
+  soulContextPromptBlock,
   storySoulCharacterizationPromptBlock,
   selectSoulContextMode,
   buildSoulEssenceDistillationPrompt,
@@ -98,10 +91,8 @@ import {
   validateSoulEssence,
   loadSoulEssence,
   loadLatestSoulEssence,
-  soulEssenceViewForNotes,
   saveSoulEssence,
   soulSourceFingerprint,
-  soulEvidencePromptBlock,
   selfPortraitPrompt,
   userPortraitPrompt,
   isSelfPortraitRequest,
@@ -2346,10 +2337,10 @@ function chatProviders(opts: {
 
 /**
  * Soul notes are the authoritative ledger; the compact essence is a disposable cache derived from
- * that ledger. One in-flight map prevents home chat + book chat from independently distilling the
- * same revision, while a failure cooldown prevents a small model returning malformed JSON from
- * adding another invisible LLM call to every later message. Transient failures can still recover;
- * changing notes or models changes the key immediately.
+ * that ledger. One in-flight map keeps explicit and idle refresh requests from independently
+ * distilling the same revision, while a failure cooldown prevents repeated downtime retries after a
+ * small model returns malformed JSON. Foreground chat only reads the cache/fallback and never enters
+ * this generation path; changing notes or models changes the refresh key immediately.
  */
 const soulEssenceInFlight = new Map<
   string,
@@ -2361,7 +2352,6 @@ const SOUL_ESSENCE_MAX_TOKENS = 1_400;
 const MIN_SOUL_DISTILLATION_CONTEXT_TOKENS = 4_096;
 const MIN_SOUL_SOURCE_CHUNK_CHARS = 3_000;
 const MAX_SOUL_SOURCE_CHUNK_CHARS = 48_000;
-const MAX_INLINE_SOUL_DISTILLATION_CHUNKS = 1;
 const SOUL_DIGEST_CACHE_LIMIT = 512;
 const SOUL_DIGEST_CACHE_MAX_CHARS = 1_000_000;
 const SOUL_DIGEST_CACHE_KEY: Record<SoulKind, string> = {
@@ -2822,7 +2812,6 @@ async function ensureSoulEssence(
     /** Background downtime work may traverse the complete resumable ledger without becoming force. */
     allowMultiPass?: boolean;
     signal?: AbortSignal;
-    onActivity?: () => void;
     contextTokens?: number;
     sourceBudget?: number;
     outputBudget?: number;
@@ -2842,17 +2831,6 @@ async function ensureSoulEssence(
   if (!opts.force) {
     const stored = await loadSoulEssence(store, kind, notes);
     if (stored) return stored;
-    // An ordinary turn may build one bounded digest inline. Larger ledgers are rebuilt by the
-    // visible Refresh action or the preemptible downtime scheduler.
-    if (
-      !opts.allowMultiPass &&
-      partitionSoulNotes(
-        notes,
-        opts.sourceBudget ?? soulDistillationSourceBudget(),
-      ).length > MAX_INLINE_SOUL_DISTILLATION_CHUNKS
-    ) {
-      return undefined;
-    }
   }
 
   const key = `${soulEssenceModelKey(llm)}:${kind}:${soulSourceFingerprint(notes)}`;
@@ -2876,10 +2854,7 @@ async function ensureSoulEssence(
   const work = (async (): Promise<SoulEssence | undefined> => {
     // Let the ownership entry land before any synchronous provider callback can fail this job.
     await Promise.resolve();
-    let activityTimer: ReturnType<typeof setInterval> | undefined;
     try {
-      opts.onActivity?.();
-      activityTimer = setInterval(() => opts.onActivity?.(), 30_000);
       const essence = await distillSoulEssence(
         llm,
         kind,
@@ -2927,7 +2902,6 @@ async function ensureSoulEssence(
       if (opts.force) throw error;
       return undefined;
     } finally {
-      if (activityTimer) clearInterval(activityTimer);
       if (soulEssenceInFlight.get(key) === entry) soulEssenceInFlight.delete(key);
     }
   })();
@@ -2937,103 +2911,26 @@ async function ensureSoulEssence(
 }
 
 async function soulPromptFor(
-  llm: LLMProvider,
   kind: SoulKind,
   opts: {
     mode?: SoulContextMode;
     /** Story-only mapped character name; keeps edited setup names bound after the opening. */
     nameOverride?: string;
     queryContext?: string;
-    signal?: AbortSignal;
-    onActivity?: () => void;
-    contextTokens?: number;
-    sourceBudget?: number;
-    outputBudget?: number;
   } = {},
 ): Promise<string> {
   const store = memoryStore();
   const [notes, storedName] = await Promise.all([loadSoul(store, kind), loadSoulName(store, kind)]);
-  const mode = opts.mode ?? "ordinary";
   const name = opts.nameOverride !== undefined ? opts.nameOverride.trim() : storedName;
-  const raw = kind === "self"
-    ? selfSoulPromptBlock(notes, name)
-    : userSoulPromptBlock(notes, name);
-  const exactFallback = kind === "self"
-    ? selfSoulExactIdentityPromptBlock(notes, name)
-    : userSoulExactIdentityPromptBlock(notes, name);
   const latestEssence = notes.length > 0
     ? await loadLatestSoulEssence(store, kind, notes)
     : undefined;
-  const cachedEssence =
-    latestEssence?.sourceFingerprint === soulSourceFingerprint(notes)
-      ? latestEssence
-      : undefined;
-  // Preserve the last generalized baseline while an idle rebuild is pending, but deterministically
-  // replace every exact identity field from the current notes before it can reach a prompt.
-  const retainedEssence = latestEssence
-    ? soulEssenceViewForNotes(latestEssence, notes)
-    : undefined;
-  const evidenceFor = (essence?: SoulEssence) =>
-    mode !== "story" && opts.queryContext
-      ? soulEvidencePromptBlock(kind, notes, opts.queryContext, undefined, essence)
-      : "";
-  if (mode === "creative" || notes.length === 0) {
-    if (mode === "story") return "";
-    return [raw, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
-  }
-
-  const compactFor = (essence?: SoulEssence) =>
-    mode === "story"
-      ? kind === "self"
-        ? selfStorySoulEssencePromptBlock(essence, name)
-        : userStorySoulEssencePromptBlock(essence, name)
-      : kind === "self"
-        ? selfSoulEssencePromptBlock(essence, name)
-        : userSoulEssencePromptBlock(essence, name);
-  const compactCached = compactFor(retainedEssence);
-  if (compactCached) {
-    return [compactCached, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
-  }
-
-  // Never add a billable preparation call to the latency of the user's active cloud chat. Manual
-  // Refresh and the separately scheduled/preemptible downtime job use the dedicated refresh path.
-  if (CLOUD_LLM_IDS.has(llm.id)) {
-    if (mode === "story") return "";
-    return [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
-  }
-
-  const sourceBudget = opts.sourceBudget ?? soulDistillationSourceBudget(opts.contextTokens);
-  const outputBudget = opts.outputBudget ?? soulDistillationOutputBudget(opts.contextTokens);
-  if (!soulDistillationFitsContext(opts.contextTokens)) {
-    if (mode === "story") return "";
-    return [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
-  }
-  if (
-    partitionSoulNotes(notes, sourceBudget).length >
-    MAX_INLINE_SOUL_DISTILLATION_CHUNKS
-  ) {
-    // A maximum ledger can require many hierarchical calls. The Soul panel's explicit action runs
-    // that cached rebuild visibly; this turn uses the guarded raw fallback without hidden latency.
-    return mode === "story"
-      ? ""
-      : [exactFallback, evidenceFor(cachedEssence)].filter(Boolean).join("\n\n");
-  }
-
-  const essence = await ensureSoulEssence(llm, kind, notes, {
-    ...(opts.signal ? { signal: opts.signal } : {}),
-    ...(opts.onActivity ? { onActivity: opts.onActivity } : {}),
-    ...(opts.contextTokens ? { contextTokens: opts.contextTokens } : {}),
-    sourceBudget,
-    outputBudget,
+  return soulContextPromptBlock(kind, notes, {
+    ...(opts.mode ? { mode: opts.mode } : {}),
+    name,
+    ...(opts.queryContext ? { queryContext: opts.queryContext } : {}),
+    ...(latestEssence ? { latestEssence } : {}),
   });
-  const compact = compactFor(essence);
-  if (!compact) {
-    if (mode === "story") return "";
-    return [exactFallback, evidenceFor(cachedEssence)]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-  return [compact, evidenceFor(essence)].filter(Boolean).join("\n\n");
 }
 
 function soulEvidenceQueryContext(history: readonly ChatTurn[], userText: string): string {
@@ -3406,42 +3303,25 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
     const soulMode = selectSoulContextMode({ storyActive: book.kind === "story" });
     const storySoulCast = await soulCastForStoryBook(book);
-    const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
-    const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
-    const identityActivity = () =>
-      post({ type: "chatActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
-    const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
-      if (soulMode === "story" && !storySoulCast) return ["", ""] as const;
-      // Distillation can load a substantial local model. Do the two identities serially inside one
-      // priority lease so they never compete with each other for the same model/VRAM.
-      const nextSelfSoul =
-        soulMode === "story" && !storySoulCast?.self
-          ? ""
-          : await soulPromptFor(llm, "self", {
-              mode: soulMode,
-              ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
-              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
-              signal: ac.signal,
-              onActivity: identityActivity,
-              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-              sourceBudget: soulSourceBudget,
-              outputBudget: soulOutputBudget,
-            });
-      const nextUserSoul =
-        soulMode === "story" && !storySoulCast?.user
-          ? ""
-          : await soulPromptFor(llm, "user", {
-              mode: soulMode,
-              ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
-              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
-              signal: ac.signal,
-              onActivity: identityActivity,
-              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-              sourceBudget: soulSourceBudget,
-              outputBudget: soulOutputBudget,
-            });
-      return [nextSelfSoul, nextUserSoul] as const;
-    });
+    const [selfSoul, userSoul] =
+      soulMode === "story" && !storySoulCast
+        ? ["", ""] as const
+        : await Promise.all([
+            soulMode === "story" && !storySoulCast?.self
+              ? Promise.resolve("")
+              : soulPromptFor("self", {
+                  mode: soulMode,
+                  ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
+                  ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+                }),
+            soulMode === "story" && !storySoulCast?.user
+              ? Promise.resolve("")
+              : soulPromptFor("user", {
+                  mode: soulMode,
+                  ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
+                  ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+                }),
+          ]);
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
@@ -5605,40 +5485,25 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       creativeSession: msg.creativeSession === true,
     });
     const storySoulCast = await soulCastForStoryBook(currentBook);
-    const soulSourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
-    const soulOutputBudget = soulDistillationOutputBudget(budgets.maxTokens);
-    const identityActivity = () =>
-      post({ type: "buddyActivity", requestId: msg.requestId, text: "Integrating identity notes..." });
-    const [selfSoul, userSoul] = await withChatPriority(llm.id, async () => {
-      if (soulMode === "story" && !storySoulCast) return ["", ""] as const;
-      const nextSelfSoul =
-        soulMode === "story" && !storySoulCast?.self
-          ? ""
-          : await soulPromptFor(llm, "self", {
-              mode: soulMode,
-              ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
-              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
-              signal: ac.signal,
-              onActivity: identityActivity,
-              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-              sourceBudget: soulSourceBudget,
-              outputBudget: soulOutputBudget,
-            });
-      const nextUserSoul =
-        soulMode === "story" && !storySoulCast?.user
-          ? ""
-          : await soulPromptFor(llm, "user", {
-              mode: soulMode,
-              ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
-              ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
-              signal: ac.signal,
-              onActivity: identityActivity,
-              ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-              sourceBudget: soulSourceBudget,
-              outputBudget: soulOutputBudget,
-            });
-      return [nextSelfSoul, nextUserSoul] as const;
-    });
+    const [selfSoul, userSoul] =
+      soulMode === "story" && !storySoulCast
+        ? ["", ""] as const
+        : await Promise.all([
+            soulMode === "story" && !storySoulCast?.self
+              ? Promise.resolve("")
+              : soulPromptFor("self", {
+                  mode: soulMode,
+                  ...(storySoulCast?.self ? { nameOverride: storySoulCast.self } : {}),
+                  ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+                }),
+            soulMode === "story" && !storySoulCast?.user
+              ? Promise.resolve("")
+              : soulPromptFor("user", {
+                  mode: soulMode,
+                  ...(storySoulCast?.user ? { nameOverride: storySoulCast.user } : {}),
+                  ...(soulMode !== "story" ? { queryContext: soulQueryContext } : {}),
+                }),
+          ]);
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.

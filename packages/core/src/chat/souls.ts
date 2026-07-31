@@ -2047,6 +2047,64 @@ export function userStorySoulEssencePromptBlock(
   return storySoulEssencePromptBlock("user", essence, name);
 }
 
+/**
+ * Select the Soul block for an active foreground chat turn without mutating storage or invoking a
+ * model. Essence generation belongs to the explicit/idle refresh path; a conversation must be able
+ * to start immediately from a retained Essence or a deterministic mode-specific fallback.
+ */
+export function soulContextPromptBlock(
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  opts: {
+    mode?: SoulContextMode;
+    name?: string;
+    queryContext?: string;
+    /** Most recently validated snapshot, which may predate the current notes. */
+    latestEssence?: SoulEssence;
+  } = {},
+): string {
+  const mode = opts.mode ?? "ordinary";
+  const name = opts.name?.trim() ?? "";
+  const raw = kind === "self"
+    ? selfSoulPromptBlock(notes, name)
+    : userSoulPromptBlock(notes, name);
+  const exactFallback = kind === "self"
+    ? selfSoulExactIdentityPromptBlock(notes, name)
+    : userSoulExactIdentityPromptBlock(notes, name);
+  const cachedEssence =
+    opts.latestEssence?.sourceFingerprint === soulSourceFingerprint(notes)
+      ? opts.latestEssence
+      : undefined;
+  // A stale snapshot remains a useful generalized baseline while the idle refresh is pending, but
+  // exact appearance and personality directions must always be projected from the current notes.
+  const retainedEssence = opts.latestEssence
+    ? soulEssenceViewForNotes(opts.latestEssence, notes)
+    : undefined;
+  const evidence =
+    mode !== "story" && opts.queryContext
+      ? soulEvidencePromptBlock(kind, notes, opts.queryContext, undefined, cachedEssence)
+      : "";
+
+  if (mode === "creative" || notes.length === 0) {
+    if (mode === "story") return "";
+    return [raw, evidence].filter(Boolean).join("\n\n");
+  }
+
+  const compact = mode === "story"
+    ? kind === "self"
+      ? selfStorySoulEssencePromptBlock(retainedEssence, name)
+      : userStorySoulEssencePromptBlock(retainedEssence, name)
+    : kind === "self"
+      ? selfSoulEssencePromptBlock(retainedEssence, name)
+      : userSoulEssencePromptBlock(retainedEssence, name);
+  if (compact) return [compact, evidence].filter(Boolean).join("\n\n");
+
+  // Ordinary conversation keeps exact identity invariants while waiting for idle generation. Story
+  // intentionally has no raw/exact fallback, because only its generalized baseline belongs in prose.
+  if (mode === "story") return "";
+  return [exactFallback, evidence].filter(Boolean).join("\n\n");
+}
+
 /** One bounded block for a persisted You-and-me Soul cast. */
 export function storySoulCharacterizationPromptBlock(input: {
   selfEssence?: SoulEssence;

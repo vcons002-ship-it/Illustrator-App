@@ -52,6 +52,7 @@ import {
   userSoulExactIdentityPromptBlock,
   selfStorySoulEssencePromptBlock,
   userStorySoulEssencePromptBlock,
+  soulContextPromptBlock,
   storySoulCharacterizationPromptBlock,
   selectSoulContextMode,
   soulEvidencePromptBlock,
@@ -1087,6 +1088,101 @@ describe("Soul Essence derivation", () => {
     const user = userSoulExactIdentityPromptBlock(notes, "Alex");
     expect(user).toContain("Name: Alex");
     expect(user).not.toContain("abandoned railway");
+  });
+
+  it("selects a current Essence for foreground ordinary chat and an exact fallback when missing", () => {
+    const notes = [
+      note("Fascinated by abandoned railway switching systems.", 1),
+      note("Physical description: silver hair and clear grey eyes.", 2),
+      note("Never flatter the reader reflexively.", 3),
+    ];
+    const current = parseSoulEssence(
+      JSON.stringify(
+        payload(
+          "self",
+          notes,
+          "Connects difficult systems with patient attention.",
+          "Intellectually curious; patient; discerning",
+        ),
+      ),
+      "self",
+      notes,
+    )!;
+
+    const integrated = soulContextPromptBlock("self", notes, {
+      mode: "ordinary",
+      name: "Sage",
+      latestEssence: current,
+    });
+    expect(integrated).toContain("integrated Soul Essence");
+    expect(integrated).toContain("Intellectually curious; patient; discerning");
+    expect(integrated).toContain("silver hair");
+    expect(integrated).not.toContain("abandoned railway");
+
+    const pending = soulContextPromptBlock("self", notes, {
+      mode: "ordinary",
+      name: "Sage",
+    });
+    expect(pending).toMatch(/generalized essence pending/i);
+    expect(pending).toContain("silver hair");
+    expect(pending).toContain("Never flatter the reader reflexively");
+    expect(pending).not.toContain("abandoned railway");
+  });
+
+  it("uses a retained generalized baseline with only current exact identity fields", () => {
+    const oldNotes = [
+      note("Patient and precise.", 1),
+      note("Physical description: silver hair and grey eyes.", 2),
+    ];
+    const retained = parseSoulEssence(
+      JSON.stringify(
+        payload(
+          "self",
+          oldNotes,
+          "Approaches questions with patient precision.",
+          "Patient; discerning",
+        ),
+      ),
+      "self",
+      oldNotes,
+    )!;
+    const currentNotes = [
+      note("Patient and precise.", 1),
+      note("Physical description: auburn hair and mossy green eyes.", 3),
+    ];
+
+    const ordinary = soulContextPromptBlock("self", currentNotes, {
+      mode: "ordinary",
+      latestEssence: retained,
+    });
+    expect(ordinary).toContain("Patient; discerning");
+    expect(ordinary).toContain("auburn hair");
+    expect(ordinary).toContain("mossy green eyes");
+    expect(ordinary).not.toMatch(/silver hair|grey eyes/i);
+
+    const story = soulContextPromptBlock("self", currentNotes, {
+      mode: "story",
+      name: "Mira",
+      latestEssence: retained,
+    });
+    expect(story).toContain("Patient; discerning");
+    expect(story).not.toMatch(/auburn hair|mossy green eyes|silver hair|grey eyes/i);
+  });
+
+  it("keeps missing-Essence story context empty while Creative mode reads raw notes", () => {
+    const notes = [
+      note("Fascinated by abandoned railway switching systems.", 1),
+      note("Physical description: silver hair and clear grey eyes.", 2),
+    ];
+    expect(soulContextPromptBlock("self", notes, { mode: "story", name: "Mira" })).toBe("");
+
+    const creative = soulContextPromptBlock("self", notes, {
+      mode: "creative",
+      name: "Sage",
+    });
+    expect(creative).toContain("WHO YOU ARE");
+    expect(creative).toContain("abandoned railway switching systems");
+    expect(creative).toContain("silver hair");
   });
 
   it("routes story ahead of Creative access so overlapping flags cannot reopen raw notes", () => {
