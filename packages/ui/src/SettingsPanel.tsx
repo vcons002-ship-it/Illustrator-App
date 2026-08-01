@@ -2658,7 +2658,10 @@ export function SettingsPanel({
                     Connect your own Charles Schwab developer app (the platform behind thinkorswim) for real quotes,
                     option chains with Greeks, and your positions. Register an app at developer.schwab.com (set the
                     callback URL to <code>https://127.0.0.1</code>), paste its key + secret here, then click
-                    <b> Connect Schwab</b> in the 📈 Markets panel. The assistant only reads/analyses — it never trades.
+                    <b> Connect Schwab</b> in the 📈 Markets panel <b>of the desktop app</b> — the sign-in can’t finish
+                    from a phone or the web, because swapping Schwab’s code for a token is a cross-origin request only
+                    the desktop can make. Once it’s connected there, a linked phone uses it normally. The assistant only
+                    reads/analyses — it never trades.
                   </p>
                   <label style={rowStyle}>
                     <span>Schwab app key</span>

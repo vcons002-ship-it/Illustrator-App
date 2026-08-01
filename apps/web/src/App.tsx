@@ -10031,6 +10031,7 @@ export function App() {
           onAddAlert={(s, type, value) => void addAlert(s, type, value)}
           onRemoveAlert={(id) => void removeAlert(id)}
           schwabConnected={schwabConnected}
+          canConnectSchwab={isDesktop}
           onConnectSchwab={() => {
             void connectSchwab().then((r) => {
               if (!r.ok && r.error) setLocalError(r.error);

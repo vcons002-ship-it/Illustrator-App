@@ -48,3 +48,31 @@ describe("setup guides", () => {
     expect(setupGuidesIndex()).toContain("google");
   });
 });
+
+describe("the Schwab guide says WHERE it can be done", () => {
+  // Reported: "I entered the app key and secret, but there's no Connect Schwab button like it says
+  // there is, on mobile." The button isn't platform-gated in code — but the connection cannot COMPLETE
+  // on a phone: swapping Schwab's code for a token is a cross-origin POST that only the desktop's
+  // CORS-exempt transport can make. The guide sent everyone to press it anyway.
+  const guide = findSetupGuide("schwab")!;
+  const text = guide.steps.join(" ");
+
+  it("names the desktop, rather than just the panel", () => {
+    expect(text).toMatch(/desktop app/i);
+    expect(text).toMatch(/can't finish from a phone|cannot finish from a phone/i);
+  });
+
+  it("still gives the exact callback URL, which has to match byte for byte", () => {
+    expect(text).toContain("https://127.0.0.1");
+  });
+
+  it("warns that the redirect shows an error, because that is the step people abandon", () => {
+    expect(text).toMatch(/connection error, which is expected|show a connection error/i);
+  });
+
+  it("says a linked phone works once the desktop is connected", () => {
+    // Otherwise "desktop only" reads as "not on my phone at all", which isn't true — only the sign-in
+    // is desktop-bound; quotes and positions mirror fine.
+    expect(text).toMatch(/linked phone/i);
+  });
+});
