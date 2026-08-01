@@ -732,7 +732,9 @@ describe("buildBuddySystemPrompt", () => {
     // The routing guide precedes the full tool catalog so it's read first.
     expect(p.indexOf("HOW TO PICK A TOOL")).toBeLessThan(p.indexOf("TOOLS — use one"));
     // Confusable pairs are disambiguated.
-    expect(p).toMatch(/read \(source:"url"\).*open_web_text/s);
+    // open_content, not open_web_text: the latter is the shape the PARSER produces from
+    // open_content source:"web", so naming it told the model to emit a call nothing accepts.
+    expect(p).toMatch(/read \(source:"url"\).*open_content \(source:"web"\)/s);
     expect(p).toMatch(/search_images.*generate_image/s);
   });
 
@@ -1128,7 +1130,7 @@ describe("skill tools", () => {
     expect(p).toMatch(/ACT, DON'T NARRATE/);
     expect(p).toMatch(/search_web to find sources/);
     expect(p).toMatch(/read \(source:"url"\) to pull a specific page's text/);
-    expect(p).toMatch(/open_web_text to open a page/);
+    expect(p).toMatch(/open_content \(source:"web"\) to open a page/);
     expect(p).toMatch(/NEVER state specific facts you have not verified/i);
   });
 });

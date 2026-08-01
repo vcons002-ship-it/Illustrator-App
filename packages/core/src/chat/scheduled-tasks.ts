@@ -238,8 +238,17 @@ export function scheduledRunPrompt(task: ScheduledTask): string {
  * scheduled work deliberately runs in its own chat — so a reader looking at the main one sees nothing
  * however well it went. PURE.
  */
-export function scheduledRunNote(produced: boolean, where: string): string {
-  return produced ? `replied in ${where}` : `no reply — nothing landed in ${where}`;
+export type ScheduledRunOutcome = "replied" | "nothing" | "unconfirmed";
+
+export function scheduledRunNote(outcome: ScheduledRunOutcome, where: string): string {
+  if (outcome === "replied") return `replied in ${where}`;
+  // "Nothing came back" and "we couldn't see whether anything came back" need different fixes and
+  // would look identical if both were reported as failure. A task-bound action runs in its OWN chat,
+  // which is precisely the one a reader or a background sweep is most likely to switch away from
+  // mid-run — and the evidence for the run lives in whichever conversation is on screen when it
+  // settles. So when the chat changed underneath it, say THAT rather than guess at an outcome.
+  if (outcome === "unconfirmed") return `ran, but the chat changed before it finished — check ${where}`;
+  return `no reply — nothing landed in ${where}`;
 }
 
 /** A human description of a task's cadence (for the UI). */

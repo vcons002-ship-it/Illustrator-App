@@ -7050,13 +7050,22 @@ export function App() {
         // ran 7:00" meant only "dispatched" — a run that produced nothing looked exactly like one
         // that worked, which is what leaves a reader hunting for output that was never written.
         const startedAt = Date.now();
+        const ranIn = activeBuddyIdRef.current; // the chat the evidence has to come FROM
         await onBuddySend(scheduledRunPrompt(task));
-        const produced = buddyMessagesRef.current.some((m) => (m.at ?? 0) >= startedAt && (m.role === "assistant" || m.role === "tool"));
-        const note = scheduledRunNote(produced, where);
+        // Switching sessions CLEARS buddyMessages, so reading it after a switch would report an empty
+        // run for one that worked — and a task-bound action runs in its own chat, the one most likely
+        // to be switched away from. When that happened we don't know either way; say so.
+        const outcome =
+          activeBuddyIdRef.current !== ranIn
+            ? "unconfirmed"
+            : buddyMessagesRef.current.some((m) => (m.at ?? 0) >= startedAt && (m.role === "assistant" || m.role === "tool"))
+              ? "replied"
+              : "nothing";
+        const note = scheduledRunNote(outcome, where);
         await upsertScheduledTask(libraryStore, { ...advanced, lastRunNote: note }).catch(() => {});
         refreshScheduled();
         logActionRef.current("scheduled_run", `Scheduled “${task.title}” — ${note}`);
-        if (!produced) pushToast(`⏰ “${task.title}” ran but produced nothing in ${where}.`, "error");
+        if (outcome === "nothing") pushToast(`⏰ “${task.title}” ran but produced nothing in ${where}.`, "error");
       })();
     }, 30_000);
     return () => clearInterval(id);
