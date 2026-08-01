@@ -168,7 +168,8 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
   type Workflow,
-  compileWorkflow,
+  type WorkflowStep,
+  recompileWorkflow,
   evaluateStep,
   advanceWorkflow,
   activeStep,
@@ -5889,6 +5890,17 @@ export function App() {
   // observed `evidence` (the collar), then drive the workflow: advance/retry → re-dispatch the next or
   // same step via `continueWith`; park/finish/abort → stop. Returns true when it handled the turn, so
   // the caller skips the legacy model-driven chaining. The model never ticks steps; the app does.
+  /**
+   * The antecedent of an elliptical step ("now do the same for the barn"), spelled out for the model.
+   *
+   * These directives are ephemeral by design and a tool step's own narration is dropped, so nothing
+   * in the model's context says what "the same" was by the time step 3 runs — it renders whichever
+   * subject it can still see, which is the previous picture. The compiler recorded the antecedent; a
+   * self-contained instruction has none and this adds nothing.
+   */
+  const stepContext = (step: WorkflowStep): string =>
+    step.context ? ` (This continues step 1's kind of work: “${step.context}” — apply that to THIS step's subject, not the previous one's.)` : "";
+
   const advanceWorkflowAfterTurn = async (
     evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string },
     continueWith: (nudge: string) => Promise<unknown>,
@@ -5932,7 +5944,7 @@ export function App() {
         const trackLine = checklistMetaOnly(evi)
           ? "The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step. "
           : "";
-        await continueWith(`[You haven't done the current step yet. ${trackLine}${toolLine}Do it now: ${step.instruction}. Call the tool and stop — no commentary.]`);
+        await continueWith(`[You haven't done the current step yet. ${trackLine}${toolLine}Do it now: ${step.instruction}.${stepContext(step)} Call the tool and stop — no commentary.]`);
         return true;
       }
       // Reminders exhausted — fall through to the normal retry/park path (a truly stuck run must end).
@@ -5950,13 +5962,13 @@ export function App() {
       const total = adv.workflow.steps.length;
       const n = adv.workflow.steps.findIndex((s) => s.id === adv.next!.id) + 1;
       await continueWith(
-        `[✓ Previous step done. Now do ONLY step ${n} of ${total}: ${adv.next!.instruction}. Call its tool and stop — don't recap or explain.]`,
+        `[✓ Previous step done. Now do ONLY step ${n} of ${total}: ${adv.next!.instruction}.${stepContext(adv.next!)} Call its tool and stop — don't recap or explain.]`,
       );
       return true;
     }
     if (adv.action === "retry") {
       await continueWith(
-        `[Your last attempt didn't satisfy this step${outcome.reason ? ` (${outcome.reason})` : ""}. Do it again now: ${step.instruction}. Just call the tool — no commentary.]`,
+        `[Your last attempt didn't satisfy this step${outcome.reason ? ` (${outcome.reason})` : ""}. Do it again now: ${step.instruction}.${stepContext(step)} Just call the tool — no commentary.]`,
       );
       return true;
     }
@@ -6052,7 +6064,10 @@ export function App() {
           // App-managed: the model just COMPILED (or re-compiled) the plan via set_plan. Turn it into a
           // workflow with per-step DoneWhen contracts; from here the APP runs it and ticks steps from
           // evidence. applyWorkflow mirrors the read-only plan projection into buddyPlan + persists.
-          applyWorkflow(compileWorkflow(e.plan));
+          // RE-compile, keeping what is already finished: a mid-run set_plan is a model revising its
+          // checklist (usually right after apologising for losing the thread), and starting the run
+          // over from step 1 redoes finished work and reaches the rest in the wrong order.
+          applyWorkflow(recompileWorkflow(buddyWorkflowRef.current, e.plan));
           buddyStepEvidenceRef.current = { toolResults: [], text: "" };
         } else {
           // Legacy model-driven path: keep the model's checklist as the live plan.
