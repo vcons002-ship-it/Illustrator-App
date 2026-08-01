@@ -113,6 +113,23 @@ function validIso(iso: string | undefined): boolean {
  * one-shot — which has no nextDueIso yet — produced `new Date("")` = Invalid Date, and the caller's
  * `.toISOString()` threw. One-time scheduling was therefore impossible until this computed a real date.
  */
+/**
+ * Which day of the week a weekly task actually runs on.
+ *
+ * The field is optional, and two places filled it in differently: the scheduler read
+ * `weekday ?? from.getDay()` — the day the task happened to be created — while the panel read
+ * `WEEKDAYS[weekday ?? 1]` and printed "Monday". So the app told the reader it was a Monday task and
+ * then ran it on a Saturday, and both halves were behaving exactly as written.
+ *
+ * `nextDueIso` is the tie-breaker because it is the truth: it is the moment the task will actually
+ * fire, so the day it falls on IS the task's day. Reading it here heals tasks already stored without
+ * a weekday, with no migration. PURE.
+ */
+export function weekdayOf(task: Pick<ScheduledTask, "weekday" | "nextDueIso">): number | undefined {
+  if (task.weekday !== undefined) return task.weekday;
+  return validIso(task.nextDueIso) ? new Date(task.nextDueIso).getDay() : undefined;
+}
+
 export function nextDue(task: Pick<ScheduledTask, "rule" | "time" | "weekday" | "dayOfMonth" | "nextDueIso" | "date">, from: Date): Date {
   const time = clampTime(task.time);
   if (task.rule === "once") {
@@ -128,7 +145,7 @@ export function nextDue(task: Pick<ScheduledTask, "rule" | "time" | "weekday" | 
     return d > from ? d : atTime(addDays(from, 1), time);
   }
   if (task.rule === "weekly") {
-    const target = task.weekday ?? from.getDay();
+    const target = weekdayOf(task) ?? from.getDay();
     let delta = (target - from.getDay() + 7) % 7;
     if (delta === 0 && atTime(from, time) <= from) delta = 7;
     return atTime(addDays(from, delta), time);
@@ -165,6 +182,12 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
   // Compute the first run when not supplied (fresh task) — or when what we were handed isn't a real
   // datetime, so a corrupt/empty stored value can never survive as an Invalid Date.
   if (!validIso(base.nextDueIso)) base.nextDueIso = nextDue(base, now).toISOString();
+  // A weekly task keeps its day EXPLICITLY from here on, resolved from the run it is actually
+  // scheduled for. One stored fact, read by both the scheduler and the panel, instead of two
+  // defaults that disagreed.
+  if (base.rule === "weekly" && base.weekday === undefined) {
+    return { ...base, weekday: new Date(base.nextDueIso).getDay() };
+  }
   return base;
 }
 
@@ -255,7 +278,12 @@ export function scheduledRunNote(outcome: ScheduledRunOutcome, where: string): s
 export function describeSchedule(task: ScheduledTask): string {
   const at = `at ${task.time}`;
   if (task.rule === "daily") return `Daily ${at}`;
-  if (task.rule === "weekly") return `Weekly on ${WEEKDAYS[task.weekday ?? 1]} ${at}`;
+  // Never invent a day. Saying "Monday" for a task with no weekday stored is how the app came to
+  // report that a Monday-only task had run on a Saturday.
+  if (task.rule === "weekly") {
+    const wd = weekdayOf(task);
+    return wd === undefined ? `Weekly ${at}` : `Weekly on ${WEEKDAYS[wd]} ${at}`;
+  }
   if (task.rule === "monthly") return `Monthly on day ${task.dayOfMonth ?? 1} ${at}`;
   // One-shot: show the actual moment it runs (never "Invalid Date" — see validIso).
   return validIso(task.nextDueIso) ? `Once — ${new Date(task.nextDueIso).toLocaleString()}` : `Once ${at}`;

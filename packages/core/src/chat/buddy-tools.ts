@@ -1738,8 +1738,10 @@ export function buildBuddySystemPrompt(raw: {
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
         '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
-        '  · RECURRING — "rule":"daily" | "weekly" (add "weekday" 0=Sun…6=Sat) | "monthly" (add "dayOfMonth" 1–31). Use for ' +
-        '"every morning/day/week/Friday…", "each month…".\n' +
+        '  · RECURRING — "rule":"daily" | "weekly" | "monthly". Use for "every morning/day/week/Friday…", "each month…". ' +
+        '"weekly" REQUIRES "weekday" (0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat) and "monthly" REQUIRES ' +
+        '"dayOfMonth" (1–31) — leave one out and the action is anchored to whatever day you happen to create it on, ' +
+        'which is not the day the reader asked for. "every Monday" is "rule":"weekly","weekday":1.\n' +
         '  · ONE-TIME — "rule":"once" with "date":"YYYY-MM-DD" for the day it should fire (omit "date" and it runs the next ' +
         'time "time" comes around — today if still ahead, else tomorrow). Use for "remind me on Friday at 5", "tomorrow ' +
         'morning…", "on July 4th…". Resolve the reader\'s words to a REAL date from today\'s date, and say back when it will run.\n' +

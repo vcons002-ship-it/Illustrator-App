@@ -9,6 +9,7 @@ import {
   normalizeScheduledTask,
   type ScheduledTask,
   scheduledRunNote,
+  weekdayOf,
 } from "./scheduled-tasks.js";
 
 const make = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
@@ -233,5 +234,45 @@ describe("a run is recorded by what it produced", () => {
 
   it("keeps a task without one clean, rather than carrying an empty field", () => {
     expect("lastRunNote" in normalizeScheduledTask({ title: "x", prompt: "y" })).toBe(false);
+  });
+});
+
+describe("a weekly action runs on the day it says it does", () => {
+  // Reported: "the app is reporting that a task that only runs on Mondays ran today." Both halves
+  // were behaving exactly as written — with DIFFERENT defaults for the same missing field. The
+  // scheduler read `weekday ?? from.getDay()` (the day the task happened to be created); the panel
+  // read `WEEKDAYS[weekday ?? 1]` and printed "Monday". So the app promised Monday and ran Saturday.
+  const SAT = new Date(2026, 7, 1, 10, 0); // 2026-08-01 is a Saturday
+
+  it("no longer promises a day it will not run on", () => {
+    const t = normalizeScheduledTask({ title: "Weekly recap", prompt: "recap", rule: "weekly", time: "08:00" }, SAT);
+    expect(describeSchedule(t)).toContain("Saturday");
+    expect(new Date(t.nextDueIso).getDay()).toBe(6);
+    // the description and the schedule now come from ONE stored fact
+    expect(t.weekday).toBe(6);
+  });
+
+  it("keeps the day the reader actually asked for", () => {
+    const mon = normalizeScheduledTask({ title: "Monday recap", prompt: "recap", rule: "weekly", weekday: 1, time: "08:00" }, SAT);
+    expect(describeSchedule(mon)).toContain("Monday");
+    expect(new Date(mon.nextDueIso).getDay()).toBe(1);
+  });
+
+  it("heals a task already stored without a weekday, from the run it is scheduled for", () => {
+    // nextDueIso is the tie-breaker because it is the truth: the moment it will actually fire.
+    const stored = { nextDueIso: new Date(2026, 7, 3, 8, 0).toISOString() }; // a Monday, no weekday stored
+    expect(weekdayOf(stored)).toBe(1);
+  });
+
+  it("says nothing about a day when there is nothing to say", () => {
+    expect(weekdayOf({ nextDueIso: "" })).toBeUndefined();
+    expect(describeSchedule({ rule: "weekly", time: "08:00", nextDueIso: "" } as never)).toBe("Weekly at 08:00");
+  });
+
+  it("advancing a week lands on the same weekday", () => {
+    const mon = normalizeScheduledTask({ title: "x", prompt: "y", rule: "weekly", weekday: 1, time: "08:00" }, SAT);
+    const after = advanceSchedule(mon, new Date(mon.nextDueIso));
+    expect(new Date(after.nextDueIso).getDay()).toBe(1);
+    expect(describeSchedule(after)).toContain("Monday");
   });
 });
