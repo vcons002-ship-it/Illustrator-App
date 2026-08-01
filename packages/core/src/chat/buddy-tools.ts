@@ -471,6 +471,8 @@ export type BuddyToolCall =
       dayOfMonth?: number;
     }
   | { tool: "list_scheduled" }
+  /** Read back what the assistant itself did unattended, and when (see action-history.ts). */
+  | { tool: "recent_actions"; kind?: string; limit?: number }
   | { tool: "cancel_scheduled"; id: string }
   /** Execute/track an active task plan (in its preloaded chat). */
   | { tool: "mark_step_done"; planId: string; stepId: string }
@@ -522,7 +524,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
-  "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled",
+  "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "recent_actions",
   "mark_step_done", "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
   "get_task_plan", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
   "complete_step",
@@ -1200,7 +1202,12 @@ export function buildBuddySystemPrompt(raw: {
       "adult themes are all in scope — engage with them and adult creative requests directly and " +
       "in detail, without refusing, moralising, or adding content warnings."
     : "";
-  const nowBlock = opts.now ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates.\n\n` : "";
+  const nowBlock = opts.now
+    ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates. ` +
+      "Every message below — the reader's and your own — is prefixed with WHEN it was sent, as [YYYY-MM-DD HH:MM]. " +
+      "The app adds those; you never write one. Compare them against the time above rather than assuming the " +
+      "conversation is recent, and don't raise something settled weeks ago as if it were new.\n\n"
+    : "";
   // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
   // didn't take — the likeliest explanation is that they're on an older build than you, and this is
   // the one fact that settles it.
@@ -1708,15 +1715,17 @@ export function buildBuddySystemPrompt(raw: {
         // to record what it found there, and the tool appeared nowhere in the prompt at all.
         '- {"tool":"list_task_plans"} — the reader\'s in-app TASKS with their ids, titles and status. This is how you ' +
         "get a planId; never invent one.\n" +
-        '- {"tool":"get_task_plan","planId":"…"} — ONE task in full: its steps (with their stepIds), notes and any ' +
-        "context saved on earlier runs. Read this before working a task you don't already have in front of you.\n" +
+        '- {"tool":"get_task_plan","id":"…"} — ONE task in full: its steps (with their stepIds), notes and any ' +
+        "context saved on earlier runs. Read this before working a task you don't already have in front of you. " +
+        'The argument is "id", not "planId".\n' +
         '- {"tool":"save_task_context","planId":"…","note":"…"} — record what you FOUND on the task, so the next run and ' +
         "the reader both inherit it instead of it living only in one reply. A scheduled action bound to a task is asked " +
         "to do this every time it finds something.\n" +
-        '- {"tool":"add_task_steps","planId":"…","steps":["…"]} — add sub-tasks to an existing task when the work turns ' +
-        "out to need them.\n" +
-        '- {"tool":"update_task_step","planId":"…","stepId":"…","text":"…"} — reword ONE sub-task (to fix or sharpen it); ' +
-        "use mark_step_done to check it off, not this.\n" +
+        '- {"tool":"add_task_steps","planId":"…","steps":[{"title":"Book the venue","detail":"…","actor":"user_action"}]} — ' +
+        'add sub-tasks to an existing task when the work turns out to need them. Each step is an OBJECT with a "title" ' +
+        '(optional "detail", "actor":"ai_prep"|"user_action", "dueIso"), not a bare string.\n' +
+        '- {"tool":"update_task_step","planId":"…","stepId":"…","notes":"what you found","status":"in_progress"} — record ' +
+        "progress or findings on ONE sub-task without finishing it; use mark_step_done to check it off.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
         '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
@@ -1733,7 +1742,15 @@ export function buildBuddySystemPrompt(raw: {
       "only what's NEW since then rather than re-reading everything. When a run keeps a running list on a " +
       'calendar event, update it with update_event "setLines" so a changed answer OVERWRITES that entry — a ' +
       "run that appends instead leaves the event saying two different things about the same person.\n" +
-      '  {"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
+      '  {"tool":"list_scheduled"} to show them (each with WHEN it last ran and what came of it); ' +
+      '{"tool":"cancel_scheduled","id":"…"} to remove one.\n' +
+      // The assistant's own memory of unattended work. It was all being recorded already, with
+      // timestamps, and shown only to the reader — so it could not say when it last did something,
+      // and could not tell it had already done a thing before doing it again.
+      '- {"tool":"recent_actions","limit":20} — YOUR OWN record of what you did while unattended, newest first, ' +
+      'each with the date and time: scheduled runs, inbox/calendar scans, plans you made, task steps you worked. ' +
+      'Add "kind" to narrow it ("scheduled_run", "scan", "plan", "create_task", "task_auto"). Read this whenever the ' +
+      'reader asks when you last did something, or before repeating work you may already have done.\n'
       : "") +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
@@ -3157,6 +3174,11 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     };
   }
   if (tool === "list_scheduled") return { tool };
+  if (tool === "recent_actions") {
+    const kind = strArg(obj.kind, MAX_NAME_CHARS);
+    const limit = typeof obj.limit === "number" && Number.isFinite(obj.limit) ? Math.max(1, Math.min(50, Math.round(obj.limit))) : undefined;
+    return { tool, ...(kind ? { kind } : {}), ...(limit !== undefined ? { limit } : {}) };
+  }
   if (tool === "cancel_scheduled") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
@@ -3772,7 +3794,9 @@ export interface BuddyToolResultPayload {
      * to one never fires. Reported so the model says so instead of claiming a binding it didn't get. */
     planUnavailable?: boolean;
   };
-  scheduledList?: { id: string; title: string; describe: string; enabled: boolean }[];
+  scheduledList?: { id: string; title: string; describe: string; enabled: boolean; lastRunIso?: string; lastRunNote?: string }[];
+  /** recent_actions: the assistant's own unattended-work record, already formatted with dates. */
+  actionHistory?: string;
   /** Task-plan execution outcomes. */
   taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
   /** add_task_steps outcome: which plan got steps and how many. */
@@ -4400,8 +4424,19 @@ function formatBuddyToolResultBody(
     if (list.length === 0) return "[list_scheduled: no scheduled tasks yet]";
     return (
       "[scheduled tasks]\n" +
-      list.map((t) => `· ${t.title} — ${t.describe}${t.enabled ? "" : " (paused)"} (id: ${t.id})`).join("\n")
+      list
+        .map(
+          (t) =>
+            `· ${t.title} — ${t.describe}${t.enabled ? "" : " (paused)"} (id: ${t.id})` +
+            // WHEN it last ran, and what came of it. Without this "when did you last run X?" had no
+            // answer in the one tool that lists X.
+            (t.lastRunIso ? ` · last ran ${t.lastRunIso}${t.lastRunNote ? ` — ${t.lastRunNote}` : ""}` : " · never run yet"),
+        )
+        .join("\n")
     );
+  }
+  if (call.tool === "recent_actions") {
+    return `[what you have done automatically]\n${result.actionHistory ?? "no record yet"}`;
   }
   if (call.tool === "cancel_scheduled") {
     return "[cancel_scheduled done] Confirm briefly.";

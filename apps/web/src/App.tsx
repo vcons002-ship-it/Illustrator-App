@@ -74,6 +74,8 @@ import {
   setTaskPlanComplete,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
+  stampTurnContent,
+  stripTurnStamp,
   agentBranchName,
   parseGitConflicts,
   countChangedFiles,
@@ -3005,9 +3007,19 @@ export function App() {
    * what the model is shown changes. */
   const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
     messages.flatMap((m): ChatTurn[] => {
-      if (m.turns) return stripPersistedDirectives(m.turns);
+      // WHEN each message was sent, in front of it — EVERY message, the assistant's replies included.
+      // A conversation handed to a model has no clock in it: yesterday, this morning and three weeks
+      // ago all look like the line above. Fine for one sitting, wrong for a chat kept for months,
+      // resumed from a phone and woken by scheduled runs.
+      //
+      // The app owns both directions, which is what makes this safe to apply to the model's own
+      // turns. Any stamp already in the text is stripped before ours is added, so a model that starts
+      // imitating the prefix cannot have its guess stored and then read back as the real time. The
+      // clock is the app's; the model never has to be trusted to keep it, or told to.
+      const stamp = (t: ChatTurn): ChatTurn => ({ ...t, content: stampTurnContent(stripTurnStamp(t.content), m.at) });
+      if (m.turns) return stripPersistedDirectives(m.turns).map(stamp);
       if (m.role === "tool") return [];
-      return m.text ? [{ role: m.role, content: m.text }] : [];
+      return m.text ? [stamp({ role: m.role, content: m.text })] : [];
     });
 
   const appendChat = (msg: Omit<StoredChatMessage, "at">) =>

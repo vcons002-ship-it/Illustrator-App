@@ -145,7 +145,7 @@ export const TOOLSETS: readonly Toolset[] = [
     tools: [
       "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "mark_step_done",
       "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
-      "get_task_plan",
+      "get_task_plan", "recent_actions",
     ],
   },
   {
