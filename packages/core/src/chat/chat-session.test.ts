@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runChatTurn,
   stampTurnContent,
+  stripTurnStamp,
 } from "./chat-session.js";
 import { MAX_TOOL_ROUNDS } from "./chat-tools.js";
 import type { ChatCapable, ChatOptions, ChatTurn } from "../providers/llm/chat.js";
@@ -490,6 +491,21 @@ describe("stampTurnContent — when a message was sent", () => {
     const once = stampTurnContent("hello", at);
     expect(stampTurnContent(once, at)).toBe(once);
     expect(stampTurnContent(once, at + 86_400_000)).toBe(once); // and never re-dated by a later pass
+  });
+
+  it("lets the app's clock overrule one the model wrote itself", () => {
+    // What makes it safe to stamp the ASSISTANT'S OWN turns. Shown its prior replies with a prefix, a
+    // model will eventually write one — and a stamp the model wrote is a GUESS, which would then be
+    // stored, re-read, and treated as the authoritative time. Stripping first means the app's clock
+    // always wins and a mimicked prefix costs nothing. A convention it cannot break, not one it has
+    // to be told to follow.
+    const mimicked = "[2019-01-01 00:00] I looked that up for you";
+    expect(stampTurnContent(stripTurnStamp(mimicked), at)).toBe("[2026-08-01 09:14] I looked that up for you");
+  });
+
+  it("leaves a message with no stamp exactly as it is", () => {
+    expect(stripTurnStamp("just talking")).toBe("just talking");
+    expect(stripTurnStamp("[not a date] hello")).toBe("[not a date] hello");
   });
 
   it("leaves a message alone when there is no time to give it", () => {

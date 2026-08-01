@@ -489,6 +489,19 @@ export async function runChatTool(
 const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] /;
 
 /**
+ * Strip a stamp off the front of a message.
+ *
+ * The counterpart that makes stamping safe to apply to the ASSISTANT'S OWN turns. A model shown its
+ * prior replies with a `[…]` prefix will eventually write one itself — and a stamp the model wrote is
+ * a guess, which would then be stored, re-read, and treated as the authoritative time. Stripping
+ * before stamping means the app's clock always wins and a mimicked prefix costs nothing. That is the
+ * difference between a convention the model must be told to follow and one it cannot break. PURE.
+ */
+export function stripTurnStamp(content: string): string {
+  return content.replace(TURN_STAMP, "");
+}
+
+/**
  * Put the time a message was sent in front of it, for the model to read.
  *
  * A conversation handed to a model is a flat list with no clock in it: "yesterday", "this morning"
