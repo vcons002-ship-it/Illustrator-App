@@ -352,3 +352,47 @@ describe("the phone's cadence edit survives the relay", () => {
     expect(weekdayOf(fixed)).toBe(weekdayOf(task));
   });
 });
+
+describe("running an action on demand doesn't steal its next run", () => {
+  // "Run now" makes the action DUE and lets the ordinary sweep fire it, rather than running it down a
+  // second path — the sweep already knows which chat it belongs in, how to advance it and how to judge
+  // what it produced, and a parallel implementation would have to be right about all four.
+  //
+  // What has to hold for that to be safe is that advancing from an off-schedule moment lands back ON
+  // the schedule. It does, because nextDue is computed from the RULE and not from an offset.
+  const SAT = new Date(2026, 7, 1, 15, 0); // Saturday afternoon — nothing's cadence
+
+  it("a Monday action run by hand on a Saturday still comes back round to Monday", () => {
+    const mon = normalizeScheduledTask({ title: "Recap", prompt: "p", rule: "weekly", weekday: 1, time: "08:00" }, SAT);
+    const after = advanceSchedule(mon, SAT); // as the sweep does, from the moment it actually ran
+    expect(new Date(after.nextDueIso).getDay()).toBe(1);
+    expect(describeSchedule(after)).toContain("Monday");
+  });
+
+  it("a daily action run at an odd hour still returns to its hour", () => {
+    const daily = normalizeScheduledTask({ title: "Recap", prompt: "p", rule: "daily", time: "08:00" }, SAT);
+    const after = advanceSchedule(daily, SAT);
+    const next = new Date(after.nextDueIso);
+    expect(next.getHours()).toBe(8);
+    expect(next.getDate()).toBe(SAT.getDate() + 1); // tomorrow at 08:00, not 24h from the manual run
+  });
+
+  it("a monthly action keeps its day of month", () => {
+    const monthly = normalizeScheduledTask({ title: "Recap", prompt: "p", rule: "monthly", dayOfMonth: 9, time: "08:00" }, SAT);
+    expect(new Date(advanceSchedule(monthly, SAT).nextDueIso).getDate()).toBe(9);
+  });
+
+  it("a one-shot run by hand is finished, not re-armed", () => {
+    const once = normalizeScheduledTask({ title: "Recap", prompt: "p", rule: "once", time: "08:00" }, SAT);
+    const after = advanceSchedule(once, SAT);
+    expect(after.enabled).toBe(false);
+    expect(after.lastRunIso).toBe(SAT.toISOString());
+  });
+
+  it("marking it due is all it takes for the sweep to pick it up", () => {
+    const mon = normalizeScheduledTask({ title: "Recap", prompt: "p", rule: "weekly", weekday: 1, time: "08:00" }, SAT);
+    expect(dueScheduledTasks([mon], SAT)).toEqual([]); // not due on a Saturday
+    const asked = { ...mon, nextDueIso: SAT.toISOString() };
+    expect(dueScheduledTasks([asked], SAT)).toEqual([asked]);
+  });
+});

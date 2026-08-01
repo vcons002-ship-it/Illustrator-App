@@ -273,7 +273,10 @@ export type CmdToDesktop =
         | { action: "bind"; id: string; planId?: string }
         // Change WHEN an action runs. The phone shows the desktop's schedule and has no runner of its
         // own, so editing a cadence locally changed nothing the desktop would ever act on.
-        | { action: "reschedule"; id: string; rule?: "daily" | "weekly" | "monthly" | "once"; time?: string; weekday?: number; dayOfMonth?: number };
+        | { action: "reschedule"; id: string; rule?: "daily" | "weekly" | "monthly" | "once"; time?: string; weekday?: number; dayOfMonth?: number }
+        // Fire it on demand. The desktop owns the runner and the chats an action runs in, so a phone
+        // can only ask.
+        | { action: "runNow"; id: string };
     }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
