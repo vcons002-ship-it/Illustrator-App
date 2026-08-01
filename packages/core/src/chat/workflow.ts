@@ -41,6 +41,16 @@ export interface WorkflowStep {
   attempts: number;
   /** A short note the app attaches (e.g. why it failed/was skipped). */
   note?: string;
+  /**
+   * The contract was GUESSED from the instruction's wording, not declared by the model (`needs` /
+   * `produces`).
+   *
+   * This is the difference between a promise and a guess, and the collar has to treat them
+   * differently. A declared contract is the model's own word about what would prove the step done, so
+   * it stays strict. An inferred one is a regex reading English — and when a regex and reality
+   * disagree about whether work happened, reality wins. See {@link evaluateStep}.
+   */
+  inferred?: boolean;
 }
 
 export interface Workflow {
@@ -112,7 +122,10 @@ export function needsToDoneWhen(needs: string | undefined): DoneWhen | undefined
  * satisfies, rather than something that could wrongly block. */
 export function inferDoneWhen(instruction: string): DoneWhen {
   const t = instruction.toLowerCase();
-  if (/\b(generate|draw|render|paint|illustrate|create|make)\b[^.]*\b(image|picture|photo|art|portrait|drawing|render)\b/.test(t) || /\bimage of\b/.test(t))
+  if (
+    /\b(generate|draw|render|paint|illustrate|create|make)\b[^.]*\b(image|images|picture|pictures|photo|art|artwork|portrait|drawing|illustration|illustrations|scene|render)\b/.test(t) ||
+    /\bimage of\b/.test(t)
+  )
     return { kind: "image" };
   if (/\b(save|write|export|create)\b[^.]*\b(file|\.md|\.csv|\.txt|\.json|document|script|doc)\b/.test(t))
     return { kind: "file" };
@@ -122,6 +135,27 @@ export function inferDoneWhen(instruction: string): DoneWhen {
   if (/\bask (me|the reader|them|you)\b/.test(t) || /\byour (favorite|favourite|name|preference)\b/.test(t))
     return { kind: "user_reply" };
   return { kind: "text", min: 1 };
+}
+
+/**
+ * Whether a step is written as a CONTINUATION of the one before it — "do the same for the barn",
+ * "repeat for the tractor", "the second one", "now the chicken".
+ *
+ * A checklist is prose, and prose is elliptical: only the first item of a run spells out what the
+ * work is. Read on its own, "now do the same for the barn" contains no evidence that an image is
+ * wanted, so the contract came out as the generic text fallback — and the step then judged a turn
+ * that rendered a picture by whether it had also written a paragraph. In a LIST, the sentence before
+ * it is part of its meaning. PURE.
+ */
+export function isContinuationStep(instruction: string): boolean {
+  const t = instruction.trim().toLowerCase();
+  return (
+    /\b(do|repeat|now)\b[^.]*\b(the same|likewise|again)\b/.test(t) ||
+    /^(and |then |now |next[,: ])/.test(t) ||
+    /\bsame (for|with|thing)\b/.test(t) ||
+    /\b(second|third|fourth|fifth|next|last|final|remaining|other|another)\b/.test(t) ||
+    /\brepeat\b/.test(t)
+  );
 }
 
 function normalizeOnFail(onFail: string | undefined): OnFail {
@@ -144,7 +178,7 @@ function normalizeOnFail(onFail: string | undefined): OnFail {
  * filled, ids assigned, all `pending` and the first `active`. PURE. */
 export function compileWorkflow(plan: BuddyPlan): Workflow {
   const steps: WorkflowStep[] = [];
-  const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail): WorkflowStep => ({
+  const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail, inferred = false): WorkflowStep => ({
     id: `s${steps.length + 1}`,
     instruction,
     doneWhen,
@@ -152,13 +186,23 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
     maxAttempts: DEFAULT_MAX_ATTEMPTS,
     status: "pending",
     attempts: 0,
+    ...(inferred ? { inferred: true } : {}),
   });
   for (const s of plan.steps) {
     // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
     // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
     const produces = s.produces?.map((p) => p.trim()).filter(Boolean);
-    const doneWhen: DoneWhen = produces?.length ? { kind: "files", paths: produces } : (needsToDoneWhen(s.needs) ?? inferDoneWhen(s.text));
-    steps.push(mk(s.text, doneWhen, normalizeOnFail(s.onFail)));
+    const declared: DoneWhen | undefined = produces?.length ? { kind: "files", paths: produces } : needsToDoneWhen(s.needs);
+    let doneWhen: DoneWhen = declared ?? inferDoneWhen(s.text);
+    // A step that classified only as the generic text FALLBACK, written as a continuation of the one
+    // before it, means what that one meant: "generate an image of the goat" / "now do the same for the
+    // barn" is two image steps, and reading the second alone turned it into a "write me a paragraph"
+    // contract that no amount of rendering could satisfy.
+    const prior = steps[steps.length - 1];
+    if (!declared && doneWhen.kind === "text" && prior && isContinuationStep(s.text) && isToolContract(prior.doneWhen.kind)) {
+      doneWhen = prior.doneWhen.kind === "files" ? { kind: "file" } : prior.doneWhen;
+    }
+    steps.push(mk(s.text, doneWhen, normalizeOnFail(s.onFail), !declared));
     // G6 — a `verify` command becomes an ENFORCED follow-up step that must exit 0 (the model can't
     // declare code "done" without it actually building/passing).
     const verify = s.verify?.trim();
@@ -206,6 +250,26 @@ function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
 }
 
 /**
+ * Did this turn actually PRODUCE something — a rendered image or clip, a written file, a command that
+ * exited cleanly?
+ *
+ * Deliberately narrower than "a tool ran": a web search that returned hits is work in progress, not a
+ * deliverable, and must not tick off a step that asked for an answer. This is only ever consulted to
+ * stop a GUESSED contract from denying visible work. PURE.
+ */
+function producedArtifact(evidence: StepEvidence): boolean {
+  return evidence.toolResults.some(
+    (r) => r.result.image?.ok === true || r.result.video?.ok === true || r.result.writeFile?.ok === true || r.result.command?.code === 0,
+  );
+}
+
+/** The same set, but counting an ATTEMPT — a failed render is still the model doing the step, so it
+ * should burn one of the step's attempts rather than loop on "you haven't started yet". PURE. */
+function attemptedArtifact(evidence: StepEvidence): boolean {
+  return evidence.toolResults.some((r) => "image" in r.result || "video" in r.result || "writeFile" in r.result || "command" in r.result);
+}
+
+/**
  * THE COLLAR. Judge the active step against its contract using ONLY observed evidence — never the
  * model's claim. The host folds host-tool outcomes (generate_image → `image.ok`, write_file →
  * `writeFile.ok`, run_command → `command.code`) into `evidence.toolResults`, so every kind is a
@@ -231,6 +295,11 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
         ? { done: true }
         : { done: false, reason: `the ${dw.tool} tool didn't run successfully` };
     case "text": {
+      // A GUESSED answer-contract loses to observed work. The model rendered the picture, the render
+      // suspended the turn (so there is no prose by construction), and a regex that had read the step
+      // as "write something" then reported it undone — for ever, because doing it again produced the
+      // same nothing. A contract the MODEL declared still holds; this only overrides a guess.
+      if (step.inferred && producedArtifact(evidence)) return { done: true };
       const body = evidence.text.trim();
       if (body.length < (dw.min ?? 1)) return { done: false, reason: "no answer was produced" };
       if (dw.regex) {
@@ -252,6 +321,7 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
         : { done: false, reason: `these files aren't on disk yet (or are empty): ${missing.join(", ")}` };
     }
     case "narration":
+      if (step.inferred && producedArtifact(evidence)) return { done: true }; // same rule as `text`
       return evidence.text.trim().length > 0 ? { done: true } : { done: false, reason: "nothing was said" };
     case "user_reply":
       // The model asked; the step is satisfied by the reader's NEXT message, not by this turn.
@@ -283,7 +353,10 @@ export function attemptedStepWork(step: WorkflowStep, evidence: StepEvidence): b
       return ran((r) => r.call.tool === dw.tool);
     case "text":
     case "narration":
-      return evidence.text.trim().length > 0; // for answer steps the text IS the attempt
+      // For answer steps the text IS the attempt — unless the contract was only guessed, in which
+      // case a real render/write/run is an attempt too. Without this the model that DID the work is
+      // told it hasn't started, re-nudged, and does it again.
+      return evidence.text.trim().length > 0 || (!!step.inferred && attemptedArtifact(evidence));
     case "user_reply":
       return true; // parks by design — never a "no attempt" nudge
   }
