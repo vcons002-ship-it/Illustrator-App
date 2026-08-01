@@ -471,3 +471,43 @@ describe("every call the prompt shows is a call the parser accepts", () => {
     expect(parseBuddyToolCall('{"tool":"get_task_plan","id":"p1"}')).toEqual({ tool: "get_task_plan", id: "p1" });
   });
 });
+
+describe("the assistant can always reach its own record", () => {
+  // Reported: "can the AI not check what the activity log shows or which scheduled tasks it has done
+  // that day? I asked and it didn't look." It couldn't. recent_actions sat inside the `tasks` toolset,
+  // so a plain chat had no documentation for it at all, and a chat that DID have task tools was told
+  // about it only under the index line "plan, schedule and track multi-step work across sessions" —
+  // nothing a model would load in order to answer "what have you done today?".
+  //
+  // It fails the always-on test in the most literal way there is: asked what it did, a model does not
+  // think to fetch the task-management manual first. Self-knowledge cannot sit behind a load, for the
+  // same reason remembering your name cannot.
+  const chat = (extra: Record<string, unknown> = {}) =>
+    buildBuddySystemPrompt({ persona: "default", library: [], ...extra } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
+
+  it("is documented in a plain chat with nothing loaded and no task tools", () => {
+    expect(chat({ loadedToolsets: [] })).toContain('"tool":"recent_actions"');
+  });
+
+  it("does not depend on the task tools being permitted", () => {
+    // canTaskTools is only on when task automation is enabled, a plan is active, or the persona is
+    // planning. "What did you do this morning?" asks for none of those.
+    expect(chat({ canTaskTools: false, loadedToolsets: [] })).toContain('"tool":"recent_actions"');
+  });
+
+  it("is never deferred", () => {
+    expect(toolsetForTool("recent_actions")).toBeUndefined();
+    expect(isToolAvailable("recent_actions", [])).toBe(true);
+  });
+
+  it("tells the model to READ it rather than answer from memory", () => {
+    // The failure was not only reachability — a model that can reach a record still has to be told
+    // that answering "what did you do today" from recollection is guessing.
+    expect(chat({ loadedToolsets: [] })).toMatch(/never answer from memory/);
+  });
+
+  it("the tasks index line says the group covers scheduled actions", () => {
+    // So "which scheduled tasks ran today?" has something to match on when list_scheduled is wanted.
+    expect(toolsetIndexBlock(["tasks"], [])).toContain("scheduled actions");
+  });
+});

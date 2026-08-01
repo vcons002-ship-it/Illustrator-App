@@ -75,6 +75,11 @@ export const ALWAYS_ON_TOOLS = [
   "search_images",
   "calculate",
   "load_toolset",
+  // The assistant's memory of its OWN unattended work. It failed the always-on test in the most
+  // literal way: asked "what have you done today?", a model does not think "I should fetch the
+  // task-management manual" — it answers from nothing. Self-knowledge cannot sit behind a load, for
+  // the same reason remembering your name cannot.
+  "recent_actions",
   // Opening a URL, pasted text or code as something readable is documented UNCONDITIONALLY, so it
   // must be callable unconditionally too. Listing it under `books` meant the prompt showed the call
   // and the gate then rejected it — advertise-then-refuse, the same shape as create_document.
@@ -140,12 +145,12 @@ export const TOOLSETS: readonly Toolset[] = [
   },
   {
     id: "tasks",
-    trigger: "plan, schedule and track multi-step work across sessions",
+    trigger: "plan, schedule and track multi-step work across sessions; the reader's to-dos and scheduled actions",
     flags: ["canTaskTools"],
     tools: [
       "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "mark_step_done",
       "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
-      "get_task_plan", "recent_actions",
+      "get_task_plan",
     ],
   },
   {
