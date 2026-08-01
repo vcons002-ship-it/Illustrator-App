@@ -227,7 +227,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                         ? new Date(t.nextDueIso).toLocaleString()
                         : "—"}
                       {t.lastRunIso
-                        ? ` · last ran ${new Date(t.lastRunIso).toLocaleString()}`
+                        ? ` · last ran ${new Date(t.lastRunIso).toLocaleString()}${t.lastRunNote ? ` — ${t.lastRunNote}` : ""}`
                         : ""}
                     </div>
                   </div>

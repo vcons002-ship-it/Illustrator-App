@@ -37,6 +37,15 @@ export interface ScheduledTask {
   enabled: boolean;
   createdAt: number;
   lastRunIso?: string;
+  /**
+   * What the last run actually PRODUCED, recorded once the turn settled.
+   *
+   * `lastRunIso` is stamped before the turn starts, deliberately — advancing first is what stops a
+   * slow turn double-firing. But that made "last ran 7:00" a record of having been DISPATCHED, and a
+   * run that then produced nothing was indistinguishable from one that worked. The reader is told it
+   * ran and finds nothing, with nowhere to look for why.
+   */
+  lastRunNote?: string;
   /** ISO datetime when it's next due to run. */
   nextDueIso: string;
 }
@@ -150,6 +159,7 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
     enabled: input.enabled ?? true,
     createdAt: input.createdAt ?? Date.now(),
     ...(input.lastRunIso ? { lastRunIso: input.lastRunIso } : {}),
+    ...(input.lastRunNote ? { lastRunNote: input.lastRunNote } : {}),
     nextDueIso: input.nextDueIso ?? "",
   };
   // Compute the first run when not supplied (fresh task) — or when what we were handed isn't a real
@@ -218,6 +228,18 @@ export function scheduledRunPrompt(task: ScheduledTask): string {
       "and update the task's steps if what you found changes them."
     : "";
   return `⏰ Scheduled task “${task.title}”. ${since}${record} Do this now: ${task.prompt}`;
+}
+
+/**
+ * What to record about a finished run, judged on whether anything actually LANDED in the chat rather
+ * than on the run having been started.
+ *
+ * `where` names the session, because the other half of "it says it ran and I can't find it" is that
+ * scheduled work deliberately runs in its own chat — so a reader looking at the main one sees nothing
+ * however well it went. PURE.
+ */
+export function scheduledRunNote(produced: boolean, where: string): string {
+  return produced ? `replied in ${where}` : `no reply — nothing landed in ${where}`;
 }
 
 /** A human description of a task's cadence (for the UI). */

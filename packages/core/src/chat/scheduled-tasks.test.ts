@@ -8,6 +8,7 @@ import {
   scheduledRunPrompt,
   normalizeScheduledTask,
   type ScheduledTask,
+  scheduledRunNote,
 } from "./scheduled-tasks.js";
 
 const make = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
@@ -190,5 +191,36 @@ describe("task binding + last-run window", () => {
 
   it("ignores a corrupt lastRun instead of quoting an invalid window", () => {
     expect(scheduledRunPrompt(make2({ lastRunIso: "not-a-date" }))).toMatch(/first run/i);
+  });
+});
+
+describe("a run is recorded by what it produced", () => {
+  // Reported: "the scheduled action is showing that it ran this morning but I don't see the action
+  // anywhere." lastRunIso is stamped BEFORE the turn — advancing first is what stops a slow turn
+  // double-firing — so "last ran 7:00" meant only that it was dispatched. A run that produced nothing
+  // looked exactly like one that worked.
+  it("says whether anything landed, and where to look for it", () => {
+    expect(scheduledRunNote(true, "the ⏰ Scheduled chat")).toBe("replied in the ⏰ Scheduled chat");
+    expect(scheduledRunNote(false, "the ⏰ Scheduled chat")).toBe("no reply — nothing landed in the ⏰ Scheduled chat");
+  });
+
+  it("names the session, because that is the other half of not finding it", () => {
+    // Scheduled work runs in its OWN chat by design, so a reader looking at the main one sees nothing
+    // however well the run went.
+    expect(scheduledRunNote(true, 'the task chat “Party”')).toContain('the task chat “Party”');
+  });
+
+  it("survives a normalize round-trip", () => {
+    const t = normalizeScheduledTask({
+      title: "Morning recap",
+      prompt: "recap my mail",
+      lastRunIso: "2026-08-01T07:00:00.000Z",
+      lastRunNote: "no reply — nothing landed in the ⏰ Scheduled chat",
+    });
+    expect(t.lastRunNote).toBe("no reply — nothing landed in the ⏰ Scheduled chat");
+  });
+
+  it("keeps a task without one clean, rather than carrying an empty field", () => {
+    expect("lastRunNote" in normalizeScheduledTask({ title: "x", prompt: "y" })).toBe(false);
   });
 });

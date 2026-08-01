@@ -79,6 +79,7 @@ import {
   countChangedFiles,
   hasConflictMarkers,
   loadScheduledTasks,
+  scheduledRunNote,
   scheduledRunPrompt,
   stripPersistedDirectives,
   upsertScheduledTask,
@@ -7035,17 +7036,27 @@ export function App() {
         }
         // Advance first (so a slow turn can't double-fire), then run it. `task` is the PRE-advance
         // copy, so the prompt quotes the PREVIOUS run as the "what's new since" window.
-        await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
+        const advanced = advanceSchedule(task);
+        await upsertScheduledTask(libraryStore, advanced).catch(() => {});
         refreshScheduled();
-        logActionRef.current("scheduled_run", `Ran scheduled: ${task.title}`);
+        const where = boundPlan ? `the task chat “${boundPlan.title}”` : "the ⏰ Scheduled chat";
         pushToast(
-          boundPlan
-            ? `⏰ Running “${task.title}” on the task “${boundPlan.title}”.`
-            : `⏰ Running scheduled task “${task.title}” in the Scheduled chat.`,
+          boundPlan ? `⏰ Running “${task.title}” on the task “${boundPlan.title}”.` : `⏰ Running scheduled task “${task.title}” in the Scheduled chat.`,
           "info",
         );
         markBackgroundSweep();
-        onBuddySendText(scheduledRunPrompt(task));
+        // Record what the run PRODUCED, not that it was started. lastRunIso is stamped above before
+        // the turn (advancing first is what stops a slow turn double-firing), so without this "last
+        // ran 7:00" meant only "dispatched" — a run that produced nothing looked exactly like one
+        // that worked, which is what leaves a reader hunting for output that was never written.
+        const startedAt = Date.now();
+        await onBuddySend(scheduledRunPrompt(task));
+        const produced = buddyMessagesRef.current.some((m) => (m.at ?? 0) >= startedAt && (m.role === "assistant" || m.role === "tool"));
+        const note = scheduledRunNote(produced, where);
+        await upsertScheduledTask(libraryStore, { ...advanced, lastRunNote: note }).catch(() => {});
+        refreshScheduled();
+        logActionRef.current("scheduled_run", `Scheduled “${task.title}” — ${note}`);
+        if (!produced) pushToast(`⏰ “${task.title}” ran but produced nothing in ${where}.`, "error");
       })();
     }, 30_000);
     return () => clearInterval(id);
