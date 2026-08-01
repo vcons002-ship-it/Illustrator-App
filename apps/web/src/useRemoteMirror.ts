@@ -127,7 +127,8 @@ export interface RemoteMirrorDeps {
     command:
       | { action: "toggle"; id: string; enabled: boolean }
       | { action: "delete"; id: string }
-      | { action: "bind"; id: string; planId?: string },
+      | { action: "bind"; id: string; planId?: string }
+      | { action: "reschedule"; id: string; rule?: "daily" | "weekly" | "monthly" | "once"; time?: string; weekday?: number; dayOfMonth?: number },
   ) => void;
 
   // Host-owned refs the handler reads (declared in App.tsx, passed in so the single registration
