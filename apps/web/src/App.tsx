@@ -2430,15 +2430,22 @@ export function App() {
     [taskPlans],
   );
   /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */
+  // Declared before runScheduledNow (which needs the sweep), so the relay reaches it through a ref.
+  const runScheduledNowRef = useRef<(id: string) => void>(() => {});
   const applyScheduledCommand = useCallback(
     (
       command:
         | { action: "toggle"; id: string; enabled: boolean }
         | { action: "delete"; id: string }
         | { action: "bind"; id: string; planId?: string }
-        | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number },
+        | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }
+        | { action: "runNow"; id: string },
     ) => {
       void (async () => {
+        if (command.action === "runNow") {
+          runScheduledNowRef.current(command.id);
+          return;
+        }
         if (command.action === "delete") await deleteScheduledTask(libraryStore, command.id).catch(() => {});
         else {
           const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === command.id);
@@ -7044,16 +7051,24 @@ export function App() {
     });
     switchBuddyRef.current?.(SCHEDULED_CHAT_ID);
   }, [persistSessions]);
-  useEffect(() => {
-    if (isRemoteClient) return; // the desktop runs scheduled tasks (it owns the chat + the data)
-    const id = setInterval(() => {
+  /**
+   * One pass of the scheduled runner, hoisted out of its timer so "Run now" can reuse it.
+   *
+   * `manual` waives only the WAITING guards — the two-minute idle gate exists to keep background work
+   * out of a live conversation, and a button press IS the reader asking, so there is nothing to wait
+   * for. The guards that protect something in progress (a turn running, an approval on screen, a
+   * story that owns the chat) still hold: those aren't politeness, they're correctness.
+   */
+  const sweepScheduled = useCallback(
+    (manual = false) => {
+      if (isRemoteClient) return;
       if (buddyBusyRef.current) return;
       if (buddyPendingToolRef.current) return; // an approval is on screen — don't switch out from under it
       // A STORY OWNS THE CHAT while it's open: what's in the dock is what the next beat is written
       // from, so a background sweep switching the session away is a leak, not an inconvenience.
       // Due tasks stay due and fire once the story is closed.
       if (bookRef.current?.kind === "story") return;
-      if (Date.now() - lastRequestAt.current < SCHEDULED_IDLE_MS) return; // mid-conversation: defer, stay due
+      if (!manual && Date.now() - lastRequestAt.current < SCHEDULED_IDLE_MS) return; // mid-conversation: defer, stay due
       void (async () => {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
@@ -7115,9 +7130,52 @@ export function App() {
         logActionRef.current("scheduled_run", `Scheduled “${task.title}” — ${note}`);
         if (outcome === "nothing") pushToast(`⏰ “${task.title}” ran but produced nothing in ${where}.`, "error");
       })();
-    }, 30_000);
+    },
+    [libraryStore, onBuddySend, refreshScheduled, isRemoteClient, openScheduledSession, pushToast, markBackgroundSweep],
+  );
+  const sweepScheduledRef = useRef(sweepScheduled);
+  sweepScheduledRef.current = sweepScheduled;
+  useEffect(() => {
+    if (isRemoteClient) return; // the desktop runs scheduled tasks (it owns the chat + the data)
+    const id = setInterval(() => sweepScheduledRef.current(), 30_000);
     return () => clearInterval(id);
-  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient, openScheduledSession, pushToast, markBackgroundSweep]);
+  }, [isRemoteClient]);
+
+  /**
+   * RUN NOW — fire a scheduled action on demand.
+   *
+   * It makes the action DUE and sweeps, rather than running it down a second path: the sweep already
+   * knows which chat an action belongs in, how to open it, how to advance the schedule and how to
+   * judge what the run produced. A parallel implementation would have to be right about all four, and
+   * would drift.
+   *
+   * The cadence survives, because `nextDue` is computed from the RULE and not from an offset: a
+   * Monday action run by hand on a Saturday still comes back round to Monday. So "run now" is an
+   * extra run, not a stolen one.
+   */
+  const runScheduledNow = useCallback(
+    (id: string) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "runNow", id } });
+        pushToast("⏰ Asked your desktop to run this now…", "info");
+        return;
+      }
+      void (async () => {
+        const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
+        if (!t) return;
+        if (!t.enabled) {
+          pushToast(`⏰ “${t.title}” is paused — resume it first.`, "error");
+          return;
+        }
+        await upsertScheduledTask(libraryStore, { ...t, nextDueIso: new Date().toISOString() }).catch(() => {});
+        refreshScheduled();
+        // Waive the idle wait: the reader just asked, so there is nothing to be polite about.
+        sweepScheduledRef.current(true);
+      })();
+    },
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync, pushToast],
+  );
+  runScheduledNowRef.current = runScheduledNow;
 
   // AUTONOMOUS TASK WORK: while you're away, pick up the next step the assistant is allowed to do
   // ITSELF and attempt it in that task's own chat. This is the half the background sweep never had —
@@ -10155,6 +10213,7 @@ export function App() {
           onBindTask={(id, planId) => void bindScheduledToTask(id, planId)}
           taskOptions={scheduledTaskOptions}
           onReschedule={onRescheduleScheduled}
+          onRunNow={runScheduledNow}
           onClose={() => setShowScheduled(false)}
         />
       )}

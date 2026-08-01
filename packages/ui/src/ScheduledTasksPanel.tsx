@@ -26,6 +26,9 @@ export interface ScheduledTasksPanelProps {
    * time is the window each run is given ("only what's new since then"), so recreating one throws
    * away everything it already handled and the next run re-reports it all. */
   onReschedule?: (id: string, when: { rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }) => void;
+  /** Fire an action now, as WELL as on its schedule — the cadence is computed from the rule, so a
+   * Monday action run by hand on a Saturday still comes back round to Monday. Absent → no button. */
+  onRunNow?: (id: string) => void;
   /** Tasks that an action can be bound to (id + title), for the picker. */
   taskOptions?: { id: string; title: string }[];
   onClose: () => void;
@@ -67,6 +70,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   onDelete,
   onBindTask,
   onReschedule,
+  onRunNow,
   taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
@@ -147,6 +151,15 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                       <span
                         style={{ marginLeft: "auto", display: "flex", gap: 6 }}
                       >
+                        {onRunNow && t.enabled ? (
+                          <button
+                            style={btn}
+                            onClick={() => onRunNow(t.id)}
+                            title="Run this now, as well as on its schedule"
+                          >
+                            ▶ Run now
+                          </button>
+                        ) : null}
                         <button
                           style={btn}
                           onClick={() => onToggle(t.id, !t.enabled)}
