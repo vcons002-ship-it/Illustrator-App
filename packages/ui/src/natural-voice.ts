@@ -95,23 +95,33 @@ export function naturalVoiceReady(): boolean {
  * expects. `signal` aborts BOTH the synthesis wait and the playback, so stopping is immediate.
  */
 export async function speakNaturally(
-  text: string,
+  texts: readonly string[],
   opts: { gender?: VoiceGender; lang?: string; signal?: AbortSignal },
 ): Promise<void> {
   const tts = await loadNaturalVoice();
-  if (opts.signal?.aborted) return;
+  if (opts.signal?.aborted || texts.length === 0) return;
   const voice = pickNaturalVoice(tts.voices, {
     ...(opts.gender ? { gender: opts.gender } : {}),
     ...(opts.lang ? { lang: opts.lang } : {}),
   });
   if (!voice) throw new Error("the natural voice model has no voices");
-  const audio = await tts.generate(text, { voice });
-  if (opts.signal?.aborted) return;
-  const url = URL.createObjectURL(audio.toBlob());
-  try {
-    await playUrl(url, opts.signal);
-  } finally {
-    URL.revokeObjectURL(url);
+  // Synthesise the NEXT piece while this one is playing.
+  //
+  // Generating and playing strictly in turn put a silent gap at every seam — the model takes a real
+  // fraction of a second per sentence — so a paragraph came out as a stutter with a pause between
+  // each phrase. Reading ahead by one hides that behind the audio already playing, which is the
+  // difference between "a voice" and "a voice that keeps stopping".
+  let pending: Promise<{ toBlob: () => Blob }> | undefined = tts.generate(texts[0]!, { voice });
+  for (let i = 0; i < texts.length; i++) {
+    const audio = await pending;
+    pending = i + 1 < texts.length ? tts.generate(texts[i + 1]!, { voice }) : undefined;
+    if (opts.signal?.aborted || !audio) return;
+    const url = URL.createObjectURL(audio.toBlob());
+    try {
+      await playUrl(url, opts.signal);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 }
 
