@@ -344,3 +344,55 @@ describe("native schemas follow the same gate", () => {
     expect(ollamaToolSchemas({ canRunCommands: true }).map((t) => t.function.name)).toContain("run_command");
   });
 });
+
+describe("a tool the prompt names is a tool the model can call", () => {
+  // How a task-bound scheduled action ended up doing nothing visible. The prompt said, in the task
+  // block: "Get the ids from list_task_plans / get_task_plan first if you don't have them — never
+  // guess an id." Neither tool was documented as a call anywhere. Told to fetch ids from a tool whose
+  // shape it had never been shown, and forbidden from guessing, the model had nothing left to do.
+  // save_task_context was worse: the prompt a bound scheduled action FIRES with tells it to record
+  // what it found there, and the tool appeared nowhere in the prompt at all.
+  //
+  // The other half were names that are not callable at all: open_library_book, open_web_text and
+  // read_file are shapes the PARSER produces from open_content / read, so a model following the prose
+  // literally emitted a call no parser accepts.
+  const EQUIPPED = {
+    ...FULL, canGoogle: true, canMarkets: true, canTaskTools: true, canSubAgents: true,
+    canSchwab: true, canAutomateTasks: true,
+    activePlan: { goal: "g", steps: [{ text: "s", status: "pending" }] },
+    library: [{ id: "b1", title: "T" }],
+  } as unknown as Parameters<typeof buildBuddySystemPrompt>[0];
+
+  /** Named in the prompt on purpose while NOT being callable — each needs a reason. */
+  const DELIBERATE = new Set([
+    "complete_step", // app-managed mode withdraws it and tells the model so, by name
+    "set_plan", // named in the multi-step guidance before any checklist exists
+  ]);
+
+  it("documents every tool it tells the model to use", () => {
+    const prompt = buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: TOOLSET_IDS });
+    const unusable = [...BUDDY_TOOL_NAMES].filter(
+      (t) => !DELIBERATE.has(t) && prompt.includes(t) && !prompt.includes(`"tool":"${t}"`),
+    );
+    expect(unusable, `named but never shown as a call: ${unusable.join(", ")}`).toEqual([]);
+  });
+
+  it("on the lean prompt, a named tool is at least LOADABLE", () => {
+    // Different rule, deliberately. The routing guide names deferred tools on purpose ("a downloadable
+    // DOCUMENT → create_document") and calling one un-loaded returns its instructions rather than an
+    // error — that is the whole on-demand design. What must never happen is a name with no
+    // documentation AND no group to fetch it from: nothing the model does can reach that.
+    const lean = buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: [] });
+    const homed = new Set([...TOOLSETS.flatMap((set) => set.tools), ...ALWAYS_ON_TOOLS]);
+    const unreachable = [...BUDDY_TOOL_NAMES].filter(
+      (t) => !DELIBERATE.has(t) && lean.includes(t) && !lean.includes(`"tool":"${t}"`) && !homed.has(t),
+    );
+    expect(unreachable, `named, undocumented, and in no toolset: ${unreachable.join(", ")}`).toEqual([]);
+  });
+
+  it("can read a task back, which is what a bound scheduled action needs", () => {
+    const prompt = buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: ["tasks"] });
+    for (const t of ["list_task_plans", "get_task_plan", "save_task_context"])
+      expect(prompt, t).toContain(`"tool":"${t}"`);
+  });
+});

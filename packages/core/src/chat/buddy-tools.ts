@@ -926,7 +926,7 @@ export function buildBuddySystemPrompt(raw: {
   const library =
     opts.library.length === 0
       ? "THE READER'S LIBRARY is empty so far."
-      : "THE READER'S LIBRARY (open instantly with open_library_book; NEVER invent an id):\n" +
+      : "THE READER'S LIBRARY (open instantly with open_content, source:\"library\"; NEVER invent an id):\n" +
         opts.library
           .slice(0, 30)
           .map((b) => `- "${b.title}"${b.author ? ` by ${b.author}` : ""} — id: ${b.id}`)
@@ -957,7 +957,8 @@ export function buildBuddySystemPrompt(raw: {
       "yourself: a script or data file to run, OR any sizable thing the reader KEEPS — a long document/.md, an " +
       ".html page, a report. `path` is workspace-relative (e.g. `analysis.py`, `dragon.html`, `notes.md`) and " +
       "cannot escape the workspace folder. Saving needs NO approval click. Prefer this over a fenced ```code``` " +
-      "block for anything substantial: the file is saved WHOLE on disk and you can read_file it back next turn, " +
+      "block for anything substantial: the file is saved WHOLE on disk and you can read it back next turn (read with "
+      + 'source:"file"), ' +
       "whereas a big pasted block gets cut off AND scrolls out of your context (you forget what you wrote). Never " +
       "ask the reader to save a fenced block for you to run, and don't rely on the chat's Save button for that (it " +
       "exports a copy for the reader, NOT into the workspace). BIG FILE OR DOCUMENT? One reply can't hold it all, " +
@@ -970,10 +971,10 @@ export function buildBuddySystemPrompt(raw: {
   const editFileTool = opts.canRunCommands
     ? '- {"tool":"edit_file","path":"src/main.py","edits":[{"search":"old exact text","replace":"new text"}]} — ' +
       "change an EXISTING workspace file IN PLACE via search/replace, instead of rewriting the whole file. Each " +
-      "`search` must appear EXACTLY ONCE — copy enough surrounding lines VERBATIM (from a read_file) to make it " +
+      "`search` must appear EXACTLY ONCE — copy enough surrounding lines VERBATIM (from a read, source:\"file\") to make it " +
       "unique; if a search is ambiguous, add more context. ALWAYS prefer this over write_file when TWEAKING a file " +
       "you've already written or read — it's faster, can't truncate, and won't drop the rest of the file. " +
-      "(read_file first if you don't already have the exact text.)\n"
+      "(read it with source:\"file\" first if you don't already have the exact text.)\n"
     : "";
   const autonomyNote = opts.canAutonomousWorkspace
     ? "AUTONOMOUS WORKSPACE is ON: write_file and run_command run WITHOUT a per-action click, so you can write " +
@@ -1545,7 +1546,7 @@ export function buildBuddySystemPrompt(raw: {
     (opts.canSpreadsheets || opts.canDocuments
       ? "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
       "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
-      "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
+      "later with open_content, source:\"library\") and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
       "document you just made is ALREADY in their library and open now — NEVER tell the reader you can't save a created " +
       "document to the library; it's already saved there. \"Where is it?\" → it's open on screen (the data view) and saved " +
       "in the library. To hand them a downloadable FILE, the data view has an \"Excel (.xlsx)\" button (or call export_data); " +
@@ -1700,6 +1701,22 @@ export function buildBuddySystemPrompt(raw: {
         '"done":false to reopen one); {"tool":"mark_step_done","planId":"…","stepId":"…"} checks off ONE sub-task. Get the ' +
         "ids from list_task_plans / get_task_plan first if you don't have them — never guess an id, and confirm briefly " +
         "once it's done.\n" +
+        // READING a task back. These were named all over this block — "get the ids from list_task_plans /
+        // get_task_plan first … never guess an id" — while never being shown as calls. Told to fetch ids
+        // from a tool it had never seen the shape of, and forbidden from guessing, the model had nothing
+        // left to do. save_task_context was worse: the prompt a BOUND scheduled action fires with tells it
+        // to record what it found there, and the tool appeared nowhere in the prompt at all.
+        '- {"tool":"list_task_plans"} — the reader\'s in-app TASKS with their ids, titles and status. This is how you ' +
+        "get a planId; never invent one.\n" +
+        '- {"tool":"get_task_plan","planId":"…"} — ONE task in full: its steps (with their stepIds), notes and any ' +
+        "context saved on earlier runs. Read this before working a task you don't already have in front of you.\n" +
+        '- {"tool":"save_task_context","planId":"…","note":"…"} — record what you FOUND on the task, so the next run and ' +
+        "the reader both inherit it instead of it living only in one reply. A scheduled action bound to a task is asked " +
+        "to do this every time it finds something.\n" +
+        '- {"tool":"add_task_steps","planId":"…","steps":["…"]} — add sub-tasks to an existing task when the work turns ' +
+        "out to need them.\n" +
+        '- {"tool":"update_task_step","planId":"…","stepId":"…","text":"…"} — reword ONE sub-task (to fix or sharpen it); ' +
+        "use mark_step_done to check it off, not this.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
         '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
@@ -1746,8 +1763,8 @@ export function buildBuddySystemPrompt(raw: {
     "that up\", \"let me open/read that page\", \"give me a second\", or \"I'll be right back\" and then stopping does " +
     "NOTHING (there is no later turn that does it for you; the reader just waits). So when you need to act, your reply " +
     "MUST BE the tool's JSON itself — search_web to find sources; read (source:\"url\") to pull a specific page's text INTO the chat " +
-    "(so you can quote/summarize it); open_web_text to open a page in the reader — NOT a promise to do it. If the reader " +
-    "gives you a URL and asks you to read it or open it, emit read (source:\"url\") / open_web_text in your very next reply. " +
+    "(so you can quote/summarize it); open_content (source:\"web\") to open a page in the reader — NOT a promise to do it. If the reader " +
+    "gives you a URL and asks you to read it or open it, emit read (source:\"url\") / open_content (source:\"web\") in your very next reply. " +
     'NEVER state specific facts you have not verified this turn — ' +
     "names, sports results/draft picks, scores, dates, prices, who-did-what — if you didn't just search_web or read " +
     "it, you do NOT know it: search first, then answer from what you found, or say plainly you couldn't find it. Making " +
