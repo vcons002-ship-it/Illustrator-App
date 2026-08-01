@@ -307,3 +307,108 @@ describe("attemptedStepWork — did the model actually TRY the step (vs fiddle t
     expect(checklistMetaOnly(ev())).toBe(false); // no tools at all is a narration miss, not meta-fiddling
   });
 });
+
+describe("a multi-image checklist doesn't wedge on its second step", () => {
+  // Reported: "the app-managed workflow gets stuck on step 2 for multiple image generations — it
+  // never gets checked off, and when handed back to the LLM it only sees the step isn't done and
+  // tries again." Two faults stacked, both here.
+  const img = (ok: boolean): { call: BuddyToolCall; result: BuddyToolResultPayload } => ({
+    call: { tool: "generate_image", prompt: "x" },
+    result: { image: { ok } },
+  });
+
+  it("reads an elliptical second step in the context of the first", () => {
+    // Only the FIRST item of a run spells out the work. On its own, "now do the same for the barn"
+    // says nothing about images, so it compiled to the generic text fallback — and then judged a
+    // turn that rendered a picture by whether it had also written a paragraph.
+    const plan: BuddyPlan = {
+      goal: "farm pictures",
+      steps: [
+        { text: "Generate an image of a goat in a field", status: "pending" },
+        { text: "Now do the same for the barn", status: "pending" },
+        { text: "Repeat for the tractor", status: "pending" },
+      ],
+    };
+    const wf = compileWorkflow(plan);
+    expect(wf.steps.map((s) => s.doneWhen.kind)).toEqual(["image", "image", "image"]);
+  });
+
+  it("does not inherit across an unrelated step", () => {
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Generate an image of a goat", status: "pending" },
+        { text: "Write a short caption for it", status: "pending" },
+      ],
+    });
+    expect(wf.steps[1]!.doneWhen.kind).toBe("text");
+  });
+
+  it("lets observed work beat a GUESSED answer-contract", () => {
+    // The second fault, and the one that actually wedged it: a render SUSPENDS the turn, so there is
+    // no prose by construction. A text contract then reported the step undone for ever — doing it
+    // again produced the same nothing.
+    const guessed = step({ doneWhen: { kind: "text", min: 1 }, inferred: true });
+    expect(evaluateStep(guessed, ev([img(true)])).done).toBe(true);
+    expect(evaluateStep(step({ doneWhen: { kind: "narration" }, inferred: true }), ev([img(true)])).done).toBe(true);
+  });
+
+  it("does NOT let observed work beat a contract the model DECLARED", () => {
+    // needs:"text" is the model's own word about what would prove this step done. A guess may be
+    // overruled by reality; a promise may not — otherwise "render it, then describe it" ticks off
+    // the describing step the moment the render lands.
+    const declared = step({ doneWhen: { kind: "text", min: 1 } }); // no `inferred` flag
+    expect(evaluateStep(declared, ev([img(true)])).done).toBe(false);
+  });
+
+  it("counts only real deliverables, not any tool that ran", () => {
+    // A web search is work in progress, not something produced — it must not tick off a step that
+    // asked for an answer, however loosely that step was classified.
+    const guessed = step({ doneWhen: { kind: "text", min: 1 }, inferred: true });
+    const searched = ev([{ call: { tool: "search_web", query: "goats" }, result: { hits: [] } }]);
+    expect(evaluateStep(guessed, searched).done).toBe(false);
+    expect(evaluateStep(guessed, ev([img(false)])).done).toBe(false); // a FAILED render isn't done either
+  });
+
+  it("treats a failed render on a guessed step as a real attempt", () => {
+    // Otherwise the model that tried and was refused by the image engine is told it hasn't started —
+    // and re-nudged, for ever, without ever spending an attempt or reaching the reader.
+    const guessed = step({ doneWhen: { kind: "text", min: 1 }, inferred: true });
+    expect(attemptedStepWork(guessed, ev([img(false)]))).toBe(true);
+    expect(attemptedStepWork(guessed, ev([]))).toBe(false); // nothing at all is still no attempt
+  });
+
+  it("runs the whole three-image checklist to completion", () => {
+    // End to end, the way the host drives it: each render is judged, ticked, and the next step armed.
+    let wf = compileWorkflow({
+      steps: [
+        { text: "Generate an image of a goat", status: "pending" },
+        { text: "Now the barn", status: "pending" },
+        { text: "And the tractor", status: "pending" },
+      ],
+    });
+    const actions: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const active = wf.steps.find((s) => s.status === "active")!;
+      const adv = advanceWorkflow(wf, evaluateStep(active, ev([img(true)])));
+      actions.push(adv.action);
+      wf = adv.workflow;
+    }
+    expect(actions).toEqual(["advance", "advance", "finish"]);
+    expect(wf.steps.every((s) => s.status === "done")).toBe(true);
+  });
+});
+
+describe("inferDoneWhen reads the ways people actually ask for a picture", () => {
+  for (const phrase of [
+    "Create an illustration of the farmhouse",
+    "Draw the final scene",
+    "Illustrate the opening scene",
+    "Generate the remaining two images",
+  ]) {
+    it(`"${phrase}"`, () => expect(inferDoneWhen(phrase).kind).toBe("image"));
+  }
+
+  it("still falls back to text for something genuinely unclassifiable", () => {
+    expect(inferDoneWhen("Think about what the reader might want next").kind).toBe("text");
+  });
+});
