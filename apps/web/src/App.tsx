@@ -6424,12 +6424,16 @@ export function App() {
       }
       return;
     }
-    if (res.text) {
+    // An app-managed turn is judged whether or not it produced prose. A tool step's reply is EMPTY by
+    // design (the render suspends it, and between-step narration is suppressed), and a planning turn
+    // now settles with nothing at all — so gating the executor on `res.text` would leave the run with
+    // a compiled checklist and nobody driving it.
+    if (res.text || (appManagedActive && buddyWorkflowRef.current)) {
       // A plain-text settle ON a tool step is the model narrating instead of acting ("I already did
       // X…") — hide it (the advance/retry below still runs from evidence). Answer steps + the final
       // wrap-up (no active step) show their text as the deliverable.
       const trimmedThinking = res.thinking ? stripIdentityRecital(res.thinking, identityRef.current) : "";
-      if (!suppressProse) {
+      if (res.text && !suppressProse) {
         appendBuddy({
           role: "assistant",
           text: res.text,

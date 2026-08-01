@@ -170,6 +170,31 @@ export function isContinuationStep(instruction: string): boolean {
   );
 }
 
+/**
+ * Whether a step is the model PLANNING rather than working — "plan the actions", "decide the prompts
+ * for each image", "outline the approach".
+ *
+ * A checklist made of observable work has no such step in it: `set_plan` IS the planning, and it has
+ * already happened by the time the checklist exists. But models write one anyway, and it is the worst
+ * possible first step — nothing about it can be observed, so its contract falls to the generic text
+ * check, which any sentence satisfies. The run then ticks a step off before doing anything, which is
+ * exactly what the collar exists to prevent, and the reader watches it congratulate itself.
+ *
+ * Deliberately narrow. "Draft the itinerary" and "List 3 follow-ups" are deliverables, not planning:
+ * the object has to refer to the WORK ITSELF (its steps, prompts, approach, order) before a verb like
+ * "draft" or "decide" counts. Only a bare "plan …" is meta on the verb alone. PURE.
+ */
+export function isPlanningStep(instruction: string): boolean {
+  const t = instruction.trim().toLowerCase().replace(/^(?:first|then|next)[,:]?\s+/, "").replace(/^i(?:'ll| will|'m going to)\s+/, "");
+  // "Plan the actions" / "Plan the three images" is the checklist talking about itself. "Plan MY trip
+  // to Rome" is the reader's deliverable — a possessive is the tell, and dropping it would throw away
+  // the very thing they asked for.
+  if (/^plan\b/.test(t) && !/^plan\s+(?:my|our|his|her|their|your|the reader's)\b/.test(t)) return true;
+  return /^(?:decide|determine|outline|prepare|design|identify|choose|pick|draft|brainstorm|think about|figure out|work out)\b[^.]*\b(?:plans?|steps?|prompts?|approach|order|sequence|actions?|tasks?|outline|checklist|what to|which)\b/.test(
+    t,
+  );
+}
+
 function normalizeOnFail(onFail: string | undefined): OnFail {
   switch ((onFail ?? "").trim().toLowerCase()) {
     case "skip":
@@ -201,7 +226,11 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
     ...(inferred ? { inferred: true } : {}),
     ...(context ? { context } : {}),
   });
-  for (const s of plan.steps) {
+  // A leading "plan the actions" step is dropped before anything is compiled — see isPlanningStep.
+  // Only when the model didn't DECLARE a contract for it (a step it tagged `needs:"text"` is a real
+  // written deliverable), and only when there is actual work behind it to run.
+  const authored = plan.steps.filter((s, i) => !(i === 0 && plan.steps.length > 1 && !s.needs && !s.produces?.length && isPlanningStep(s.text)));
+  for (const s of authored) {
     // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
     // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
     const produces = s.produces?.map((p) => p.trim()).filter(Boolean);
