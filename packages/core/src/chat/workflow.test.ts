@@ -12,7 +12,9 @@ import {
   inferDoneWhen,
   isToolContract,
   needsToDoneWhen,
+  recompileWorkflow,
   resumeWorkflow,
+  stepDirective,
   workflowToPlan,
 } from "./workflow.js";
 
@@ -410,5 +412,132 @@ describe("inferDoneWhen reads the ways people actually ask for a picture", () =>
 
   it("still falls back to text for something genuinely unclassifiable", () => {
     expect(inferDoneWhen("Think about what the reader might want next").kind).toBe("text");
+  });
+});
+
+describe("an elliptical step survives leaving the model's context", () => {
+  // Reported after the wedge was fixed: the run now advances, but it "generates the second or third
+  // image twice and never the first". The directives that name each step are EPHEMERAL by design and
+  // a tool step's own narration is dropped, so by step 3 nothing in context says what "the same" was
+  // — and the model renders whichever subject it can still see, which is the previous picture.
+  it("records what each continuation step continues", () => {
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Generate an image of a goat in a field", status: "pending" },
+        { text: "Now do the same for the barn", status: "pending" },
+        { text: "Repeat for the tractor", status: "pending" },
+      ],
+    });
+    expect(wf.steps[0]!.context).toBeUndefined(); // it spells itself out
+    expect(wf.steps[1]!.context).toBe("Generate an image of a goat in a field");
+    // Step 3 points at the step that SPELT THE WORK OUT, not at another ellipsis.
+    expect(wf.steps[2]!.context).toBe("Generate an image of a goat in a field");
+  });
+
+  it("adds nothing to a step that stands on its own", () => {
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Generate an image of a goat", status: "pending" },
+        { text: "Generate an image of a chicken", status: "pending" },
+      ],
+    });
+    expect(wf.steps[1]!.context).toBeUndefined();
+  });
+});
+
+describe("re-planning mid-run keeps the work already done", () => {
+  // The turn the reader saw as "it apologises for getting confused about the plan": set_plan is how a
+  // model both starts AND revises a checklist, and revising is exactly what a confused model does.
+  // Compiling that from scratch re-armed step 1 and redid finished work.
+  const plan: BuddyPlan = {
+    steps: [
+      { text: "Generate an image of a goat", status: "pending" },
+      { text: "Now the barn", status: "pending" },
+      { text: "And the tractor", status: "pending" },
+    ],
+  };
+
+  it("keeps finished steps finished and arms the first unfinished one", () => {
+    let wf = compileWorkflow(plan);
+    wf = advanceWorkflow(wf, { done: true }).workflow; // step 1 rendered
+    expect(wf.steps[0]!.status).toBe("done");
+
+    const again = recompileWorkflow(wf, plan); // the model re-issues the same checklist
+    expect(again.steps[0]!.status).toBe("done");
+    expect(again.steps[1]!.status).toBe("active");
+    expect(again.steps[2]!.status).toBe("pending");
+  });
+
+  it("lets a genuinely revised plan take effect", () => {
+    let wf = compileWorkflow(plan);
+    wf = advanceWorkflow(wf, { done: true }).workflow;
+    const revised = recompileWorkflow(wf, {
+      steps: [
+        { text: "Generate an image of a goat", status: "pending" }, // already done
+        { text: "Generate an image of a duck", status: "pending" }, // new work
+      ],
+    });
+    expect(revised.steps.map((s) => s.status)).toEqual(["done", "active"]);
+  });
+
+  it("compiles normally when there was no run to preserve", () => {
+    expect(recompileWorkflow(undefined, plan).steps.map((s) => s.status)).toEqual(["active", "pending", "pending"]);
+  });
+
+  it("finishes rather than re-arming when every step is already done", () => {
+    let wf = compileWorkflow(plan);
+    for (let i = 0; i < 3; i++) wf = advanceWorkflow(wf, { done: true }).workflow;
+    const again = recompileWorkflow(wf, plan);
+    expect(again.steps.every((s) => s.status === "done")).toBe(true);
+  });
+});
+
+describe("no step is ever reached anonymously", () => {
+  // The reported fault, stated exactly: "it was step one that had an issue and never ran." Steps two
+  // onward were each reached by a directive naming them; the first was reached by nothing — it ran on
+  // whatever the model chose to do in the turn it wrote the plan. And because the collar can see THAT
+  // an image rendered but not WHAT it depicts, whatever came back was credited to step 1.
+  const wf = compileWorkflow({
+    steps: [
+      { text: "Generate an image of a goat in a field", status: "pending" },
+      { text: "Now do the same for the barn", status: "pending" },
+      { text: "Repeat for the tractor", status: "pending" },
+    ],
+  });
+
+  it("names the step and its position, whatever brought us here", () => {
+    for (const kind of ["start", "advance", "retry", "nudge"] as const) {
+      const d = stepDirective(wf, wf.steps[0]!, kind);
+      expect(d, kind).toContain("step 1 of 3");
+      expect(d, kind).toContain("Generate an image of a goat in a field");
+    }
+  });
+
+  it("gives the FIRST step a directive of its own", () => {
+    // The whole fix: a planning turn no longer leaves step 1 to the model's own reading of its plan.
+    const d = stepDirective(wf, wf.steps[0]!, "start");
+    expect(d).toContain("Checklist ready — 3 steps");
+    expect(d).toContain("ONLY step 1 of 3");
+  });
+
+  it("carries the antecedent of an elliptical step, and only then", () => {
+    expect(stepDirective(wf, wf.steps[2]!, "advance")).toContain("Generate an image of a goat in a field");
+    expect(stepDirective(wf, wf.steps[2]!, "advance")).toContain("not the previous one's");
+    expect(stepDirective(wf, wf.steps[0]!, "advance")).not.toContain("This continues");
+  });
+
+  it("passes on why a retry is being asked for", () => {
+    expect(stepDirective(wf, wf.steps[1]!, "retry", { reason: "no image was rendered" })).toContain("no image was rendered");
+  });
+
+  it("says which tool a nudged step needs, and who owns the checklist", () => {
+    const d = stepDirective(wf, wf.steps[1]!, "nudge", { needsTool: "generate_image", checklistMeta: true });
+    expect(d).toContain("ACTUAL generate_image call");
+    expect(d).toContain("do NOT call complete_step");
+  });
+
+  it("counts a single-step checklist in the singular", () => {
+    const one = compileWorkflow({ steps: [{ text: "Generate an image of a goat", status: "pending" }] });
+    expect(stepDirective(one, one.steps[0]!, "start")).toContain("1 step.");
   });
 });

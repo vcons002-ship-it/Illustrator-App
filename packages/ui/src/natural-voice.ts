@@ -32,6 +32,30 @@ let loading: Promise<Kokoro> | undefined;
 let loaded: Kokoro | undefined;
 
 /**
+ * Overall fetch progress across every file, by BYTES.
+ *
+ * The runtime reports progress per file — tokenizer, config, weights, voice data — each running 0 to
+ * 100 of its own. Showing whichever arrived last makes the number lurch backwards several times,
+ * which reads as a stuck download. Summing bytes gives one number that only goes forward. The weights
+ * dominate the total, so it also reflects the actual wait.
+ */
+function trackProgress(onProgress?: (fraction: number) => void): (p: unknown) => void {
+  const files = new Map<string, { loaded: number; total: number }>();
+  return (raw: unknown) => {
+    const p = raw as { file?: string; loaded?: number; total?: number };
+    if (!p?.file || typeof p.total !== "number" || p.total <= 0) return;
+    files.set(p.file, { loaded: Math.min(p.loaded ?? 0, p.total), total: p.total });
+    let done = 0;
+    let all = 0;
+    for (const f of files.values()) {
+      done += f.loaded;
+      all += f.total;
+    }
+    if (all > 0) onProgress?.(Math.max(0, Math.min(1, done / all)));
+  };
+}
+
+/**
  * Load the model (once per page), reporting progress.
  *
  * A failed load CLEARS the cached promise so turning it on again retries — a transient network
@@ -46,9 +70,7 @@ export async function loadNaturalVoice(onProgress?: (fraction: number) => void):
       const { KokoroTTS } = await import("kokoro-js");
       const tts = (await KokoroTTS.from_pretrained(MODEL_ID, {
         dtype: DTYPE,
-        progress_callback: (p: { status?: string; progress?: number }) => {
-          if (typeof p?.progress === "number") onProgress?.(Math.max(0, Math.min(100, p.progress)) / 100);
-        },
+        progress_callback: trackProgress(onProgress),
       })) as unknown as Kokoro;
       loaded = tts;
       return tts;

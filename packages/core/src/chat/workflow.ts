@@ -51,6 +51,18 @@ export interface WorkflowStep {
    * disagree about whether work happened, reality wins. See {@link evaluateStep}.
    */
   inferred?: boolean;
+  /**
+   * What this step is a continuation OF — the antecedent step's instruction, when this one only makes
+   * sense after it ("now do the same for the barn").
+   *
+   * The executor hands each step to the model as a self-contained directive, and those directives are
+   * EPHEMERAL: they're deliberately kept out of the saved transcript, and on a tool step the model's
+   * own between-step narration is dropped too. So by the time step 3 runs, nothing in context says
+   * what "the same" was — and a model told to do it without recapping renders whatever subject it can
+   * still see, which is the previous picture. Resolving the ellipsis at COMPILE time is the fix; at
+   * execution time the antecedent is already gone.
+   */
+  context?: string;
 }
 
 export interface Workflow {
@@ -178,7 +190,7 @@ function normalizeOnFail(onFail: string | undefined): OnFail {
  * filled, ids assigned, all `pending` and the first `active`. PURE. */
 export function compileWorkflow(plan: BuddyPlan): Workflow {
   const steps: WorkflowStep[] = [];
-  const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail, inferred = false): WorkflowStep => ({
+  const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail, inferred = false, context?: string): WorkflowStep => ({
     id: `s${steps.length + 1}`,
     instruction,
     doneWhen,
@@ -187,6 +199,7 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
     status: "pending",
     attempts: 0,
     ...(inferred ? { inferred: true } : {}),
+    ...(context ? { context } : {}),
   });
   for (const s of plan.steps) {
     // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
@@ -199,10 +212,15 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
     // barn" is two image steps, and reading the second alone turned it into a "write me a paragraph"
     // contract that no amount of rendering could satisfy.
     const prior = steps[steps.length - 1];
-    if (!declared && doneWhen.kind === "text" && prior && isContinuationStep(s.text) && isToolContract(prior.doneWhen.kind)) {
-      doneWhen = prior.doneWhen.kind === "files" ? { kind: "file" } : prior.doneWhen;
+    const continues = !!prior && isContinuationStep(s.text);
+    if (!declared && doneWhen.kind === "text" && continues && isToolContract(prior!.doneWhen.kind)) {
+      doneWhen = prior!.doneWhen.kind === "files" ? { kind: "file" } : prior!.doneWhen;
     }
-    steps.push(mk(s.text, doneWhen, normalizeOnFail(s.onFail), !declared));
+    // Carry the antecedent so the step can be handed over as a self-contained instruction later. Its
+    // OWN antecedent is followed back, so a run of three keeps pointing at the one that spelt the work
+    // out rather than at another ellipsis.
+    const context = continues ? (prior!.context ?? prior!.instruction) : undefined;
+    steps.push(mk(s.text, doneWhen, normalizeOnFail(s.onFail), !declared, context));
     // G6 — a `verify` command becomes an ENFORCED follow-up step that must exit 0 (the model can't
     // declare code "done" without it actually building/passing).
     const verify = s.verify?.trim();
@@ -210,6 +228,83 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
   }
   if (steps[0]) steps[0].status = "active";
   return { ...(plan.goal ? { goal: plan.goal } : {}), steps };
+}
+
+/**
+ * Re-compile a plan the model has just RE-issued mid-run, keeping the work already finished.
+ *
+ * `set_plan` is how a model both starts and revises a checklist, and revising is exactly what a
+ * confused model does — it apologises, re-plans, and carries on. Compiling that from scratch reset
+ * every step to pending and armed step 1 again, so finished work was redone and unfinished work was
+ * reached in the wrong order. The reader sees three renders and the wrong pictures.
+ *
+ * A step is "the same step" if its instruction matches one that was already settled — matched on
+ * text, since ids are positional and a revision may insert or drop steps. Genuinely new steps start
+ * pending, so a real change of plan still takes effect. PURE.
+ */
+export function recompileWorkflow(prev: Workflow | undefined, plan: BuddyPlan): Workflow {
+  const fresh = compileWorkflow(plan);
+  if (!prev) return fresh;
+  const settled = new Map<string, WorkflowStep>();
+  for (const s of prev.steps) if (s.status === "done" || s.status === "failed") settled.set(s.instruction.trim().toLowerCase(), s);
+  const steps = fresh.steps.map((s) => {
+    const was = settled.get(s.instruction.trim().toLowerCase());
+    return was ? { ...s, status: was.status, attempts: was.attempts, ...(was.note ? { note: was.note } : {}) } : { ...s, status: "pending" as WorkflowStepStatus };
+  });
+  // Arm the first step that still needs doing — not step 1, which may well be finished.
+  const next = steps.find((s) => s.status === "pending");
+  if (next) next.status = "active";
+  return { ...fresh, steps };
+}
+
+/** Why the executor is handing this step to the model. */
+export type DirectiveKind =
+  | "start" // the checklist was just compiled — drive its first step
+  | "advance" // the previous step is settled; do the next one
+  | "retry" // the attempt didn't satisfy the contract
+  | "nudge"; // the model didn't attempt this step's work at all
+
+/**
+ * The instruction the model is given for a step — the executor's whole control surface, in one place.
+ *
+ * It lives here because it was the ASYMMETRY that broke a multi-image run: steps two onward were each
+ * reached by a directive naming them ("now do ONLY step 2 of 3: …"), and the first was reached by
+ * nothing at all. It ran on whatever the model chose to do in the turn it wrote the plan, before any
+ * marker existed to say where it was — and since the collar can see that an image rendered but not
+ * WHAT it depicts, whatever came back was credited to step 1. A model that planned goat/barn/tractor
+ * and reached for the barn ticked step 1 off with it, and the goat was never drawn.
+ *
+ * Every kind names the step and its position, so no step can be reached anonymously again. PURE.
+ */
+export function stepDirective(
+  wf: Workflow,
+  step: WorkflowStep,
+  kind: DirectiveKind,
+  extra: { reason?: string; needsTool?: string; checklistMeta?: boolean } = {},
+): string {
+  const total = wf.steps.length;
+  const n = wf.steps.findIndex((s) => s.id === step.id) + 1;
+  const where = `step ${n} of ${total}`;
+  // An elliptical step ("now do the same for the barn") loses its antecedent: these directives are
+  // ephemeral by design and a tool step's narration is dropped, so nothing in context says what "the
+  // same" was. The compiler recorded it; hand it over with the step.
+  const context = step.context
+    ? ` (This continues the kind of work in “${step.context}” — apply it to THIS step's subject, not the previous one's.)`
+    : "";
+  const lead =
+    kind === "start"
+      ? `Checklist ready — ${total} step${total === 1 ? "" : "s"}. Now do ONLY ${where}:`
+      : kind === "advance"
+        ? `✓ Previous step done. Now do ONLY ${where}:`
+        : kind === "retry"
+          ? `Your last attempt didn't satisfy ${where}${extra.reason ? ` (${extra.reason})` : ""}. Do it again now:`
+          : `You haven't done ${where} yet.${
+              extra.checklistMeta
+                ? " The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step."
+                : ""
+            }${extra.needsTool ? ` This step needs an ACTUAL ${extra.needsTool} call this turn (not a description).` : ""} Do it now:`;
+  const tail = kind === "advance" || kind === "start" ? "Call its tool and stop — don't recap or explain." : "Call the tool and stop — no commentary.";
+  return `[${lead} ${step.instruction}.${context} ${tail}]`;
 }
 
 /** The step currently being worked (the single `active` one), or undefined when none. */

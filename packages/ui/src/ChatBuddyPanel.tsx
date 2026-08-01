@@ -389,6 +389,15 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       stopSpeaking();
     } else if (ttsSupported) {
       speakSince.current = Date.now();
+      // Start fetching the natural voice NOW, on the click that asked for it — not when the first
+      // reply arrives. An 80MB wait is fine while you type; it is not fine with an answer already on
+      // screen waiting to be read out.
+      if (props.voiceEngine === "natural" && !naturalVoiceReady()) {
+        setVoiceNote("Downloading the natural voice (about 80MB, once)…");
+        void loadNaturalVoice((f) => setVoiceNote(`Downloading the natural voice… ${Math.round(f * 100)}%`))
+          .then(() => setVoiceNote(""))
+          .catch(() => setVoiceNote("")); // the speak path reports the failure, with its fallback
+      }
       // Safari (iOS especially) only lets a page speak once it has spoken from a real user gesture.
       // A silent utterance issued from this click is what makes the FIRST reply audible; without it
       // the toggle appears to work and nothing is ever heard.
