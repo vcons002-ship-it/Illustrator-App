@@ -2301,6 +2301,17 @@ export function App() {
    */
   const onRescheduleScheduled = useCallback(
     (id: string, when: { rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }) => {
+      // A phone shows the desktop's schedule and has no runner of its own, so writing to its own store
+      // changed nothing that would ever fire — and refreshScheduled bails on a remote client, so even
+      // the row it had just edited snapped back on the next mirror push. Relay it, like every other
+      // control in this panel already does.
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "reschedule", id, ...when } });
+        // Say that it went somewhere. The phone can't confirm the new cadence itself — it waits for
+        // the desktop's next push — and silence here is exactly what "nothing happened" looks like.
+        pushToast("⏰ Asked your desktop to change when this runs…", "info");
+        return;
+      }
       void (async () => {
         const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
         if (!t) return;
@@ -2310,7 +2321,7 @@ export function App() {
         pushToast(`⏰ “${next.title}” now runs ${describeSchedule(next).toLowerCase()}.`, "success");
       })();
     },
-    [libraryStore, refreshScheduled, pushToast],
+    [libraryStore, refreshScheduled, pushToast, isRemoteClient, sendAppSync],
   );
   const removeScheduled = useCallback(
     async (id: string) => {
@@ -2424,7 +2435,8 @@ export function App() {
       command:
         | { action: "toggle"; id: string; enabled: boolean }
         | { action: "delete"; id: string }
-        | { action: "bind"; id: string; planId?: string },
+        | { action: "bind"; id: string; planId?: string }
+        | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number },
     ) => {
       void (async () => {
         if (command.action === "delete") await deleteScheduledTask(libraryStore, command.id).catch(() => {});
@@ -2434,6 +2446,9 @@ export function App() {
             /* gone already — nothing to change */
           } else if (command.action === "toggle") {
             await upsertScheduledTask(libraryStore, { ...t, enabled: command.enabled }).catch(() => {});
+          } else if (command.action === "reschedule") {
+            const { action: _a, id: _i, ...when } = command;
+            await upsertScheduledTask(libraryStore, rescheduleTask(t, when)).catch(() => {});
           } else {
             // Drop the key rather than setting undefined — absent is what "not on a task" means.
             const { planId: _drop, ...rest } = t;

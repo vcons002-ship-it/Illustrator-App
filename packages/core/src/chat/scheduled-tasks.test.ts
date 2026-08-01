@@ -319,3 +319,36 @@ describe("rescheduleTask — fix the cadence, keep the history", () => {
     expect(daily.weekday).toBeUndefined();
   });
 });
+
+describe("the phone's cadence edit survives the relay", () => {
+  // A phone shows the desktop's schedule and has no runner of its own, so a cadence edit has to be
+  // relayed and applied THERE. The command carries `action`/`id` alongside the change; the desktop
+  // strips those and passes the rest to rescheduleTask. Pinning that shape here, because a stray key
+  // reaching rescheduleTask is a silent no-op — which is what "it doesn't actually change" looks like.
+  const SAT = new Date(2026, 7, 1, 10, 0);
+  const task = normalizeScheduledTask({ title: "Weekly recap", prompt: "recap", rule: "weekly", time: "08:00" }, SAT);
+
+  it("applies exactly what the phone asked for", () => {
+    const command = { action: "reschedule" as const, id: task.id, weekday: 1 };
+    const { action: _a, id: _i, ...when } = command;
+    const fixed = rescheduleTask(task, when, SAT);
+    expect(describeSchedule(fixed)).toContain("Monday");
+    expect(new Date(fixed.nextDueIso).getDay()).toBe(1);
+  });
+
+  it("carries a time change and a rule change the same way", () => {
+    const { action: _a, id: _i, ...when } = { action: "reschedule" as const, id: task.id, rule: "daily" as const, time: "06:30" };
+    const fixed = rescheduleTask(task, when, SAT);
+    expect(fixed.rule).toBe("daily");
+    expect(fixed.time).toBe("06:30");
+    expect(describeSchedule(fixed)).toBe("Daily at 06:30");
+  });
+
+  it("changes nothing when the command carries no change", () => {
+    // An empty edit must be a no-op on the CADENCE, not a reset of it.
+    const fixed = rescheduleTask(task, {}, SAT);
+    expect(fixed.rule).toBe(task.rule);
+    expect(fixed.time).toBe(task.time);
+    expect(weekdayOf(fixed)).toBe(weekdayOf(task));
+  });
+});
