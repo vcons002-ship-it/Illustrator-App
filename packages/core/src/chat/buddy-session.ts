@@ -729,6 +729,16 @@ export async function runBuddyTurn(opts: {
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
       feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
+      // APP-MANAGED: compiling the checklist IS the whole turn.
+      //
+      // Left to run on, the model acts immediately on a plan the app hasn't yet given it a position
+      // in — so it reaches for whichever subject it happens to be holding, which is routinely the
+      // last one it wrote down rather than the first. The app can see THAT an image rendered but not
+      // WHAT it depicts, so that render is unusable and gets thrown away. Stopping here is what makes
+      // "now do ONLY step 1 of 3" the first thing that happens, instead of the second.
+      if (opts.deps.appManagedSteps && call.tool === "set_plan" && !result.error) {
+        return withThinking({ text: "", transcript, toolResults });
+      }
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }

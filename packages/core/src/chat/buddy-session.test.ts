@@ -981,3 +981,66 @@ describe("runBuddyTurn", () => {
     expect(outcome.text.trim()).not.toBe(""); // never an empty answer
   });
 });
+
+describe("app-managed steps: compiling the checklist is the whole turn", () => {
+  // Reported: "it generated image 3 in step 1, then realised its mistake and generated image 1 before
+  // checking off step 1." Both renders were real. The first happened in the SAME turn as set_plan —
+  // the model acting on a plan the app hadn't yet given it a position in, so it reached for whichever
+  // subject it was holding. The app can see THAT an image rendered but not WHAT it depicts, so that
+  // render was discarded and step 1 was driven properly on the next turn. Correct, and wasteful: the
+  // fix is to stop the turn at set_plan so the wrong render never happens.
+  function planHarness() {
+    let plan: { goal?: string; steps: { text: string; status: "pending" | "done" }[] } | undefined;
+    return {
+      deps: {
+        ...baseDeps,
+        appManagedSteps: true,
+        setPlan: (goal: string | undefined, steps: string[]) => {
+          plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+          return plan;
+        },
+      },
+    };
+  }
+  const script = [
+    '{"tool":"set_plan","goal":"3 images","steps":["Generate an image of a goat","Now the barn","And the tractor"]}',
+    '{"tool":"generate_image","prompt":"the tractor"}', // what it would have done unprompted
+  ];
+
+  it("settles the moment the plan compiles, before the model can act on it", async () => {
+    const rendered: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm: scriptedLlm(script),
+      system: "sys",
+      history: [{ role: "user", content: "make me three pictures" }],
+      deps: planHarness().deps,
+      runHostTool: async (call) => {
+        if (call.tool === "generate_image") rendered.push(call.prompt);
+        return { image: { ok: true } };
+      },
+    });
+    expect(rendered).toEqual([]); // nothing rendered on the planning turn
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["set_plan"]);
+    expect(outcome.pendingTool).toBeUndefined();
+  });
+
+  it("leaves the legacy model-driven path running on, as it always did", async () => {
+    // Without app-managed steps the model owns its own checklist, so ending its turn at set_plan
+    // would strand it — there is no executor waiting to hand it step 1.
+    const rendered: string[] = [];
+    const { deps } = planHarness();
+    await runBuddyTurn({
+      llm: scriptedLlm(script),
+      system: "sys",
+      history: [{ role: "user", content: "make me three pictures" }],
+      deps: { ...deps, appManagedSteps: false },
+      runHostTool: async (call) => {
+        if (call.tool === "generate_image") rendered.push(call.prompt);
+        return { image: { ok: true } };
+      },
+    });
+    // (the scripted model repeats its last line once the script runs out, so just assert it acted)
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered[0]).toBe("the tractor");
+  });
+});
