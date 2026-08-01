@@ -200,14 +200,25 @@ describe("a run is recorded by what it produced", () => {
   // double-firing — so "last ran 7:00" meant only that it was dispatched. A run that produced nothing
   // looked exactly like one that worked.
   it("says whether anything landed, and where to look for it", () => {
-    expect(scheduledRunNote(true, "the ⏰ Scheduled chat")).toBe("replied in the ⏰ Scheduled chat");
-    expect(scheduledRunNote(false, "the ⏰ Scheduled chat")).toBe("no reply — nothing landed in the ⏰ Scheduled chat");
+    expect(scheduledRunNote("replied", "the ⏰ Scheduled chat")).toBe("replied in the ⏰ Scheduled chat");
+    expect(scheduledRunNote("nothing", "the ⏰ Scheduled chat")).toBe("no reply — nothing landed in the ⏰ Scheduled chat");
   });
 
   it("names the session, because that is the other half of not finding it", () => {
     // Scheduled work runs in its OWN chat by design, so a reader looking at the main one sees nothing
     // however well the run went.
-    expect(scheduledRunNote(true, 'the task chat “Party”')).toContain('the task chat “Party”');
+    expect(scheduledRunNote("replied", 'the task chat “Party”')).toContain('the task chat “Party”');
+  });
+
+  it("does not call an unobservable run a failed one", () => {
+    // The evidence for a run is whatever is in the conversation on screen when it settles, and
+    // switching chats CLEARS that — so a task-bound action, which runs in its own chat and is the one
+    // most likely to be switched away from, would report an empty run for one that worked. "Nothing
+    // came back" and "we couldn't see whether anything came back" need different fixes.
+    const note = scheduledRunNote("unconfirmed", 'the task chat “Party”');
+    expect(note).toContain("the chat changed before it finished");
+    expect(note).toContain('the task chat “Party”');
+    expect(note).not.toContain("no reply");
   });
 
   it("survives a normalize round-trip", () => {
