@@ -81,6 +81,7 @@ import {
   countChangedFiles,
   hasConflictMarkers,
   loadScheduledTasks,
+  rescheduleTask,
   scheduledRunNote,
   scheduledRunPrompt,
   stripPersistedDirectives,
@@ -2290,6 +2291,26 @@ export function App() {
       refreshScheduled();
     },
     [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+  );
+  /**
+   * Change WHEN a scheduled action runs, keeping the action itself.
+   *
+   * Editing rather than delete-and-recreate: a recurring action's lastRunIso is the window each run
+   * is given ("only what's new since then"), so recreating one throws away everything it already
+   * handled and the next run re-reports the lot. Only the cadence was ever wrong.
+   */
+  const onRescheduleScheduled = useCallback(
+    (id: string, when: { rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }) => {
+      void (async () => {
+        const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
+        if (!t) return;
+        const next = rescheduleTask(t, when);
+        await upsertScheduledTask(libraryStore, next);
+        refreshScheduled();
+        pushToast(`⏰ “${next.title}” now runs ${describeSchedule(next).toLowerCase()}.`, "success");
+      })();
+    },
+    [libraryStore, refreshScheduled, pushToast],
   );
   const removeScheduled = useCallback(
     async (id: string) => {
@@ -10118,6 +10139,7 @@ export function App() {
           onDelete={(id) => void removeScheduled(id)}
           onBindTask={(id, planId) => void bindScheduledToTask(id, planId)}
           taskOptions={scheduledTaskOptions}
+          onReschedule={onRescheduleScheduled}
           onClose={() => setShowScheduled(false)}
         />
       )}

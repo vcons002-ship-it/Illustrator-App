@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import type { ScheduledTask } from "@visual-reader/core";
+import { weekdayOf, type ScheduledTask } from "@visual-reader/core";
 
 /**
  * Manage scheduled / periodic tasks — recurring actions the assistant runs on a cadence
@@ -22,6 +22,10 @@ export interface ScheduledTasksPanelProps {
    * cold in the shared Scheduled chat. Actions made before binding existed are all loose, and there's
    * no safe way to guess which task they belong to, so this is how they get attached. */
   onBindTask?: (id: string, planId: string | undefined) => void;
+  /** Change WHEN an action runs. Editing beats delete-and-recreate: a recurring action's last-run
+   * time is the window each run is given ("only what's new since then"), so recreating one throws
+   * away everything it already handled and the next run re-reports it all. */
+  onReschedule?: (id: string, when: { rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }) => void;
   /** Tasks that an action can be bound to (id + title), for the picker. */
   taskOptions?: { id: string; title: string }[];
   onClose: () => void;
@@ -62,6 +66,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   onToggle,
   onDelete,
   onBindTask,
+  onReschedule,
   taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
@@ -221,6 +226,54 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                         </span>
                       )}
                     </label>
+                    {onReschedule ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, opacity: 0.5 }}>Runs</span>
+                        <select
+                          value={t.rule}
+                          onChange={(e) => onReschedule(t.id, { rule: e.target.value as ScheduledTask["rule"] })}
+                          style={editStyle}
+                        >
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="once">Once</option>
+                        </select>
+                        {t.rule === "weekly" ? (
+                          <select
+                            value={String(weekdayOf(t) ?? 1)}
+                            onChange={(e) => onReschedule(t.id, { weekday: Number(e.target.value) })}
+                            style={editStyle}
+                          >
+                            {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d, i) => (
+                              <option key={d} value={String(i)}>
+                                {d}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {t.rule === "monthly" ? (
+                          <select
+                            value={String(t.dayOfMonth ?? 1)}
+                            onChange={(e) => onReschedule(t.id, { dayOfMonth: Number(e.target.value) })}
+                            style={editStyle}
+                          >
+                            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                              <option key={d} value={String(d)}>
+                                day {d}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          type="time"
+                          value={t.time}
+                          onChange={(e) => onReschedule(t.id, { time: e.target.value })}
+                          style={editStyle}
+                          aria-label="Time of day"
+                        />
+                      </div>
+                    ) : null}
                     <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
                       Next:{" "}
                       {t.enabled
@@ -245,6 +298,16 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
     </div>
   );
 });
+
+/** The inline cadence editors — small, so a row of them doesn't dominate the action it belongs to. */
+const editStyle: React.CSSProperties = {
+  fontSize: 11,
+  background: "#1e2128",
+  color: "#e6e6e6",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 5,
+  padding: "2px 4px",
+};
 
 const overlay: React.CSSProperties = {
   position: "fixed",

@@ -10,6 +10,7 @@ import {
   type ScheduledTask,
   scheduledRunNote,
   weekdayOf,
+  rescheduleTask,
 } from "./scheduled-tasks.js";
 
 const make = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
@@ -274,5 +275,47 @@ describe("a weekly action runs on the day it says it does", () => {
     const after = advanceSchedule(mon, new Date(mon.nextDueIso));
     expect(new Date(after.nextDueIso).getDay()).toBe(1);
     expect(describeSchedule(after)).toContain("Monday");
+  });
+});
+
+describe("rescheduleTask — fix the cadence, keep the history", () => {
+  // The reported task said "weekly on Saturday" because it was created without a weekday and got
+  // anchored to its creation day. Recreating it would have fixed the day and thrown away lastRunIso,
+  // which is the window each run is given ("cover only what is NEW since then") — so the next run
+  // would re-report everything the action had already handled. Only the cadence was ever wrong.
+  const SAT = new Date(2026, 7, 1, 10, 0); // Saturday
+  const saturdayTask = normalizeScheduledTask(
+    { title: "Weekly recap", prompt: "recap", rule: "weekly", time: "08:00", lastRunIso: "2026-07-25T08:00:00.000Z" },
+    SAT,
+  );
+
+  it("moves it to the day the reader actually wanted", () => {
+    expect(describeSchedule(saturdayTask)).toContain("Saturday"); // the reported state
+    const fixed = rescheduleTask(saturdayTask, { weekday: 1 }, SAT);
+    expect(describeSchedule(fixed)).toContain("Monday");
+    expect(new Date(fixed.nextDueIso).getDay()).toBe(1);
+  });
+
+  it("keeps what the action has already done", () => {
+    const fixed = rescheduleTask(saturdayTask, { weekday: 1 }, SAT);
+    expect(fixed.lastRunIso).toBe(saturdayTask.lastRunIso);
+    expect(fixed.id).toBe(saturdayTask.id);
+    expect(fixed.prompt).toBe(saturdayTask.prompt);
+  });
+
+  it("changes the time without disturbing the day", () => {
+    const fixed = rescheduleTask(rescheduleTask(saturdayTask, { weekday: 1 }, SAT), { time: "17:30" }, SAT);
+    expect(fixed.time).toBe("17:30");
+    expect(new Date(fixed.nextDueIso).getDay()).toBe(1);
+  });
+
+  it("drops a field that means nothing to the new rule", () => {
+    // A day-of-week left over from a weekly rule must not quietly steer a monthly one.
+    const monthly = rescheduleTask(rescheduleTask(saturdayTask, { weekday: 1 }, SAT), { rule: "monthly", dayOfMonth: 9 }, SAT);
+    expect(monthly.weekday).toBeUndefined();
+    expect(new Date(monthly.nextDueIso).getDate()).toBe(9);
+    const daily = rescheduleTask(monthly, { rule: "daily" }, SAT);
+    expect(daily.dayOfMonth).toBeUndefined();
+    expect(daily.weekday).toBeUndefined();
   });
 });
