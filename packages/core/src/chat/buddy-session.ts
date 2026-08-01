@@ -205,7 +205,9 @@ export interface BuddyDeps {
   addTaskGroup?: (group: { title: string; due?: string; subtasks: { title: string; due?: string }[] }) => Promise<{ title: string; count: number }>;
   /** Scheduled/periodic tasks — created/listed/cancelled over the shared store. */
   scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string; planTitle?: string; planUnavailable?: boolean }>;
-  listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean }[]>;
+  listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean; lastRunIso?: string; lastRunNote?: string }[]>;
+  /** The assistant's own record of what it did unattended — see action-history.ts. */
+  recentActions?: (kind: string | undefined, limit: number) => Promise<string>;
   cancelScheduled?: (id: string) => Promise<boolean>;
   /** Task-plan execution (the orchestrator) — wired over the shared store. */
   markStepDone?: (planId: string, stepId: string) => Promise<{ planTitle: string; nextStep?: string; completed: boolean } | undefined>;
@@ -978,6 +980,9 @@ export async function runBuddyTool(
         return {
           memory: { action: "forgot", note: call.match, about: call.about ?? "reader", count: await deps.forget(call.match, call.about) },
         };
+      case "recent_actions":
+        if (!deps.recentActions) return { error: "the action record isn't available right now" };
+        return { actionHistory: await deps.recentActions(call.kind, call.limit ?? 20) };
       case "set_plan":
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
         return { plan: deps.setPlan(call.goal, call.steps, call.stepDetails) };

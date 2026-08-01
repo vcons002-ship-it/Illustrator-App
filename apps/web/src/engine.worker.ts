@@ -182,6 +182,9 @@ import {
   updateTaskStep,
   applyStepEdits,
   appendTaskContext,
+  filterActionHistory,
+  formatActionHistory,
+  loadActionHistory,
   harvestTaskContext,
   completeStepById,
   setTaskPlanComplete,
@@ -4927,7 +4930,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       },
       listScheduled: async () =>
-        (await loadScheduledTasks(store)).map((t) => ({ id: t.id, title: t.title, describe: describeSchedule(t), enabled: t.enabled })),
+        (await loadScheduledTasks(store)).map((t) => ({
+          id: t.id,
+          title: t.title,
+          describe: describeSchedule(t),
+          enabled: t.enabled,
+          // WHEN it last ran, and what came of it — without these, "when did you last run X?" had no
+          // answer in the one tool that lists X.
+          ...(t.lastRunIso ? { lastRunIso: t.lastRunIso } : {}),
+          ...(t.lastRunNote ? { lastRunNote: t.lastRunNote } : {}),
+        })),
+      // The assistant reading back its OWN unattended work. Every entry was already being written
+      // here, with a timestamp; only the reader could see it.
+      recentActions: async (kind, limit) =>
+        formatActionHistory(filterActionHistory(await loadActionHistory(store), kind, limit)),
       cancelScheduled: async (id) => {
         await deleteScheduledTask(store, id);
         post({ type: "buddyScheduledChanged", requestId: msg.requestId });
