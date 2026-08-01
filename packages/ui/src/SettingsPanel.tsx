@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
-import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN } from "./tokens.js";
+import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN, smallButtonStyle } from "./tokens.js";
+import { loadNaturalVoice, naturalVoiceReady } from "./natural-voice.js";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -705,6 +706,18 @@ export function SettingsPanel({
   onImportData,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
+  // The natural voice's ~80MB fetch, reported WHERE THE READER CHOSE IT. It used to start only when
+  // the first reply after enabling it arrived — so turning the setting on appeared to do nothing, and
+  // the wait then landed at the worst possible moment, with an answer on screen waiting to be read.
+  const [voiceDl, setVoiceDl] = useState<{ state: "idle" | "loading" | "ready" | "failed"; pct: number; error?: string }>(
+    () => ({ state: naturalVoiceReady() ? "ready" : "idle", pct: 0 }),
+  );
+  const downloadNaturalVoice = (): void => {
+    setVoiceDl({ state: "loading", pct: 0 });
+    void loadNaturalVoice((f) => setVoiceDl({ state: "loading", pct: f * 100 }))
+      .then(() => setVoiceDl({ state: "ready", pct: 100 }))
+      .catch((e: unknown) => setVoiceDl({ state: "failed", pct: 0, error: e instanceof Error ? e.message : String(e) }));
+  };
   // Escape closes the floating panel like the ✕ button — it isn't a centered modal
   // (no ModalShell), so it needs its own keyboard dismissal.
   useEffect(() => {
@@ -1702,14 +1715,34 @@ export function SettingsPanel({
               <option value="natural">Natural voice — downloads once (~80MB)</option>
             </select>
           </label>
+          {value.voiceEngine === "natural" ? (
+            <label style={rowStyle}>
+              <span>Natural voice model</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {voiceDl.state === "ready" ? (
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>✓ Ready</span>
+                ) : voiceDl.state === "loading" ? (
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>Downloading… {Math.round(voiceDl.pct)}%</span>
+                ) : (
+                  <button style={smallButtonStyle} onClick={downloadNaturalVoice}>
+                    Download now (~80MB)
+                  </button>
+                )}
+              </span>
+            </label>
+          ) : null}
+          {voiceDl.state === "failed" ? (
+            <span style={{ fontSize: 11, color: "#ff8c8c" }}>Couldn't download it: {voiceDl.error}</span>
+          ) : null}
           <span style={{ opacity: 0.55, fontSize: 11 }}>
             Your device's voices work offline straight away, but they're whatever your operating
             system happens to ship — and most don't say whether they're male or female, so the choice
             above has to be matched by name and can miss (Android especially). The natural voice is
             an open-source model (Kokoro-82M, Apache-2.0) that runs on this device, sounds the same
             on your computer and your phone, and states each voice's gender so the setting above is
-            exact. It downloads about 80MB the first time you use it and is cached after that; if it
-            can't be fetched, replies are read in your device's voice instead and the chat says so.
+            exact. It downloads about 80MB — now, if you press the button, otherwise the first time
+            you turn on 🔊 in a chat — and your browser caches it after that. If it can't be fetched,
+            replies are read in your device's voice instead and the chat says so.
           </span>
           </Group>
 
