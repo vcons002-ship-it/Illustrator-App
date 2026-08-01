@@ -1580,6 +1580,15 @@ export function buildBuddySystemPrompt(raw: {
     "look or an appearance that exists only inside a fictional story as a current Soul fact.\n" +
     '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
     '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
+    // Your own record of unattended work — ALWAYS available, and next to the memory tools because that
+    // is what it is. It sat inside the task-tools block, so a plain chat could not reach it at all and
+    // a chat that could was told about it under "plan, schedule and track multi-step work" — nothing a
+    // model would load in order to answer "what have you done today?".
+    '- {"tool":"recent_actions","limit":20} — YOUR OWN record of what you did while the reader was away, newest ' +
+    "first, each with the date, time and outcome: scheduled actions that ran, inbox/calendar scans, plans you made, " +
+    'task steps you worked alone. Add "kind" to narrow it ("scheduled_run", "scan", "plan", "create_task", ' +
+    '"task_auto"). READ IT — never answer from memory — whenever the reader asks what you have done, what ran today, ' +
+    "or when you last did something; and before repeating work you may already have done.\n" +
     checklistCatalog +
     // Settings + setup guides — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canAppSettings
@@ -1743,14 +1752,7 @@ export function buildBuddySystemPrompt(raw: {
       'calendar event, update it with update_event "setLines" so a changed answer OVERWRITES that entry — a ' +
       "run that appends instead leaves the event saying two different things about the same person.\n" +
       '  {"tool":"list_scheduled"} to show them (each with WHEN it last ran and what came of it); ' +
-      '{"tool":"cancel_scheduled","id":"…"} to remove one.\n' +
-      // The assistant's own memory of unattended work. It was all being recorded already, with
-      // timestamps, and shown only to the reader — so it could not say when it last did something,
-      // and could not tell it had already done a thing before doing it again.
-      '- {"tool":"recent_actions","limit":20} — YOUR OWN record of what you did while unattended, newest first, ' +
-      'each with the date and time: scheduled runs, inbox/calendar scans, plans you made, task steps you worked. ' +
-      'Add "kind" to narrow it ("scheduled_run", "scan", "plan", "create_task", "task_auto"). Read this whenever the ' +
-      'reader asks when you last did something, or before repeating work you may already have done.\n'
+      '{"tool":"cancel_scheduled","id":"…"} to remove one.\n'
       : "") +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
