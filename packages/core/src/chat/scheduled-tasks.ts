@@ -274,6 +274,40 @@ export function scheduledRunNote(outcome: ScheduledRunOutcome, where: string): s
   return `no reply — nothing landed in ${where}`;
 }
 
+/**
+ * Change WHEN a task runs, recomputing its next occurrence from now.
+ *
+ * Editing rather than delete-and-recreate, deliberately: a recurring action's `lastRunIso` is the
+ * window each run is given ("cover only what is NEW since then"), so recreating one silently throws
+ * away everything it already handled and the next run re-reports it all. The history is the part
+ * worth keeping; only the cadence was wrong. PURE.
+ */
+export function rescheduleTask(
+  task: ScheduledTask,
+  when: { rule?: ScheduleRule; time?: string; weekday?: number; dayOfMonth?: number; date?: string },
+  now = new Date(),
+): ScheduledTask {
+  const rule = when.rule ?? task.rule;
+  // Strip every cadence field first, then put back only the one this rule uses. Spreading the task
+  // and conditionally ADDING would leave a stale day-of-week on a monthly rule — invisible until the
+  // rule changed back and it steered the schedule again.
+  const { weekday: _wd, dayOfMonth: _dom, date: _date, ...bare } = task;
+  const next: ScheduledTask = {
+    ...bare,
+    rule,
+    time: clampTime(when.time ?? task.time),
+    // Each rule keeps only the field that means anything to it, so a day-of-week left over from a
+    // weekly rule can't quietly steer a monthly one.
+    ...(rule === "weekly"
+      ? { weekday: Math.min(6, Math.max(0, Math.round(when.weekday ?? weekdayOf(task) ?? now.getDay()))) }
+      : {}),
+    ...(rule === "monthly" ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(when.dayOfMonth ?? task.dayOfMonth ?? now.getDate()))) } : {}),
+    ...(rule === "once" && (when.date ?? task.date) ? { date: (when.date ?? task.date)!.trim() } : {}),
+    nextDueIso: "",
+  };
+  return { ...next, nextDueIso: nextDue(next, now).toISOString() };
+}
+
 /** A human description of a task's cadence (for the UI). */
 export function describeSchedule(task: ScheduledTask): string {
   const at = `at ${task.time}`;
