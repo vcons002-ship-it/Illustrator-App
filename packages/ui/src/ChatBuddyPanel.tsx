@@ -17,6 +17,7 @@ import {
   pickVoice,
   repliesToSpeak,
   speechChunks,
+  MAX_NATURAL_CHARS,
   type BuddyPersona,
   type BuddyPlan,
   type BuddyToolCall,
@@ -357,14 +358,16 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         }
         setVoiceNote("");
         for (const reply of fresh) {
-          for (const chunk of speechChunks(reply)) {
-            if (ac.signal.aborted) return;
-            await speakNaturally(chunk, {
-              ...(props.voiceGender && props.voiceGender !== "system" ? { gender: props.voiceGender } : {}),
-              lang: (typeof navigator !== "undefined" && navigator.language) || "en-US",
-              signal: ac.signal,
-            });
-          }
+          if (ac.signal.aborted) return;
+          // Longer pieces than the browser path takes, and handed over as ONE sequence so the engine
+          // can synthesise ahead while the current piece plays. Cutting to the browser's 180 and
+          // generating one at a time made a paragraph come out as a dozen fragments with a pause at
+          // every seam.
+          await speakNaturally(speechChunks(reply, MAX_NATURAL_CHARS), {
+            ...(props.voiceGender && props.voiceGender !== "system" ? { gender: props.voiceGender } : {}),
+            lang: (typeof navigator !== "undefined" && navigator.language) || "en-US",
+            signal: ac.signal,
+          });
         }
       } catch (e) {
         if (ac.signal.aborted) return;

@@ -4277,7 +4277,15 @@ export function App() {
   };
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
-    setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
+    // Strip a timestamp the MODEL wrote. Its own prior replies are shown to it prefixed with when
+    // they were sent, and a model shown that eventually writes one itself — which then gets stored,
+    // displayed, and (the way this surfaced) read out loud before every answer. The app's clock is
+    // added on the way IN to the model and taken off on the way OUT, so the prefix is never the
+    // model's to keep. Same reason it can't be left to an instruction.
+    setBuddyMessages((prev) => [
+      ...prev,
+      { ...msg, ...(msg.text ? { text: stripTurnStamp(msg.text) } : {}), at: Date.now() },
+    ]);
   // A reference line posted to the buddy chat when an out-of-chat button does something (scan,
   // plan, create task), so the buddy thread is a running record of "what worked". A `tool`-role
   // note renders as a system line (like a delegated-subtask note), not as the assistant talking.
@@ -6112,7 +6120,7 @@ export function App() {
     const res = await buddyChat(history, userText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
-        setBuddyStreaming(buddyStreamingRef.current);
+        setBuddyStreaming(stripTurnStamp(buddyStreamingRef.current));
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
       } else if (e.kind === "thinking") setBuddyThinking(stripIdentityRecital(e.text, identityRef.current));
       else if (e.kind === "activity") setBuddyActivity(e.text);

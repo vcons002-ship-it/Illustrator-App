@@ -11,6 +11,11 @@ export const MAX_SPEAK_CHARS = 1200;
 /** Turn an assistant reply (markdown) into clean, speakable prose. */
 export function speakableText(text: string): string {
   return text
+    // The app puts "[2026-08-01 09:14] " in front of every message for the MODEL to read, and models
+    // shown their own prefixed replies start writing the prefix themselves. Spoken aloud it is a
+    // string of numbers before every answer. Stripped here as well as on the way in, so messages
+    // already stored with one don't keep reading it out.
+    .replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/, "")
     .replace(/```[\s\S]*?```/g, " (code block) ") // don't read code aloud
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // images
@@ -76,6 +81,16 @@ export function repliesToSpeak(
  * queued back-to-back play as one continuous read.
  */
 export const MAX_UTTERANCE_CHARS = 180;
+
+/**
+ * Longest piece to hand the DOWNLOADED voice.
+ *
+ * That 180 exists for a Chrome bug — it truncates a long utterance silently — and the local model has
+ * no such limit. Cutting for a browser's fault made a paragraph into a dozen separately-synthesised
+ * fragments, and every seam is a place the prosody restarts. Longer pieces read as sentences rather
+ * than as a list of phrases; the cap is only here so one runaway paragraph can't stall the start.
+ */
+export const MAX_NATURAL_CHARS = 400;
 
 /**
  * Cut speakable text into utterances at sentence ends, falling back to clause and word boundaries.

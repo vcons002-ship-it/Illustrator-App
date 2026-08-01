@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_SPEAK_CHARS,
+  MAX_NATURAL_CHARS,
   MAX_UTTERANCE_CHARS,
   pickNaturalVoice,
   pickVoice,
@@ -218,5 +219,50 @@ describe("pickVoice", () => {
   it("ignores gender when none was asked for", () => {
     const voices = [v("Zarvox"), v("Microsoft Guy Online (Natural)")];
     expect(pickVoice(voices)?.name).toContain("Guy");
+  });
+});
+
+describe("it doesn't read the timestamp out loud", () => {
+  // The app puts "[2026-08-01 09:14] " in front of every message for the MODEL to read. A model shown
+  // its OWN replies prefixed that way eventually writes one itself — and then it is stored, shown,
+  // and spoken: a string of numbers before every answer.
+  it("strips a stamp the model wrote into its reply", () => {
+    expect(speakableText("[2026-08-01 09:14] Here's what I found.")).toBe("Here's what I found.");
+  });
+
+  it("fixes messages already stored with one, not just new ones", () => {
+    const stored = [{ role: "assistant", text: "[2026-07-30 08:00] The recap is ready.", at: 5 }];
+    expect(repliesToSpeak([], stored, 0)).toEqual(["The recap is ready."]);
+  });
+
+  it("leaves a real bracket at the start of a reply alone", () => {
+    // Only the timestamp SHAPE, not anything in brackets — "[note] …" is the assistant talking.
+    expect(speakableText("[note] read this first")).toBe("[note] read this first");
+    expect(speakableText("[08:00] earlier today")).toBe("[08:00] earlier today");
+  });
+
+  it("matches on shape, not on the calendar", () => {
+    // "[2026-13-99 99:99]" is not a real date and is still stripped. Deliberate: validating ranges
+    // buys nothing — a reply that opens with those digits in that exact layout is the prefix — and a
+    // stricter check would only find new ways to leave one in.
+    expect(speakableText("[2026-13-99 99:99] hello")).toBe("hello");
+  });
+});
+
+describe("the downloaded voice gets longer pieces than the browser does", () => {
+  // The 180-char cap exists for a Chrome bug — it truncates a long utterance silently. The local
+  // model has no such limit, and cutting for a browser's fault turned a paragraph into a dozen
+  // separately-synthesised fragments, each one a place the prosody restarts.
+  const para =
+    "The subduction zone runs the length of the coast. Sediment piles against the overriding plate. " +
+    "Every few centuries the locked section lets go. The result is a megathrust earthquake.";
+
+  it("makes fewer seams to hear", () => {
+    expect(speechChunks(para, MAX_NATURAL_CHARS).length).toBeLessThan(speechChunks(para).length);
+  });
+
+  it("still breaks at sentence ends, not mid-word", () => {
+    for (const c of speechChunks(para, MAX_NATURAL_CHARS)) expect(c.length).toBeLessThanOrEqual(MAX_NATURAL_CHARS);
+    expect(speechChunks(para, MAX_NATURAL_CHARS).join(" ").split(/\s+/)).toEqual(para.split(/\s+/));
   });
 });
