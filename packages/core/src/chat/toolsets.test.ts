@@ -7,7 +7,7 @@ import {
   toolsetForTool,
   toolsetIndexBlock,
 } from "./toolsets.js";
-import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, ollamaToolSchemas, toolsetDoc } from "./buddy-tools.js";
+import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
 
 /** Everything a fully-equipped desktop can do. */
 const FULL = {
@@ -394,5 +394,80 @@ describe("a tool the prompt names is a tool the model can call", () => {
     const prompt = buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: ["tasks"] });
     for (const t of ["list_task_plans", "get_task_plan", "save_task_context"])
       expect(prompt, t).toContain(`"tool":"${t}"`);
+  });
+});
+
+describe("every call the prompt shows is a call the parser accepts", () => {
+  // Naming a tool is not enough — the SHAPE has to be right too, and getting that wrong is worse than
+  // saying nothing: the model follows the documented example, the parser rejects the key it never
+  // heard of, and the call is dropped silently. Three of the five task tools documented in the
+  // previous change were wrong this way — get_task_plan takes `id` (not `planId`), add_task_steps
+  // takes step OBJECTS (not strings), update_task_step takes `notes`/`status` (not `text`) — which is
+  // exactly the failure that documenting them was meant to fix. So the prompt's own examples are
+  // parsed here, and anything the runtime would reject fails the build.
+  const EQUIPPED = {
+    ...FULL, canGoogle: true, canMarkets: true, canTaskTools: true, canSubAgents: true,
+    canSchwab: true, canAutomateTasks: true,
+    activePlan: { goal: "g", steps: [{ text: "s", status: "pending" }] },
+    library: [{ id: "b1", title: "T" }],
+  } as unknown as Parameters<typeof buildBuddySystemPrompt>[0];
+
+  /** Every `{"tool":…}` object the prompt shows, extracted by balancing braces. */
+  function examples(prompt: string): string[] {
+    const out: string[] = [];
+    for (let i = prompt.indexOf('{"tool":'); i >= 0; i = prompt.indexOf('{"tool":', i + 1)) {
+      let depth = 0;
+      for (let j = i; j < prompt.length; j++) {
+        if (prompt[j] === "{") depth++;
+        else if (prompt[j] === "}" && --depth === 0) {
+          out.push(prompt.slice(i, j + 1));
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  it("finds the examples at all", () => {
+    // Guard against the extractor silently matching nothing and the real assertion passing vacuously.
+    const found = examples(buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: TOOLSET_IDS }));
+    expect(found.length).toBeGreaterThan(30);
+  });
+
+  /**
+   * Shapes the prompt deliberately SKETCHES rather than shows — alternatives separated by `|`, a bare
+   * `…` standing in for "and the rest". They aren't valid JSON, so a model can't copy them verbatim
+   * anyway; the surrounding prose is what teaches those two. Listed explicitly so a NEW unparseable
+   * example has to be justified here rather than quietly joining them.
+   */
+  const SKETCHES = [
+    '{"tool":"generate_long_video","subject":"…","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}}',
+    '{"tool":"open_content","source":"library|web|pasted|code", …}',
+    '{"tool":"update_setting","field":"…","value":…}',
+  ];
+
+  it("parses every one of them", () => {
+    const prompt = buildBuddySystemPrompt({ ...EQUIPPED, loadedToolsets: TOOLSET_IDS });
+    // The prompt writes placeholders as "…"; a parser requiring a non-empty string would reject those
+    // for the wrong reason, so fill them first. What is under test is the KEYS.
+    const fill = (ex: string) => ex.replace(/"…"/g, '"x"').replace(/…/g, "");
+    const all = examples(prompt);
+    const sketches = all.filter((ex) => {
+      try {
+        JSON.parse(fill(ex));
+        return false;
+      } catch {
+        return true; // not even JSON — a sketch, not an example
+      }
+    });
+    expect(sketches, "a new example isn't valid JSON — make it real or list it as a sketch").toEqual(SKETCHES);
+    const rejected = all.filter((ex) => !sketches.includes(ex) && parseBuddyToolCall(fill(ex)) === undefined);
+    expect(rejected, `the prompt shows calls the parser rejects:\n${rejected.join("\n")}`).toEqual([]);
+  });
+
+  it("would have caught the wrong argument name", () => {
+    // The specific mistake, pinned: `planId` is not how you fetch a task.
+    expect(parseBuddyToolCall('{"tool":"get_task_plan","planId":"p1"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"get_task_plan","id":"p1"}')).toEqual({ tool: "get_task_plan", id: "p1" });
   });
 });

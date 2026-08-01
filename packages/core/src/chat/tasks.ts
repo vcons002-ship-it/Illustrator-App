@@ -97,6 +97,14 @@ export interface TaskStep {
   researchNotes?: string;
   googleTaskId?: string;
   googleEventId?: string;
+  /**
+   * When this step was checked off (ms epoch).
+   *
+   * A task is worked across days by a reader and by scheduled runs that resume it cold, and neither
+   * could tell whether "3 of 7 done" happened this morning or a month ago. Without it the model
+   * re-reports settled work as news and treats a stalled task as a fresh one.
+   */
+  doneAt?: number;
 }
 
 export interface TaskPlan {
@@ -465,7 +473,7 @@ export async function setTaskPlanComplete(store: VisualReaderStore, id: string, 
       return {
         ...p,
         status: "completed" as const,
-        steps: p.steps.map((s) => ({ ...s, status: "done" as StepStatus })),
+        steps: p.steps.map((s) => ({ ...s, status: "done" as StepStatus, doneAt: s.doneAt ?? Date.now() })),
         updatedAt: Date.now(),
       };
     }
@@ -535,7 +543,7 @@ export function advanceStep(plan: TaskPlan): { plan: TaskPlan; ready?: TaskStep 
   const currentIdx = ordered.findIndex((s) => s.status !== "done");
   if (currentIdx === -1) return { plan: { ...plan, status: "completed" } };
   const steps = ordered.map((s, i) =>
-    i === currentIdx ? { ...s, status: "done" as StepStatus } : s,
+    i === currentIdx ? { ...s, status: "done" as StepStatus, doneAt: Date.now() } : s,
   );
   const nextIdx = steps.findIndex((s, i) => i > currentIdx && s.status !== "done");
   let ready: TaskStep | undefined;
@@ -582,11 +590,21 @@ export function harvestTaskContext(userText: string): string[] {
  * fragment that read as a real note ("…ed the deposit on the 3rd"), and left no sign that anything had
  * been lost at all — on a long-running task that's the earliest context disappearing silently. PURE.
  */
-export function mergeUserNotes(existing: string | undefined, notes: string[], capChars = MAX_NOTES_CHARS): string | undefined {
+export function mergeUserNotes(
+  existing: string | undefined,
+  notes: string[],
+  capChars = MAX_NOTES_CHARS,
+  at: Date = new Date(),
+): string | undefined {
   const cur = existing?.trim() ?? "";
   const fresh = notes.map((n) => n.trim()).filter((n) => n.length > 0 && !cur.includes(n));
   if (fresh.length === 0) return existing;
-  const lines = [cur, ...fresh.map((n) => (n.startsWith("•") ? n : `• ${n}`))].filter(Boolean).join("\n").split("\n");
+  // DATE each note as it is written. These notes are the memory a task carries between sessions and
+  // across scheduled runs that resume it cold, and undated they read as one flat present tense — the
+  // model can't tell this morning's finding from one three weeks stale, so it re-reports settled
+  // things as news. The stamp is written once, here, and travels with the note.
+  const stamp = isoDay(at);
+  const lines = [cur, ...fresh.map((n) => (n.startsWith("•") ? n : `• [${stamp}] ${n}`))].filter(Boolean).join("\n").split("\n");
   let next = lines.join("\n");
   if (next.length <= capChars) return next;
   // Drop from the front, a whole line at a time, until what's left PLUS the marker fits. The marker is
@@ -643,10 +661,14 @@ export function completeStepById(
   plan: TaskPlan,
   stepId: string,
   done = true,
+  at = Date.now(),
 ): { plan: TaskPlan; step: TaskStep; ready?: TaskStep; completed: boolean } | undefined {
   const target = plan.steps.find((s) => s.id === stepId);
   if (!target) return undefined;
-  const flipped: TaskStep = { ...target, status: done ? "done" : "ready" };
+  // Stamp when it was checked off, and clear the stamp when it is reopened — a doneAt on a step
+  // that is no longer done would date work that has been undone.
+  const { doneAt: _wasDoneAt, ...withoutStamp } = target;
+  const flipped: TaskStep = done ? { ...target, status: "done", doneAt: at } : { ...withoutStamp, status: "ready" };
   let steps = plan.steps.map((s) => (s.id === stepId ? flipped : s));
   const allDone = steps.length > 0 && steps.every((s) => s.status === "done");
   let ready: TaskStep | undefined;
@@ -920,11 +942,41 @@ export function nextAutoStep(plans: TaskPlan[], opts: { skipStepIds?: ReadonlySe
 
 /** Compact plan context to prepend to the execution chat's system prompt (carries the
  * ids the step tools need). */
-export function tasksIndexBlock(plan: TaskPlan): string {
+/** `YYYY-MM-DD` in LOCAL time — the reader's day, not UTC's. PURE. */
+export function isoDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * A date the model can act on: the day itself, plus how long ago that was.
+ *
+ * Both halves earn their place. The absolute date is what lines up with a deadline and with today's
+ * date at the top of the prompt; the relative one is what actually answers "is this stale" without
+ * making the model do arithmetic it is bad at. PURE.
+ */
+export function whenLabel(ms: number, now = Date.now()): string {
+  const day = isoDay(new Date(ms));
+  const days = Math.floor((now - ms) / 86_400_000);
+  if (days <= 0) return `${day} (today)`;
+  if (days === 1) return `${day} (yesterday)`;
+  return `${day} (${days} days ago)`;
+}
+
+export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
   const ready = nextReadyStep(plan);
+  const done = plan.steps.filter((s) => s.status === "done");
+  const lastDone = done.reduce((m, s) => Math.max(m, s.doneAt ?? 0), 0);
+  // WHEN, so the model can tell a task it touched this morning from one that has sat for a month.
+  // Today's date is already at the top of the prompt, so these are directly comparable.
+  const dates =
+    `Created ${whenLabel(plan.createdAt, now)} · last touched ${whenLabel(plan.updatedAt, now)}` +
+    ` · ${done.length} of ${plan.steps.length} steps done` +
+    (lastDone > 0 ? ` (most recent ${whenLabel(lastDone, now)})` : "");
   const lines = [
     `ACTIVE TASK: ${plan.title}${plan.deadlineIso ? ` — deadline ${plan.deadlineIso}` : ""} (plan id: ${plan.id})`,
     plan.summary ? plan.summary : "",
+    dates,
     plan.clarifyingQuestions?.length
       ? "OPEN QUESTIONS you still need answered to finalize this plan — ASK the reader these FIRST, " +
         "then refine the plan with their answers:\n" +

@@ -74,6 +74,7 @@ import {
   setTaskPlanComplete,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
+  stampTurnContent,
   agentBranchName,
   parseGitConflicts,
   countChangedFiles,
@@ -3005,9 +3006,17 @@ export function App() {
    * what the model is shown changes. */
   const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
     messages.flatMap((m): ChatTurn[] => {
-      if (m.turns) return stripPersistedDirectives(m.turns);
+      // WHEN each message was sent, in front of it. A conversation handed to a model has no clock in
+      // it — yesterday, this morning and three weeks ago all look like the line above — which is fine
+      // for one sitting and wrong for a chat kept for months, resumed from a phone and woken by
+      // scheduled runs. Stamped on the READER's turns only: the model never writes those, so it can't
+      // learn to imitate the format and start emitting timestamps of its own. Its own replies sit
+      // directly under the message they answer.
+      const stamp = (t: ChatTurn): ChatTurn =>
+        t.role === "user" ? { ...t, content: stampTurnContent(t.content, m.at) } : t;
+      if (m.turns) return stripPersistedDirectives(m.turns).map(stamp);
       if (m.role === "tool") return [];
-      return m.text ? [{ role: m.role, content: m.text }] : [];
+      return m.text ? [stamp({ role: m.role, content: m.text })] : [];
     });
 
   const appendChat = (msg: Omit<StoredChatMessage, "at">) =>

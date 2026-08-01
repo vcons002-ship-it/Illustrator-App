@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runChatTurn } from "./chat-session.js";
+import { runChatTurn,
+  stampTurnContent,
+} from "./chat-session.js";
 import { MAX_TOOL_ROUNDS } from "./chat-tools.js";
 import type { ChatCapable, ChatOptions, ChatTurn } from "../providers/llm/chat.js";
 
@@ -471,5 +473,30 @@ describe("trimChatHistory", () => {
     // The newest turn survives even when it alone exceeds the budget.
     expect(trimChatHistory(turns, 10)).toEqual(turns.slice(2));
     expect(trimChatHistory([], 100)).toEqual([]);
+  });
+});
+
+describe("stampTurnContent — when a message was sent", () => {
+  // A conversation handed to a model is a flat list with no clock in it: yesterday, this morning and
+  // three weeks ago all look like the line above. Fine for one sitting, wrong for a chat kept for
+  // months, resumed from a phone and woken by scheduled runs.
+  const at = new Date(2026, 7, 1, 9, 14).getTime(); // local time, like the reader's clock
+
+  it("puts the local date and time in front", () => {
+    expect(stampTurnContent("what's left on the party list?", at)).toBe("[2026-08-01 09:14] what's left on the party list?");
+  });
+
+  it("is idempotent, because history is rebuilt every turn", () => {
+    const once = stampTurnContent("hello", at);
+    expect(stampTurnContent(once, at)).toBe(once);
+    expect(stampTurnContent(once, at + 86_400_000)).toBe(once); // and never re-dated by a later pass
+  });
+
+  it("leaves a message alone when there is no time to give it", () => {
+    for (const bad of [undefined, 0, NaN]) expect(stampTurnContent("hello", bad as number | undefined)).toBe("hello");
+  });
+
+  it("pads so the stamps line up and sort", () => {
+    expect(stampTurnContent("x", new Date(2026, 0, 5, 4, 7).getTime())).toBe("[2026-01-05 04:07] x");
   });
 });

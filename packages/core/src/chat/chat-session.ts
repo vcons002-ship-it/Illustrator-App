@@ -484,3 +484,25 @@ export async function runChatTool(
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/** A stamp already on a turn — so re-building history can never nest one inside another. */
+const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
+/**
+ * Put the time a message was sent in front of it, for the model to read.
+ *
+ * A conversation handed to a model is a flat list with no clock in it: "yesterday", "this morning"
+ * and "three weeks ago" all look like the line above. That is fine for one sitting and wrong for an
+ * assistant that keeps a chat for months, resumes it from a phone, and is woken by scheduled runs —
+ * it re-raises settled things as news and treats stale answers as current. Today's date is already
+ * at the top of the prompt, so these line up directly against it.
+ *
+ * Idempotent, because history is rebuilt from storage on every turn. PURE.
+ */
+export function stampTurnContent(content: string, at: number | undefined): string {
+  if (at === undefined || !Number.isFinite(at) || at <= 0) return content;
+  if (TURN_STAMP.test(content)) return content;
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}] ${content}`;
+}

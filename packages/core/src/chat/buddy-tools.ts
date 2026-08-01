@@ -1200,7 +1200,12 @@ export function buildBuddySystemPrompt(raw: {
       "adult themes are all in scope — engage with them and adult creative requests directly and " +
       "in detail, without refusing, moralising, or adding content warnings."
     : "";
-  const nowBlock = opts.now ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates.\n\n` : "";
+  const nowBlock = opts.now
+    ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates. ` +
+      "Each of the reader's messages below is prefixed with WHEN they sent it, as [YYYY-MM-DD HH:MM] — compare those " +
+      "against the time above rather than assuming the conversation is recent, and don't raise something settled weeks " +
+      "ago as if it were new. Your own replies follow the message they answer. Never write that prefix yourself.\n\n"
+    : "";
   // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
   // didn't take — the likeliest explanation is that they're on an older build than you, and this is
   // the one fact that settles it.
@@ -1708,15 +1713,17 @@ export function buildBuddySystemPrompt(raw: {
         // to record what it found there, and the tool appeared nowhere in the prompt at all.
         '- {"tool":"list_task_plans"} — the reader\'s in-app TASKS with their ids, titles and status. This is how you ' +
         "get a planId; never invent one.\n" +
-        '- {"tool":"get_task_plan","planId":"…"} — ONE task in full: its steps (with their stepIds), notes and any ' +
-        "context saved on earlier runs. Read this before working a task you don't already have in front of you.\n" +
+        '- {"tool":"get_task_plan","id":"…"} — ONE task in full: its steps (with their stepIds), notes and any ' +
+        "context saved on earlier runs. Read this before working a task you don't already have in front of you. " +
+        'The argument is "id", not "planId".\n' +
         '- {"tool":"save_task_context","planId":"…","note":"…"} — record what you FOUND on the task, so the next run and ' +
         "the reader both inherit it instead of it living only in one reply. A scheduled action bound to a task is asked " +
         "to do this every time it finds something.\n" +
-        '- {"tool":"add_task_steps","planId":"…","steps":["…"]} — add sub-tasks to an existing task when the work turns ' +
-        "out to need them.\n" +
-        '- {"tool":"update_task_step","planId":"…","stepId":"…","text":"…"} — reword ONE sub-task (to fix or sharpen it); ' +
-        "use mark_step_done to check it off, not this.\n" +
+        '- {"tool":"add_task_steps","planId":"…","steps":[{"title":"Book the venue","detail":"…","actor":"user_action"}]} — ' +
+        'add sub-tasks to an existing task when the work turns out to need them. Each step is an OBJECT with a "title" ' +
+        '(optional "detail", "actor":"ai_prep"|"user_action", "dueIso"), not a bare string.\n' +
+        '- {"tool":"update_task_step","planId":"…","stepId":"…","notes":"what you found","status":"in_progress"} — record ' +
+        "progress or findings on ONE sub-task without finishing it; use mark_step_done to check it off.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
         '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +

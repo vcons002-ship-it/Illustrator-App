@@ -44,6 +44,7 @@ import {
   upsertTaskPlan,
   type TaskPlan,
   type TaskPlanInput,
+  whenLabel,
 } from "./tasks.js";
 
 const plan = (over: Partial<TaskPlanInput> = {}): TaskPlan =>
@@ -483,24 +484,28 @@ describe("advanceStep / nextReadyStep", () => {
   });
 
   it("mergeUserNotes appends bullets, dedupes verbatim repeats, and caps keeping the newest", () => {
-    const first = mergeUserNotes(undefined, ["Link from chat: https://a.com"]);
-    expect(first).toBe("• Link from chat: https://a.com");
-    // Re-sending the same link changes nothing (same reference back).
-    expect(mergeUserNotes(first, ["Link from chat: https://a.com"])).toBe(first);
-    const grown = mergeUserNotes(first, ["Attached in chat: resume.pdf"]);
-    expect(grown).toBe("• Link from chat: https://a.com\n• Attached in chat: resume.pdf");
+    // Each note carries the day it was written: these are what a task remembers between sessions and
+    // across scheduled runs that resume it cold, and undated they read as one flat present tense.
+    const day = new Date(2026, 7, 1);
+    const first = mergeUserNotes(undefined, ["Link from chat: https://a.com"], undefined, day);
+    expect(first).toBe("• [2026-08-01] Link from chat: https://a.com");
+    // Re-sending the same link changes nothing (same reference back) — even on a LATER day, since the
+    // dedupe is on the note's own text, not on the line it became.
+    expect(mergeUserNotes(first, ["Link from chat: https://a.com"], undefined, new Date(2026, 7, 9))).toBe(first);
+    const grown = mergeUserNotes(first, ["Attached in chat: resume.pdf"], undefined, new Date(2026, 7, 9));
+    expect(grown).toBe("• [2026-08-01] Link from chat: https://a.com\n• [2026-08-09] Attached in chat: resume.pdf");
     // Over the cap, the OLDEST content falls off the front.
-    const capped = mergeUserNotes("x".repeat(90), ["newest note"], 40);
+    const capped = mergeUserNotes("x".repeat(90), ["newest note"], 40, day);
     expect(capped!.length).toBeLessThanOrEqual(40);
     expect(capped).toContain("newest note");
   });
 
   it("mergeUserNotes drops WHOLE oldest notes and says so, instead of cutting one in half", () => {
     const existing = ["• paid the deposit on the 3rd", "• venue confirmed for the 14th", "• catering still open"].join("\n");
-    const r = mergeUserNotes(existing, ["band booked"], 80)!;
-    expect(r.length).toBeLessThanOrEqual(80);
+    const r = mergeUserNotes(existing, ["band booked"], 95, new Date(2026, 7, 1))!;
+    expect(r.length).toBeLessThanOrEqual(95);
     // The newest note survives, and so does the note before it — whole.
-    expect(r).toContain("• band booked");
+    expect(r).toContain("band booked");
     expect(r).toContain("• catering still open");
     // The loss is stated rather than silent, and nothing is left as a half-sentence fragment.
     expect(r).toMatch(/earlier notes? dropped/);
@@ -715,5 +720,57 @@ describe("planner-requested watches", () => {
     expect(w.dayOfMonth).toBe(1);
     expect(w.date).toBeUndefined(); // not a one-shot
     expect(withWatches([{ title: "t", prompt: "p", rule: "once", date: "2026-07-04" }]).watches![0]!.date).toBe("2026-07-04");
+  });
+});
+
+describe("a task carries its dates where the model can read them", () => {
+  // Asked for: "tasks need time stamps that the ai can see" — with today's date, so they can be
+  // compared. A task is worked across days by a reader AND by scheduled runs that resume it cold; a
+  // block with no clock in it made a month-old plan indistinguishable from this morning's.
+  const NOW = new Date(2026, 7, 1, 9, 0).getTime();
+  const day = (d: number) => new Date(2026, 6, d, 9, 0).getTime();
+
+  const plan = {
+    id: "p1", title: "Party", status: "active", source: { kind: "manual" }, summary: "throw a party",
+    createdAt: day(12), updatedAt: day(30),
+    steps: [
+      { id: "s1", title: "Book venue", detail: "", actor: "user_action", status: "done", order: 0, links: [], docs: [], doneAt: day(14) },
+      { id: "s2", title: "Send invites", detail: "", actor: "user_action", status: "done", order: 1, links: [], docs: [], doneAt: day(30) },
+      { id: "s3", title: "Order cake", detail: "", actor: "user_action", status: "ready", order: 2, links: [], docs: [] },
+    ],
+  } as unknown as Parameters<typeof tasksIndexBlock>[0];
+
+  it("says when it was created, last touched, and how far along", () => {
+    const block = tasksIndexBlock(plan, NOW);
+    expect(block).toContain("Created 2026-07-12 (20 days ago)");
+    expect(block).toContain("last touched 2026-07-30 (2 days ago)");
+    expect(block).toContain("2 of 3 steps done");
+    expect(block).toContain("most recent 2026-07-30");
+  });
+
+  it("gives both the date and the age, because each answers a different question", () => {
+    // The absolute date lines up with a deadline and with today's date at the top of the prompt; the
+    // relative one answers "is this stale" without arithmetic the model is bad at.
+    expect(whenLabel(NOW, NOW)).toBe("2026-08-01 (today)");
+    expect(whenLabel(NOW - 86_400_000, NOW)).toBe("2026-07-31 (yesterday)");
+    expect(whenLabel(NOW - 5 * 86_400_000, NOW)).toBe("2026-07-27 (5 days ago)");
+  });
+
+  it("says nothing about a most-recent completion when nothing is done yet", () => {
+    const fresh = {
+      ...plan,
+      steps: plan.steps.map(({ doneAt: _drop, ...s }) => ({ ...s, status: "ready" })),
+    } as unknown as typeof plan;
+    const block = tasksIndexBlock(fresh, NOW);
+    expect(block).toContain("0 of 3 steps done");
+    expect(block).not.toContain("most recent");
+  });
+
+  it("stamps a step when it is checked off, and un-stamps it when reopened", () => {
+    // A doneAt left on a reopened step would date work that has been undone.
+    const done = completeStepById(plan, "s3", true, NOW)!;
+    expect(done.step.doneAt).toBe(NOW);
+    const reopened = completeStepById(done.plan, "s3", false)!;
+    expect(reopened.step.doneAt).toBeUndefined();
   });
 });
