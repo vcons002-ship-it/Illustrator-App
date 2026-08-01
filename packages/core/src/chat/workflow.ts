@@ -257,6 +257,56 @@ export function recompileWorkflow(prev: Workflow | undefined, plan: BuddyPlan): 
   return { ...fresh, steps };
 }
 
+/** Why the executor is handing this step to the model. */
+export type DirectiveKind =
+  | "start" // the checklist was just compiled — drive its first step
+  | "advance" // the previous step is settled; do the next one
+  | "retry" // the attempt didn't satisfy the contract
+  | "nudge"; // the model didn't attempt this step's work at all
+
+/**
+ * The instruction the model is given for a step — the executor's whole control surface, in one place.
+ *
+ * It lives here because it was the ASYMMETRY that broke a multi-image run: steps two onward were each
+ * reached by a directive naming them ("now do ONLY step 2 of 3: …"), and the first was reached by
+ * nothing at all. It ran on whatever the model chose to do in the turn it wrote the plan, before any
+ * marker existed to say where it was — and since the collar can see that an image rendered but not
+ * WHAT it depicts, whatever came back was credited to step 1. A model that planned goat/barn/tractor
+ * and reached for the barn ticked step 1 off with it, and the goat was never drawn.
+ *
+ * Every kind names the step and its position, so no step can be reached anonymously again. PURE.
+ */
+export function stepDirective(
+  wf: Workflow,
+  step: WorkflowStep,
+  kind: DirectiveKind,
+  extra: { reason?: string; needsTool?: string; checklistMeta?: boolean } = {},
+): string {
+  const total = wf.steps.length;
+  const n = wf.steps.findIndex((s) => s.id === step.id) + 1;
+  const where = `step ${n} of ${total}`;
+  // An elliptical step ("now do the same for the barn") loses its antecedent: these directives are
+  // ephemeral by design and a tool step's narration is dropped, so nothing in context says what "the
+  // same" was. The compiler recorded it; hand it over with the step.
+  const context = step.context
+    ? ` (This continues the kind of work in “${step.context}” — apply it to THIS step's subject, not the previous one's.)`
+    : "";
+  const lead =
+    kind === "start"
+      ? `Checklist ready — ${total} step${total === 1 ? "" : "s"}. Now do ONLY ${where}:`
+      : kind === "advance"
+        ? `✓ Previous step done. Now do ONLY ${where}:`
+        : kind === "retry"
+          ? `Your last attempt didn't satisfy ${where}${extra.reason ? ` (${extra.reason})` : ""}. Do it again now:`
+          : `You haven't done ${where} yet.${
+              extra.checklistMeta
+                ? " The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step."
+                : ""
+            }${extra.needsTool ? ` This step needs an ACTUAL ${extra.needsTool} call this turn (not a description).` : ""} Do it now:`;
+  const tail = kind === "advance" || kind === "start" ? "Call its tool and stop — don't recap or explain." : "Call the tool and stop — no commentary.";
+  return `[${lead} ${step.instruction}.${context} ${tail}]`;
+}
+
 /** The step currently being worked (the single `active` one), or undefined when none. */
 export function activeStep(wf: Workflow | undefined): WorkflowStep | undefined {
   return wf?.steps.find((s) => s.status === "active");

@@ -167,8 +167,8 @@ import {
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  stepDirective,
   type Workflow,
-  type WorkflowStep,
   recompileWorkflow,
   evaluateStep,
   advanceWorkflow,
@@ -1637,6 +1637,9 @@ export function App() {
   // check the box itself — complete_step is withdrawn here), re-nudge toward the exact tool WITHOUT
   // burning one of the step's few attempts. Bounded per-step so a genuinely stuck model still parks.
   const appManagedNudgeRef = useRef<{ stepId: string; count: number }>({ stepId: "", count: 0 });
+  // This turn CALLED set_plan, so the workflow it is being judged against didn't exist when it began.
+  // See advanceWorkflowAfterTurn: a planning turn doesn't also finish step 1.
+  const planCompiledThisTurn = useRef(false);
   // Whether App-managed steps runs this chat. Opt-in setting (the model's checklist meta-tools are
   // unreliable across models, so the app drives instead). Off → the legacy model-driven path.
   const appManagedActive = !!settings.appManagedSteps;
@@ -5890,17 +5893,6 @@ export function App() {
   // observed `evidence` (the collar), then drive the workflow: advance/retry → re-dispatch the next or
   // same step via `continueWith`; park/finish/abort → stop. Returns true when it handled the turn, so
   // the caller skips the legacy model-driven chaining. The model never ticks steps; the app does.
-  /**
-   * The antecedent of an elliptical step ("now do the same for the barn"), spelled out for the model.
-   *
-   * These directives are ephemeral by design and a tool step's own narration is dropped, so nothing
-   * in the model's context says what "the same" was by the time step 3 runs — it renders whichever
-   * subject it can still see, which is the previous picture. The compiler recorded the antecedent; a
-   * self-contained instruction has none and this adds nothing.
-   */
-  const stepContext = (step: WorkflowStep): string =>
-    step.context ? ` (This continues step 1's kind of work: “${step.context}” — apply that to THIS step's subject, not the previous one's.)` : "";
-
   const advanceWorkflowAfterTurn = async (
     evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string },
     continueWith: (nudge: string) => Promise<unknown>,
@@ -5910,6 +5902,20 @@ export function App() {
     const step = activeStep(wf);
     if (!step) {
       setBuddyBusy(false);
+      return true;
+    }
+    // A PLANNING turn does not also finish step 1.
+    //
+    // Every step from the second onward is reached by an explicit directive naming it ("now do ONLY
+    // step 2 of 3: …"). The first had none: it ran on whatever the model chose to do in the same turn
+    // it wrote the plan, before any ▸ marker existed to tell it where it was — and the collar credits
+    // step 1 with ANY image that lands, because it can check that a render happened but not what the
+    // render depicts. So a model that planned goat/barn/tractor and then reached for the barn ticked
+    // step 1 off with it, and the goat was never drawn. Step 1 is now driven like every other step.
+    if (planCompiledThisTurn.current) {
+      planCompiledThisTurn.current = false;
+      buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+      await continueWith(stepDirective(wf, step, "start"));
       return true;
     }
     // G5 — a `files` step is judged on whether the declared deliverables ACTUALLY landed on disk (and
@@ -5940,11 +5946,12 @@ export function App() {
         appManagedNudgeRef.current = { stepId: step.id, count: used + 1 };
         buddyStepEvidenceRef.current = { toolResults: [], text: "" };
         const need = doneWhenToNeeds(step.doneWhen);
-        const toolLine = need ? `This step needs an ACTUAL ${need} call this turn (not a description). ` : "";
-        const trackLine = checklistMetaOnly(evi)
-          ? "The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step. "
-          : "";
-        await continueWith(`[You haven't done the current step yet. ${trackLine}${toolLine}Do it now: ${step.instruction}.${stepContext(step)} Call the tool and stop — no commentary.]`);
+        await continueWith(
+          stepDirective(wf, step, "nudge", {
+            ...(need ? { needsTool: need } : {}),
+            ...(checklistMetaOnly(evi) ? { checklistMeta: true } : {}),
+          }),
+        );
         return true;
       }
       // Reminders exhausted — fall through to the normal retry/park path (a truly stuck run must end).
@@ -5959,17 +5966,11 @@ export function App() {
       // Tell the model the PRIOR step is settled and give the next step's position, so it stops
       // "announcing the transition" (the confused "I already did X, moving on") — its prior tool call
       // is still in context. Ask for the tool only, no recap.
-      const total = adv.workflow.steps.length;
-      const n = adv.workflow.steps.findIndex((s) => s.id === adv.next!.id) + 1;
-      await continueWith(
-        `[✓ Previous step done. Now do ONLY step ${n} of ${total}: ${adv.next!.instruction}.${stepContext(adv.next!)} Call its tool and stop — don't recap or explain.]`,
-      );
+      await continueWith(stepDirective(adv.workflow, adv.next!, "advance"));
       return true;
     }
     if (adv.action === "retry") {
-      await continueWith(
-        `[Your last attempt didn't satisfy this step${outcome.reason ? ` (${outcome.reason})` : ""}. Do it again now: ${step.instruction}.${stepContext(step)} Just call the tool — no commentary.]`,
-      );
+      await continueWith(stepDirective(wf, step, "retry", outcome.reason ? { reason: outcome.reason } : {}));
       return true;
     }
     // Terminal — stop the run.
@@ -5999,6 +6000,7 @@ export function App() {
     storySoulCast?: { self: string; user: string },
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+    planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
     // CONSUME the creative-run flag HERE, synchronously, before anything below awaits.
     //
     // It used to be read at the buddyChat call far below and cleared by a setTimeout(0) at the call
@@ -6069,6 +6071,7 @@ export function App() {
           // over from step 1 redoes finished work and reaches the rest in the wrong order.
           applyWorkflow(recompileWorkflow(buddyWorkflowRef.current, e.plan));
           buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+          planCompiledThisTurn.current = true;
         } else {
           // Legacy model-driven path: keep the model's checklist as the live plan.
           // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
