@@ -1276,6 +1276,11 @@ export function buildBuddySystemPrompt(raw: {
       "or a tool name). The APP then runs the checklist for you: it gives you ONE step at a time and ticks it off " +
       "ITSELF once it sees the step's effect (a render, a saved file, a reply). There is NO complete_step — never " +
       "try to mark progress; just do the one step you're given each turn. Skip set_plan for a simple one-shot ask. " +
+      "EVERY step must be WORK THE APP CAN SEE HAPPEN — a render, a saved file, a command, an answer. This call IS " +
+      "the planning, so NEVER make \"plan the actions\" / \"decide the prompts\" / \"outline the approach\" a step: " +
+      "there is nothing for the app to observe, so it would tick off before you had done anything. Start at the " +
+      "FIRST real action. Write each step so it stands ALONE — \"Generate an image of the barn at dusk\", not \"do " +
+      "the same for the barn\" — because you are given one step at a time without the others in front of you. " +
       'A step can also name the exact files it must produce ("produces":["a.py","b.py"] — the app verifies they ' +
       'exist) and a check command ("verify":"pytest -q" — the app runs it and won\'t pass the step until it exits ' +
       "0). For a LONG DOCUMENT or many code files, plan it as an OUTLINE first, then ONE step per section/file " +

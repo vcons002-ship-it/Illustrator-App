@@ -10,6 +10,7 @@ import {
   doneWhenToNeeds,
   evaluateStep,
   inferDoneWhen,
+  isPlanningStep,
   isToolContract,
   needsToDoneWhen,
   recompileWorkflow,
@@ -539,5 +540,80 @@ describe("no step is ever reached anonymously", () => {
   it("counts a single-step checklist in the singular", () => {
     const one = compileWorkflow({ steps: [{ text: "Generate an image of a goat", status: "pending" }] });
     expect(stepDirective(one, one.steps[0]!, "start")).toContain("1 step.");
+  });
+});
+
+describe("planning is not a step", () => {
+  // Reported: "it still tries to check off a step before doing anything, as if it thinks the first
+  // step will be 'plan the actions'." It does think that — because it wrote that step itself. And it
+  // is the worst possible one: nothing about planning can be observed, so the contract falls to the
+  // generic text check, which any sentence satisfies. The run ticks a step off before doing anything,
+  // which is precisely what the collar exists to prevent.
+  it("recognises the model talking about its own checklist", () => {
+    for (const meta of [
+      "Plan the actions",
+      "Plan the three images",
+      "First, plan the steps",
+      "Decide the prompts for each image",
+      "Outline the approach",
+      "I'll determine what to generate",
+      "Prepare the image prompts",
+    ])
+      expect(isPlanningStep(meta), meta).toBe(true);
+  });
+
+  it("leaves real deliverables alone", () => {
+    // The line that matters: a possessive says this is the READER'S deliverable, not the checklist
+    // describing itself. Dropping "Plan my trip to Rome" would throw away what they asked for.
+    for (const real of [
+      "Plan my trip to Rome",
+      "Draft the itinerary",
+      "List 3 follow-ups",
+      "Generate an image of a goat",
+      "Write the recap to recap.md",
+      "Choose a name for the character",
+      "Design a logo for the shop",
+    ])
+      expect(isPlanningStep(real), real).toBe(false);
+  });
+
+  it("drops a leading planning step so the run starts on real work", () => {
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Plan the three images", status: "pending" },
+        { text: "Generate an image of a goat", status: "pending" },
+        { text: "Now the barn", status: "pending" },
+      ],
+    });
+    expect(wf.steps.map((s) => s.instruction)).toEqual(["Generate an image of a goat", "Now the barn"]);
+    expect(wf.steps[0]!.status).toBe("active"); // and the first REAL step is the one armed
+  });
+
+  it("keeps it when the model DECLARED what proves it done", () => {
+    // needs:"text" is the model's own word that this step produces something written. A guess may be
+    // overruled; a promise is kept — the same line drawn everywhere else in this file.
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Plan the approach", needs: "text", status: "pending" },
+        { text: "Generate an image of a goat", status: "pending" },
+      ],
+    });
+    expect(wf.steps).toHaveLength(2);
+  });
+
+  it("never drops the only step there is", () => {
+    const wf = compileWorkflow({ steps: [{ text: "Plan the actions", status: "pending" }] });
+    expect(wf.steps).toHaveLength(1);
+  });
+
+  it("only drops it at the FRONT", () => {
+    // Mid-run "now decide the order" is odd but it is not the app ticking a box before any work.
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Generate an image of a goat", status: "pending" },
+        { text: "Plan the remaining images", status: "pending" },
+      ],
+    });
+    expect(wf.steps).toHaveLength(2);
   });
 });
