@@ -314,6 +314,24 @@ const SUBMIT_RETRY_DELAY_MS = 1_500;
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
 /**
+ * The checkpoint families IP-Adapter can attach to here.
+ *
+ * ComfyUI_IPAdapter_plus resolves its adapter + CLIP-Vision weights from the BASE MODEL's
+ * architecture, and the models that exist are the SD ones. Point it at a Flux, Flux.2, Z-Image,
+ * Qwen-Image or HiDream checkpoint and the loader raises instead of degrading — so a reference photo
+ * on those families used to take the whole render down with it, which is a bad trade for a likeness.
+ *
+ * This is about the LOCAL engine only: Gemini's native image model and gpt-image-1 read reference
+ * photos on any of their own models, because they take them as ordinary image inputs.
+ */
+const IPADAPTER_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["sd15", "sdxl"]);
+
+/** Can IP-Adapter condition a render on this checkpoint family? PURE. */
+export function ipAdapterSupports(family: ModelFamily): boolean {
+  return IPADAPTER_FAMILIES.has(family);
+}
+
+/**
  * ComfyUI engine backend. Drives a local ComfyUI server (which the desktop shell
  * launches) over its HTTP API:
  *  - listModels → GET /object_info/CheckpointLoaderSimple (the checkpoint enum)
@@ -490,6 +508,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
   private warnedNoIpAdapter = false;
+  private warnedIpAdapterFamily = false;
   /**
    * `/object_info/<node>` responses per node. Installed files are stable for an
    * engine session (the same assumption as `lorasCache`; a Settings reconnect
@@ -1042,10 +1061,23 @@ export class ComfyUIBackend implements LocalEngineBackend {
       }
     }
 
-    // IP-Adapter character consistency — only when refs are passed AND the nodes/
-    // models are installed; otherwise render seed-only (graceful, never an error).
+    // IP-Adapter character consistency — only when refs are passed, the base model is one
+    // IP-Adapter can attach to, AND the nodes/models are installed. Anything else renders
+    // seed-only (graceful, never an error).
     let ipAdapter: IpAdapterGraph | undefined;
-    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0) {
+    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && !ipAdapterSupports(family)) {
+      // Splicing the chain in anyway was worse than doing nothing: IPAdapterUnifiedLoader resolves
+      // its models from the base model's architecture, so on a Flux/Z-Image/Qwen/HiDream checkpoint
+      // it raises rather than degrading, and the whole render fails. A reference photo the model
+      // can't use should cost the reader the likeness, not the picture.
+      if (!this.warnedIpAdapterFamily) {
+        this.warnedIpAdapterFamily = true;
+        console.info(
+          `[visual-reader] IP-Adapter doesn't support ${family} checkpoints — rendering seed-only. ` +
+            "Reference photos condition SD 1.5 and SDXL models here (cloud Gemini / gpt-image-1 take them too).",
+        );
+      }
+    } else if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0) {
       const caps = await this.availableIpAdapter();
       if (caps) {
         try {

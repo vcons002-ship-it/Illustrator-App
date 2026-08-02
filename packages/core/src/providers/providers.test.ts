@@ -15,6 +15,7 @@ import {
   assetStem,
   comfyExecutionError,
   flux2EncoderPatterns,
+  ipAdapterSupports,
   pickComponentAsset,
   resolveAssetName,
 } from "./image/local-engine/comfyui-backend.js";
@@ -1843,6 +1844,30 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(wf["3"]!.inputs.model).toEqual(["23", 0]);
   });
 
+  it("a family IP-Adapter can't attach to → seed-only, and the picture still renders", async () => {
+    // IPAdapterUnifiedLoader resolves its weights from the base model's architecture. Splicing it
+    // over a Flux/Z-Image/Qwen/HiDream checkpoint doesn't degrade — it raises, and the whole render
+    // fails. A reference the model can't use should cost the likeness, not the picture.
+    // Flux is the all-in-one-checkpoint family, so this runs the whole render path; the other
+    // unsupported families load split components and are covered by the roster test below.
+    const t = transportWith({ IPAdapterAdvanced: { input: {} }, IPAdapterUnifiedLoader: { input: {} } });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    const out = await backend.generate(refInput, "flux1-dev.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["20"]).toBeUndefined(); // no IP-Adapter chain built
+    expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
+    // And the photo isn't uploaded to the engine for a render that can't use it.
+    expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(false);
+  });
+
+  it("names exactly the families that can use a reference photo locally", () => {
+    expect(ipAdapterSupports("sd15")).toBe(true);
+    expect(ipAdapterSupports("sdxl")).toBe(true);
+    for (const f of ["flux", "flux2", "zimage", "qwenimage", "hidream"] as const) {
+      expect(ipAdapterSupports(f), f).toBe(false);
+    }
+  });
+
   it("no IP-Adapter nodes installed → seed-only, generation still succeeds", async () => {
     const t = transportWith({});
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
@@ -1905,5 +1930,57 @@ describe("OLLAMA_TEXT_MODELS catalog", () => {
     expect(ollamaModelMatches("qwen3:latest", "qwen3")).toBe(true);
     expect(ollamaModelMatches("qwen3:14b", "qwen3")).toBe(true);
     expect(ollamaModelMatches("qwen3:14b", "qwen3:8b")).toBe(false);
+  });
+});
+
+describe("AUDIT: which image providers actually use reference photos", () => {
+  // "Which models can use reference images?" had no single answer in the code, and the two places
+  // that claimed one — the ipAdapterRefs doc and the Characters panel caption — both said "ComfyUI
+  // only", which stopped being true when the natively multimodal cloud models landed. A reader on
+  // Gemini was being told their uploads did nothing while the provider was sending them.
+  //
+  // ComfyUI is covered in comfyui-backend.test.ts (it needs a live-ish engine to probe for the
+  // IPAdapter nodes); this pins the cloud half, in both directions.
+  const ref = { bytes: new TextEncoder().encode("FACE").buffer, mimeType: "image/png", weight: 0.5 };
+  const withRefs = { ...imageInput, ipAdapterRefs: [ref] };
+
+  it("Gemini native SENDS them, as inline image parts", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: b64("D") } }] } }] },
+    }));
+    await new GeminiNativeImageProvider({ apiKey: "K", model: "gemini-2.5-flash-image", transport }).generate(withRefs);
+    const body = transport.requests[0]!.body as { contents: { parts: Record<string, unknown>[] }[] };
+    const inline = body.contents[0]!.parts.filter((p) => "inline_data" in p);
+    expect(inline).toHaveLength(1);
+    expect((inline[0]!.inline_data as { data: string }).data).toBe(b64("FACE"));
+  });
+
+  it("OpenAI native SENDS them, as /images/edits files", async () => {
+    const transport = new FakeTransport(() => ({ json: { data: [{ b64_json: b64("E") }] } }));
+    await new OpenAINativeImageProvider({ apiKey: "K", transport }).generate(withRefs);
+    expect(transport.requests[0]!.url).toContain("/images/edits");
+    expect(transport.requests[0]!.multipart!.files).toHaveLength(1);
+  });
+
+  it("DALL·E IGNORES them — and still renders, rather than failing", async () => {
+    // Silently ignoring is the right behaviour for a provider that can't condition on a photo; the
+    // wrong behaviour would be erroring, or quietly dropping the whole render.
+    const transport = new FakeTransport(() => ({ json: { data: [{ b64_json: b64("PNG") }] } }));
+    const out = await new OpenAIImageProvider({ apiKey: "K", transport }).generate(withRefs);
+    expect(new TextDecoder().decode(out.bytes)).toBe("PNG");
+    expect(transport.requests[0]!.multipart).toBeUndefined();
+    expect(JSON.stringify(transport.requests[0]!.body)).not.toContain(b64("FACE"));
+  });
+
+  it("Flux IGNORES them — and still renders", async () => {
+    const png = new TextEncoder().encode("FLUXPNG").buffer;
+    const transport = new FakeTransport((_req, i) => {
+      if (i === 0) return { json: { id: "a", polling_url: "https://poll.example" } };
+      if (i === 1) return { json: { status: "Ready", result: { sample: "https://img.example/x.png" } } };
+      return { bytes: png };
+    });
+    const out = await new FluxProvider({ apiKey: "K", transport, pollIntervalMs: 0 }).generate(withRefs);
+    expect(new TextDecoder().decode(out.bytes)).toBe("FLUXPNG");
+    expect(JSON.stringify(transport.requests[0]!.body)).not.toContain(b64("FACE"));
   });
 });

@@ -328,8 +328,10 @@ const CharacterCard = memo(function CharacterCard({
 
 /**
  * Up to MAX_CHARACTER_REFS uploaded reference photos per character (ideally different
- * angles of the same face), shown as removable thumbnails. Used by the local ComfyUI
- * engine via IP-Adapter; other image providers ignore them.
+ * angles of the same face), shown as removable thumbnails.
+ *
+ * Read by ComfyUI (IP-Adapter), Gemini's native image model, and OpenAI's gpt-image-1.
+ * Automatic1111, Flux, DALL·E and the in-browser ONNX provider ignore them.
  */
 function ReferenceGallery({
   character,
@@ -375,8 +377,14 @@ function ReferenceGallery({
           </label>
         )}
       </div>
+      {/* This line used to say "the local ComfyUI engine" and nothing else, which was true when
+          IP-Adapter was the only way to condition on a photo. Two cloud models read these now, so a
+          reader on Gemini was being told their uploads did nothing — and on ComfyUI it overpromised
+          the other way, since IP-Adapter only attaches to SD 1.5 / SDXL checkpoints. */}
       <span style={{ opacity: 0.5, fontSize: 11 }}>
-        Used by the local ComfyUI engine (IP-Adapter). 2–3 angles of the same face work best.
+        Used by Gemini and gpt-image-1, and by ComfyUI on SD 1.5 / SDXL checkpoints (IP-Adapter nodes
+        required — Flux, Z-Image, Qwen-Image and HiDream can't use them). 2–3 angles of the same face
+        work best.
       </span>
     </div>
   );

@@ -41,8 +41,18 @@ export interface DownloadableModel {
   id: string;
   filename: string;
   url: string;
-  /** ComfyUI models subfolder for split-file components (default "checkpoints"). */
-  folder?: "checkpoints" | "diffusion_models" | "text_encoders" | "vae" | "loras" | "latent_upscale_models";
+  /** ComfyUI models subfolder for split-file components (default "checkpoints"). `ipadapter` and
+   * `clip_vision` are where the reference-photo weights live — kept in the same union as everything
+   * else so the desktop's folder allowlist and this one can't drift apart. */
+  folder?:
+    | "checkpoints"
+    | "diffusion_models"
+    | "text_encoders"
+    | "vae"
+    | "loras"
+    | "latent_upscale_models"
+    | "ipadapter"
+    | "clip_vision";
 }
 
 /** Progress while the engine itself is being installed / launched. */
@@ -306,6 +316,14 @@ export async function desktopFetch(input: RequestInfo | URL, init?: RequestInit)
 /** Download a curated checkpoint; emits `model://progress` events while it runs. */
 export function downloadModel(model: DownloadableModel): Promise<void> {
   return invoke<void>("download_model", { model });
+}
+
+/** Install (or update) the IP-Adapter node pack in the managed engine's custom_nodes. Resolves with
+ * the message to show — it always ends in "restart the engine", because ComfyUI only scans
+ * custom_nodes at startup and an install that changes nothing until an unmentioned restart reads
+ * exactly like the silent seed-only fallback this whole feature exists to end. */
+export function installIpAdapterNodes(): Promise<string> {
+  return invoke<string>("install_ipadapter_nodes");
 }
 
 /** Download a style LoRA into the engine's loras dir; emits `model://progress`. */

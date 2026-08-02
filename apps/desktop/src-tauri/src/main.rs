@@ -310,7 +310,10 @@ async fn download_model(app: AppHandle, model: DownloadableModel) -> Result<(), 
         let dir = match model.folder.as_deref() {
             None | Some("checkpoints") => checkpoints_dir(&app2),
             Some("loras") => loras_dir(&app2),
-            Some(f @ ("diffusion_models" | "text_encoders" | "vae" | "latent_upscale_models")) => {
+            // `ipadapter` / `clip_vision` are where ComfyUI_IPAdapter_plus looks for the two halves
+            // of a reference-photo render: the adapter weights, and the CLIP-Vision encoder that
+            // reads the photo. Without them the nodes load but every render falls back to seed-only.
+            Some(f @ ("diffusion_models" | "text_encoders" | "vae" | "latent_upscale_models" | "ipadapter" | "clip_vision")) => {
                 comfy_models_dir(&app2).join(f)
             }
             Some(other) => return Err(format!("Unknown model folder \"{other}\".")),
@@ -318,6 +321,64 @@ async fn download_model(app: AppHandle, model: DownloadableModel) -> Result<(), 
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let dest = dir.join(&model.filename);
         download_model_with_progress(&app2, &model, &dest)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The managed ComfyUI's `custom_nodes` folder — where a node pack has to live to be loaded.
+fn custom_nodes_dir(app: &AppHandle) -> PathBuf {
+    engine_root(app)
+        .join("ComfyUI_windows_portable")
+        .join("ComfyUI")
+        .join("custom_nodes")
+}
+
+/// The node pack that gives ComfyUI reference-photo conditioning. Cloned, not zipped, because that
+/// is how it expects to be updated and how every install guide describes it.
+const IPADAPTER_REPO: &str = "https://github.com/cubiq/ComfyUI_IPAdapter_plus";
+
+/// Install (or update) the IP-Adapter node pack into the managed engine's `custom_nodes`.
+///
+/// The reference-image workflow has always been BUILT — detection, graph, weights, per-character
+/// budget — and never SET UP: nothing in the app put the nodes on disk, so ComfyUI quietly rendered
+/// seed-only and the only trace was a console line no reader sees. This is the missing half.
+///
+/// Returns the message to show. Reports rather than repairs when it can't: git missing, the engine
+/// not installed yet, a clone that failed. ComfyUI only scans `custom_nodes` at startup, so the
+/// caller has to restart the engine — said in the returned message, because a silent "installed"
+/// that changes nothing until an unmentioned restart is the same invisible failure again.
+#[tauri::command]
+async fn install_ipadapter_nodes(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let nodes = custom_nodes_dir(&app);
+        if !nodes.parent().map(|p| p.exists()).unwrap_or(false) {
+            return Err("The local engine isn't installed yet — set it up first, then add IP-Adapter.".into());
+        }
+        std::fs::create_dir_all(&nodes).map_err(|e| e.to_string())?;
+        let dest = nodes.join("ComfyUI_IPAdapter_plus");
+        let dest_str = dest.to_string_lossy().to_string();
+        if dest.join(".git").exists() {
+            // Already there — update in place rather than reporting success over a stale copy.
+            let r = git(&dest_str, &["pull", "--ff-only"])?;
+            return if r.code == 0 {
+                Ok("IP-Adapter nodes updated. Restart the engine to load them.".to_string())
+            } else {
+                Err(format!("Couldn't update the IP-Adapter nodes: {}", r.stderr.trim()))
+            };
+        }
+        if dest.exists() {
+            return Ok("IP-Adapter nodes are already installed. Restart the engine if renders still ignore reference photos.".to_string());
+        }
+        let parent = nodes.to_string_lossy().to_string();
+        let r = git(&parent, &["clone", "--depth", "1", IPADAPTER_REPO, "ComfyUI_IPAdapter_plus"])?;
+        if r.code != 0 {
+            return Err(format!(
+                "Couldn't install the IP-Adapter nodes: {}. You can clone {IPADAPTER_REPO} into {parent} yourself.",
+                r.stderr.trim()
+            ));
+        }
+        Ok("IP-Adapter nodes installed. Restart the engine to load them, then download the IP-Adapter models.".to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3745,6 +3806,7 @@ fn main() {
             is_packaged,
             list_models,
             download_model,
+            install_ipadapter_nodes,
             list_loras,
             lora_headers,
             download_lora,

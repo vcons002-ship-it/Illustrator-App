@@ -103,9 +103,18 @@ export interface ImageGenerationInput {
    */
   negativePrompt?: string;
   /**
-   * Per-character reference images for IP-Adapter conditioning (ComfyUI only, when
-   * the IPAdapter nodes/models are installed). Resolved bytes, not ids. Ignored by
-   * every other provider.
+   * Per-character reference images — "make them look like this". Resolved bytes, not ids.
+   *
+   * The name is historical: this began as ComfyUI IP-Adapter conditioning, but the natively
+   * multimodal cloud models take reference photos directly and three providers now read it:
+   *
+   *   - ComfyUI (local) — IP-Adapter, and ONLY when its nodes + models are installed; otherwise
+   *     the render silently falls back to seed-only consistency.
+   *   - Gemini native image — each ref rides as an inline image part.
+   *   - OpenAI native (gpt-image-1) — each ref is a file on /images/edits.
+   *
+   * Ignored by Automatic1111, Flux, DALL·E and the in-browser ONNX provider. `weight` is honoured
+   * by ComfyUI; the cloud providers have no weight parameter and treat every ref equally.
    */
   ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
   /**

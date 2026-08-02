@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import {
   Automatic1111Backend,
   BUNDLED_LLM,
@@ -8,6 +8,7 @@ import {
   LOCAL_IMAGE_MODELS,
   LOCAL_TEXT_SERVER_DEFAULT_URL,
   LocalServerLLMProvider,
+  IPADAPTER_DOWNLOADS,
   VIDEO_MODELS,
   getImageStyle,
   imageModelVramCostGb,
@@ -33,6 +34,7 @@ import {
   ensureA1111,
   ensureEngine,
   gpuVramMb,
+  installIpAdapterNodes,
   isDesktop,
   listLocalModels,
   listLoras,
@@ -636,6 +638,60 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     }
   }, []);
 
+  // The outcome of the last IP-Adapter install, shown under the button. Not an error and not a
+  // progress stage: it's the "now restart the engine" that the install is incomplete without.
+  const [ipAdapterNote, setIpAdapterNote] = useState<string | undefined>();
+  /**
+   * Install the reference-photo half of the local engine: the IP-Adapter node pack, then its models.
+   *
+   * Both, in that order, in one action. The workflow that uses them has been in the app all along —
+   * detection, graph, per-character weight budget — but nothing ever put them on disk, so every local
+   * render fell back to seed-only and said so only to a console nobody reads.
+   *
+   * Nodes first because they're small and their failure is the informative one (no git → say so and
+   * stop, rather than pulling 3 GB of weights nothing can load). Models reuse the catalog downloader
+   * wholesale, so they get the same resumable per-file progress every other big download has.
+   */
+  const onInstallIpAdapter = useCallback(async () => {
+    const id = "ipadapter";
+    setLocalError("");
+    setModelProgress((prev) => ({ ...prev, [id]: 0 }));
+    setDownloadStage((prev) => ({ ...prev, [id]: "installing nodes…" }));
+    let currentFile = "the IP-Adapter nodes";
+    try {
+      const note = await installIpAdapterNodes();
+      const files = IPADAPTER_DOWNLOADS;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]!;
+        currentFile = f.filename;
+        multiFile.current[id] = { index: i, count: files.length };
+        setDownloadStage((prev) => ({ ...prev, [id]: `file ${i + 1}/${files.length}: ${f.filename}` }));
+        await downloadModel({ id, filename: f.filename, url: f.url, folder: f.folder });
+        setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
+      }
+      // The engine only scans custom_nodes at STARTUP. Saying "installed" without saying that would
+      // send the reader straight back to renders that still ignore their photos.
+      setIpAdapterNote(`${note} Reference photos will work after the engine restarts.`);
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setLocalError(
+        `IP-Adapter setup failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Retrying skips whatever finished.`,
+      );
+    } finally {
+      delete multiFile.current[id];
+      setDownloadStage((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, []);
+
   // Download a text model INTO Ollama from the Settings menu (no terminal needed),
   // with live progress; on success refresh the model list and auto-select it.
   const onPullTextModel = useCallback(
@@ -842,6 +898,8 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     onDownloadModel,
     onDownloadModelUrl,
     onDownloadVideoModel,
+    onInstallIpAdapter,
+    ipAdapterNote,
     onDownloadFfmpeg,
     onPullTextModel,
     onDownloadStyleLora,
