@@ -229,6 +229,16 @@ describe("isTextDocument / inlineReadableText (Read here)", () => {
     expect(inlineReadableText({ name: "report.pdf", mime: "application/pdf", bytes: buf("%PDF-1.4") })).toBeUndefined();
   });
 
+  it("reads a written .txt straight from the card, without going back to disk", () => {
+    // The card for a file the assistant just wrote used to carry only its path, so showing text the
+    // app was already holding meant a round-trip through the desktop's file-read command — a second
+    // door, with its own permission check, that the write had not gone through. Now a full write
+    // carries its content, and this is a pure lookup.
+    expect(inlineReadableText({ name: "haiku1.txt", mime: "", content: "old pond\nfrog leaps in\nwater's sound" })).toBe(
+      "old pond\nfrog leaps in\nwater's sound",
+    );
+  });
+
   it("declines undecodable bytes rather than rendering replacement characters", () => {
     const bad = new Uint8Array([0xff, 0xfe, 0xff, 0xfe]);
     const b = new ArrayBuffer(bad.byteLength);

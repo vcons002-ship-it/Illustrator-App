@@ -185,6 +185,7 @@ import {
   filterActionHistory,
   formatActionHistory,
   producedArtifactFrom,
+  type ArtifactKind,
   loadActionHistory,
   harvestTaskContext,
   completeStepById,
@@ -5853,7 +5854,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             // Whether this produced something durable. Only a handful of fields cross this boundary,
             // so the part of the payload that says WHAT a tool made never reached the app-managed
             // collar — which then judged "no file was written" about a document it had just written.
-            ...(producedArtifactFrom(e.result) ? { artifact: true } : {}),
+            // Created-vs-changed rides along: a step asking for a SECOND document is not finished
+            // by an edit to the first, and one bit couldn't tell those apart.
+            ...((): { artifact?: ArtifactKind } => {
+              const a = producedArtifactFrom(e.result);
+              return a ? { artifact: a } : {};
+            })(),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

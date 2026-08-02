@@ -1072,10 +1072,12 @@ export function FileActionBar({
     setReadErr(undefined);
     try {
       const text = await actions.readText(file);
-      // undefined/empty is NOT a document — say so, rather than opening a blank panel that reads as
-      // "this file is empty" when what happened is that it couldn't be reached.
-      if (text) setLoadedText(text);
-      else setReadErr(`Couldn't read “${file.name}” on this device.`);
+      // `undefined` is "couldn't get it"; `""` is "got it, it's empty". Collapsing the two reported a
+      // file that read perfectly well as unreachable — and the other way round, a blank panel would
+      // have read as "this file is empty" when the file was simply out of reach.
+      if (text === undefined) setReadErr(`Couldn't read “${file.name}” from here.`);
+      else if (text.trim() === "") setReadErr(`“${file.name}” is empty.`);
+      else setLoadedText(text);
     } catch (e) {
       setReadErr(`Couldn't read “${file.name}”: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

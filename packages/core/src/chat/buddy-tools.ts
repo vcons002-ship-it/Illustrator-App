@@ -512,31 +512,41 @@ export type BuddyToolCall =
  * any free-form word) validate it against this set so an invented name ("research") is rejected as a
  * contract instead of compiling into an unsatisfiable `tool_ok("research")` that no evidence can ever
  * match. The `Set<BuddyToolName>` element type makes TypeScript reject any name that isn't a real tool. */
+/** What a tool result left behind: something that did not exist before, or a change to something that
+ * did. See {@link producedArtifactFrom}. */
+export type ArtifactKind = "created" | "changed";
+
 /**
- * Did this tool result produce something durable the reader now has?
+ * Did this tool result produce something durable the reader now has — and did it make that thing, or
+ * modify one that already existed?
  *
  * Deliberately narrower than "it worked": a web search returning hits is progress, not a deliverable,
  * and must not tick off a step that asked for one. A document, a spreadsheet, an applied edit, a
- * written file, a render, a clean command — those are things that exist afterwards. PURE.
+ * written file, a render, a clean command — those are things that exist afterwards.
+ *
+ * The created/changed split matters because the two are not interchangeable to a checklist. Asked for
+ * three haikus in three documents, a model that has one document open reaches for edit_document and
+ * appends — and while "something durable happened" is true of that, the second document the step asked
+ * for does not exist. Reduced to one bit, the collar signed off on one document as three. PURE.
  */
-export function producedArtifactFrom(result: BuddyToolResultPayload): boolean {
-  if (result.error) return false;
-  return (
+export function producedArtifactFrom(result: BuddyToolResultPayload): ArtifactKind | undefined {
+  if (result.error) return undefined;
+  // Modifications to something that already existed. An edit is real work — it just isn't a new thing.
+  if (result.documentEdit?.ok === true || result.dataEdit?.ok === true) return "changed";
+  const created =
     result.image?.ok === true ||
     result.video?.ok === true ||
     result.writeFile?.ok === true ||
     result.command?.code === 0 ||
     result.document?.ok === true ||
-    result.documentEdit?.ok === true ||
-    result.dataEdit?.ok === true ||
     !!result.opened ||
     // Things the reader now HAS in Google: a draft they can send, an event on the calendar, a to-do.
     // Left out, a step like "draft an email to the team" or "add it to my calendar" sat unfinished
     // beside the draft and the event it had just made.
     (!!result.email && !result.email.error) ||
     !!result.eventCreated ||
-    !!result.taskCreated
-  );
+    !!result.taskCreated;
+  return created ? "created" : undefined;
 }
 
 export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolName>([
@@ -1556,7 +1566,13 @@ export function buildBuddySystemPrompt(raw: {
       ? '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
       "make a real, downloadable DOCUMENT (report, letter, notes, essay…). Put the WHOLE body in \"content\" as Markdown; " +
       "\"format\" is just the first download offered (pdf default) — PDF, Word, and Markdown are all available on the card. " +
-      "It shows as a file card in the chat (with a side reader). Use this to CREATE a document — never to revise one.\n" +
+      "It shows as a file card in the chat (with a side reader). Use this to CREATE a document — never to revise one. " +
+      // The ban on re-calling create_document is about revising ONE document, and a model reading it
+      // with a document already open concluded it could never call the tool twice — so "three haikus
+      // in three documents" came out as three haikus appended to the first one.
+      "ONE CALL PER DOCUMENT: if the reader asks for several (three haikus, one per file; a separate write-up each), " +
+      "call it once for EACH — a second create_document starts a second, independent document and leaves the first " +
+      "untouched. Only put two things in one document when the reader asked for one document.\n" +
       '- {"tool":"edit_document","edits":[{"search":"exact old text","replace":"new text"}]} — REVISE the active ' +
       "document. This is the ONLY right way to change one: it search/replaces against the document's FULL stored text, " +
       "so it works even on a document far longer than the excerpt you can see, and it can't drop the parts you can't. " +
@@ -2097,9 +2113,13 @@ export function buildActiveDocumentBlock(
   if (!doc) return "";
   const body = doc.content.trim();
   if (!body) return "";
+  // "Never call create_document again" is the right advice for REVISING this document and the wrong
+  // advice for writing a different one — and with only the ban in view, a model asked for three haikus
+  // in three documents appended all three to this one. The carve-out is the whole point of the rule.
   const how =
     `to change part of it use {"tool":"edit_document","edits":[{"search":"exact old text","replace":"new text"}]} ` +
-    `— NEVER re-emit the whole document with create_document just to revise it`;
+    `— NEVER re-emit the whole document with create_document just to revise it. To write a SEPARATE document ` +
+    `(a second one, one of a set, its own file) call create_document — that is a new document, not a revision`;
   if (body.length <= budgetChars) {
     return `ACTIVE DOCUMENT "${doc.title}" (Markdown — the reader is viewing this; ${how}):\n${body}`;
   }
@@ -3761,15 +3781,17 @@ export interface BuddyToolResultPayload {
   /** set_cell / add_formula_column outcome against the open spreadsheet. */
   dataEdit?: { ok: boolean; summary?: string; error?: string };
   /**
-   * The host's summary of whether this tool produced something DURABLE — a document, a spreadsheet,
-   * an edit that landed. See {@link producedArtifactFrom}.
+   * The host's summary of what this tool left behind — a document or spreadsheet that did not exist
+   * before ("created"), or an edit to one that did ("changed"). See {@link producedArtifactFrom}.
    *
    * Auto-run results cross a worker boundary that forwards only a handful of fields, so the payload
    * that says WHAT a tool produced doesn't survive the trip. The collar was left judging an empty
-   * object and concluding "no file was written" about a document it had just written. This is the one
-   * bit of that payload the collar actually needs, carried deliberately rather than by accident.
+   * object and concluding "no file was written" about a document it had just written. This is the part
+   * of that payload the collar actually needs, carried deliberately rather than by accident — and it
+   * carries created-vs-changed, because a checklist step asking for a SECOND document is not satisfied
+   * by appending to the first.
    */
-  artifact?: boolean;
+  artifact?: ArtifactKind;
   /** read_data outcome: the open sheet's cells, with the A1 refs needed to aim set_cell at them. */
   dataText?: { title: string; text: string; rows: number; from: number; to: number };
   /** Title of a removed library book (remove_library_book). */
@@ -4668,8 +4690,10 @@ function formatBuddyToolResultBody(
     return (
       `[created the document "${d.title}" (${d.words} words). It's shown in the chat as a file card the reader can ` +
       "download as PDF, Word, or Markdown, or open in a side reader" +
-      `${d.path ? `, and saved to the workspace (${d.path})` : ""}. To revise it, use edit_document — NOT another ` +
-      "create_document.] Confirm warmly in one line and offer to refine it."
+      `${d.path ? `, and saved to the workspace (${d.path})` : ""}. To revise THIS document, use edit_document — NOT ` +
+      "another create_document. A DIFFERENT document is not a revision: if the next thing wanted is a separate " +
+      "document (one of several, its own file), call create_document again — that starts a new one and leaves this " +
+      "one alone.] Confirm warmly in one line and offer to refine it."
     );
   }
   if (call.tool === "set_cell" || call.tool === "add_formula_column") {
