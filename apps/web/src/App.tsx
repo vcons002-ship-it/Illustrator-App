@@ -8875,6 +8875,13 @@ export function App() {
             pullProgress={pullProgress}
             onTestSubAgentEndpoint={onTestSubAgentEndpoint}
             googleConnected={googleConnected}
+            schwabConnected={schwabConnected}
+            canConnectSchwab={isDesktop}
+            onConnectSchwab={() => {
+              void connectSchwab().then((r) => {
+                if (!r.ok && r.error) setLocalError(r.error);
+              });
+            }}
             {...(googleEmail ? { googleEmail } : {})}
             onConnectGoogle={onConnectGoogle}
             onDisconnectGoogle={onDisconnectGoogle}
@@ -10031,6 +10038,7 @@ export function App() {
           onAddAlert={(s, type, value) => void addAlert(s, type, value)}
           onRemoveAlert={(id) => void removeAlert(id)}
           schwabConnected={schwabConnected}
+          canConnectSchwab={isDesktop}
           onConnectSchwab={() => {
             void connectSchwab().then((r) => {
               if (!r.ok && r.error) setLocalError(r.error);

@@ -25,6 +25,10 @@ export interface StockChartPanelProps {
   /** Schwab account (real quotes / option chains + Greeks / positions) connect state. */
   schwabConnected?: boolean;
   onConnectSchwab?: () => void;
+  /** Whether THIS device can complete the Schwab connection. The token exchange is a cross-origin
+   * POST to Schwab, which only the desktop app's CORS-exempt transport can make — a phone browser is
+   * refused by the browser itself. Absent/false → say so instead of offering a button that can't work. */
+  canConnectSchwab?: boolean;
   /** TradingView Desktop bridge (when enabled): connection status + a re-check. */
   tvBridge?: { status: string | null; onTest: () => void };
   onClose: () => void;
@@ -44,6 +48,7 @@ export const StockChartPanel = memo(function StockChartPanel({
   onRemoveAlert,
   schwabConnected,
   onConnectSchwab,
+  canConnectSchwab,
   tvBridge,
   onClose,
 }: StockChartPanelProps) {
@@ -118,10 +123,17 @@ export const StockChartPanel = memo(function StockChartPanel({
           {onConnectSchwab ? (
             schwabConnected ? (
               <span style={{ ...btn, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" }}>✓ Schwab</span>
-            ) : (
+            ) : canConnectSchwab ? (
               <button style={btn} onClick={onConnectSchwab} title="Connect your Schwab account for real quotes, option chains + Greeks, and positions">
                 Connect Schwab
               </button>
+            ) : (
+              // Not a button that fails when pressed: swapping Schwab's code for a token is a
+              // cross-origin POST the browser refuses on a phone. Say where it CAN be done.
+              <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                Connect Schwab on the desktop app — the sign-in can’t finish from a phone. Once it’s connected there,
+                quotes and positions work here.
+              </span>
             )
           ) : null}
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>

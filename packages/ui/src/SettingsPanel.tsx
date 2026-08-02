@@ -628,6 +628,11 @@ export interface SettingsPanelProps {
   googleEmail?: string;
   /** Run the Google OAuth consent flow (desktop); returns the outcome. */
   onConnectGoogle?: () => Promise<{ ok: boolean; email?: string; error?: string }>;
+  /** Schwab sign-in, offered next to the key + secret it needs. */
+  onConnectSchwab?: () => void;
+  schwabConnected?: boolean;
+  /** False on a phone/web: the token exchange is cross-origin and only the desktop can make it. */
+  canConnectSchwab?: boolean;
   /** Forget the stored Google tokens. */
   onDisconnectGoogle?: () => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
@@ -699,6 +704,9 @@ export function SettingsPanel({
   googleConnected,
   googleEmail,
   onConnectGoogle,
+  onConnectSchwab,
+  schwabConnected,
+  canConnectSchwab,
   onDisconnectGoogle,
   onSoftwareUpdate,
   onRestartApp,
@@ -2658,7 +2666,10 @@ export function SettingsPanel({
                     Connect your own Charles Schwab developer app (the platform behind thinkorswim) for real quotes,
                     option chains with Greeks, and your positions. Register an app at developer.schwab.com (set the
                     callback URL to <code>https://127.0.0.1</code>), paste its key + secret here, then click
-                    <b> Connect Schwab</b> in the 📈 Markets panel. The assistant only reads/analyses — it never trades.
+                    <b> Connect Schwab</b> in the 📈 Markets panel <b>of the desktop app</b> — the sign-in can’t finish
+                    from a phone or the web, because swapping Schwab’s code for a token is a cross-origin request only
+                    the desktop can make. Once it’s connected there, a linked phone uses it normally. The assistant only
+                    reads/analyses — it never trades.
                   </p>
                   <label style={rowStyle}>
                     <span>Schwab app key</span>
@@ -2676,6 +2687,34 @@ export function SettingsPanel({
                       onChange={(e) => setKey("schwabClientSecret", e.target.value.trim())}
                     />
                   </label>
+                  {/* The sign-in belongs WHERE THE CREDENTIALS GO. It only existed in the Markets
+                      panel's header, so entering a key and secret here left the reader with nothing
+                      to press and no reason to think the next step was in a different panel. */}
+                  {onConnectSchwab ? (
+                    <div style={{ marginTop: 8 }}>
+                      {schwabConnected ? (
+                        <span style={{ fontSize: 12, color: SUCCESS_GREEN }}>✓ Schwab connected</span>
+                      ) : !canConnectSchwab ? (
+                        <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                          Sign in on the desktop app — swapping Schwab’s code for a token is a cross-origin request a
+                          phone browser refuses. Once it’s connected there, this device uses it normally.
+                        </span>
+                      ) : !value.keys.schwabClientId || !value.keys.schwabClientSecret ? (
+                        <span style={{ opacity: 0.55, fontSize: 11 }}>Add the app key and secret above, then sign in.</span>
+                      ) : (
+                        <>
+                          <button style={smallButtonStyle} onClick={onConnectSchwab}>
+                            Sign in to Schwab
+                          </button>
+                          <span style={{ opacity: 0.55, fontSize: 11, display: "block", marginTop: 4 }}>
+                            Opens Schwab’s consent page. After you approve it redirects to{" "}
+                            <code>https://127.0.0.1</code> and the page shows a connection error — that’s expected,
+                            nothing is listening there. Copy the whole address and paste it back when asked.
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </>
             </Group>
