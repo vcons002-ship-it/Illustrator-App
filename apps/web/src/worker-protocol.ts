@@ -436,6 +436,9 @@ export type WorkerToMain =
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
+      /** This tool produced something durable (a document, spreadsheet, applied edit…) — the one bit
+       * of the payload the app-managed collar needs, since the rest doesn't cross this boundary. */
+      artifact?: boolean;
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and

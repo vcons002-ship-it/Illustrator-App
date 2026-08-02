@@ -617,3 +617,64 @@ describe("planning is not a step", () => {
     expect(wf.steps).toHaveLength(2);
   });
 });
+
+describe("AUDIT: every contract can be satisfied by the tool that satisfies it", () => {
+  // The consistency problem in one table. For each realistic step, the contract it compiles to, the
+  // tool a model would call for it, and the evidence the HOST actually records for that tool — then
+  // ask whether the step completes. Anything that doesn't is a workflow that wedges on a step whose
+  // work was done, which is the shape every app-managed report in this stream has taken.
+  //
+  // Seven of these thirteen failed when the audit was first run. The cause was one line: auto-run
+  // results crossed the worker boundary as `{}` — only the error flag survived — so the collar judged
+  // an empty payload and concluded "no file was written" about a document it had just written.
+
+  /** Exactly what apps/web/src/App.tsx records, per tool. Auto-run tools carry `artifact`. */
+  const MAKES_ARTIFACT = new Set([
+    "create_document", "edit_document", "create_spreadsheet", "set_cell", "add_formula_column",
+    "open_content", "draft_email", "send_email", "create_event", "update_event", "create_task", "add_task_group",
+  ]);
+  const evidenceFor = (tool: string): BuddyToolResultPayload => {
+    if (tool === "generate_image") return { image: { ok: true } };
+    if (tool === "generate_video" || tool === "generate_long_video" || tool === "stitch_videos") return { video: { ok: true } };
+    if (tool === "write_file" || tool === "edit_file") return { writeFile: { path: "a.md", ok: true } };
+    if (tool === "run_command" || tool === "delegate_coding_task") return { command: { stdout: "", stderr: "", code: 0 } };
+    return MAKES_ARTIFACT.has(tool) ? { artifact: true } : {};
+  };
+
+  const CASES: [string, string][] = [
+    ["Generate an image of a goat in a field", "generate_image"],
+    ["Search the web for current Boston hotel prices", "search_web"],
+    ["Write the recap to recap.md", "write_file"],
+    ["Run the tests with pytest", "run_command"],
+    ["Write it up as a PDF report", "create_document"],
+    ["Create a Word document summarising the findings", "create_document"],
+    ["Save the findings as a document", "create_document"],
+    ["Build a spreadsheet of the results", "create_spreadsheet"],
+    ["Create a budget spreadsheet file", "create_spreadsheet"],
+    ["Draft an email to the team", "draft_email"],
+    ["Add it to my calendar", "create_event"],
+    ["Animate that image into a short clip", "generate_video"],
+  ];
+
+  for (const [text, tool] of CASES) {
+    it(`"${text}" completes when ${tool} succeeds`, () => {
+      const wf = compileWorkflow({ steps: [{ text, status: "pending" }] });
+      const step = wf.steps[0]!;
+      const outcome = evaluateStep(step, ev([{ call: { tool } as BuddyToolCall, result: evidenceFor(tool) }]));
+      expect(outcome.done, `${JSON.stringify(step.doneWhen)} — ${outcome.reason ?? ""}`).toBe(true);
+    });
+  }
+
+  it("an answer step is still satisfied by the answer, not by a tool running", () => {
+    const wf = compileWorkflow({ steps: [{ text: "Summarise what you found", status: "pending" }] });
+    expect(evaluateStep(wf.steps[0]!, ev([], "Here's what I found.")).done).toBe(true);
+  });
+
+  it("and a search that returned nothing durable still does NOT tick an answer step", () => {
+    // The line that keeps this honest: work in progress is not a deliverable. Widening the collar to
+    // fix the document case must not widen it to "any tool ran".
+    const wf = compileWorkflow({ steps: [{ text: "Summarise what you found", status: "pending" }] });
+    const searched = ev([{ call: { tool: "search_web", query: "x" }, result: { hits: [] } }]);
+    expect(evaluateStep(wf.steps[0]!, searched).done).toBe(false);
+  });
+});

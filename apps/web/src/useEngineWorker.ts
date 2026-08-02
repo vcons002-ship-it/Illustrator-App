@@ -444,6 +444,8 @@ export type BuddyStreamEvent =
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
+      /** This tool produced something durable — the app-managed collar's evidence that work landed. */
+      artifact?: boolean;
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
@@ -1195,6 +1197,7 @@ export function useEngineWorker(
             ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.openedImage ? { openedImage: msg.openedImage } : {}),
+            ...(msg.artifact ? { artifact: true } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
