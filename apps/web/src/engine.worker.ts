@@ -5928,9 +5928,16 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
 }
 
 /** A soul's reference photos, decoded to bytes for use as character references in an image render. */
-/** How many reference photos one chat render may carry. Mirrors the book pipeline's per-frame cap:
- * past a handful the model stops resolving a likeness and starts averaging faces together. */
-const MAX_CHAT_REFS = 4;
+/**
+ * The ceiling on how many reference photos one chat render may carry.
+ *
+ * Deliberately the LOOSEST of the routes, not the tightest: each backend caps to what its own
+ * mechanism can use (IP-Adapter blends, so it takes four; Flux.2's ReferenceLatent chain keeps each
+ * photo independent, so it takes ten). Clamping to four here would have silently thrown away the
+ * capability that makes Flux.2 worth using — a person from one photo, a place from another.
+ * This is only a sanity bound so an accidental drag-and-drop of a folder can't queue fifty encodes.
+ */
+const MAX_CHAT_REFS = 10;
 
 async function loadSoulRefs(
   store: ReturnType<typeof memoryStore>,

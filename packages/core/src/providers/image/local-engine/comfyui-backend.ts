@@ -333,6 +333,23 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
  */
 const IPADAPTER_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["sd15", "sdxl"]);
 
+/**
+ * How many references each route will actually use — a property of the MECHANISM, not of the caller.
+ *
+ * IP-Adapter blends every reference into one identity signal, so past a handful it stops resolving a
+ * likeness and starts averaging faces, and each one costs another encode and another apply node.
+ * Four is where the book pipeline already draws that line.
+ *
+ * ReferenceLatent doesn't blend: each photo is an independent latent appended to the conditioning,
+ * which is what lets Flux.2 take a person from one picture and a setting from another. Its documented
+ * ceiling is ten, so ten is the cap — holding it to four would throw away the capability.
+ *
+ * Capped HERE because here is where the route is known. The chat path can't decide it: the same four
+ * attachments mean different things depending on which model is loaded.
+ */
+const IPADAPTER_MAX_REFS = 4;
+const REFERENCE_LATENT_MAX_REFS = 10;
+
 /** Can IP-Adapter condition a render on this checkpoint family? PURE. */
 export function ipAdapterSupports(family: ModelFamily): boolean {
   return IPADAPTER_FAMILIES.has(family);
@@ -1100,7 +1117,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
       // images, a different route into the same render.
       try {
         referenceLatents = await Promise.all(
-          input.ipAdapterRefs.map((ref) => this.uploadedReference(ref.bytes, ref.mimeType)),
+          input.ipAdapterRefs
+            .slice(0, REFERENCE_LATENT_MAX_REFS)
+            .map((ref) => this.uploadedReference(ref.bytes, ref.mimeType)),
         );
       } catch {
         referenceLatents = undefined; // upload failed → render without the reference, not at all
@@ -1125,7 +1144,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
           // Cached per buffer (uploaded once per session) and fetched in parallel
           // on a miss; `map` keeps the refs in their original order.
           const refs = await Promise.all(
-            input.ipAdapterRefs.map(async (ref) => ({
+            input.ipAdapterRefs.slice(0, IPADAPTER_MAX_REFS).map(async (ref) => ({
               filename: await this.uploadedReference(ref.bytes, ref.mimeType),
               weight: ref.weight,
             })),

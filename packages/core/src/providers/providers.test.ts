@@ -1910,6 +1910,45 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(true);
   });
 
+  it("takes as many references as its route can actually use — 10 on Flux.2, 4 on IP-Adapter", async () => {
+    // Not one shared number. IP-Adapter blends every reference into one identity signal, so past a
+    // handful it averages faces instead of resolving one. ReferenceLatent keeps each photo
+    // independent, which is what lets Flux.2 take a person from one picture and a place from
+    // another — capping that at four would throw the capability away.
+    const many = Array.from({ length: 12 }, () => ({ bytes: new ArrayBuffer(3), mimeType: "image/png", weight: 0.5 }));
+
+    const files: Record<string, unknown> = {
+      CLIPLoader: { input: { required: { clip_name: [["qwen_3_8b_fp8mixed.safetensors"]] } } },
+      VAELoader: { input: { required: { vae_name: [["flux2-ae.safetensors"]] } } },
+      UNETLoader: { input: { required: { unet_name: [["flux2-klein.safetensors"]] } } },
+    };
+    const tFlux = new FakeTransport((req) => {
+      const node = /\/object_info\/(\w+)/.exec(req.url)?.[1];
+      if (node) return { json: files[node] ? { [node]: files[node] } : {} };
+      if (req.url.endsWith("/object_info")) return { json: files };
+      if (req.url.endsWith("/upload/image")) return { json: { name: "vr-ref.png" } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: tFlux, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "flux2", ipAdapterRefs: many },
+      "flux2-klein.safetensors",
+    );
+    const fluxWf = workflowOf(tFlux);
+    const refNodes = Object.values(fluxWf).filter((n) => n.class_type === "ReferenceLatent");
+    expect(refNodes).toHaveLength(10);
+
+    const tSd = transportWith({ IPAdapterAdvanced: { input: {} }, IPAdapterUnifiedLoader: { input: {} } });
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: tSd, pollIntervalMs: 0 }).generate(
+      { ...imageInput, ipAdapterRefs: many },
+      "sd_xl_base_1.0.safetensors",
+    );
+    const sdWf = workflowOf(tSd);
+    expect(Object.values(sdWf).filter((n) => n.class_type === "IPAdapterAdvanced")).toHaveLength(4);
+  });
+
   it("routes each family to the ONE reference mechanism it has, or to neither", () => {
     // Two mechanisms, no overlap, and the families that have neither are named as such rather than
     // being sent down a path that raises.
