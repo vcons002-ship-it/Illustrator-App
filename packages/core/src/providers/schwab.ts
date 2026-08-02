@@ -29,6 +29,26 @@ export interface SchwabTokens {
 
 // ----------------------------------------------------------------- OAuth
 
+/** What the app uses when the reader hasn't set a callback of their own. */
+export const DEFAULT_SCHWAB_CALLBACK = "https://127.0.0.1";
+
+/**
+ * What looks wrong with a callback URL, or undefined when nothing does.
+ *
+ * Reports rather than repairs. Schwab compares the callback LITERALLY against what is registered, so
+ * "helpfully" stripping a trailing slash would break the reader whose portal entry actually has one —
+ * the app cannot know which side is wrong, and silently changing one of them turns a visible mismatch
+ * into an invisible one. Saying what looks odd leaves the decision where the information is. PURE.
+ */
+export function schwabCallbackIssue(url: string): string | undefined {
+  const v = url.trim();
+  if (!v) return "Enter a callback URL, or leave it blank to use the default.";
+  if (!/^https:\/\//i.test(v)) return "Schwab requires https:// — an http:// callback is rejected.";
+  if (v.endsWith("/")) return "Ends with a slash. Schwab matches this literally, so it must match the portal character for character.";
+  if (/\s/.test(v)) return "Contains a space.";
+  return undefined;
+}
+
 /**
  * The Schwab consent URL to open in the browser (authorization-code flow).
  *

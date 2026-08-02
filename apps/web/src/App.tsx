@@ -144,6 +144,7 @@ import {
   clearGoogleTokens,
   GOOGLE_SCOPES,
   buildSchwabAuthUrl,
+  DEFAULT_SCHWAB_CALLBACK,
   buildEquityOrder,
   buildOptionOrder,
   describeOrder,
@@ -3774,7 +3775,10 @@ export function App() {
   const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const clientId = settings.keys?.schwabClientId;
     if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
-    const redirectUri = "https://127.0.0.1";
+    // The reader's own callback when they've set one. It has to be the SAME value in the consent URL
+    // and in the token exchange — Schwab compares both against what is registered — so it is read
+    // once, here, and passed to both.
+    const redirectUri = settings.keys?.schwabCallbackUrl?.trim() || DEFAULT_SCHWAB_CALLBACK;
     try {
       const url = buildSchwabAuthUrl({ clientId, redirectUri, state: crypto.randomUUID() });
       // CHECK that it opened. The desktop shell's webview blocks window.open — it returns null and
@@ -3819,7 +3823,7 @@ export function App() {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [settings.keys?.schwabClientId, settings.keys?.schwabClientSecret, schwabConnect]);
+  }, [settings.keys?.schwabClientId, settings.keys?.schwabClientSecret, settings.keys?.schwabCallbackUrl, schwabConnect]);
   // Overlay the assistant's planned deadlines (plan-level + each dated step) onto the grid.
   const calendarDeadlines = useMemo<CalendarDeadline[]>(() => {
     const out: CalendarDeadline[] = [];
