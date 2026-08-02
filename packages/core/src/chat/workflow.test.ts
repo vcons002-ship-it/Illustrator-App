@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { producedArtifactFrom } from "./buddy-tools.js";
 import type { BuddyPlan, BuddyToolCall, BuddyToolResultPayload } from "./buddy-tools.js";
 import {
   type StepEvidence,
@@ -628,17 +629,38 @@ describe("AUDIT: every contract can be satisfied by the tool that satisfies it",
   // results crossed the worker boundary as `{}` — only the error flag survived — so the collar judged
   // an empty payload and concluded "no file was written" about a document it had just written.
 
-  /** Exactly what apps/web/src/App.tsx records, per tool. Auto-run tools carry `artifact`. */
-  const MAKES_ARTIFACT = new Set([
-    "create_document", "edit_document", "create_spreadsheet", "set_cell", "add_formula_column",
-    "open_content", "draft_email", "send_email", "create_event", "update_event", "create_task", "add_task_group",
-  ]);
+  /** The payload each tool really hands back, so the audit reads the HOST's own summary rather than a
+   * hand-kept list that can drift from it. Auto-run results reach the collar as `artifact`, which is
+   * exactly `producedArtifactFrom` of this payload — the same call apps/web/src/engine.worker.ts makes. */
+  const PAYLOAD: Record<string, BuddyToolResultPayload> = {
+    generate_image: { image: { ok: true } },
+    generate_video: { video: { ok: true } },
+    generate_long_video: { video: { ok: true } },
+    stitch_videos: { video: { ok: true } },
+    write_file: { writeFile: { path: "a.md", ok: true } },
+    edit_file: { writeFile: { path: "a.md", ok: true } },
+    run_command: { command: { stdout: "", stderr: "", code: 0 } },
+    delegate_coding_task: { command: { stdout: "", stderr: "", code: 0 } },
+    create_document: { document: { ok: true, id: "d1", title: "t", words: 10 } },
+    edit_document: { documentEdit: { ok: true, title: "t", applied: 1, failures: 0, words: 10, summary: "1 edit applied" } },
+    create_spreadsheet: { opened: { title: "t", chapters: 1, pages: 1, visuals: false } },
+    set_cell: { dataEdit: { ok: true } },
+    add_formula_column: { dataEdit: { ok: true } },
+    open_content: { opened: { title: "t", chapters: 1, pages: 1, visuals: false } },
+    draft_email: { email: { sent: false, to: ["a@b.c"], subject: "s", id: "d1" } },
+    send_email: { email: { sent: true, to: ["a@b.c"], subject: "s", id: "d1" } },
+    create_event: { eventCreated: { id: "e1", summary: "s", start: "2026-08-02T10:00:00Z", end: "2026-08-02T11:00:00Z" } },
+    update_event: { eventCreated: { id: "e1", summary: "s", start: "2026-08-02T10:00:00Z", end: "2026-08-02T11:00:00Z" } },
+    create_task: { taskCreated: { id: "t1", title: "t" } },
+    add_task_group: { taskCreated: { id: "t1", title: "t" } },
+    search_web: { hits: [] },
+  };
   const evidenceFor = (tool: string): BuddyToolResultPayload => {
-    if (tool === "generate_image") return { image: { ok: true } };
-    if (tool === "generate_video" || tool === "generate_long_video" || tool === "stitch_videos") return { video: { ok: true } };
-    if (tool === "write_file" || tool === "edit_file") return { writeFile: { path: "a.md", ok: true } };
-    if (tool === "run_command" || tool === "delegate_coding_task") return { command: { stdout: "", stderr: "", code: 0 } };
-    return MAKES_ARTIFACT.has(tool) ? { artifact: true } : {};
+    const payload = PAYLOAD[tool] ?? {};
+    // Host tools suspend the turn and record their own payload; auto-run tools cross the worker
+    // boundary as just this summary. Both shapes are exercised by keeping the payload AND the summary.
+    const kind = producedArtifactFrom(payload);
+    return kind ? { ...payload, artifact: kind } : payload;
   };
 
   const CASES: [string, string][] = [
@@ -676,5 +698,78 @@ describe("AUDIT: every contract can be satisfied by the tool that satisfies it",
     const wf = compileWorkflow({ steps: [{ text: "Summarise what you found", status: "pending" }] });
     const searched = ev([{ call: { tool: "search_web", query: "x" }, result: { hits: [] } }]);
     expect(evaluateStep(wf.steps[0]!, searched).done).toBe(false);
+  });
+});
+
+describe("three separate documents must come out as three documents", () => {
+  // Reported: "create 3 individual haikus in separate documents" — the model plans three, then
+  // delivers all three inside the ONE document already open in the chat.
+  //
+  // Two things conspire. Once a document exists it becomes the ACTIVE DOCUMENT, and both the
+  // create_document result and the active-document block tell the model, loudly, not to call
+  // create_document again — advice meant for REVISING this document, which reads as a blanket ban.
+  // So on step 2 it reaches for edit_document and appends. And the collar then TICKS that step,
+  // because every durable outcome had been reduced to one bit: "something was produced". Changing a
+  // document that already existed is not producing the second one the step asked for.
+  const doc = (): BuddyToolResultPayload => ({ artifact: "created" });
+  const edit = (): BuddyToolResultPayload => ({ artifact: "changed" });
+  const plan: BuddyPlan = {
+    steps: [
+      { text: "Create a document containing the first haiku", status: "pending" },
+      { text: "Create a second document containing the second haiku", status: "pending" },
+      { text: "Create a third document containing the third haiku", status: "pending" },
+    ],
+  };
+
+  it("a step asking for a NEW document is not satisfied by editing the open one", () => {
+    const wf = compileWorkflow(plan);
+    const second = wf.steps[1]!;
+    const outcome = evaluateStep(second, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }]));
+    expect(outcome.done).toBe(false);
+    expect(outcome.reason).toMatch(/new|separate|own/i);
+  });
+
+  it("but IS satisfied by actually creating one", () => {
+    const wf = compileWorkflow(plan);
+    const outcome = evaluateStep(wf.steps[1]!, ev([{ call: { tool: "create_document", title: "Haiku 2", content: "x" }, result: doc() }]));
+    expect(outcome.done).toBe(true);
+  });
+
+  it("the whole run: three create_documents finish, three edits do not", () => {
+    let wf = compileWorkflow(plan);
+    const actions: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const active = wf.steps.find((s) => s.status === "active")!;
+      const adv = advanceWorkflow(wf, evaluateStep(active, ev([{ call: { tool: "create_document", title: "t", content: "x" }, result: doc() }])));
+      actions.push(adv.action);
+      wf = adv.workflow;
+    }
+    expect(actions).toEqual(["advance", "advance", "finish"]);
+
+    // The reported run: haiku 1 creates, haikus 2 and 3 get appended to it. The collar must NOT
+    // sign that off as three documents.
+    let wf2 = compileWorkflow(plan);
+    const first = advanceWorkflow(wf2, evaluateStep(wf2.steps[0]!, ev([{ call: { tool: "create_document", title: "t", content: "x" }, result: doc() }])));
+    expect(first.action).toBe("advance");
+    wf2 = first.workflow;
+    const second = advanceWorkflow(wf2, evaluateStep(wf2.steps.find((s) => s.status === "active")!, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }])));
+    expect(second.action).toBe("retry");
+  });
+
+  it("a step that asks to CHANGE a document is still satisfied by an edit", () => {
+    // The fix must not swing the other way: revising the open document is what edit_document is for.
+    const wf = compileWorkflow({ steps: [{ text: "Tighten the introduction of the report", status: "pending" }] });
+    expect(evaluateStep(wf.steps[0]!, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }])).done).toBe(true);
+  });
+
+  it("an elliptical continuation inherits the NEW-document requirement", () => {
+    // "Now the second one" carries no words of its own — it means what step 1 meant.
+    const wf = compileWorkflow({
+      steps: [
+        { text: "Create a document containing the first haiku", status: "pending" },
+        { text: "Now the second one", status: "pending" },
+      ],
+    });
+    expect(evaluateStep(wf.steps[1]!, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }])).done).toBe(false);
   });
 });

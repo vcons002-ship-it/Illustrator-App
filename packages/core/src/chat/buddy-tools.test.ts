@@ -18,6 +18,7 @@ import {
   normalizeBuddyPersona,
   ollamaToolSchemas,
   parseBuddyToolCall,
+  producedArtifactFrom,
   parseBuddyToolCalls,
   planHasPendingStep,
   planQueueResumeFeedback,
@@ -1284,6 +1285,18 @@ describe("create_document tool", () => {
     expect(fail).toContain("create_document failed");
     expect(fail).toContain("boom");
   });
+
+  it("scopes 'not another create_document' to revising THIS one, and says how to write a different one", () => {
+    // Unqualified, this was the second half of what turned three haikus into one document: the model
+    // made the first, was told not to call create_document again, and appended the rest with an edit.
+    const ok = formatBuddyToolResult(
+      { tool: "create_document", title: "Haiku 1", content: "x" },
+      { document: { ok: true, id: "d1", title: "Haiku 1", words: 12 } },
+    );
+    expect(ok).toContain("To revise THIS document");
+    expect(ok).toContain("A DIFFERENT document is not a revision");
+    expect(ok).toMatch(/call create_document again/);
+  });
 });
 
 describe("buildActiveDocumentBlock", () => {
@@ -1296,6 +1309,16 @@ describe("buildActiveDocumentBlock", () => {
     // Re-emitting the whole document is the behaviour that lost content — it must be named as wrong.
     expect(block).toContain("NEVER re-emit the whole document");
     expect(block).toContain("# Brief");
+  });
+
+  it("says that a SEPARATE document is not a revision, so a set of documents stays a set", () => {
+    // Asked for three haikus in three documents, the model made the first, then read this block's ban
+    // on create_document — advice about REVISING this document — as a ban outright, and appended the
+    // other two to it. The rule needs its own carve-out or it argues against the next step.
+    const block = buildActiveDocumentBlock({ title: "Haiku 1", content: "# Haiku 1\n\nold pond…" });
+    expect(block).toContain("SEPARATE document");
+    expect(block).toMatch(/second one|one of a set|its own file/);
+    expect(block).toContain("call create_document");
   });
 
   it("tells the model an excerpt is an EXCERPT — with the size, the outline, and how to get the rest", () => {
@@ -2608,5 +2631,40 @@ describe("MULTI-STEP guidance — LEAN with no plan, discipline only mid-checkli
     expect(sys).toMatch(/don't wait for the reader to say 'continue'/i);
     // Still no verbose narration mandate even mid-plan.
     expect(sys).not.toMatch(/NARRATE EVERY STEP/);
+  });
+});
+
+describe("producedArtifactFrom — made a thing, or changed one", () => {
+  it("calls a new document/spreadsheet/render/file 'created'", () => {
+    expect(producedArtifactFrom({ document: { ok: true, id: "d", title: "t", words: 1 } })).toBe("created");
+    expect(producedArtifactFrom({ image: { ok: true } })).toBe("created");
+    expect(producedArtifactFrom({ writeFile: { path: "a.md", ok: true } })).toBe("created");
+    expect(producedArtifactFrom({ opened: { title: "t", chapters: 1, pages: 1, visuals: false } })).toBe("created");
+    expect(producedArtifactFrom({ eventCreated: { id: "e", summary: "s", start: "a", end: "b" } })).toBe("created");
+  });
+
+  it("calls an edit to something that already existed 'changed'", () => {
+    // The distinction the collar needs: an edit is real work, but it is not a SECOND document.
+    expect(producedArtifactFrom({ documentEdit: { ok: true, title: "t", applied: 1, failures: 0, words: 9, summary: "s" } })).toBe("changed");
+    expect(producedArtifactFrom({ dataEdit: { ok: true } })).toBe("changed");
+  });
+
+  it("still says nothing durable happened for a search, a failure, or an edit that applied nothing", () => {
+    expect(producedArtifactFrom({ hits: [] })).toBeUndefined();
+    expect(producedArtifactFrom({ error: "network" })).toBeUndefined();
+    expect(producedArtifactFrom({ documentEdit: { ok: false, title: "t", applied: 0, failures: 1, words: 9, summary: "no match" } })).toBeUndefined();
+    expect(producedArtifactFrom({})).toBeUndefined();
+  });
+});
+
+describe("a set of documents is a set of create_document calls", () => {
+  it("the prompt says one call per document, not one document per request", () => {
+    // "create 3 individual haikus in separate documents" produced one document with three haikus in
+    // it. Nothing in the prompt said a second call makes a second document — only that create_document
+    // must not be used to revise — so with one document open the model read the rule as a ban.
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], canDocuments: true });
+    expect(p).toContain("ONE CALL PER DOCUMENT");
+    expect(p).toMatch(/call it once for EACH/);
+    expect(p).toContain("starts a second, independent document");
   });
 });

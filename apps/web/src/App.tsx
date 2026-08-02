@@ -6416,7 +6416,7 @@ export function App() {
           // and since the payload was gone, nothing downstream could tell either.
           buddyStepEvidenceRef.current.toolResults.push({
             call: e.call,
-            result: e.error ? { error: e.error } : e.artifact ? { artifact: true } : {},
+            result: e.error ? { error: e.error } : e.artifact ? { artifact: e.artifact } : {},
           });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();

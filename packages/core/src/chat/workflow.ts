@@ -1,4 +1,4 @@
-import { BUDDY_TOOL_NAMES, type BuddyPlan, type BuddyToolCall, type BuddyToolName, type BuddyToolResultPayload } from "./buddy-tools.js";
+import { BUDDY_TOOL_NAMES, type ArtifactKind, type BuddyPlan, type BuddyToolCall, type BuddyToolName, type BuddyToolResultPayload } from "./buddy-tools.js";
 
 /**
  * Compiled workflows — the "App-managed steps" engine.
@@ -18,7 +18,9 @@ import { BUDDY_TOOL_NAMES, type BuddyPlan, type BuddyToolCall, type BuddyToolNam
 export type DoneWhen =
   | { kind: "tool_ok"; tool: BuddyToolName } // that tool ran and returned non-error this step
   | { kind: "image" } // generate_image produced an image (image.ok)
-  | { kind: "file" } // write_file succeeded / a file artifact appeared
+  // write_file succeeded / a file artifact appeared. `fresh` when the step asked for a NEW document —
+  // editing the one already open doesn't produce the second document a step asked for.
+  | { kind: "file"; fresh?: boolean }
   | { kind: "command_ok" } // run_command exited 0
   | { kind: "text"; min?: number; regex?: string } // plain-text output non-empty / matches a pattern
   | { kind: "files"; paths: string[] } // these specific deliverable files exist + are non-empty (host-verified)
@@ -129,6 +131,23 @@ export function needsToDoneWhen(needs: string | undefined): DoneWhen | undefined
   return undefined;
 }
 
+/**
+ * Does this step ask for a document/file that does not exist yet, as opposed to changing one that
+ * does? "Create a second document", "put each haiku in its own file", "a separate write-up" — versus
+ * "add a summary section", "tighten the introduction".
+ *
+ * The distinction only became load-bearing when a document could be a step's deliverable. Once one
+ * document is open the model is told, correctly, to revise it with edit_document rather than re-emit
+ * it — and told nothing about the case where the next step wants a DIFFERENT document. It appends;
+ * "something durable happened" is true of that; and three haikus come out as one document. PURE.
+ */
+function asksForANewOne(t: string): boolean {
+  if (/\b(new|another|separate|individual|second|third|fourth|fifth|next|each)\b/.test(t)) return true;
+  if (/\b(its |their |his |her )?own\b/.test(t)) return true;
+  // A bare "create/write a document" is a new one too — you cannot create what is already there.
+  return /\b(create|write|make|produce|generate|draft)\b/.test(t);
+}
+
 /** Heuristic fallback when a step declares no `needs`: read the instruction and guess the contract.
  * Conservative — a step we can't classify becomes a `text` (non-empty) check, which any real reply
  * satisfies, rather than something that could wrongly block. */
@@ -140,7 +159,7 @@ export function inferDoneWhen(instruction: string): DoneWhen {
   )
     return { kind: "image" };
   if (/\b(save|write|export|create)\b[^.]*\b(file|\.md|\.csv|\.txt|\.json|document|script|doc)\b/.test(t))
-    return { kind: "file" };
+    return { kind: "file", ...(asksForANewOne(t) ? { fresh: true } : {}) };
   if (/\b(run|execute|exec)\b[^.]*\b(command|script|test|build|it)\b/.test(t)) return { kind: "command_ok" };
   if (/\b(search|find|look up|google)\b/.test(t)) return { kind: "tool_ok", tool: "search_web" };
   // "ask me / ask the reader / your favorite / what's your …" → wait for the reader.
@@ -389,7 +408,8 @@ function producedArtifact(evidence: StepEvidence): boolean {
       r.result.writeFile?.ok === true ||
       r.result.command?.code === 0 ||
       // Anything the host summarised as durable: a document, a spreadsheet, an edit that landed.
-      r.result.artifact === true,
+      // Either kind counts here — this only stops a GUESS from denying work that visibly happened.
+      !!r.result.artifact,
   );
 }
 
@@ -414,14 +434,22 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
       return evidence.toolResults.some((r) => r.result.image?.ok === true)
         ? { done: true }
         : { done: false, reason: "no image was rendered" };
-    case "file":
+    case "file": {
       // A DOCUMENT is a file. create_document saves to the workspace and hands back a downloadable
       // card, and a spreadsheet opens and is saved — but neither goes through write_file, so a step
       // that asked for "a Word document summarising the findings" sat unfinished beside the document
-      // it had asked for. `artifact` is the host's word that something durable landed.
-      return evidence.toolResults.some((r) => r.result.writeFile?.ok === true || r.result.artifact === true)
-        ? { done: true }
-        : { done: false, reason: "no file or document was produced" };
+      // it had asked for. `artifact` is the host's word about what landed.
+      const wrote = evidence.toolResults.some((r) => r.result.writeFile?.ok === true);
+      if (wrote) return { done: true };
+      const kinds = evidence.toolResults.map((r) => r.result.artifact).filter((k): k is ArtifactKind => !!k);
+      if (kinds.length === 0) return { done: false, reason: "no file or document was produced" };
+      // A step that asked for a NEW document is not finished by an edit to the one already open. This
+      // is the "three haikus, three documents" case: the model appends to the open document, something
+      // durable does happen, and without this the collar signs off on one document as three.
+      if (dw.fresh && !kinds.includes("created"))
+        return { done: false, reason: "that changed the document already open — this step needs a NEW, separate one (call create_document)" };
+      return { done: true };
+    }
     case "command_ok":
       return evidence.toolResults.some((r) => r.result.command?.code === 0)
         ? { done: true }

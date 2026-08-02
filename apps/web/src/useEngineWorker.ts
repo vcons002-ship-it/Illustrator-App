@@ -15,6 +15,7 @@ import {
   type RemoteMode,
 } from "@visual-reader/core";
 import type {
+  ArtifactKind,
   BookPassage,
   BookSearchHit,
   BookSource,
@@ -444,8 +445,10 @@ export type BuddyStreamEvent =
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
-      /** This tool produced something durable — the app-managed collar's evidence that work landed. */
-      artifact?: boolean;
+      /** What this tool left behind — "created" (a thing that didn't exist) or "changed" (an edit to
+       * one that did). The app-managed collar's evidence that work landed, and WHICH work: a step
+       * asking for a second document is not finished by appending to the first. */
+      artifact?: ArtifactKind;
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
@@ -1197,7 +1200,7 @@ export function useEngineWorker(
             ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.openedImage ? { openedImage: msg.openedImage } : {}),
-            ...(msg.artifact ? { artifact: true } : {}),
+            ...(msg.artifact ? { artifact: msg.artifact } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;

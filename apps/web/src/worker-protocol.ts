@@ -1,4 +1,5 @@
 import type {
+  ArtifactKind,
   BookPassage,
   BookSearchHit,
   BookSource,
@@ -436,9 +437,11 @@ export type WorkerToMain =
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
-      /** This tool produced something durable (a document, spreadsheet, applied edit…) — the one bit
-       * of the payload the app-managed collar needs, since the rest doesn't cross this boundary. */
-      artifact?: boolean;
+      /** What this tool left behind — something that didn't exist before ("created") or a change to
+       * something that did ("changed"). The part of the payload the app-managed collar needs, since
+       * the rest doesn't cross this boundary; the two kinds are distinguished because a step asking
+       * for a SECOND document is not satisfied by appending to the first. */
+      artifact?: ArtifactKind;
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and
