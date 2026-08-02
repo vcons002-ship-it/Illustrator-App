@@ -120,6 +120,23 @@ export function restartApp(): Promise<void> {
 }
 
 /**
+ * Open a URL in the reader's DEFAULT BROWSER (desktop only).
+ *
+ * The webview blocks `window.open` — it returns null and nothing happens — so an OAuth sign-in had no
+ * way out of the app. Resolves false on the web (where `window.open` works) and on any failure, so
+ * the caller can fall back rather than assume a browser appeared.
+ */
+export async function openExternalUrl(url: string): Promise<boolean> {
+  if (!isDesktop) return false;
+  try {
+    await invoke<void>("open_url", { url });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Is this the PACKAGED desktop build (web UI compiled into the binary) rather than `cargo tauri dev`?
  *
  * It changes what "updated" means. Under the dev server, rebuilding the web app and reloading is the
