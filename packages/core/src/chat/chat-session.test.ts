@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runChatTurn,
   isOnlyTurnStamp,
+  stampAssistantContent,
   stampTurnContent,
   stripTurnStamp,
 } from "./chat-session.js";
@@ -492,6 +493,33 @@ describe("stampTurnContent — when a message was sent", () => {
     const once = stampTurnContent("hello", at);
     expect(stampTurnContent(once, at)).toBe(once);
     expect(stampTurnContent(once, at + 86_400_000)).toBe(once); // and never re-dated by a later pass
+  });
+
+  it("dates the assistant's own reply at the END, where it can't open a turn", () => {
+    // Its replies DO need dating: a scheduled run or unattended work has no reader message beside it
+    // to be dated by, and "when did I last do this" is exactly the question that arises then. But a
+    // LEADING prefix on every message is a turn delimiter, and the model produced one instead of an
+    // answer. A trailing marker can't be produced instead of content — to write it, the reply has to
+    // exist first.
+    const out = stampAssistantContent("I added those to the event.", at);
+    expect(out).toBe("I added those to the event.\n[sent 2026-08-01 09:14]");
+    expect(out.startsWith("[")).toBe(false);
+  });
+
+  it("never dates an empty reply into looking like a real one", () => {
+    expect(stampAssistantContent("", at)).toBe("");
+    expect(stampAssistantContent("   ", at)).toBe("   ");
+  });
+
+  it("re-stamps rather than accumulating, however often history is rebuilt", () => {
+    const once = stampAssistantContent("done", at);
+    expect(stampAssistantContent(once, at)).toBe(once);
+    expect(stampAssistantContent(once, at + 3_600_000)).toBe("done\n[sent 2026-08-01 10:14]");
+  });
+
+  it("strips either stamp the app adds", () => {
+    expect(stripTurnStamp("[2026-08-01 09:14] hello")).toBe("hello");
+    expect(stripTurnStamp("done\n[sent 2026-08-01 09:14]")).toBe("done");
   });
 
   it("recognises a reply that is nothing but a timestamp", () => {

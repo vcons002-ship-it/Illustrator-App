@@ -75,6 +75,7 @@ import {
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
   isOnlyTurnStamp,
+  stampAssistantContent,
   stampTurnContent,
   stripTurnStamp,
   agentBranchName,
@@ -3066,8 +3067,18 @@ export function App() {
       // store; it could never make it harmless to generate. So the reader's turns carry the clock —
       // the model never writes those, so there is nothing to imitate — and a reply is dated by the
       // message it answers.
-      const stamp = (t: ChatTurn): ChatTurn =>
-        t.role === "user" ? { ...t, content: stampTurnContent(stripTurnStamp(t.content), m.at) } : { ...t, content: stripTurnStamp(t.content) };
+      // The READER'S turns are stamped in front; the assistant's are stamped at the END. Both need a
+      // time — a scheduled run or a piece of unattended work has no reader message beside it to be
+      // dated by, and "when did I last do this" is exactly the question that arises then — but only
+      // one of them can safely carry it in front. A leading prefix on every message is a turn
+      // delimiter, and the model wrote one instead of an answer. A trailing marker cannot be produced
+      // INSTEAD of content: to write it, the reply has to exist first.
+      const stamp = (t: ChatTurn): ChatTurn => {
+        const bare = stripTurnStamp(t.content);
+        return t.role === "user"
+          ? { ...t, content: stampTurnContent(bare, m.at) }
+          : { ...t, content: stampAssistantContent(bare, m.at) };
+      };
       if (m.turns) return stripPersistedDirectives(m.turns).map(stamp);
       if (m.role === "tool") return [];
       return m.text ? [stamp({ role: m.role, content: m.text })] : [];
