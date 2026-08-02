@@ -4587,10 +4587,16 @@ export function App() {
       // the chat can show them instead of only offering to open them somewhere else.
       readText: async (ref) => {
         if (ref.path) {
-          // A path only means anything on the machine that holds it. Off the desktop (a browser, a
-          // linked phone mirroring a desktop chat) say so plainly instead of letting the Tauri call
-          // throw its own message about a command that doesn't exist here.
-          if (!isDesktop) return undefined;
+          // A path is real on the machine that HOLDS it, and a linked phone isn't that machine — the
+          // relay can tell the desktop to open a file but nothing comes back to render here.
+          //
+          // This used to refuse on `!isDesktop`, which is the wrong question asked at the wrong time:
+          // it's a module-load snapshot of whether the Tauri bridge had been injected yet, whereas
+          // readLocalFile asks the bridge at CALL time. Every other action on this bar (Open in app,
+          // Add to library, Download) just calls and lets the answer be the answer, and Read here was
+          // the one button that could refuse a file the button beside it opened fine. Don't predict a
+          // failure the call itself will report.
+          if (isRemoteClient) return undefined;
           const f = await readLocalFile(ref.path);
           return await f.text();
         }
@@ -4600,7 +4606,7 @@ export function App() {
         return new TextDecoder().decode(new Uint8Array(full.bytes));
       },
     }),
-    [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC, withFetchedBytes],
+    [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC, withFetchedBytes, isRemoteClient],
   );
 
   // Run a local-file search and present the matches as clickable chips. `modelTurns`
@@ -4962,12 +4968,26 @@ export function App() {
       // the model stays aware of the file across history trimming.
       recordCreatedFile(call.path, call.content ? call.content.split("\n").length : 0, !!call.append);
       // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
-      // Download), not just a "saved" line — the card reads from the on-disk path so it's correct even
-      // for an append (whole file, not the fragment).
+      // Download), not just a "saved" line.
+      //
+      // A full write also carries the TEXT it just wrote. The card was path-only, so reading it back —
+      // "Read here" in the chat, Open in app, Add to library — went to disk through read_file, a
+      // different door from the write_workspace_file that had just put it there, with its own
+      // approved-roots check. The app asking the filesystem for permission to show text it is holding
+      // in memory is a round-trip that can only fail. An APPEND still goes to disk on purpose:
+      // call.content is a fragment there, and the card must show the whole file, not the last chunk.
       appendBuddy({
         role: "tool",
         text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`,
-        attachments: [{ name: saved.split(/[\\/]/).pop() || saved, mime: "", kind: createdFileKind(saved), path: saved }],
+        attachments: [
+          {
+            name: saved.split(/[\\/]/).pop() || saved,
+            mime: "",
+            kind: createdFileKind(saved),
+            path: saved,
+            ...(call.append ? {} : { content: call.content }),
+          },
+        ],
         turns: [],
       });
       // If the assistant just edited the file open in the code window, show its change live there. (Skip
