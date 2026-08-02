@@ -674,6 +674,23 @@ export interface SettingsPanelProps {
   onImportData?: (file: File) => Promise<{ ok: boolean; error?: string }>;
 }
 
+/**
+ * Is the ACTIVE local image engine ComfyUI?
+ *
+ * Two fields answer this and they don't default the same way. `engineBackend` is what the running
+ * engine actually speaks (set by engine resolution — "comfyui" for the app's managed one);
+ * `localBackend` is the reader's stored preference and is very often UNSET, because the managed
+ * ComfyUI needs no choosing.
+ *
+ * Reading `localBackend ?? "a1111"` therefore says "AUTOMATIC1111" about a machine running ComfyUI —
+ * which is how the ComfyUI-only sections here stayed hidden on an install whose own status pill said
+ * ComfyUI. That pill reads `(engineBackend ?? localBackend) === "a1111"`; this is the same test, in
+ * one place, so the two can't drift apart again. PURE.
+ */
+export function isComfyBackend(value: { engineBackend?: LocalBackendId; localBackend?: LocalBackendId }): boolean {
+  return (value.engineBackend ?? value.localBackend) !== "a1111";
+}
+
 export function SettingsPanel({
   value,
   onChange,
@@ -921,7 +938,7 @@ export function SettingsPanel({
                 </span>
               </div>
             )}
-            {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
+            {value.imageProvider === "local" && isComfyBackend(value) ? (
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
@@ -2753,11 +2770,11 @@ export function SettingsPanel({
             q={query}
             order={21}
             title="⚙️ Image — local engine & advanced"
-            keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files low vram lowvram fp8 memory offload gpu"
+            keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos character reference ipadapter ip-adapter clip vision face likeness identity model files low vram lowvram fp8 memory offload gpu"
           >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
-            {(isDesktop || remote) && value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
+            {(isDesktop || remote) && value.imageProvider === "local" && isComfyBackend(value) ? (
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Character reference photos (IP-Adapter)</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>

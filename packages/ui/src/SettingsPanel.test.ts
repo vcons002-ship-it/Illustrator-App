@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { panelStyle } from "./SettingsPanel.js";
+import { isComfyBackend, panelStyle } from "./SettingsPanel.js";
 
 /**
  * The settings card renders through a PORTAL, at the top of the document rather than inside the app.
@@ -38,5 +38,45 @@ describe("the settings card is self-sufficient", () => {
     expect(panelStyle.overflowY).toBe("auto");
     // dvh, not vh: on a phone the address bar makes vh taller than what's on screen.
     expect(String(panelStyle.maxHeight)).toContain("dvh");
+  });
+});
+
+describe("isComfyBackend — which local engine the ComfyUI-only sections belong to", () => {
+  it("says ComfyUI when NEITHER field is set, because that is what the status pill says", () => {
+    // The bug this replaces: the sections read `localBackend ?? "a1111"`, so an install running the
+    // app's managed ComfyUI — which needs no choosing, and therefore leaves localBackend unset — was
+    // told it was on AUTOMATIC1111 and the ComfyUI-only settings never rendered. The status pill,
+    // meanwhile, read the other field and said "ComfyUI" on the same screen.
+    expect(isComfyBackend({})).toBe(true);
+  });
+
+  it("follows the RUNNING engine over the stored preference", () => {
+    // engineBackend is what the live engine actually speaks; localBackend is only a preference, and
+    // the app falls back to the managed ComfyUI even when A1111 was chosen.
+    expect(isComfyBackend({ engineBackend: "comfyui", localBackend: "a1111" })).toBe(true);
+    expect(isComfyBackend({ engineBackend: "a1111", localBackend: "comfyui" })).toBe(false);
+  });
+
+  it("uses the stored preference when nothing is running yet", () => {
+    expect(isComfyBackend({ localBackend: "comfyui" })).toBe(true);
+    expect(isComfyBackend({ localBackend: "a1111" })).toBe(false);
+  });
+
+  it("agrees with the status pill's own test, for every combination", () => {
+    // The pill in App.tsx computes `(engineBackend ?? localBackend) === "a1111" ? A1111 : ComfyUI`.
+    // Two places deciding the same thing differently is what produced a screen that contradicted
+    // itself, so this pins them to one answer.
+    const pillSaysComfy = (v: { engineBackend?: "comfyui" | "a1111"; localBackend?: "comfyui" | "a1111" }) =>
+      (v.engineBackend ?? v.localBackend) !== "a1111";
+    const options = [undefined, "comfyui", "a1111"] as const;
+    for (const engineBackend of options) {
+      for (const localBackend of options) {
+        const v = {
+          ...(engineBackend ? { engineBackend } : {}),
+          ...(localBackend ? { localBackend } : {}),
+        };
+        expect(isComfyBackend(v), JSON.stringify(v)).toBe(pillSaysComfy(v));
+      }
+    }
   });
 });
