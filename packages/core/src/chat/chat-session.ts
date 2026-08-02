@@ -500,8 +500,30 @@ const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/;
  * before stamping means the app's clock always wins and a mimicked prefix costs nothing. That is the
  * difference between a convention the model must be told to follow and one it cannot break. PURE.
  */
+/**
+ * The assistant's own time, written where it cannot be mistaken for the start of a turn.
+ *
+ * Its replies DO need dating — a scheduled run or a piece of unattended work has no reader message
+ * beside it to be dated by, and "when did I last do this" is exactly the question that arises then.
+ * But a leading `[…]` on every message is a turn DELIMITER, and the model produced one instead of an
+ * answer (see the note on TURN_STAMP). A trailing marker cannot be produced *instead of* content: to
+ * write it the model has to have written the reply first. If it imitates this one, the cost is a line
+ * at the end that gets stripped, not a turn that says nothing.
+ */
+const ASSISTANT_STAMP = /\n?\[sent \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*$/;
+
+export function stampAssistantContent(content: string, at: number | undefined): string {
+  if (at === undefined || !Number.isFinite(at) || at <= 0) return content;
+  const body = content.replace(ASSISTANT_STAMP, "");
+  if (!body.trim()) return content;
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${body}\n[sent ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}]`;
+}
+
+/** Remove either stamp the app adds — the reader's leading one, or the assistant's trailing one. */
 export function stripTurnStamp(content: string): string {
-  return content.replace(TURN_STAMP, "");
+  return content.replace(TURN_STAMP, "").replace(ASSISTANT_STAMP, "");
 }
 
 /**

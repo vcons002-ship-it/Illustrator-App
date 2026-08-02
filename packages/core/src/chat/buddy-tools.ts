@@ -1204,11 +1204,11 @@ export function buildBuddySystemPrompt(raw: {
     : "";
   const nowBlock = opts.now
     ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates. ` +
-      "Each of the READER'S messages below is prefixed with when they sent it, as [YYYY-MM-DD HH:MM] — the app adds " +
-      "those. NEVER write one yourself: a timestamp is not part of an answer, and a reply that begins with one is a " +
-      "reply that never said anything. Your own replies are dated by the message they answer. Compare these against " +
-      "the time above rather than assuming the conversation is recent, and don't raise something settled weeks ago as " +
-      "if it were new.\n\n"
+      "WHEN each message was sent: the reader's are prefixed [YYYY-MM-DD HH:MM], and YOUR OWN end with a line " +
+      "[sent YYYY-MM-DD HH:MM] — so you can tell when you last said or did something even where the reader wasn't " +
+      "involved, as with a scheduled run. The app writes both; NEVER write either yourself. A timestamp is not part of " +
+      "an answer, and a reply that is one is a reply that said nothing. Compare them against the time above rather " +
+      "than assuming the conversation is recent, and don't raise something settled weeks ago as if it were new.\n\n"
     : "";
   // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
   // didn't take — the likeliest explanation is that they're on an older build than you, and this is
