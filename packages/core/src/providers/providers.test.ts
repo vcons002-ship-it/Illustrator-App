@@ -15,6 +15,7 @@ import {
   assetStem,
   comfyExecutionError,
   flux2EncoderPatterns,
+  ipAdapterSupports,
   pickComponentAsset,
   resolveAssetName,
 } from "./image/local-engine/comfyui-backend.js";
@@ -1841,6 +1842,30 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(wf["21"]!.class_type).toBe("CLIPVisionLoader");
     expect(wf["23"]!.class_type).toBe("IPAdapterApply");
     expect(wf["3"]!.inputs.model).toEqual(["23", 0]);
+  });
+
+  it("a family IP-Adapter can't attach to → seed-only, and the picture still renders", async () => {
+    // IPAdapterUnifiedLoader resolves its weights from the base model's architecture. Splicing it
+    // over a Flux/Z-Image/Qwen/HiDream checkpoint doesn't degrade — it raises, and the whole render
+    // fails. A reference the model can't use should cost the likeness, not the picture.
+    // Flux is the all-in-one-checkpoint family, so this runs the whole render path; the other
+    // unsupported families load split components and are covered by the roster test below.
+    const t = transportWith({ IPAdapterAdvanced: { input: {} }, IPAdapterUnifiedLoader: { input: {} } });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    const out = await backend.generate(refInput, "flux1-dev.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["20"]).toBeUndefined(); // no IP-Adapter chain built
+    expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
+    // And the photo isn't uploaded to the engine for a render that can't use it.
+    expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(false);
+  });
+
+  it("names exactly the families that can use a reference photo locally", () => {
+    expect(ipAdapterSupports("sd15")).toBe(true);
+    expect(ipAdapterSupports("sdxl")).toBe(true);
+    for (const f of ["flux", "flux2", "zimage", "qwenimage", "hidream"] as const) {
+      expect(ipAdapterSupports(f), f).toBe(false);
+    }
   });
 
   it("no IP-Adapter nodes installed → seed-only, generation still succeeds", async () => {

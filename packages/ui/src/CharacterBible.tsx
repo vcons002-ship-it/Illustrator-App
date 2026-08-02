@@ -379,9 +379,12 @@ function ReferenceGallery({
       </div>
       {/* This line used to say "the local ComfyUI engine" and nothing else, which was true when
           IP-Adapter was the only way to condition on a photo. Two cloud models read these now, so a
-          reader on Gemini was being told their uploads did nothing. */}
+          reader on Gemini was being told their uploads did nothing — and on ComfyUI it overpromised
+          the other way, since IP-Adapter only attaches to SD 1.5 / SDXL checkpoints. */}
       <span style={{ opacity: 0.5, fontSize: 11 }}>
-        Used by ComfyUI (IP-Adapter), Gemini and gpt-image-1. 2–3 angles of the same face work best.
+        Used by Gemini and gpt-image-1, and by ComfyUI on SD 1.5 / SDXL checkpoints (IP-Adapter nodes
+        required — Flux, Z-Image, Qwen-Image and HiDream can't use them). 2–3 angles of the same face
+        work best.
       </span>
     </div>
   );
