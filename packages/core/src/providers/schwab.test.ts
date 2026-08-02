@@ -37,6 +37,29 @@ describe("buildSchwabAuthUrl", () => {
     expect(url.searchParams.get("client_id")).toBe("cid");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("redirect_uri")).toBe("https://127.0.0.1");
+    expect(url.searchParams.get("state")).toBe("st");
+  });
+
+  it("sends NO scope by default", () => {
+    // Schwab's documented consent URL carries only client_id and redirect_uri. We were adding
+    // scope=readonly on top, which on an app registered for Accounts and Trading asks for a narrower
+    // grant than the app is for — and the reported symptom was signing in, pressing Continue, and
+    // landing back on the login screen while the portal showed the calls arriving. Anything we send
+    // beyond the documented minimum has to earn its place.
+    const url = new URL(buildSchwabAuthUrl({ clientId: "cid", redirectUri: "https://127.0.0.1", state: "st" }));
+    expect(url.searchParams.has("scope")).toBe(false);
+  });
+
+  it("still sends one when a caller has a reason to narrow it", () => {
+    const url = new URL(buildSchwabAuthUrl({ clientId: "cid", redirectUri: "https://127.0.0.1", state: "st", scope: "readonly" }));
+    expect(url.searchParams.get("scope")).toBe("readonly");
+  });
+
+  it("encodes the callback exactly, since Schwab compares it literally", () => {
+    // A trailing slash or a stray encoding difference is a mismatch, and a mismatch presents as a
+    // bounce rather than an error.
+    const raw = buildSchwabAuthUrl({ clientId: "cid", redirectUri: "https://127.0.0.1", state: "st" });
+    expect(raw).toContain("redirect_uri=https%3A%2F%2F127.0.0.1&");
   });
 });
 
