@@ -486,7 +486,10 @@ export async function runChatTool(
 }
 
 /** A stamp already on a turn — so re-building history can never nest one inside another. */
-const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+// The trailing space is OPTIONAL. Requiring it missed the case that mattered most: a reply that is
+// the stamp and NOTHING else, which is what the model produced when it mistook the prefix for a turn
+// delimiter. The stricter pattern left that unrecognised and unstripped.
+const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/;
 
 /**
  * Strip a stamp off the front of a message.
@@ -499,6 +502,19 @@ const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] /;
  */
 export function stripTurnStamp(content: string): string {
   return content.replace(TURN_STAMP, "");
+}
+
+/**
+ * Whether a reply is NOTHING BUT a timestamp the model wrote.
+ *
+ * Observed on a 3B local model: the reasoning block held a complete, correct plan and the reply was
+ * "[2026-08-02 10:05]" and nothing else — the model continuing the transcript pattern instead of
+ * answering. Stored and shown, that is an empty bubble the reader has to interpret; named, it is a
+ * turn that produced nothing, which is a thing the app already knows how to say. PURE.
+ */
+export function isOnlyTurnStamp(content: string): boolean {
+  const body = content.trim();
+  return body.length > 0 && stripTurnStamp(body).trim().length === 0;
 }
 
 /**

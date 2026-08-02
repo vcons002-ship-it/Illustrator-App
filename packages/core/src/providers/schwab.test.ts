@@ -12,6 +12,8 @@ import {
   placeSchwabOrder,
   schwabAccountNumbers,
   schwabWatchlists,
+  DEFAULT_SCHWAB_CALLBACK,
+  schwabCallbackIssue,
 } from "./schwab.js";
 import type { Transport, TransportRequest, TransportResponse } from "./transport/transport.js";
 
@@ -190,5 +192,31 @@ describe("option order + place", () => {
     expect(req.method).toBe("POST");
     expect(req.url).toContain("/accounts/HASH123/orders");
     expect(req.headers?.authorization).toBe("Bearer tok");
+  });
+});
+
+describe("the callback is the reader's to choose", () => {
+  // Asked: "are we sure that's a good callback link? should I use my tunnel through my Cloudflare
+  // domain?" It was hardcoded to https://127.0.0.1, so there was no way to find out. Any https
+  // address the reader controls works — nothing has to be listening, since the code arrives in the
+  // address bar and is pasted back — and a real domain removes loopback from the list of suspects.
+  it("takes whatever callback it is given, unchanged", () => {
+    const url = new URL(buildSchwabAuthUrl({ clientId: "cid", redirectUri: "https://schwab.example.com/cb", state: "st" }));
+    expect(url.searchParams.get("redirect_uri")).toBe("https://schwab.example.com/cb");
+  });
+
+  it("reports what looks wrong instead of quietly fixing it", () => {
+    // Schwab compares the callback LITERALLY, so stripping a trailing slash would break the reader
+    // whose portal entry actually has one. The app can't know which side is wrong; silently changing
+    // one turns a visible mismatch into an invisible one.
+    expect(schwabCallbackIssue("https://127.0.0.1/")).toMatch(/slash/i);
+    expect(schwabCallbackIssue("http://127.0.0.1")).toMatch(/https/i);
+    expect(schwabCallbackIssue("https://my tunnel.example.com")).toMatch(/space/i);
+    expect(schwabCallbackIssue("")).toMatch(/Enter a callback/i);
+  });
+
+  it("is happy with a plain https address", () => {
+    expect(schwabCallbackIssue(DEFAULT_SCHWAB_CALLBACK)).toBeUndefined();
+    expect(schwabCallbackIssue("https://vr.example.com/schwab")).toBeUndefined();
   });
 });

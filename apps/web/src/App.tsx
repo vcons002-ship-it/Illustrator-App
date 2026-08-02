@@ -74,6 +74,7 @@ import {
   setTaskPlanComplete,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
+  isOnlyTurnStamp,
   stampTurnContent,
   stripTurnStamp,
   agentBranchName,
@@ -144,6 +145,7 @@ import {
   clearGoogleTokens,
   GOOGLE_SCOPES,
   buildSchwabAuthUrl,
+  DEFAULT_SCHWAB_CALLBACK,
   buildEquityOrder,
   buildOptionOrder,
   describeOrder,
@@ -3051,16 +3053,21 @@ export function App() {
    * what the model is shown changes. */
   const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
     messages.flatMap((m): ChatTurn[] => {
-      // WHEN each message was sent, in front of it — EVERY message, the assistant's replies included.
-      // A conversation handed to a model has no clock in it: yesterday, this morning and three weeks
-      // ago all look like the line above. Fine for one sitting, wrong for a chat kept for months,
-      // resumed from a phone and woken by scheduled runs.
+      // WHEN each message was sent — on the READER'S turns only.
       //
-      // The app owns both directions, which is what makes this safe to apply to the model's own
-      // turns. Any stamp already in the text is stripped before ours is added, so a model that starts
-      // imitating the prefix cannot have its guess stored and then read back as the real time. The
-      // clock is the app's; the model never has to be trusted to keep it, or told to.
-      const stamp = (t: ChatTurn): ChatTurn => ({ ...t, content: stampTurnContent(stripTurnStamp(t.content), m.at) });
+      // Stamping the assistant's own replies too was the obvious reading of "all messages", and it
+      // broke the assistant outright: every message it could see began with "[2026-08-02 10:05] ", so
+      // asked for the next one it wrote the prefix and stopped. In the pattern it had been shown, what
+      // follows a prefix is the OTHER party's turn. Its whole reply became a timestamp — reasoning
+      // block full of a correct plan, output empty. Small local models imitate hardest.
+      //
+      // A prefix on every line of a transcript is a TURN DELIMITER, whoever writes it, and a model
+      // completing a transcript will produce one. Stripping it on the way out made that harmless to
+      // store; it could never make it harmless to generate. So the reader's turns carry the clock —
+      // the model never writes those, so there is nothing to imitate — and a reply is dated by the
+      // message it answers.
+      const stamp = (t: ChatTurn): ChatTurn =>
+        t.role === "user" ? { ...t, content: stampTurnContent(stripTurnStamp(t.content), m.at) } : { ...t, content: stripTurnStamp(t.content) };
       if (m.turns) return stripPersistedDirectives(m.turns).map(stamp);
       if (m.role === "tool") return [];
       return m.text ? [stamp({ role: m.role, content: m.text })] : [];
@@ -3774,7 +3781,10 @@ export function App() {
   const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const clientId = settings.keys?.schwabClientId;
     if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
-    const redirectUri = "https://127.0.0.1";
+    // The reader's own callback when they've set one. It has to be the SAME value in the consent URL
+    // and in the token exchange — Schwab compares both against what is registered — so it is read
+    // once, here, and passed to both.
+    const redirectUri = settings.keys?.schwabCallbackUrl?.trim() || DEFAULT_SCHWAB_CALLBACK;
     try {
       const url = buildSchwabAuthUrl({ clientId, redirectUri, state: crypto.randomUUID() });
       // CHECK that it opened. The desktop shell's webview blocks window.open — it returns null and
@@ -3819,7 +3829,7 @@ export function App() {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [settings.keys?.schwabClientId, settings.keys?.schwabClientSecret, schwabConnect]);
+  }, [settings.keys?.schwabClientId, settings.keys?.schwabClientSecret, settings.keys?.schwabCallbackUrl, schwabConnect]);
   // Overlay the assistant's planned deadlines (plan-level + each dated step) onto the grid.
   const calendarDeadlines = useMemo<CalendarDeadline[]>(() => {
     const out: CalendarDeadline[] = [];
@@ -4313,10 +4323,14 @@ export function App() {
     // displayed, and (the way this surfaced) read out loud before every answer. The app's clock is
     // added on the way IN to the model and taken off on the way OUT, so the prefix is never the
     // model's to keep. Same reason it can't be left to an instruction.
-    setBuddyMessages((prev) => [
-      ...prev,
-      { ...msg, ...(msg.text ? { text: stripTurnStamp(msg.text) } : {}), at: Date.now() },
-    ]);
+    setBuddyMessages((prev) => {
+      // A reply that is ONLY a timestamp said nothing. Storing it leaves an empty bubble the reader
+      // has to interpret; dropping it silently loses the fact that the turn failed. Say so.
+      if (msg.role === "assistant" && msg.text && isOnlyTurnStamp(msg.text)) {
+        return [...prev, { role: "tool" as const, text: "⚠ That reply came back empty — ask again.", turns: [], at: Date.now() }];
+      }
+      return [...prev, { ...msg, ...(msg.text ? { text: stripTurnStamp(msg.text) } : {}), at: Date.now() }];
+    });
   // A reference line posted to the buddy chat when an out-of-chat button does something (scan,
   // plan, create task), so the buddy thread is a running record of "what worked". A `tool`-role
   // note renders as a system line (like a delegated-subtask note), not as the assistant talking.

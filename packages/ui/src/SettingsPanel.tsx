@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
 import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN, smallButtonStyle } from "./tokens.js";
+import { DEFAULT_SCHWAB_CALLBACK, schwabCallbackIssue } from "@visual-reader/core";
 import { loadNaturalVoice, naturalVoiceReady } from "./natural-voice.js";
 import {
   IMAGE_PROVIDERS,
@@ -2687,6 +2688,26 @@ export function SettingsPanel({
                       onChange={(e) => setKey("schwabClientSecret", e.target.value.trim())}
                     />
                   </label>
+                  <label style={rowStyle}>
+                    <span>Callback URL</span>
+                    <input
+                      value={value.keys.schwabCallbackUrl ?? ""}
+                      placeholder={DEFAULT_SCHWAB_CALLBACK}
+                      onChange={(e) => setKey("schwabCallbackUrl", e.target.value.trim())}
+                    />
+                  </label>
+                  <span style={{ opacity: 0.55, fontSize: 11 }}>
+                    Must match your Schwab app’s callback EXACTLY — Schwab compares it character for character, and a
+                    mismatch sends you back to the login screen instead of returning an error. Blank uses{" "}
+                    <code>{DEFAULT_SCHWAB_CALLBACK}</code>. Any https address you control works, including a tunnel or
+                    your own domain; nothing has to be listening there, since the code arrives in the address bar and
+                    you paste it back.
+                  </span>
+                  {schwabCallbackIssue(value.keys.schwabCallbackUrl ?? DEFAULT_SCHWAB_CALLBACK) ? (
+                    <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                      ⚠ {schwabCallbackIssue(value.keys.schwabCallbackUrl ?? DEFAULT_SCHWAB_CALLBACK)}
+                    </span>
+                  ) : null}
                   {/* The sign-in belongs WHERE THE CREDENTIALS GO. It only existed in the Markets
                       panel's header, so entering a key and secret here left the reader with nothing
                       to press and no reason to think the next step was in a different panel. */}

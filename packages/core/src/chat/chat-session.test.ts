@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runChatTurn,
+  isOnlyTurnStamp,
   stampTurnContent,
   stripTurnStamp,
 } from "./chat-session.js";
@@ -491,6 +492,18 @@ describe("stampTurnContent — when a message was sent", () => {
     const once = stampTurnContent("hello", at);
     expect(stampTurnContent(once, at)).toBe(once);
     expect(stampTurnContent(once, at + 86_400_000)).toBe(once); // and never re-dated by a later pass
+  });
+
+  it("recognises a reply that is nothing but a timestamp", () => {
+    // What the reported screenshot showed: the reasoning block held a complete, correct plan and the
+    // reply was "[2026-08-02 10:05]" and nothing else. Every message the model could see began with
+    // that prefix, so asked for the next one it wrote the prefix and stopped — in the pattern it had
+    // been shown, what follows a prefix is the OTHER party's turn.
+    expect(isOnlyTurnStamp("[2026-08-02 10:05]")).toBe(true);
+    expect(isOnlyTurnStamp("[2026-08-02 10:05]   ")).toBe(true);
+    expect(isOnlyTurnStamp("[2026-08-02 10:05] I'll add those to the event.")).toBe(false);
+    expect(isOnlyTurnStamp("Here you go.")).toBe(false);
+    expect(isOnlyTurnStamp("")).toBe(false); // an empty reply is a different failure, reported elsewhere
   });
 
   it("lets the app's clock overrule one the model wrote itself", () => {
