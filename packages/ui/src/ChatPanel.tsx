@@ -145,11 +145,63 @@ export function parseMessageBlocks(text: string): MessageBlock[] {
     const i = m.index;
     if (i > last) blocks.push({ type: "text", text: text.slice(last, i) });
     const { lang, filename } = parseFenceInfo(m[1] ?? "");
-    blocks.push({ type: "code", lang, code: m[2]!.replace(/\n$/, ""), ...(filename ? { filename } : {}) });
+    blocks.push(
+      ...splitRunTogetherFiles({ type: "code", lang, code: m[2]!.replace(/\n$/, ""), ...(filename ? { filename } : {}) }),
+    );
     last = i + m[0].length;
   }
   if (last < text.length) blocks.push({ type: "text", text: text.slice(last) });
   return blocks.length ? blocks : [{ type: "text", text }];
+}
+
+/** A body line long enough that it's prose, not a fence header someone forgot to fence. */
+const MAX_HEADER_LINE = 120;
+
+/**
+ * Split ONE code block that is really SEVERAL files run together, because the model wrote the second
+ * and third files' fence headers as ordinary lines INSIDE the first block instead of opening new
+ * fences.
+ *
+ * Asked for three haikus as separate documents, a local model produced one ```text haiku_6.txt block
+ * whose body was haiku 6, then the bare line `text haiku_7.txt`, then haiku 7, then `text haiku_8.txt`,
+ * then haiku 8. The reader gets one file card for three files, and no button in the app can undo that
+ * — every downstream feature (Save, Save all as project, Open in app) reads the parsed blocks. Nothing
+ * about the model's INTENT is ambiguous here: it named three files, in the exact grammar the fence line
+ * uses. So the app reads what was written rather than what was fenced.
+ *
+ * Deliberately narrow, because a false split silently corrupts a real file. A cut requires all of:
+ * the block itself is named (the model was naming files), the line is exactly two tokens, the first is
+ * the block's OWN language verbatim, and the second is a filename with an extension. `text haiku_7.txt`
+ * inside a ```text haiku_6.txt block is that; a bare `README.md` line — which is ordinary content in a
+ * document listing files — is NOT, and is left alone. PURE.
+ */
+export function splitRunTogetherFiles(
+  block: Extract<MessageBlock, { type: "code" }>,
+): Extract<MessageBlock, { type: "code" }>[] {
+  if (!block.filename || !block.lang) return [block];
+  const lines = block.code.split("\n");
+  const cuts: { at: number; filename: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!.trim();
+    if (!raw || raw.length > MAX_HEADER_LINE) continue;
+    const tokens = raw.split(/\s+/);
+    if (tokens.length !== 2 || tokens[0]!.toLowerCase() !== block.lang) continue;
+    const name = tokens[1]!;
+    if (!/\.[A-Za-z0-9]+$/.test(name)) continue;
+    cuts.push({ at: i, filename: name });
+  }
+  if (cuts.length === 0) return [block];
+  const parts: Extract<MessageBlock, { type: "code" }>[] = [];
+  const push = (filename: string, from: number, to: number): void => {
+    const code = lines.slice(from, to).join("\n").replace(/^\n+|\n+$/g, "");
+    if (code.trim()) parts.push({ type: "code", lang: block.lang, code, filename });
+  };
+  push(block.filename, 0, cuts[0]!.at);
+  for (let k = 0; k < cuts.length; k++) {
+    push(cuts[k]!.filename, cuts[k]!.at + 1, cuts[k + 1]?.at ?? lines.length);
+  }
+  // A run of headers with no bodies isn't several files — leave the block as the model wrote it.
+  return parts.length > 1 ? parts : [block];
 }
 
 const looksLikeFilename = (s: string): boolean => /[^/\s]+\.[A-Za-z0-9]+$/.test(s) || s.includes("/");

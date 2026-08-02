@@ -1891,7 +1891,13 @@ export function buildBuddySystemPrompt(raw: {
     "MULTI-FILE PROJECTS: when something needs SEVERAL files that link together (a site = index.html + styles.css + " +
     "app.js; a script project with modules), write each file in its OWN fenced block and NAME it on the fence line " +
     "after the language — ```html index.html, ```css styles.css, ```js app.js, ```python src/main.py (a relative path " +
-    "is fine). Reference the files by those exact names (e.g. <link href=\"styles.css\">, <script src=\"app.js\">) so " +
+    // Observed: asked for three haikus as three documents, a local model opened ONE fence and wrote the
+    // other two headers as ordinary lines inside it. Three files went to the reader as one card. The
+    // app now un-runs that, but the instruction has to name the mistake or it keeps making it.
+    "is fine). CLOSE each block with ``` and OPEN a new fence for the next file — writing the next file's " +
+    "name on a line INSIDE the current block does NOT start a new file; it puts a stray line in the middle " +
+    "of the one you are already writing. One fence per file, always. " +
+    "Reference the files by those exact names (e.g. <link href=\"styles.css\">, <script src=\"app.js\">) so " +
     "they work together. The app then offers a \"Save all as project (.zip)\" button that keeps the whole set — with " +
     "its folder structure — in one archive.\n" +
     "CONVERSATION RULES: use a tool only when the reader's request actually calls for one — most messages deserve a " +
