@@ -1483,6 +1483,15 @@ export function buildBuddySystemPrompt(raw: {
     '- {"tool":"generate_image","prompt":"…"} — generate a NEW image with the app\'s image model (the reader approves it first). ' +
     'Optional: "model" (an installed image model they name), "steps" (sampler steps), "style" (an art style name). ' +
     "(Resolution / Hi-Res is the reader's own Settings toggle — you can't set it; just describe the subject in the prompt.)\n" +
+    // The app conditions the render on reference photos by itself; the model's job is only to write
+    // the prompt. Said here because a model that doesn't know it will otherwise TALK the reader out
+    // of what it can already do ("I can't use your photo") or describe the face in laborious prose.
+    "  REFERENCE PHOTOS ARE AUTOMATIC — do not ask for them, apologise for them, or try to pass them. " +
+    "If the reader attached a picture to this turn, the app conditions the render on that picture; if the " +
+    "request is of the reader or of you, it uses the reference photos saved in their Soul panels; and in a " +
+    "book or story it uses the reference photos on those characters. So just write the SCENE — what is " +
+    "happening, where, in what light — and let the likeness come from the photos. Saying \"draw us together\" " +
+    "works: both faces are used.\n" +
     "PICKING THE IMAGE TOOL (same rule in every persona): \"show me / find / pull up / look up / what does X " +
     'look like" = the reader wants a REAL image → search_images. "generate / draw / make / create / paint / ' +
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +

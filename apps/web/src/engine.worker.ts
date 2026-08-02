@@ -1988,7 +1988,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handlePolish(msg);
       break;
     case "chatTool":
-      void handleChatTool(msg.requestId, msg.call);
+      void handleChatTool(msg.requestId, msg.call, msg.refImages);
       break;
     case "chatVideo":
       void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage, msg.keepResident);
@@ -5928,6 +5928,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
 }
 
 /** A soul's reference photos, decoded to bytes for use as character references in an image render. */
+/** How many reference photos one chat render may carry. Mirrors the book pipeline's per-frame cap:
+ * past a handful the model stops resolving a likeness and starts averaging faces together. */
+const MAX_CHAT_REFS = 4;
+
 async function loadSoulRefs(
   store: ReturnType<typeof memoryStore>,
   kind: "self" | "user",
@@ -5970,7 +5974,11 @@ async function seedSoulReferences(target: Engine): Promise<void> {
  * isn't downloaded silently keeps the current one), a named style against the
  * style catalog, and a step count rides the render directly.
  */
-async function handleChatTool(requestId: number, call: ToolCall): Promise<void> {
+async function handleChatTool(
+  requestId: number,
+  call: ToolCall,
+  refImages?: { bytes: ArrayBuffer; mimeType: string }[],
+): Promise<void> {
   // Register an abort controller under THIS render's requestId so the Stop button (chatCancel)
   // can interrupt the ComfyUI render — without this the image kept rendering after Stop.
   const ac = new AbortController();
@@ -6039,17 +6047,26 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const portraitSelfName = storySoulCast?.self ?? selfName;
     const portraitUserName = storySoulCast?.user ?? userName;
     let prompt = call.prompt;
-    let soulRefs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] | undefined;
+    // Every reference this render can legitimately use, in one list.
+    //
+    // It used to be an if/else over the two Souls, so "draw you and me together" carried ONE face —
+    // whichever branch won — and the other person came out a stranger in a picture that named them.
+    // And an ATTACHED photo carried nothing at all: the vision model described it, the description
+    // went into the prompt, and the bytes were dropped, so "make an image from this" rendered from
+    // somebody's words about the picture rather than the picture.
+    const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
     if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(call.prompt, portraitSelfName)) {
-      prompt = selfPortraitPrompt(call.prompt, portraitSelfName, selfNotes);
-      soulRefs = await loadSoulRefs(store, "self");
-    } else if (
-      (!inStory || !!storySoulCast?.user) &&
-      isUserPortraitRequest(call.prompt, portraitUserName)
-    ) {
-      prompt = userPortraitPrompt(call.prompt, portraitUserName, userNotes);
-      soulRefs = await loadSoulRefs(store, "user");
+      prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes);
+      refs.push(...(await loadSoulRefs(store, "self")));
     }
+    if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(call.prompt, portraitUserName)) {
+      prompt = userPortraitPrompt(prompt, portraitUserName, userNotes);
+      refs.push(...(await loadSoulRefs(store, "user")));
+    }
+    // The reader's own attachment is the strongest statement of intent there is — they picked THIS
+    // picture for THIS turn — so it leads, and at a higher weight than a stored Soul photo.
+    for (const im of refImages ?? []) refs.push({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 });
+    const soulRefs = refs.length ? refs.slice(0, MAX_CHAT_REFS) : undefined;
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),

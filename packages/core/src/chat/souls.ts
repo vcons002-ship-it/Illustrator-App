@@ -4168,8 +4168,28 @@ export function userPortraitPrompt(prompt: string, name: string, notes: readonly
   return foldSoulLook(prompt, name, notes, "the reader");
 }
 
+/**
+ * A request for a picture of the assistant AND the reader together — "you and me", "me and you",
+ * "us both", "the two of us".
+ *
+ * Neither single-subject test catches these on its own. "draw you and me on a beach" reads as a
+ * self-portrait (it says "draw you") and NOT as a picture of the reader, because the reader test
+ * deliberately requires "draw me" and refuses "draw me a castle". So a two-hander carried one face
+ * and the other person — named in the same sentence — came out a stranger. PURE.
+ */
+function isPairRequest(p: string): boolean {
+  return (
+    /\b(you|us)\s+and\s+(me|i)\b/.test(p) ||
+    /\bme\s+and\s+(you|us)\b/.test(p) ||
+    /\bus\s+(together|both)\b/.test(p) ||
+    /\bboth\s+of\s+us\b/.test(p) ||
+    /\bthe\s+two\s+of\s+us\b/.test(p)
+  );
+}
+
 /** True when an image request is of the ASSISTANT itself — it names the assistant (whole word) or
- * self-references it ("yourself", "a selfie", "portrait of you", "draw you"). */
+ * self-references it ("yourself", "a selfie", "portrait of you", "draw you"), or asks for the two of
+ * them together. */
 export function isSelfPortraitRequest(prompt: string, name: string): boolean {
   const p = prompt.toLowerCase();
   const t = name.trim();
@@ -4180,7 +4200,8 @@ export function isSelfPortraitRequest(prompt: string, name: string): boolean {
     /\ba selfie\b/.test(p) ||
     /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+you\b/.test(p) ||
     /\b(draw|paint|render|generate|make|create)\s+you\b/.test(p) ||
-    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p)
+    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p) ||
+    isPairRequest(p)
   );
 }
 
@@ -4196,7 +4217,8 @@ export function isUserPortraitRequest(prompt: string, name: string): boolean {
     /\bmyself\b/.test(p) ||
     /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+me\b/.test(p) ||
     /\bmy\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p) ||
-    /\b(draw|paint|render|sketch)\s+me\b(?!\s+(a|an|the|some|this|that|one)\b)/.test(p)
+    /\b(draw|paint|render|sketch)\s+me\b(?!\s+(a|an|the|some|this|that|one)\b)/.test(p) ||
+    isPairRequest(p)
   );
 }
 

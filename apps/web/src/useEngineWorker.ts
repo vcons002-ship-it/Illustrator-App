@@ -276,7 +276,10 @@ export interface EngineWorkerApi {
     onEvent: (e: ChatStreamEvent) => void,
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
-  chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
+  chatTool: (
+    call: ToolCall,
+    opts?: { onProgress?: (fraction: number) => void; refImages?: { bytes: ArrayBuffer; mimeType: string }[] },
+  ) => Promise<ChatToolRender>;
   /** Run an approved generate_video call: the host resolves the source image bytes + model files. */
   chatVideo: (
     call: Extract<BuddyToolCall, { tool: "generate_video" }>,
@@ -1952,7 +1955,10 @@ export function useEngineWorker(
     [],
   );
   const chatTool = useCallback(
-    (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }): Promise<ChatToolRender> =>
+    (
+      call: ToolCall,
+      opts?: { onProgress?: (fraction: number) => void; refImages?: { bytes: ArrayBuffer; mimeType: string }[] },
+    ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         activeRenderRequestId.current = requestId; // so Stop can interrupt this render
@@ -1982,7 +1988,7 @@ export function useEngineWorker(
             opts?.onProgress?.(fraction);
           },
         });
-        send({ type: "chatTool", requestId, call });
+        send({ type: "chatTool", requestId, call, ...(opts?.refImages?.length ? { refImages: opts.refImages } : {}) });
       }),
     [],
   );
