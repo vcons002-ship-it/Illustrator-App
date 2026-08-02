@@ -347,6 +347,7 @@ import {
   saveExportFile,
   searchLocalFiles,
   openPathOnPC,
+  openExternalUrl,
 } from "./runtime.js";
 
 /** Chat-history key for the landing-page buddy's FIRST session — reserved, never a
@@ -3776,9 +3777,39 @@ export function App() {
     const redirectUri = "https://127.0.0.1";
     try {
       const url = buildSchwabAuthUrl({ clientId, redirectUri, state: crypto.randomUUID() });
-      window.open(url, "_blank", "noopener");
+      // CHECK that it opened. The desktop shell's webview blocks window.open — it returns null and
+      // nothing happens — while the app went on to announce "a Schwab login opened in your browser",
+      // leaving the reader waiting for a window that was never coming. Claiming an action we didn't
+      // verify is the same fault as a scheduled run reporting itself before it ran.
+      // The desktop shell hands the URL to the platform opener; the web falls back to window.open,
+      // where it works. Either way the result is CHECKED before anything is claimed about it.
+      const opened = (await openExternalUrl(url)) || !!window.open(url, "_blank", "noopener");
+      if (!opened) {
+        // Put the link somewhere it can be used: the clipboard if the browser allows it, and the chat
+        // either way — the chat renders it as a link, and unlike a dialog it's still there afterwards.
+        let copied = false;
+        try {
+          await navigator.clipboard?.writeText(url);
+          copied = true;
+        } catch {
+          /* no clipboard permission — the chat copy below is the fallback */
+        }
+        appendBuddy({
+          role: "tool",
+          text: `🔐 Schwab sign-in — open this link, approve, then paste the redirected address back here:\n${url}`,
+        });
+        pushToast(
+          copied
+            ? "Couldn't open a browser window — the sign-in link is copied to your clipboard and posted in the chat."
+            : "Couldn't open a browser window — the sign-in link is posted in the chat.",
+          "info",
+        );
+      }
       const pasted = window.prompt(
-        "A Schwab login opened in your browser. After you approve, it redirects to https://127.0.0.1/?code=… (the page may show an error — that's fine). Paste the FULL redirected URL (or just the code) here:",
+        (opened
+          ? "A Schwab login opened in your browser."
+          : "Open the sign-in link (copied to your clipboard, and posted in the chat) in your browser.") +
+          " After you approve, it redirects to https://127.0.0.1/?code=… and the page shows a connection error — that's expected, nothing is listening there. Paste the FULL redirected address (or just the code) here:",
       );
       if (!pasted) return { ok: false, error: "Cancelled." };
       const code = /[?&]code=([^&]+)/.exec(pasted)?.[1] ?? pasted.trim();

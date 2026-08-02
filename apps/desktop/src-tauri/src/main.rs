@@ -370,6 +370,46 @@ fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
     cmd
 }
 
+/// Open a URL in the reader's DEFAULT BROWSER.
+///
+/// The webview blocks `window.open` — it returns null and nothing happens — so an OAuth sign-in
+/// (Schwab, and anything like it) had no way out of the app: the renderer announced that a login had
+/// opened and the reader waited for a window that was never coming. Handing the URL to the platform
+/// opener is the whole job; no new dependency, just the same quiet spawn every other child uses.
+///
+/// Only http/https are accepted. A URL arrives from the renderer, and the opener will happily launch
+/// a `file://` path or a scheme registered to some other application — so the scheme is checked here
+/// rather than trusted.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("only http(s) URLs can be opened".into());
+    }
+    let url = url.trim();
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // `start` is a cmd builtin, and its first quoted argument is the window TITLE — the empty
+        // string is what stops a URL with spaces being eaten as one.
+        let mut c = quiet_command("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = quiet_command("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = quiet_command("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| format!("couldn't open a browser: {e}"))
+}
+
 /// A `Command` for an ENGINE process whose console the user may want to watch (ComfyUI / A1111
 /// generation logs). When `show_console` is true, spawn with a VISIBLE console window (plain
 /// `Command::new`, no `CREATE_NO_WINDOW`); otherwise stay headless like `quiet_command`. The
@@ -3700,6 +3740,7 @@ fn main() {
             ensure_llm,
             stop_llm,
             restart_app,
+            open_url,
             rebuild_desktop_app,
             is_packaged,
             list_models,
