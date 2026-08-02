@@ -16,6 +16,8 @@ import {
   comfyExecutionError,
   flux2EncoderPatterns,
   ipAdapterSupports,
+  referenceLatentSupports,
+  referencePhotoSupports,
   pickComponentAsset,
   resolveAssetName,
 } from "./image/local-engine/comfyui-backend.js";
@@ -1858,6 +1860,66 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
     // And the photo isn't uploaded to the engine for a render that can't use it.
     expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(false);
+  });
+
+  it("Flux.2 reads the photo ITSELF — a ReferenceLatent chain, and nothing to install", async () => {
+    // The point of this path: no IPAdapter node pack, no adapter weights, no engine restart. The
+    // graph is core ComfyUI nodes, exactly as the official image_flux2_klein_image_edit template
+    // wires them: LoadImage → ImageScaleToTotalPixels → VAEEncode → ReferenceLatent, chained.
+    // Flux.2 loads as separate components, so the engine has to answer the per-node file queries
+    // the backend makes to resolve its encoder + VAE. NO IPAdapter nodes are reported — this path
+    // is meant to work on an engine that has never heard of them.
+    const files: Record<string, unknown> = {
+      CLIPLoader: { input: { required: { clip_name: [["qwen_3_8b_fp8mixed.safetensors"]] } } },
+      VAELoader: { input: { required: { vae_name: [["flux2-ae.safetensors"]] } } },
+      UNETLoader: { input: { required: { unet_name: [["flux2-klein.safetensors"]] } } },
+      CheckpointLoaderSimple: { input: { required: { ckpt_name: [["sd_xl_base_1.0.safetensors"]] } } },
+    };
+    const t = new FakeTransport((req) => {
+      const node = /\/object_info\/(\w+)/.exec(req.url)?.[1];
+      if (node) return { json: files[node] ? { [node]: files[node] } : {} };
+      if (req.url.endsWith("/object_info")) return { json: files };
+      if (req.url.endsWith("/upload/image")) return { json: { name: "vr-ref.png" } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(
+      { ...refInput, modelFamily: "flux2", ipAdapterRefs: [refInput.ipAdapterRefs![0]!, refInput.ipAdapterRefs![0]!] },
+      "flux2-klein.safetensors",
+    );
+    const wf = workflowOf(t);
+    expect(wf["300"]!.class_type).toBe("LoadImage");
+    expect(wf["301"]!.class_type).toBe("ImageScaleToTotalPixels");
+    expect(wf["302"]!.class_type).toBe("VAEEncode");
+    expect(wf["303"]!.class_type).toBe("ReferenceLatent");
+    // Chained, so several references compose rather than the last one winning.
+    expect(wf["303"]!.inputs.conditioning).toEqual(["6", 0]);
+    expect(wf["307"]!.class_type).toBe("ReferenceLatent");
+    expect(wf["307"]!.inputs.conditioning).toEqual(["303", 0]);
+    // The references sit INSIDE whatever wraps the positive conditioning — here Flux guidance — so
+    // the sampler can't read a conditioning the reference never reached.
+    expect(wf["14"]!.class_type).toBe("FluxGuidance");
+    expect(wf["14"]!.inputs.conditioning).toEqual(["307", 0]);
+    expect(wf["3"]!.inputs.positive).toEqual(["14", 0]);
+    // And no IP-Adapter node was built — this route needs none.
+    expect(wf["20"]).toBeUndefined();
+    // The photo IS uploaded here (unlike the unsupported families, where it would be wasted).
+    expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(true);
+  });
+
+  it("routes each family to the ONE reference mechanism it has, or to neither", () => {
+    // Two mechanisms, no overlap, and the families that have neither are named as such rather than
+    // being sent down a path that raises.
+    expect(ipAdapterSupports("sdxl") && !referenceLatentSupports("sdxl")).toBe(true);
+    expect(referenceLatentSupports("flux2") && !ipAdapterSupports("flux2")).toBe(true);
+    expect(referencePhotoSupports("sd15")).toBe(true);
+    expect(referencePhotoSupports("flux2")).toBe(true);
+    for (const f of ["flux", "zimage", "qwenimage", "hidream"] as const) {
+      expect(referencePhotoSupports(f), f).toBe(false);
+    }
   });
 
   it("names exactly the families that can use a reference photo locally", () => {

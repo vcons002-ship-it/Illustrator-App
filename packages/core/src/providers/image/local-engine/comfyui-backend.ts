@@ -321,13 +321,12 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
  * Qwen-Image or HiDream checkpoint and the loader raises instead of degrading — so a reference photo
  * on those families used to take the whole render down with it, which is a bad trade for a likeness.
  *
- * READ THIS AS A LIMIT OF THE MECHANISM, NOT OF THE MODELS. IP-Adapter is the only reference path
- * this backend builds, so it is the only one those families are excluded from — but several of them
- * accept reference images NATIVELY, by a different route entirely (a reference-latent chain rather
- * than an adapter over the model). Flux.2 in particular takes multiple reference images as a headline
- * feature, and the Kontext/Edit variants of the other families are built for it. None of that is
- * wired here, so the honest statement is "this app can't send them there yet", not "those models
- * can't use them" — and the reader-facing copy has to say the first thing.
+ * READ THIS AS A LIMIT OF THE MECHANISM, NOT OF THE MODELS. Flux.2 now has its own route here — see
+ * REFERENCE_LATENT_FAMILIES — because it reads reference images natively rather than through an
+ * adapter. The Kontext/Edit variants of the remaining families are built for that route too; they're
+ * separate checkpoints this backend can't yet tell from their text-to-image siblings, so they stay
+ * out until it can. For those, the honest statement is "this app can't send them there yet", not
+ * "those models can't use them".
  *
  * The cloud side is unaffected: Gemini's native image model and gpt-image-1 read reference photos on
  * any of their own models, because they take them as ordinary image inputs.
@@ -337,6 +336,28 @@ const IPADAPTER_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["sd15
 /** Can IP-Adapter condition a render on this checkpoint family? PURE. */
 export function ipAdapterSupports(family: ModelFamily): boolean {
   return IPADAPTER_FAMILIES.has(family);
+}
+
+/**
+ * Families that read a reference photo THEMSELVES, through a ReferenceLatent chain of core ComfyUI
+ * nodes — no adapter, no node pack, no extra weights, nothing for the reader to install.
+ *
+ * Flux.2 only, for now, and deliberately: the Kontext and *-Edit variants of the other families are
+ * built for this too, but they're separate checkpoints whose names this backend can't currently tell
+ * apart from their text-to-image siblings. Sending a reference latent to a model that isn't an edit
+ * model produces a quietly worse picture rather than an error, which is the failure mode hardest to
+ * notice — so the roster stays at what's known-good and grows on evidence.
+ */
+const REFERENCE_LATENT_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["flux2"]);
+
+/** Does this family take reference photos natively, via ReferenceLatent? PURE. */
+export function referenceLatentSupports(family: ModelFamily): boolean {
+  return REFERENCE_LATENT_FAMILIES.has(family);
+}
+
+/** Can a reference photo condition a local render on this family AT ALL, by either route? PURE. */
+export function referencePhotoSupports(family: ModelFamily): boolean {
+  return ipAdapterSupports(family) || referenceLatentSupports(family);
 }
 
 /**
@@ -1073,7 +1094,18 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // IP-Adapter can attach to, AND the nodes/models are installed. Anything else renders
     // seed-only (graceful, never an error).
     let ipAdapter: IpAdapterGraph | undefined;
-    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && !ipAdapterSupports(family)) {
+    let referenceLatents: string[] | undefined;
+    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && referenceLatentSupports(family)) {
+      // This family reads the photo itself — no adapter, and nothing to install. Same reference
+      // images, a different route into the same render.
+      try {
+        referenceLatents = await Promise.all(
+          input.ipAdapterRefs.map((ref) => this.uploadedReference(ref.bytes, ref.mimeType)),
+        );
+      } catch {
+        referenceLatents = undefined; // upload failed → render without the reference, not at all
+      }
+    } else if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && !ipAdapterSupports(family)) {
       // Splicing the chain in anyway was worse than doing nothing: IPAdapterUnifiedLoader resolves
       // its models from the base model's architecture, so on a Flux/Z-Image/Qwen/HiDream checkpoint
       // it raises rather than degrading, and the whole render fails. A reference photo the model
@@ -1082,9 +1114,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
         this.warnedIpAdapterFamily = true;
         console.info(
           `[visual-reader] IP-Adapter can't attach to ${family} checkpoints — rendering seed-only. ` +
-            "Reference photos condition SD 1.5 / SDXL locally, and any Gemini / gpt-image-1 model. " +
-            "(Several natural-language families accept reference images natively, by a route this backend " +
-            "doesn't build yet.)",
+            "Locally, reference photos condition SD 1.5 / SDXL (IP-Adapter) and Flux.2 (native, nothing " +
+            "to install); any Gemini / gpt-image-1 model takes them too.",
         );
       }
     } else if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0) {
@@ -1156,6 +1187,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ...(components ? { components } : {}),
       ...(lora ? { lora } : {}),
       ...(ipAdapter ? { ipAdapter } : {}),
+      ...(referenceLatents?.length ? { referenceLatents } : {}),
       ...(initImage ? { initImage } : {}),
       ...(hires ? { hires } : {}),
       ...(input.castRegions && input.castRegions.length > 0 ? { regions: input.castRegions } : {}),
@@ -1544,6 +1576,8 @@ interface WorkflowParams {
   ipAdapter?: IpAdapterGraph;
   /** img2img: an already-uploaded base image (LoadImage name) + denoise strength. */
   initImage?: { filename: string; denoise: number };
+  /** Uploaded reference-photo filenames conditioned through a ReferenceLatent chain (Flux.2). */
+  referenceLatents?: readonly string[];
   /** Hi-Res two-pass: upscale the first pass's latent to this target size, then refine
    * at `denoise`. The first pass renders at `width`/`height` (the native-safe size). */
   hires?: { width: number; height: number; denoise: number };
@@ -1727,10 +1761,15 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   }
   // Per-character regions fold into the positive conditioning BEFORE guidance and before the hi-res
   // pass copies the sampler's inputs — so both passes sample from the same combined conditioning.
-  const conditioned: [string, number] =
+  let conditioned: [string, number] =
     p.regions && p.regions.length > 0
       ? addRegionalConditioning(graph, p.regions, clipRef, ["6", 0], { width: p.width, height: p.height })
       : ["6", 0];
+  // Reference photos, for a family that reads them natively — after the regions (which are about
+  // WHERE a description applies) and before guidance, so both the base and hi-res passes see them.
+  if (p.referenceLatents && p.referenceLatents.length > 0) {
+    conditioned = addReferenceLatents(graph, p.referenceLatents, conditioned, vaeRef);
+  }
   if (p.sampler.guidance !== undefined) {
     // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.
     graph["14"] = {
@@ -1819,6 +1858,48 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
     (graph["8"] as { inputs: Record<string, unknown> }).inputs.samples = ["19", 0];
   }
   return graph;
+}
+
+/**
+ * Flux.2's own way of taking a reference photo: a ReferenceLatent chain, not an adapter.
+ *
+ * IP-Adapter bolts a separately-trained adapter onto an SD model, which is why it exists for SD
+ * families and nowhere else. Flux.2 doesn't need one — it reads reference images as part of its
+ * conditioning, so the whole path is core ComfyUI nodes: encode the photo to a latent and append it
+ * to the positive conditioning. NOTHING TO INSTALL: no custom node pack, no adapter weights, no
+ * engine restart. That is the whole reason this is worth having beside the IP-Adapter path rather
+ * than instead of it.
+ *
+ * Chained one node per reference, exactly as the official image_flux2_klein_image_edit template
+ * does, so several references compose. Scaled through ImageScaleToTotalPixels first (the template's
+ * own step): a full-size photo encodes to an enormous latent, and the cost is per reference.
+ *
+ * Returns the conditioning ref the sampler should read. PURE (mutates the graph it is handed).
+ */
+function addReferenceLatents(
+  graph: Record<string, unknown>,
+  filenames: readonly string[],
+  base: [string, number],
+  vaeRef: [string, number],
+): [string, number] {
+  let conditioning = base;
+  filenames.forEach((filename, i) => {
+    // 300-block: clear of the base graph, img2img (15/16), shift (17), hi-res (18/19), the
+    // IP-Adapter chain (20+) and regional conditioning (399+).
+    const load = String(300 + i * 4);
+    const scale = String(301 + i * 4);
+    const encode = String(302 + i * 4);
+    const ref = String(303 + i * 4);
+    graph[load] = { class_type: "LoadImage", inputs: { image: filename } };
+    graph[scale] = {
+      class_type: "ImageScaleToTotalPixels",
+      inputs: { image: [load, 0], upscale_method: "lanczos", megapixels: 1 },
+    };
+    graph[encode] = { class_type: "VAEEncode", inputs: { pixels: [scale, 0], vae: vaeRef } };
+    graph[ref] = { class_type: "ReferenceLatent", inputs: { conditioning, latent: [encode, 0] } };
+    conditioning = [ref, 0];
+  });
+  return conditioning;
 }
 
 /** Modern path: IPAdapterUnifiedLoader (bundles ipadapter + clip-vision) → IPAdapterAdvanced. */
