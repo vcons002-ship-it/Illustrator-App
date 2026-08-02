@@ -383,8 +383,8 @@ function ReferenceGallery({
           the other way, since IP-Adapter only attaches to SD 1.5 / SDXL checkpoints. */}
       <span style={{ opacity: 0.5, fontSize: 11 }}>
         Used by Gemini and gpt-image-1, and by ComfyUI on SD 1.5 / SDXL checkpoints (IP-Adapter nodes
-        required — Flux, Z-Image, Qwen-Image and HiDream can't use them). 2–3 angles of the same face
-        work best.
+        required; it doesn't attach to Flux, Flux.2, Z-Image, Qwen-Image or HiDream). 2–3 angles of the
+        same face work best.
       </span>
     </div>
   );

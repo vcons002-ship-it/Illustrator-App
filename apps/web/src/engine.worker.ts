@@ -79,6 +79,8 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  soulRefSeeds,
+  type SoulImage,
   rememberSoul,
   forgetSoul,
   soulContextPromptBlock,
@@ -5935,6 +5937,34 @@ async function loadSoulRefs(
 }
 
 /**
+ * Copy a cast Soul's reference photos into the character it plays, once.
+ *
+ * Deliberately routed through the engine's own addCharacterReference rather than writing anchors
+ * directly: that is what keys the bytes into this book's namespace, respects the per-character cap,
+ * clears the pipeline's byte cache and persists the bible. A second mechanism for the same thing is
+ * how two sources of truth start.
+ */
+async function seedSoulReferences(target: Engine): Promise<void> {
+  const bible = target.getBible();
+  const cast = story?.soulCast;
+  if (!bible || !cast) return;
+  const store = memoryStore();
+  const photos: Record<"self" | "user", SoulImage[]> = {
+    self: await loadSoulImages(store, "self"),
+    user: await loadSoulImages(store, "user"),
+  };
+  const seeds = soulRefSeeds(cast, bible.characters, (kind) => photos[kind].length > 0);
+  for (const seed of seeds) {
+    for (const im of photos[seed.kind]) {
+      await target.addCharacterReference(seed.characterId, {
+        bytes: base64ToBytes(im.dataBase64),
+        mimeType: im.mimeType,
+      });
+    }
+  }
+}
+
+/**
  * A user-APPROVED generate_image tool call. In-chat render overrides apply here:
  * a named model resolves against the engine's INSTALLED models (a model that
  * isn't downloaded silently keeps the current one), a named style against the
@@ -6426,6 +6456,15 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       story = rebuildStoryFromBook(book, nextEngine.getBible());
       story.scenes.forEach((sc, k) => nextEngine!.setStoryPresent(k, presentFromScene(sc)));
     }
+    // A cast Soul brings its own FACE into the story, not just its name. `soulCast` renamed the
+    // character in the text prompt and stopped there, so a reader cast as a character got a stranger
+    // in every picture while their photos sat two panels away in the Soul panel. Seed those photos
+    // into that character's own reference slots, so every existing path — the per-frame budget, the
+    // weight split, the thumbnail, the reader deleting one they don't want — treats them like any
+    // other reference. Skips a character who already HAS references, so the reader's own uploads win
+    // and running this on every open can't stack duplicates. Best-effort: a failure here must not
+    // stop a book from opening.
+    void seedSoulReferences(nextEngine).catch(() => {});
     // Open is complete — now a deferred start can actually run (and `beginGeneration`
     // below sees `opening === false`). Replaying covers a `start` that arrived during
     // the open (e.g. the buddy's "open and illustrate it") as well as a settings re-open.

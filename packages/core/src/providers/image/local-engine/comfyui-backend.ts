@@ -314,15 +314,23 @@ const SUBMIT_RETRY_DELAY_MS = 1_500;
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
 /**
- * The checkpoint families IP-Adapter can attach to here.
+ * The checkpoint families IP-ADAPTER can attach to.
  *
  * ComfyUI_IPAdapter_plus resolves its adapter + CLIP-Vision weights from the BASE MODEL's
- * architecture, and the models that exist are the SD ones. Point it at a Flux, Flux.2, Z-Image,
+ * architecture, and the weights that exist are the SD ones. Point it at a Flux, Flux.2, Z-Image,
  * Qwen-Image or HiDream checkpoint and the loader raises instead of degrading — so a reference photo
  * on those families used to take the whole render down with it, which is a bad trade for a likeness.
  *
- * This is about the LOCAL engine only: Gemini's native image model and gpt-image-1 read reference
- * photos on any of their own models, because they take them as ordinary image inputs.
+ * READ THIS AS A LIMIT OF THE MECHANISM, NOT OF THE MODELS. IP-Adapter is the only reference path
+ * this backend builds, so it is the only one those families are excluded from — but several of them
+ * accept reference images NATIVELY, by a different route entirely (a reference-latent chain rather
+ * than an adapter over the model). Flux.2 in particular takes multiple reference images as a headline
+ * feature, and the Kontext/Edit variants of the other families are built for it. None of that is
+ * wired here, so the honest statement is "this app can't send them there yet", not "those models
+ * can't use them" — and the reader-facing copy has to say the first thing.
+ *
+ * The cloud side is unaffected: Gemini's native image model and gpt-image-1 read reference photos on
+ * any of their own models, because they take them as ordinary image inputs.
  */
 const IPADAPTER_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["sd15", "sdxl"]);
 
@@ -1073,8 +1081,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
       if (!this.warnedIpAdapterFamily) {
         this.warnedIpAdapterFamily = true;
         console.info(
-          `[visual-reader] IP-Adapter doesn't support ${family} checkpoints — rendering seed-only. ` +
-            "Reference photos condition SD 1.5 and SDXL models here (cloud Gemini / gpt-image-1 take them too).",
+          `[visual-reader] IP-Adapter can't attach to ${family} checkpoints — rendering seed-only. ` +
+            "Reference photos condition SD 1.5 / SDXL locally, and any Gemini / gpt-image-1 model. " +
+            "(Several natural-language families accept reference images natively, by a route this backend " +
+            "doesn't build yet.)",
         );
       }
     } else if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0) {
