@@ -9414,14 +9414,6 @@ export function App() {
         <div style={styles.status}>{localError || status}</div>
       )}
 
-      {!book && !status && !localError && (
-        <div style={styles.empty}>
-          Ask the assistant below anything — or have it find &amp; illustrate a book. You can also
-          open your own file (EPUB, PDF, Word, and more), transform a photo, or load the sample.
-          <span style={{ opacity: 0.55 }}> No API keys? It still runs, with placeholder art, so you can see the whole flow.</span>
-        </div>
-      )}
-
       {/* Home screen (no book open): the assistant chat is the hero, centered. With a book open the
           chat instead docks at the bottom of the page (below the reader) — see the dock after this
           scroll region. */}
@@ -11587,7 +11579,9 @@ function ProviderBadges({
   );
 }
 
-/** Live GPU VRAM chip: "VRAM 14.2 / 24.0 GB" with a usage tint (green < 75%, amber < 92%, red above). */
+/** Live GPU VRAM chip: "▦ 14.2/24.0 GB" with a usage tint (green < 75%, amber < 92%, red above).
+ * The widest pill in the row, and the one whose label carried the least: "VRAM" duplicated the ▦
+ * glyph and the hover text, which still spells out the device and the percentage. */
 function VramBadge({ vram }: { vram: EngineVram }) {
   const usedGb = vram.usedMb / 1024;
   const totalGb = vram.totalMb / 1024;
@@ -11598,8 +11592,11 @@ function VramBadge({ vram }: { vram: EngineVram }) {
     <span
       style={{ ...styles.badge, ...tone }}
       title={`${vram.device ?? "GPU"} — ${pct}% of VRAM in use (${usedGb.toFixed(1)} of ${totalGb.toFixed(1)} GB)`}
+      // The word "VRAM" left the label to save room; it must not leave the ACCESSIBLE name too, or
+      // the pill announces as a bare pair of numbers. `title` isn't reliably read out.
+      aria-label={`VRAM ${usedGb.toFixed(1)} of ${totalGb.toFixed(1)} GB used`}
     >
-      <span aria-hidden style={{ opacity: 0.8 }}>▦</span> VRAM {usedGb.toFixed(1)} / {totalGb.toFixed(1)} GB
+      <span aria-hidden style={{ opacity: 0.8 }}>▦</span> {usedGb.toFixed(1)}/{totalGb.toFixed(1)} GB
     </span>
   );
 }
@@ -11901,20 +11898,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   status: { padding: "10px 20px", color: "#ffd479" },
   bibleStatus: { padding: "4px 20px 0", fontSize: 12, opacity: 0.75, fontFamily: "system-ui, sans-serif" },
+  // The status row is ambient information, not content — it sat above the chat taking a band of the
+  // screen roughly as tall as a message. Tightened rather than hidden: the pills still say what they
+  // said, in less room, which matters most on a phone where they wrapped onto three lines.
   badges: {
     display: "flex",
     flexWrap: "wrap",
-    gap: 8,
-    padding: "8px 20px 0",
+    gap: 5,
+    padding: "5px 20px 0",
     fontFamily: "system-ui, sans-serif",
   },
   badge: {
     display: "inline-flex",
     alignItems: "center",
-    gap: 6,
-    fontSize: 12,
-    lineHeight: 1.4,
-    padding: "3px 9px",
+    gap: 4,
+    fontSize: 11,
+    lineHeight: 1.3,
+    padding: "1px 7px",
     borderRadius: 999,
     border: "1px solid transparent",
     maxWidth: "100%",
@@ -11939,7 +11939,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "rgba(230,90,90,0.5)",
     color: "#ff9c9c",
   },
-  empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
   // With a book open the chat docks at the bottom of the page (full width), beneath the reader. It's
   // a fixed-height flex child of the shell; its inner panel scrolls. The story workflow/cadence
