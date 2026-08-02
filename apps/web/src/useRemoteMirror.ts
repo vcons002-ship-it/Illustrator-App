@@ -220,6 +220,8 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   // DESKTOP: download the managed ffmpeg the PHONE tapped the button for (it owns the filesystem).
   // Assigned in App.tsx, since onDownloadFfmpeg is declared later.
   const downloadFfmpegRef = useRef<() => void>(() => {});
+  /** DESKTOP: install the IP-Adapter nodes + models for a phone that asked (assigned by App.tsx). */
+  const installIpAdapterRef = useRef<() => void>(() => {});
   // PHONE: debounce for the vrcmd:settings relay + the timestamp of the last local settings edit,
   // for the vrsync:settings echo guard (see onSettingsChange).
   const phoneSettingsRelayTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -673,6 +675,12 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             // the network + install folder), and the resulting settings mirror back via vrsync:settings.
             connectLocalServerRef.current(msg.backend, msg.url);
             break;
+          case "vrcmd:installIpAdapter":
+            // The phone asked for reference-photo support; install it HERE — the nodes go in this
+            // machine's ComfyUI folder and this machine is the one that renders. Progress rides the
+            // shared model-download dict, which the phone already mirrors.
+            installIpAdapterRef.current();
+            break;
           case "vrcmd:downloadFfmpeg":
             // The phone tapped "Download ffmpeg"; fetch it HERE (we have the filesystem) — progress
             // mirrors back via the engine inventory's ffmpegProgress field.
@@ -919,6 +927,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     openLocalFileRef,
     connectLocalServerRef,
     downloadFfmpegRef,
+    installIpAdapterRef,
     /** Reads live state without re-binding callers — the host bridge pushes a fresh snapshot on
      * every (re)connect (a phone already on the relay won't re-`hello` when only the desktop's
      * bridge dropped). */

@@ -86,6 +86,8 @@ export interface LocalEngineDeps {
    * the early-registered relay handler reaches them. */
   connectLocalServerRef: MutableRefObject<(backend: LocalBackendId, url: string) => void>;
   downloadFfmpegRef: MutableRefObject<() => void>;
+  /** Assigned so a phone's vrcmd:installIpAdapter runs the real install HERE. */
+  installIpAdapterRef: MutableRefObject<() => void>;
 }
 
 /** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
@@ -130,6 +132,7 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     setConnectingLocalText,
     connectLocalServerRef,
     downloadFfmpegRef,
+    installIpAdapterRef,
   } = deps;
 
   // Per-entry file position, to fold per-file Rust progress into one combined bar.
@@ -654,6 +657,14 @@ export function useLocalEngine(deps: LocalEngineDeps) {
    */
   const onInstallIpAdapter = useCallback(async () => {
     const id = "ipadapter";
+    // On a linked PHONE there is no engine folder and no Tauri — the DESKTOP owns both, and it is
+    // also the machine that renders, so installing here would help nothing even if it could. Relay
+    // it; the desktop runs the real install and its progress mirrors back like any other download.
+    if (isRemoteClient) {
+      setModelProgress((prev) => ({ ...prev, [id]: 0 }));
+      sendAppSync({ type: "vrcmd:installIpAdapter" });
+      return;
+    }
     setLocalError("");
     setModelProgress((prev) => ({ ...prev, [id]: 0 }));
     setDownloadStage((prev) => ({ ...prev, [id]: "installing nodes…" }));
@@ -690,7 +701,10 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         return next;
       });
     }
-  }, []);
+  }, [isRemoteClient, sendAppSync]);
+  useEffect(() => {
+    installIpAdapterRef.current = onInstallIpAdapter;
+  }, [onInstallIpAdapter]);
 
   // Download a text model INTO Ollama from the Settings menu (no terminal needed),
   // with live progress; on success refresh the model list and auto-select it.

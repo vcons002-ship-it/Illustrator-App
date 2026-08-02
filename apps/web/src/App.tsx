@@ -2502,6 +2502,7 @@ export function App() {
     openLocalFileRef,
     connectLocalServerRef,
     downloadFfmpegRef,
+    installIpAdapterRef,
     sendSnapshotRef,
     runUpdateForPhoneRef,
     phoneUpdatePending,
@@ -2608,6 +2609,7 @@ export function App() {
     setConnectingLocalText,
     connectLocalServerRef,
     downloadFfmpegRef,
+    installIpAdapterRef,
   });
 
   // In-app software update (desktop): git-pull the latest code, reinstall deps, rebuild the web

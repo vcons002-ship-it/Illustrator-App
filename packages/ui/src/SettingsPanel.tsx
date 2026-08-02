@@ -923,51 +923,6 @@ export function SettingsPanel({
             )}
             {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Character reference photos (IP-Adapter)</label>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
-                  {onInstallIpAdapter ? (
-                    <button type="button" onClick={() => onInstallIpAdapter()}>
-                      Set up reference photos (~{ipAdapterDownloadSizeGB()} GB)
-                    </button>
-                  ) : null}
-                </div>
-                {ipAdapterNote ? (
-                  <span style={{ display: "block", fontSize: 11, marginTop: 4, color: ACCENT_BLUE }}>{ipAdapterNote}</span>
-                ) : null}
-                <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
-                  Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
-                  condition local renders (add photos per character in Characters). Works on{" "}
-                  <strong>SD 1.5 and SDXL checkpoints only</strong> — Flux, Z-Image, Qwen-Image and HiDream can&rsquo;t
-                  use them. <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
-                  Cloud Gemini and gpt-image-1 take reference photos on any of their models, with nothing to install.
-                </span>
-                <div style={{ marginTop: 8, fontSize: 11 }}>
-                  <span style={{ opacity: 0.75, fontWeight: 600 }}>Required files (for manual download):</span>
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
-                    {IPADAPTER_DOWNLOADS.map((d) => (
-                      <li key={d.filename} style={{ marginTop: 3, lineHeight: 1.5 }}>
-                        <code style={{ userSelect: "all", fontSize: 11 }}>{d.filename}</code>
-                        <span style={{ opacity: 0.6 }}>
-                          {" → "}ComfyUI/models/{d.folder}/ — {d.note}{" "}
-                        </span>
-                        <a href={d.url} target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
-                          source ↗
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                  <span style={{ display: "block", opacity: 0.5, marginTop: 3 }}>
-                    Plus the nodes themselves:{" "}
-                    <a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
-                      ComfyUI_IPAdapter_plus ↗
-                    </a>{" "}
-                    cloned into ComfyUI/custom_nodes/.
-                  </span>
-                </div>
-              </div>
-            ) : null}
-            {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
-              <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
                   <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
@@ -2801,6 +2756,53 @@ export function SettingsPanel({
             keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files low vram lowvram fp8 memory offload gpu"
           >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
+
+            {(isDesktop || remote) && value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Character reference photos (IP-Adapter)</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                  {onInstallIpAdapter ? (
+                    <button type="button" onClick={() => onInstallIpAdapter()}>
+                      Set up reference photos (~{ipAdapterDownloadSizeGB()} GB)
+                    </button>
+                  ) : null}
+                </div>
+                {ipAdapterNote ? (
+                  <span style={{ display: "block", fontSize: 11, marginTop: 4, color: ACCENT_BLUE }}>{ipAdapterNote}</span>
+                ) : null}
+                <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+                  Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
+                  condition local renders (add photos per character in Characters). Works on{" "}
+                  <strong>SD 1.5 and SDXL checkpoints only</strong> — Flux, Z-Image, Qwen-Image and HiDream can&rsquo;t
+                  use them. <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
+                  Cloud Gemini and gpt-image-1 take reference photos on any of their models, with nothing to install.
+                  {remote && !isDesktop ? " Installs on your linked desktop, where the engine runs." : ""}
+                </span>
+                <div style={{ marginTop: 8, fontSize: 11 }}>
+                  <span style={{ opacity: 0.75, fontWeight: 600 }}>Required files (for manual download):</span>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+                    {IPADAPTER_DOWNLOADS.map((d) => (
+                      <li key={d.filename} style={{ marginTop: 3, lineHeight: 1.5 }}>
+                        <code style={{ userSelect: "all", fontSize: 11 }}>{d.filename}</code>
+                        <span style={{ opacity: 0.6 }}>
+                          {" → "}ComfyUI/models/{d.folder}/ — {d.note}{" "}
+                        </span>
+                        <a href={d.url} target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
+                          source ↗
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                  <span style={{ display: "block", opacity: 0.5, marginTop: 3 }}>
+                    Plus the nodes themselves:{" "}
+                    <a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
+                      ComfyUI_IPAdapter_plus ↗
+                    </a>{" "}
+                    cloned into ComfyUI/custom_nodes/.
+                  </span>
+                </div>
+              </div>
+            ) : null}
 
           {(isDesktop || remote) && value.imageProvider === "local" && (
             // A linked phone sees the style-pack STATUS too (installed/size — mirrored via
