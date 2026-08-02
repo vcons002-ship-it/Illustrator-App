@@ -257,6 +257,11 @@ export type CmdToDesktop =
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
   | { type: "vrcmd:libraryDelete"; bookId: string } // phone deleted a library book → delete it on the desktop (it owns the library; a local-only delete is re-clobbered by vrsync:library)
+  // Phone added a book to the library (an "Add to library" on a chat file card) → store it on the
+  // DESKTOP, for the same reason as the delete above. A phone-local add landed in a store nothing
+  // reads: the list it appeared in came from the desktop, and vrcmd:open then named an id the desktop
+  // had never seen, so the entry couldn't be opened from either side.
+  | { type: "vrcmd:libraryAdd"; book: BookSource }
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop

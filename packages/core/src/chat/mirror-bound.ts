@@ -81,6 +81,34 @@ function stripBytes<T extends { bytes?: ArrayBuffer }>(ref: T): T {
 }
 
 /**
+ * The most a single phone→desktop COMMAND may weigh. Most commands are an id or a settings object and
+ * come nowhere near it, but a few carry a whole document — "Add to library" on a chat file card sends
+ * the imported book, because the desktop owns the library and a phone-local add lands in a store
+ * nothing reads.
+ *
+ * The ceiling exists because an oversized frame does not fail loudly: a tunnel (Cloudflare) drops it
+ * and the desktop relay hard-caps a message at 4 MiB, so the command simply never arrives and the
+ * phone has no way to know. Unlike the mirror, a command can't be trimmed — half a book is not a book
+ * — so the only honest move is to measure it first and say so. 3 MB of JSON leaves room for the frame
+ * envelope and base64 growth under the relay's cap.
+ */
+export const MAX_RELAY_COMMAND_BYTES = 3_000_000;
+
+/**
+ * Will this command payload survive one relay frame? Measured on its serialized form, which is what
+ * actually travels. Returns false for anything that can't be serialized at all (a cycle, a value the
+ * encoder rejects) — that can't cross either, and finding out here beats finding out by silence. PURE.
+ */
+export function fitsOneRelayFrame(value: unknown, max = MAX_RELAY_COMMAND_BYTES): boolean {
+  try {
+    const json = JSON.stringify(value);
+    return json !== undefined && json.length <= max;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bytes per chunk when a file is fetched over the phone↔desktop tunnel ON DEMAND. The mirror snapshot
  * must fit ONE frame (hence CHAT_MIRROR_IMAGE_BUDGET strips big images), but an on-demand fetch can be
  * SPLIT across many frames — so any-size file syncs in pieces instead of being dropped for exceeding a

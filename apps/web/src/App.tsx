@@ -188,6 +188,7 @@ import {
   workflowParked,
   resumeWorkflow,
   boundChatHistoryForMirror,
+  fitsOneRelayFrame,
   externalizeChatImages,
   externalizedImageId,
   externalizedVideoId,
@@ -1936,6 +1937,29 @@ export function App() {
     );
   }, []);
 
+  /**
+   * Re-read the library from THIS device's store and show it. The one way the list is refreshed.
+   *
+   * A NO-OP on a linked phone, and that is the whole point. The desktop owns the library; the phone
+   * renders what it is pushed (vrsync:library). But every refresh in the app read the LOCAL store and
+   * called setLibrary unconditionally — so on the phone, its own near-empty IndexedDB periodically
+   * overwrote the desktop's real list. The reader saw a different, shorter library that nothing would
+   * open (tapping one relays vrcmd:open with an id the desktop has never heard of), until a chat
+   * switch or a reload made the desktop push the real list again. Intermittent because it was a race
+   * between the local read and the mirror frame.
+   *
+   * The phone still WRITES to its local store — caching a mirrored book there is useful — it just
+   * doesn't get to decide what the list says.
+   */
+  const refreshLibrary = useCallback(async (): Promise<void> => {
+    if (isRemoteClient) return;
+    try {
+      setLibrary(await libraryStore.listBooks());
+    } catch {
+      /* a failed list leaves the last known library on screen rather than blanking it */
+    }
+  }, [libraryStore, isRemoteClient]);
+
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
@@ -1943,13 +1967,9 @@ export function App() {
       openInWorker(source);
       // Remember it in the library so it can be reopened later (Bible + images
       // are already cached, so switching back is instant).
-      void libraryStore
-        .putBook(source)
-        .then(() => libraryStore.listBooks())
-        .then(setLibrary)
-        .catch(persistWarn);
+      void libraryStore.putBook(source).then(refreshLibrary).catch(persistWarn);
     },
-    [openInWorker, libraryStore, persistWarn],
+    [openInWorker, libraryStore, persistWarn, refreshLibrary],
   );
 
   // Change the open book's view category (the reader's drop-down): only "story" shows the illustration
@@ -1961,16 +1981,12 @@ export function App() {
         if (!cur) return cur;
         const next = { ...cur, viewAs: cat };
         bookRef.current = next;
-        void libraryStore
-          .putBook(next)
-          .then(() => libraryStore.listBooks())
-          .then(setLibrary)
-          .catch(persistWarn);
+        void libraryStore.putBook(next).then(refreshLibrary).catch(persistWarn);
         return next;
       });
       if (cat === "code") setCodeEditMode(true); // the code view IS the full-screen editor
     },
-    [libraryStore, persistWarn],
+    [libraryStore, persistWarn, refreshLibrary],
   );
 
   // Apply an edit to the open spreadsheet's active table (the chosen sheet, and `data`
@@ -2078,8 +2094,8 @@ export function App() {
 
   // Load the library on mount (recent books to switch between).
   useEffect(() => {
-    void libraryStore.listBooks().then(setLibrary).catch(() => {});
-  }, [libraryStore]);
+    void refreshLibrary();
+  }, [refreshLibrary]);
 
   /**
    * A STORY OWNS ITS CHAT. Whenever a story book is open, the dock runs that book's own session —
@@ -2172,13 +2188,9 @@ export function App() {
         sendAppSync({ type: "vrcmd:libraryDelete", bookId: id });
         return;
       }
-      void libraryStore
-        .removeBook(id)
-        .then(() => libraryStore.listBooks())
-        .then(setLibrary)
-        .catch(() => {});
+      void libraryStore.removeBook(id).then(refreshLibrary).catch(() => {});
     },
-    [libraryStore, isRemoteClient, sendAppSync],
+    [libraryStore, isRemoteClient, sendAppSync, refreshLibrary],
   );
 
   // PHONE MIRROR: a linked phone shows exactly what THIS desktop shows — its library, the open
@@ -4428,15 +4440,30 @@ export function App() {
                 ...(imported.dataSheets ? { dataSheets: imported.dataSheets } : {}),
                 ...(imported.tree !== undefined ? { tree: imported.tree } : {}),
               };
-        await libraryStore.putBook(book);
-        const lib = await libraryStore.listBooks();
-        setLibrary(lib);
+        if (isRemoteClient) {
+          // The DESKTOP owns the library. Adding here put the book in the phone's own store, where
+          // the only thing that ever read it was the list refresh that then showed a library the
+          // desktop had never heard of — and tapping one of those entries relayed vrcmd:open with an
+          // id the desktop couldn't find, so nothing opened. Relay the add instead, exactly as a
+          // delete is relayed; the desktop's own library-change push brings the real list back.
+          //
+          // A book too big for one frame is DROPPED by the tunnel without a word, so it's measured
+          // first: half a book isn't a book, and "added" would be a lie.
+          if (!fitsOneRelayFrame(book)) {
+            buddyNoteRef.current(`⚠ “${ref.name}” is too big to send to the desktop from here — add it on the desktop.`);
+            return;
+          }
+          sendAppSync({ type: "vrcmd:libraryAdd", book });
+        } else {
+          await libraryStore.putBook(book);
+          await refreshLibrary();
+        }
         buddyNoteRef.current(`📚 Added “${ref.name}” to your library.`);
       } catch (err) {
         buddyNoteRef.current(`⚠ Couldn't add to the library: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [fileFromRef, libraryStore],
+    [fileFromRef, libraryStore, refreshLibrary, isRemoteClient, sendAppSync],
   );
 
   // Desktop "Open on PC": a found file opens by its path; in-chat content/bytes are saved to the
@@ -6311,7 +6338,7 @@ export function App() {
         if (e.summary) appendBuddy({ role: "tool", text: `⚙ ${e.summary}` });
         else appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
       } else if (e.kind === "libraryChanged") {
-        void libraryStore.listBooks().then(setLibrary).catch(() => {});
+        void refreshLibrary();
       } else if (e.kind === "scheduledChanged") {
         refreshScheduled();
       } else if (e.kind === "alertsChanged") {
@@ -6344,11 +6371,7 @@ export function App() {
         // engine and undo the append. The new beat's image arrives via the normal `update`
         // events the engine already posts. Persist the grown book and scroll to the new beat.
         setBook(e.book);
-        void libraryStore
-          .putBook(e.book)
-          .then(() => libraryStore.listBooks())
-          .then(setLibrary)
-          .catch(persistWarn);
+        void libraryStore.putBook(e.book).then(refreshLibrary).catch(persistWarn);
         const chapter = e.book.chapters[e.book.chapters.length - 1];
         const paraId = chapter
           ? e.book.pages.find((p) => p.chapterId === chapter.id)?.paragraphs[0]?.id
