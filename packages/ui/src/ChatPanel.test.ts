@@ -3,6 +3,8 @@ import {
   classifyBlocks,
   fileActionKeys,
   fileForLang,
+  inlineReadableText,
+  isTextDocument,
   linkifyText,
   parseFenceInfo,
   parseMessageBlocks,
@@ -178,6 +180,60 @@ describe("fileActionKeys (universal file card)", () => {
 
   it("renders nothing when no callbacks are wired", () => {
     expect(fileActionKeys("text", {}, true)).toEqual([]);
+  });
+});
+
+describe("isTextDocument / inlineReadableText (Read here)", () => {
+  const buf = (s: string): ArrayBuffer => {
+    const u = new TextEncoder().encode(s);
+    const b = new ArrayBuffer(u.byteLength);
+    new Uint8Array(b).set(u);
+    return b;
+  };
+
+  it("recognises a .md written to disk, which arrives with NO mime at all", () => {
+    // The exact card that had no way to be read: `write_file` surfaces a path with `mime: ""`.
+    expect(isTextDocument({ name: "notes.md", mime: "" })).toBe(true);
+    expect(isTextDocument({ name: "notes.markdown", mime: "" })).toBe(true);
+    expect(isTextDocument({ name: "notes.txt", mime: "" })).toBe(true);
+  });
+
+  it("recognises a text document by mime when the name has no useful extension", () => {
+    expect(isTextDocument({ name: "document", mime: "text/markdown" })).toBe(true);
+    expect(isTextDocument({ name: "document", mime: "text/plain" })).toBe(true);
+  });
+
+  it("is not fooled by other files", () => {
+    expect(isTextDocument({ name: "report.pdf", mime: "application/pdf" })).toBe(false);
+    expect(isTextDocument({ name: "sheet.csv", mime: "text/csv" })).toBe(false);
+    expect(isTextDocument({ name: "shot.png", mime: "image/png" })).toBe(false);
+    // "README.mdx" is not Markdown this renderer should claim.
+    expect(isTextDocument({ name: "README.mdx", mime: "" })).toBe(false);
+  });
+
+  it("uses the card's own content when it carries it", () => {
+    expect(inlineReadableText({ name: "a.md", mime: "text/markdown", content: "# Hi" })).toBe("# Hi");
+  });
+
+  it("decodes the text out of a card that carries ONLY bytes", () => {
+    // Before, this card offered no Read button at all even though the chat could render it.
+    expect(inlineReadableText({ name: "a.md", mime: "text/markdown", bytes: buf("# Hi\n\nthere") })).toBe("# Hi\n\nthere");
+  });
+
+  it("offers nothing for a text card with neither content nor bytes (it must be fetched)", () => {
+    expect(inlineReadableText({ name: "notes.md", mime: "" })).toBeUndefined();
+    expect(inlineReadableText({ name: "notes.md", mime: "", bytes: new ArrayBuffer(0) })).toBeUndefined();
+  });
+
+  it("offers nothing for a non-text file, even one carrying bytes", () => {
+    expect(inlineReadableText({ name: "report.pdf", mime: "application/pdf", bytes: buf("%PDF-1.4") })).toBeUndefined();
+  });
+
+  it("declines undecodable bytes rather than rendering replacement characters", () => {
+    const bad = new Uint8Array([0xff, 0xfe, 0xff, 0xfe]);
+    const b = new ArrayBuffer(bad.byteLength);
+    new Uint8Array(b).set(bad);
+    expect(inlineReadableText({ name: "a.md", mime: "text/markdown", bytes: b })).toBeUndefined();
   });
 });
 

@@ -4581,6 +4581,24 @@ export function App() {
         if (ref.path) void readLocalFile(ref.path).then((f) => onUpload(f, as));
         else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r), as));
       },
+      // Read a text document INLINE in the chat when the CARD doesn't carry the text: a `.md` the
+      // assistant wrote is surfaced as a bare path, and a card whose bytes were externalized on
+      // persist holds only an id. Both are readable — one off disk, one out of the blob store — so
+      // the chat can show them instead of only offering to open them somewhere else.
+      readText: async (ref) => {
+        if (ref.path) {
+          // A path only means anything on the machine that holds it. Off the desktop (a browser, a
+          // linked phone mirroring a desktop chat) say so plainly instead of letting the Tauri call
+          // throw its own message about a command that doesn't exist here.
+          if (!isDesktop) return undefined;
+          const f = await readLocalFile(ref.path);
+          return await f.text();
+        }
+        const full = await withFetchedBytes(ref);
+        if (full.content) return full.content;
+        if (!full.bytes) return undefined;
+        return new TextDecoder().decode(new Uint8Array(full.bytes));
+      },
     }),
     [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC, withFetchedBytes],
   );
