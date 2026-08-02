@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { StoredChatMessage } from "../storage/store.js";
-import { boundChatHistoryForMirror, chunkArrayBuffer, concatArrayBuffers, FILE_CHUNK_BYTES } from "./mirror-bound.js";
+import {
+  boundChatHistoryForMirror,
+  chunkArrayBuffer,
+  concatArrayBuffers,
+  fitsOneRelayFrame,
+  FILE_CHUNK_BYTES,
+  MAX_RELAY_COMMAND_BYTES,
+} from "./mirror-bound.js";
 
 const buf = (n: number) => new ArrayBuffer(n);
 const msg = (over: Partial<StoredChatMessage>): StoredChatMessage => ({ role: "assistant", text: "x", at: 0, ...over });
@@ -128,5 +135,31 @@ describe("chunkArrayBuffer / concatArrayBuffers (on-demand chunked file sync)", 
     }
     expect(firstMismatch).toBe(-1);
     expect(back.byteLength).toBe(u.byteLength);
+  });
+});
+
+describe("fitsOneRelayFrame — a command that can't arrive must not be sent", () => {
+  it("passes ordinary commands", () => {
+    expect(fitsOneRelayFrame({ type: "vrcmd:open", bookId: "b1" })).toBe(true);
+    expect(fitsOneRelayFrame({ type: "vrcmd:libraryAdd", book: { id: "b", title: "T", text: "x".repeat(50_000) } })).toBe(true);
+  });
+
+  it("rejects a payload too big for one frame", () => {
+    // An oversized frame doesn't fail loudly — the tunnel drops it and the phone never learns. So the
+    // size is checked before sending, and the reader is told, instead of a silent "added".
+    expect(fitsOneRelayFrame({ book: { text: "x".repeat(MAX_RELAY_COMMAND_BYTES + 1) } })).toBe(false);
+    expect(fitsOneRelayFrame({ text: "x".repeat(20) }, 10)).toBe(false);
+  });
+
+  it("measures the SERIALIZED form, which is what actually travels", () => {
+    // 8 characters of text, but escaping makes it longer on the wire.
+    expect(fitsOneRelayFrame({ a: '""""""""' }, 12)).toBe(false);
+  });
+
+  it("rejects anything that can't be serialized at all", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(fitsOneRelayFrame(cyclic)).toBe(false);
+    expect(fitsOneRelayFrame(undefined)).toBe(false);
   });
 });

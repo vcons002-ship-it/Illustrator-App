@@ -509,6 +509,16 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
               })
               .catch(() => {});
             break;
+          case "vrcmd:libraryAdd":
+            // The phone added a book from a chat file card; store it HERE (we own the library) — our
+            // library change-effect then re-pushes vrsync:library WITH it, so the phone sees it in
+            // the same list every other book is in, and can open it.
+            void libraryStore
+              .putBook(msg.book)
+              .then(() => libraryStore.listBooks())
+              .then(setLibrary)
+              .catch(() => {});
+            break;
           case "vrcmd:libraryDelete":
             // The phone deleted a library book; delete it HERE (we own the library) — our library
             // change-effect then re-pushes vrsync:library WITHOUT the book, so it stays gone.
