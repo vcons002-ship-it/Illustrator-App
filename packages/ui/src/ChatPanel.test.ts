@@ -9,6 +9,7 @@ import {
   parseFenceInfo,
   parseMessageBlocks,
   projectFilesFromBlocks,
+  splitRunTogetherFiles,
 } from "./ChatPanel.js";
 
 describe("linkifyText", () => {
@@ -254,5 +255,76 @@ describe("fileForLang", () => {
     expect(fileForLang("python")).toMatchObject({ ext: "py", base: "file" });
     expect(fileForLang("markdown")).toMatchObject({ ext: "md", base: "document", mime: "text/markdown" });
     expect(fileForLang("")).toMatchObject({ ext: "txt", mime: "text/plain" });
+  });
+});
+
+describe("several files run together in one fence", () => {
+  // Reported, with a screenshot: "generate 3 more as separate documents" came back as ONE card,
+  // `text · haiku_6.txt`, whose body was haiku 6, then the line `text haiku_7.txt`, then haiku 7,
+  // then `text haiku_8.txt`, then haiku 8. The model named three files in the fence line's own
+  // grammar and only fenced the first, and one card for three files is not something the reader can
+  // undo — Save, Save all as project and Open in app all read the parsed blocks.
+  const runTogether = [
+    "```text haiku_6.txt",
+    "Golden summer sun,",
+    "Warm breeze whispers through the trees,",
+    "Daylight lingers long.",
+    "text haiku_7.txt",
+    "Silver moon above,",
+    "Stars dance in the velvet night,",
+    "Silent world asleep.",
+    "text haiku_8.txt",
+    "Crisp air turns to cold,",
+    "Crimson leaves drift to the ground,",
+    "Winter's breath is near.",
+    "```",
+  ].join("\n");
+
+  it("comes out as three named files, not one", () => {
+    const code = parseMessageBlocks(runTogether).filter((b) => b.type === "code");
+    expect(code.map((b) => (b as { filename?: string }).filename)).toEqual([
+      "haiku_6.txt",
+      "haiku_7.txt",
+      "haiku_8.txt",
+    ]);
+    expect((code[0] as { code: string }).code).toBe("Golden summer sun,\nWarm breeze whispers through the trees,\nDaylight lingers long.");
+    expect((code[2] as { code: string }).code).toBe("Crisp air turns to cold,\nCrimson leaves drift to the ground,\nWinter's breath is near.");
+    // No header line survives inside any file's content.
+    for (const b of code) expect((b as { code: string }).code).not.toMatch(/^text \S+\.\S+$/m);
+  });
+
+  it("each one saves and zips under its own name", () => {
+    const blocks = parseMessageBlocks(runTogether);
+    expect(projectFilesFromBlocks(blocks).map((f) => f.name)).toEqual(["haiku_6.txt", "haiku_7.txt", "haiku_8.txt"]);
+    // Named blocks are file cards, so all three get their own Save button.
+    expect(classifyBlocks(blocks).filter((k) => k === "file")).toHaveLength(3);
+  });
+
+  it("leaves a real file alone — a document that merely LISTS filenames is one file", () => {
+    // The false split is the dangerous direction: it would silently cut a file in half. A bare
+    // filename on its own line is ordinary content and must not be read as a fence header.
+    const listing = "```markdown notes.md\nFiles in this project:\n\nREADME.md\nsetup.py\nsrc/app.js\n```";
+    const code = parseMessageBlocks(listing).filter((b) => b.type === "code");
+    expect(code).toHaveLength(1);
+    expect((code[0] as { code: string }).code).toContain("README.md");
+  });
+
+  it("leaves prose that happens to name a file alone", () => {
+    // Two tokens, but the first isn't this block's language, so it isn't a header.
+    const doc = "```text notes.txt\nSee also chapter_two.txt\nfor the rest.\n```";
+    expect(parseMessageBlocks(doc).filter((b) => b.type === "code")).toHaveLength(1);
+  });
+
+  it("doesn't split an unnamed block, or one whose headers have no bodies", () => {
+    expect(splitRunTogetherFiles({ type: "code", lang: "text", code: "text a.txt\nhi" })).toHaveLength(1);
+    expect(
+      splitRunTogetherFiles({ type: "code", lang: "text", code: "text b.txt\ntext c.txt", filename: "a.txt" }),
+    ).toHaveLength(1);
+  });
+
+  it("still parses properly fenced files exactly as before", () => {
+    const proper = "```html index.html\n<p>hi</p>\n```\n\n```css styles.css\np{color:red}\n```";
+    const code = parseMessageBlocks(proper).filter((b) => b.type === "code");
+    expect(code.map((b) => (b as { filename?: string }).filename)).toEqual(["index.html", "styles.css"]);
   });
 });
