@@ -57,6 +57,8 @@ import {
   selectSoulContextMode,
   soulEvidencePromptBlock,
   SOUL_EVIDENCE_PROMPT_BUDGET_CHARS,
+  isSelfPortraitRequest,
+  isUserPortraitRequest,
 } from "./souls.js";
 
 describe("selfPortraitPrompt", () => {
@@ -1613,5 +1615,34 @@ describe("visualSoulNotes", () => {
     const out = visualSoulNotes(notes);
     expect(out.length).toBeGreaterThan(200); // the old ceiling
     expect(out).toContain("charcoal coat"); // the LAST note still makes it in
+  });
+});
+
+describe("an image can be of BOTH souls at once", () => {
+  // The render path used to branch if/else over the two: "draw you and me together" carried one
+  // face and the other person came out a stranger, in a picture that named them. Both predicates
+  // answer independently, so the caller can collect both sets of photos — this pins that they do.
+  it("recognises a two-hander by self-reference", () => {
+    const p = "draw you and me together on a beach";
+    expect(isSelfPortraitRequest(p, "Aria")).toBe(true);
+    expect(isUserPortraitRequest(p, "Sam")).toBe(true);
+  });
+
+  it("recognises a two-hander by name", () => {
+    const p = "a picture of Aria and Sam at the market";
+    expect(isSelfPortraitRequest(p, "Aria")).toBe(true);
+    expect(isUserPortraitRequest(p, "Sam")).toBe(true);
+  });
+
+  it("still tells a one-sided request apart", () => {
+    expect(isSelfPortraitRequest("draw yourself", "Aria")).toBe(true);
+    expect(isUserPortraitRequest("draw yourself", "Sam")).toBe(false);
+    expect(isUserPortraitRequest("a portrait of me", "Sam")).toBe(true);
+    expect(isSelfPortraitRequest("a portrait of me", "Aria")).toBe(false);
+  });
+
+  it("still refuses 'draw me a castle' — that's a request FOR the reader, not OF them", () => {
+    expect(isUserPortraitRequest("draw me a castle", "Sam")).toBe(false);
+    expect(isSelfPortraitRequest("draw me a castle", "Aria")).toBe(false);
   });
 });

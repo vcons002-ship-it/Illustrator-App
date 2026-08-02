@@ -79,6 +79,8 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  soulRefSeeds,
+  type SoulImage,
   rememberSoul,
   forgetSoul,
   soulContextPromptBlock,
@@ -1986,7 +1988,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handlePolish(msg);
       break;
     case "chatTool":
-      void handleChatTool(msg.requestId, msg.call);
+      void handleChatTool(msg.requestId, msg.call, msg.refImages);
       break;
     case "chatVideo":
       void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage, msg.keepResident);
@@ -5926,6 +5928,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
 }
 
 /** A soul's reference photos, decoded to bytes for use as character references in an image render. */
+/**
+ * The ceiling on how many reference photos one chat render may carry.
+ *
+ * Deliberately the LOOSEST of the routes, not the tightest: each backend caps to what its own
+ * mechanism can use (IP-Adapter blends, so it takes four; Flux.2's ReferenceLatent chain keeps each
+ * photo independent, so it takes ten). Clamping to four here would have silently thrown away the
+ * capability that makes Flux.2 worth using — a person from one photo, a place from another.
+ * This is only a sanity bound so an accidental drag-and-drop of a folder can't queue fifty encodes.
+ */
+const MAX_CHAT_REFS = 10;
+
 async function loadSoulRefs(
   store: ReturnType<typeof memoryStore>,
   kind: "self" | "user",
@@ -5935,12 +5948,44 @@ async function loadSoulRefs(
 }
 
 /**
+ * Copy a cast Soul's reference photos into the character it plays, once.
+ *
+ * Deliberately routed through the engine's own addCharacterReference rather than writing anchors
+ * directly: that is what keys the bytes into this book's namespace, respects the per-character cap,
+ * clears the pipeline's byte cache and persists the bible. A second mechanism for the same thing is
+ * how two sources of truth start.
+ */
+async function seedSoulReferences(target: Engine): Promise<void> {
+  const bible = target.getBible();
+  const cast = story?.soulCast;
+  if (!bible || !cast) return;
+  const store = memoryStore();
+  const photos: Record<"self" | "user", SoulImage[]> = {
+    self: await loadSoulImages(store, "self"),
+    user: await loadSoulImages(store, "user"),
+  };
+  const seeds = soulRefSeeds(cast, bible.characters, (kind) => photos[kind].length > 0);
+  for (const seed of seeds) {
+    for (const im of photos[seed.kind]) {
+      await target.addCharacterReference(seed.characterId, {
+        bytes: base64ToBytes(im.dataBase64),
+        mimeType: im.mimeType,
+      });
+    }
+  }
+}
+
+/**
  * A user-APPROVED generate_image tool call. In-chat render overrides apply here:
  * a named model resolves against the engine's INSTALLED models (a model that
  * isn't downloaded silently keeps the current one), a named style against the
  * style catalog, and a step count rides the render directly.
  */
-async function handleChatTool(requestId: number, call: ToolCall): Promise<void> {
+async function handleChatTool(
+  requestId: number,
+  call: ToolCall,
+  refImages?: { bytes: ArrayBuffer; mimeType: string }[],
+): Promise<void> {
   // Register an abort controller under THIS render's requestId so the Stop button (chatCancel)
   // can interrupt the ComfyUI render — without this the image kept rendering after Stop.
   const ac = new AbortController();
@@ -6009,17 +6054,26 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const portraitSelfName = storySoulCast?.self ?? selfName;
     const portraitUserName = storySoulCast?.user ?? userName;
     let prompt = call.prompt;
-    let soulRefs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] | undefined;
+    // Every reference this render can legitimately use, in one list.
+    //
+    // It used to be an if/else over the two Souls, so "draw you and me together" carried ONE face —
+    // whichever branch won — and the other person came out a stranger in a picture that named them.
+    // And an ATTACHED photo carried nothing at all: the vision model described it, the description
+    // went into the prompt, and the bytes were dropped, so "make an image from this" rendered from
+    // somebody's words about the picture rather than the picture.
+    const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
     if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(call.prompt, portraitSelfName)) {
-      prompt = selfPortraitPrompt(call.prompt, portraitSelfName, selfNotes);
-      soulRefs = await loadSoulRefs(store, "self");
-    } else if (
-      (!inStory || !!storySoulCast?.user) &&
-      isUserPortraitRequest(call.prompt, portraitUserName)
-    ) {
-      prompt = userPortraitPrompt(call.prompt, portraitUserName, userNotes);
-      soulRefs = await loadSoulRefs(store, "user");
+      prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes);
+      refs.push(...(await loadSoulRefs(store, "self")));
     }
+    if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(call.prompt, portraitUserName)) {
+      prompt = userPortraitPrompt(prompt, portraitUserName, userNotes);
+      refs.push(...(await loadSoulRefs(store, "user")));
+    }
+    // The reader's own attachment is the strongest statement of intent there is — they picked THIS
+    // picture for THIS turn — so it leads, and at a higher weight than a stored Soul photo.
+    for (const im of refImages ?? []) refs.push({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 });
+    const soulRefs = refs.length ? refs.slice(0, MAX_CHAT_REFS) : undefined;
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),
@@ -6426,6 +6480,15 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       story = rebuildStoryFromBook(book, nextEngine.getBible());
       story.scenes.forEach((sc, k) => nextEngine!.setStoryPresent(k, presentFromScene(sc)));
     }
+    // A cast Soul brings its own FACE into the story, not just its name. `soulCast` renamed the
+    // character in the text prompt and stopped there, so a reader cast as a character got a stranger
+    // in every picture while their photos sat two panels away in the Soul panel. Seed those photos
+    // into that character's own reference slots, so every existing path — the per-frame budget, the
+    // weight split, the thumbnail, the reader deleting one they don't want — treats them like any
+    // other reference. Skips a character who already HAS references, so the reader's own uploads win
+    // and running this on every open can't stack duplicates. Best-effort: a failure here must not
+    // stop a book from opening.
+    void seedSoulReferences(nextEngine).catch(() => {});
     // Open is complete — now a deferred start can actually run (and `beginGeneration`
     // below sees `opening === false`). Replaying covers a `start` that arrived during
     // the open (e.g. the buddy's "open and illustrate it") as well as a settings re-open.

@@ -464,14 +464,17 @@ interface BuddySession {
  * documents a ~3 MB frame ceiling), so "send photo from phone" would do nothing. Bounded to ≤1280 px
  * on the long edge and re-encoded JPEG — plenty for the vision model that reads it. Best-effort:
  * anything unsupported/failed returns the original bytes unchanged (H4). */
-async function downscaleImageForRelay(image: { bytes: ArrayBuffer; mimeType: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
-  const LIMIT = 1280;
+async function downscaleImageForRelay(
+  image: { bytes: ArrayBuffer; mimeType: string },
+  limitPx = 1280,
+): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
+  const LIMIT = limitPx;
   try {
     if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas !== "function") return image;
     const bitmap = await createImageBitmap(new Blob([image.bytes], { type: image.mimeType }));
     const longEdge = Math.max(bitmap.width, bitmap.height);
     // Already small enough AND already a compact frame → leave it be (avoid a needless re-encode).
-    if (longEdge <= LIMIT && image.bytes.byteLength <= 2_000_000) {
+    if (longEdge <= LIMIT && image.bytes.byteLength <= Math.min(2_000_000, LIMIT * 1_500)) {
       bitmap.close();
       return image;
     }
@@ -5586,6 +5589,7 @@ export function App() {
     try {
       out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
+        ...(turnRefImagesRef.current.length ? { refImages: turnRefImagesRef.current } : {}),
       });
     } finally {
       // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
@@ -6209,6 +6213,11 @@ export function App() {
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
+    // A turn STARTED by the reader carries only the pictures they attached to it. Cleared here (not
+    // when the render finishes) so a follow-up turn can still use them for a second image — "another
+    // one, but at night" — while a fresh, unattached message can't inherit a stale photo.
+    if (userBubbleText !== undefined && !attachmentsThisTurn.current) turnRefImagesRef.current = [];
+    attachmentsThisTurn.current = false;
     // CONSUME the creative-run flag HERE, synchronously, before anything below awaits.
     //
     // It used to be read at the buddyChat call far below and cleared by a setTimeout(0) at the call
@@ -6887,6 +6896,20 @@ export function App() {
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
   // extracted to text via the same importer the "Open a document" path uses; images are held
   // for the vision model to describe at send time. All in the main thread — no new worker wiring.
+  /**
+   * Pictures the reader attached to the turn in flight, kept so a generate_image in the SAME turn can
+   * be conditioned on them — "here's a photo, now draw X from it".
+   *
+   * The attachment was already being read by the vision model and folded into the prompt as prose,
+   * which is the right thing for "what does this say" and the wrong thing for "make an image from
+   * this": the render only ever saw a description. The bytes now survive the turn that carried them,
+   * and are cleared at the start of the next one so an old photo can't leak into a later picture.
+   */
+  const turnRefImagesRef = useRef<{ bytes: ArrayBuffer; mimeType: string }[]>([]);
+  /** Set for the one dispatch that follows an attachment send, so the clear above doesn't wipe the
+   * pictures before the turn that carried them has run. */
+  const attachmentsThisTurn = useRef(false);
+
   const onAttachBuddyFile = useCallback(async (file: File) => {
     const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const looksImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
@@ -6934,6 +6957,11 @@ export function App() {
       }
       const userText = text.trim() || "Please look at the attached file(s) and help me with them.";
       const parts: string[] = [];
+      // Keep the attached pictures for THIS turn's renders (see turnRefImagesRef).
+      turnRefImagesRef.current = atts
+        .filter((a) => a.kind === "image" && a.image)
+        .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType }));
+      attachmentsThisTurn.current = turnRefImagesRef.current.length > 0;
       for (const att of atts) {
         if (att.kind === "image" && att.image) {
           // Show the picture the reader attached, inline in the chat (display-only — the full
@@ -6971,12 +6999,33 @@ export function App() {
       if (isRemoteClient) {
         // Shrink image attachments before they ride the relay — a full-res phone photo overruns the
         // tunnel frame ceiling and the send silently vanishes (H4).
-        const relayAtts: ChatSendAttachment[] = await Promise.all(
+        //
+        // The budget is PER SEND, not per photo, and this send can now carry ten of them: reference
+        // conditioning takes up to ten pictures on Flux.2, and ten 1280px JPEGs base64-encode past
+        // the ceiling. So the per-image limit falls as the count rises — a reference photo conditions
+        // perfectly well at 768px — and then the whole command is MEASURED, because an oversized
+        // frame isn't a loud failure: the tunnel drops it and the phone never learns.
+        const limitPx = atts.length >= 6 ? 640 : atts.length >= 3 ? 896 : 1280;
+        let relayAtts: ChatSendAttachment[] = await Promise.all(
           atts.map(async (a) =>
-            a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image) } : a,
+            a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image, limitPx) } : a,
           ),
         );
-        if (text.trim() || relayAtts.length) sendAppSync({ type: "vrcmd:chatSend", text, ...(relayAtts.length ? { attachments: relayAtts } : {}) });
+        const frame = (list: ChatSendAttachment[]) => ({ type: "vrcmd:chatSend" as const, text, ...(list.length ? { attachments: list } : {}) });
+        if (!fitsOneRelayFrame(frame(relayAtts))) {
+          // One more, harder pass before giving up — a long document attached alongside the photos
+          // can be what tipped it, and dropping resolution is cheaper than dropping the send.
+          relayAtts = await Promise.all(
+            relayAtts.map(async (a) => (a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image, 512) } : a)),
+          );
+        }
+        if (!fitsOneRelayFrame(frame(relayAtts))) {
+          buddyNoteRef.current(
+            `⚠ That's too much to send from here in one go (${atts.length} attachment${atts.length === 1 ? "" : "s"}). Send fewer at once, or attach them on the desktop.`,
+          );
+          return;
+        }
+        if (text.trim() || relayAtts.length) sendAppSync(frame(relayAtts));
         return;
       }
       await runBuddyTurnWithAttachments(text, atts);

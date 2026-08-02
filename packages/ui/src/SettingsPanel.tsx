@@ -2790,8 +2790,10 @@ export function SettingsPanel({
                 <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
                   Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
                   condition local renders (add photos per character in Characters). Works on{" "}
-                  <strong>SD 1.5 and SDXL checkpoints only</strong> — Flux, Z-Image, Qwen-Image and HiDream can&rsquo;t
-                  use them. <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
+                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2 needs none of this</strong> — it reads
+                  reference photos itself, with nothing to install. Flux.1, Z-Image, Qwen-Image and HiDream can&rsquo;t
+                  use them here by either route.{" "}
+                  <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
                   Cloud Gemini and gpt-image-1 take reference photos on any of their models, with nothing to install.
                   {remote && !isDesktop ? " Installs on your linked desktop, where the engine runs." : ""}
                 </span>

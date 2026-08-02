@@ -141,7 +141,11 @@ export type MainToWorker =
    * `imageAssessed`). Bytes travel zero-copy. */
   | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
-  | { type: "chatTool"; requestId: number; call: ToolCall }
+  // `refImages` — pictures the reader ATTACHED to this turn, carried so a generate_image in the same
+  // turn can be conditioned on them ("here's a photo, now draw X from it"). Until this existed an
+  // attachment was described by the vision model and the BYTES were dropped, so the render only ever
+  // saw somebody's words about the picture.
+  | { type: "chatTool"; requestId: number; call: ToolCall; refImages?: { bytes: ArrayBuffer; mimeType: string }[] }
   /** Run a user-APPROVED generate_video call: the host resolved the SOURCE image bytes + the model files
    * (the worker has no access to the chat's images / library); answered by `chatToolResult` (video field). */
   | {
