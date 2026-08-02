@@ -184,6 +184,7 @@ import {
   appendTaskContext,
   filterActionHistory,
   formatActionHistory,
+  producedArtifactFrom,
   loadActionHistory,
   harvestTaskContext,
   completeStepById,
@@ -5849,6 +5850,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.wolfram ? { wolfram: e.result.wolfram } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.openedImage ? { openedImage: e.result.openedImage } : {}),
+            // Whether this produced something durable. Only a handful of fields cross this boundary,
+            // so the part of the payload that says WHAT a tool made never reached the app-managed
+            // collar — which then judged "no file was written" about a document it had just written.
+            ...(producedArtifactFrom(e.result) ? { artifact: true } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

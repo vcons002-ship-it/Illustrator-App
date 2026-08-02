@@ -6391,7 +6391,15 @@ export function App() {
         // and add their own evidence in the approve* handlers; here we only see auto-run results, for
         // which "ran without error" is what a tool_ok contract needs.
         if (appManagedActive && e.kind === "toolResult" && buddyWorkflowRef.current)
-          buddyStepEvidenceRef.current.toolResults.push({ call: e.call, result: e.error ? { error: e.error } : {} });
+          // Record the RESULT, not just whether it errored. Reducing every auto-run outcome to {} threw
+          // away the only evidence that distinguishes them: create_document returns {document}, a
+          // spreadsheet returns {opened}, an edit returns {documentEdit}. The collar then saw an empty
+          // payload and judged "no file was written" for a step whose document had just been written —
+          // and since the payload was gone, nothing downstream could tell either.
+          buddyStepEvidenceRef.current.toolResults.push({
+            call: e.call,
+            result: e.error ? { error: e.error } : e.artifact ? { artifact: true } : {},
+          });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step")) refreshTaskPlans();

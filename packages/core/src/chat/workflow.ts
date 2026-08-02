@@ -383,14 +383,22 @@ function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
  */
 function producedArtifact(evidence: StepEvidence): boolean {
   return evidence.toolResults.some(
-    (r) => r.result.image?.ok === true || r.result.video?.ok === true || r.result.writeFile?.ok === true || r.result.command?.code === 0,
+    (r) =>
+      r.result.image?.ok === true ||
+      r.result.video?.ok === true ||
+      r.result.writeFile?.ok === true ||
+      r.result.command?.code === 0 ||
+      // Anything the host summarised as durable: a document, a spreadsheet, an edit that landed.
+      r.result.artifact === true,
   );
 }
 
 /** The same set, but counting an ATTEMPT — a failed render is still the model doing the step, so it
  * should burn one of the step's attempts rather than loop on "you haven't started yet". PURE. */
 function attemptedArtifact(evidence: StepEvidence): boolean {
-  return evidence.toolResults.some((r) => "image" in r.result || "video" in r.result || "writeFile" in r.result || "command" in r.result);
+  return evidence.toolResults.some(
+    (r) => "image" in r.result || "video" in r.result || "writeFile" in r.result || "command" in r.result || "artifact" in r.result,
+  );
 }
 
 /**
@@ -407,9 +415,13 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
         ? { done: true }
         : { done: false, reason: "no image was rendered" };
     case "file":
-      return evidence.toolResults.some((r) => r.result.writeFile?.ok === true)
+      // A DOCUMENT is a file. create_document saves to the workspace and hands back a downloadable
+      // card, and a spreadsheet opens and is saved — but neither goes through write_file, so a step
+      // that asked for "a Word document summarising the findings" sat unfinished beside the document
+      // it had asked for. `artifact` is the host's word that something durable landed.
+      return evidence.toolResults.some((r) => r.result.writeFile?.ok === true || r.result.artifact === true)
         ? { done: true }
-        : { done: false, reason: "no file was written" };
+        : { done: false, reason: "no file or document was produced" };
     case "command_ok":
       return evidence.toolResults.some((r) => r.result.command?.code === 0)
         ? { done: true }
@@ -470,7 +482,7 @@ export function attemptedStepWork(step: WorkflowStep, evidence: StepEvidence): b
       return ran((r) => "image" in r.result); // a render was attempted (image.ok true OR false)
     case "file":
     case "files":
-      return ran((r) => "writeFile" in r.result);
+      return ran((r) => "writeFile" in r.result || "artifact" in r.result);
     case "command_ok":
       return ran((r) => "command" in r.result);
     case "tool_ok":

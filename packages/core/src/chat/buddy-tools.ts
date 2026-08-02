@@ -512,6 +512,33 @@ export type BuddyToolCall =
  * any free-form word) validate it against this set so an invented name ("research") is rejected as a
  * contract instead of compiling into an unsatisfiable `tool_ok("research")` that no evidence can ever
  * match. The `Set<BuddyToolName>` element type makes TypeScript reject any name that isn't a real tool. */
+/**
+ * Did this tool result produce something durable the reader now has?
+ *
+ * Deliberately narrower than "it worked": a web search returning hits is progress, not a deliverable,
+ * and must not tick off a step that asked for one. A document, a spreadsheet, an applied edit, a
+ * written file, a render, a clean command — those are things that exist afterwards. PURE.
+ */
+export function producedArtifactFrom(result: BuddyToolResultPayload): boolean {
+  if (result.error) return false;
+  return (
+    result.image?.ok === true ||
+    result.video?.ok === true ||
+    result.writeFile?.ok === true ||
+    result.command?.code === 0 ||
+    result.document?.ok === true ||
+    result.documentEdit?.ok === true ||
+    result.dataEdit?.ok === true ||
+    !!result.opened ||
+    // Things the reader now HAS in Google: a draft they can send, an event on the calendar, a to-do.
+    // Left out, a step like "draft an email to the team" or "add it to my calendar" sat unfinished
+    // beside the draft and the event it had just made.
+    (!!result.email && !result.email.error) ||
+    !!result.eventCreated ||
+    !!result.taskCreated
+  );
+}
+
 export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolName>([
   "search_web", "search_books", "search_images", "read", "read_url", "random_books", "calculate", "wolfram",
   "stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "schwab_quote",
@@ -3733,6 +3760,16 @@ export interface BuddyToolResultPayload {
   draftEdited?: { id: string; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[]; error?: string };
   /** set_cell / add_formula_column outcome against the open spreadsheet. */
   dataEdit?: { ok: boolean; summary?: string; error?: string };
+  /**
+   * The host's summary of whether this tool produced something DURABLE — a document, a spreadsheet,
+   * an edit that landed. See {@link producedArtifactFrom}.
+   *
+   * Auto-run results cross a worker boundary that forwards only a handful of fields, so the payload
+   * that says WHAT a tool produced doesn't survive the trip. The collar was left judging an empty
+   * object and concluding "no file was written" about a document it had just written. This is the one
+   * bit of that payload the collar actually needs, carried deliberately rather than by accident.
+   */
+  artifact?: boolean;
   /** read_data outcome: the open sheet's cells, with the A1 refs needed to aim set_cell at them. */
   dataText?: { title: string; text: string; rows: number; from: number; to: number };
   /** Title of a removed library book (remove_library_book). */
