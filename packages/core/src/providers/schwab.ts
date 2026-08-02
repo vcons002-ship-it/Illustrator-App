@@ -29,14 +29,26 @@ export interface SchwabTokens {
 
 // ----------------------------------------------------------------- OAuth
 
-/** The Schwab consent URL to open in the browser (authorization-code flow). */
-export function buildSchwabAuthUrl(opts: { clientId: string; redirectUri: string; state: string }): string {
+/**
+ * The Schwab consent URL to open in the browser (authorization-code flow).
+ *
+ * NO `scope` unless one is asked for. Schwab's own documented consent URL carries only `client_id`
+ * and `redirect_uri`, and we were adding `scope=readonly` on top. On an app registered for Accounts
+ * and Trading that is a narrower grant than the app is for, and the reported symptom — sign in, press
+ * Continue, land back on the login screen with the calls showing on the portal — is what a consent
+ * that cannot be satisfied looks like from the outside: the request arrives, and nothing comes back.
+ *
+ * That was the only thing we sent beyond the documented minimum, on an app the reader had already
+ * confirmed was Ready For Use with both API products added — so it is the one candidate left in our
+ * half. `scope` stays available for a caller that has a reason to narrow it.
+ */
+export function buildSchwabAuthUrl(opts: { clientId: string; redirectUri: string; state: string; scope?: string }): string {
   const params = new URLSearchParams({
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
     response_type: "code",
-    scope: "readonly",
     state: opts.state,
+    ...(opts.scope ? { scope: opts.scope } : {}),
   });
   return `${AUTH_ENDPOINT}?${params.toString()}`;
 }
