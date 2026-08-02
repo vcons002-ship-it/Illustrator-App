@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CHAT_SLASH_COMMANDS,
   chartDatasetFromTable,
@@ -115,6 +115,11 @@ export interface FileActions {
   /** Re-open the SAME file through a different reader ("Open as…"): the plain-text reader, the data
    * grid, the book/article reader, or the photo tools. Lets the reader override the extension's route. */
   openAs?: (file: FileRef, as: "reader" | "data" | "text" | "image") => void;
+  /** Fetch a text document's contents so it can be read INLINE in the chat. Only asked for when the
+   * card is a text/Markdown file that doesn't already carry its text — a written `.md` surfaced as a
+   * bare path, or a card whose bytes were externalized on persist. Resolve `undefined` when the text
+   * genuinely can't be got; the card then says so rather than showing an empty document. */
+  readText?: (file: FileRef) => Promise<string | undefined>;
 }
 
 /** The "Open as…" choices a file can be re-routed through, with labels for the menu. */
@@ -974,10 +979,46 @@ export function fileActionKeys(
   return keys;
 }
 
+/**
+ * Is this card a TEXT document — something the chat window can render as prose, whether or not it
+ * currently holds the text? Extension counts as well as MIME, because a written `.md` reaches the
+ * chat as a bare path with `mime: ""`, which is exactly the card that had no way to be read.
+ */
+export function isTextDocument(file: Pick<FileRef, "name" | "mime">): boolean {
+  return (
+    file.mime === "text/markdown" ||
+    file.mime === "text/plain" ||
+    /\.(md|markdown|txt|text)$/i.test(file.name)
+  );
+}
+
+/**
+ * The text a file card ALREADY carries, renderable inline ("📖 Read here"), or undefined when it
+ * isn't a text document or the text has to be fetched. `content` when the card carries it, otherwise
+ * decoded from its bytes — a text document is readable either way, and keying off `content` alone
+ * meant a card that reached the reader carrying only bytes offered no way to read a .md at all, in a
+ * chat window perfectly able to render it.
+ */
+export function inlineReadableText(file: Pick<FileRef, "name" | "mime" | "content" | "bytes">): string | undefined {
+  if (!isTextDocument(file)) return undefined;
+  if (file.content) return file.content;
+  if (!file.bytes || file.bytes.byteLength === 0) return undefined;
+  try {
+    // `fatal` so undecodable bytes throw instead of coming back as a page of replacement characters,
+    // which would render as a "document" made of garbage rather than simply offering no Read button.
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(file.bytes));
+  } catch {
+    return undefined;
+  }
+}
+
 const FILE_ACTION_LABEL: Record<FileActionKey, { label: string; title: string }> = {
   dl: { label: "💾 Download", title: "Save a copy of this file" },
-  app: { label: "📖 Open in app", title: "Open it in the reader" },
-  lib: { label: "📚 Open in library", title: "Add it to your library and open it" },
+  app: { label: "📖 Open in app", title: "Open it in the reader (this also keeps it in your library)" },
+  // "Open in library" claimed it opened the file and didn't — it only saved it. And since opening a
+  // file ALSO adds it to the library, the two actions landed in the same place from the outside, which
+  // is why they read as duplicates. The distinction that's actually useful is open-it versus just-keep-it.
+  lib: { label: "📚 Add to library", title: "Keep it in your library without opening it now" },
   pc: { label: "🖥 Open on PC", title: "Open it in your computer's default app" },
 };
 
@@ -1013,9 +1054,34 @@ export function FileActionBar({
   const closeMore = (): void => {
     if (moreRef.current) moreRef.current.open = false;
   };
-  // A document the chat can render INLINE (read it here without switching to the reader window) — a
-  // text/Markdown card that carries its content. Reuses the same block model as the PDF/Word export.
-  const canReadInline = !!file.content && (file.mime === "text/markdown" || /\.(md|markdown|txt)$/i.test(file.name));
+  // Reading a text document INLINE, without leaving the chat. The card's own text when it carries it;
+  // otherwise fetched on the first click, because the most common way a `.md` reaches the chat is as a
+  // bare path (the assistant wrote it, or a search found it) — which used to mean a Markdown file the
+  // chat could render perfectly well had no button to render it, only "open it somewhere else".
+  const ownText = useMemo(() => inlineReadableText(file), [file]);
+  const [loadedText, setLoadedText] = useState<string | undefined>();
+  const [readErr, setReadErr] = useState<string | undefined>();
+  const [reading, setReading] = useState(false);
+  const inlineText = ownText ?? loadedText;
+  const canReadInline = ownText !== undefined || (isTextDocument(file) && !!actions.readText);
+  const toggleRead = async (): Promise<void> => {
+    if (readOpen) return setReadOpen(false);
+    setReadOpen(true);
+    if (inlineText !== undefined || !actions.readText) return;
+    setReading(true);
+    setReadErr(undefined);
+    try {
+      const text = await actions.readText(file);
+      // undefined/empty is NOT a document — say so, rather than opening a blank panel that reads as
+      // "this file is empty" when what happened is that it couldn't be reached.
+      if (text) setLoadedText(text);
+      else setReadErr(`Couldn't read “${file.name}” on this device.`);
+    } catch (e) {
+      setReadErr(`Couldn't read “${file.name}”: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setReading(false);
+    }
+  };
   const runFor: Record<FileActionKey, () => void | Promise<unknown>> = {
     dl: async () => {
       const saved = await actions.download!(file);
@@ -1060,9 +1126,10 @@ export function FileActionBar({
         <button
           style={readOpen ? { ...fileChipStyle, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" } : fileChipStyle}
           title="Read this document right here in the chat (no need to open the reader)"
-          onClick={() => setReadOpen((v) => !v)}
+          disabled={reading}
+          onClick={() => void toggleRead()}
         >
-          {readOpen ? "▾ Hide" : "📖 Read here"}
+          {reading ? "…" : readOpen ? "▾ Hide" : "📖 Read here"}
         </button>
       ) : null}
       {rest.length >= 1 || actions.openAs ? (
@@ -1109,7 +1176,10 @@ export function FileActionBar({
         {note.text}
       </div>
     ) : null}
-    {canReadInline && readOpen ? (
+    {readOpen && readErr ? (
+      <div style={{ fontSize: 11, marginTop: 4, color: DANGER_RED }}>⚠ {readErr}</div>
+    ) : null}
+    {readOpen && inlineText !== undefined ? (
       <div
         style={{
           maxHeight: 440,
@@ -1121,7 +1191,7 @@ export function FileActionBar({
           background: "rgba(255,255,255,0.03)",
         }}
       >
-        <DocBlocksView markdown={file.content!} />
+        <DocBlocksView markdown={inlineText} />
       </div>
     ) : null}
     </div>
