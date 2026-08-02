@@ -4580,6 +4580,25 @@ export function App() {
 
   // The universal file-card actions, shared by both chats: Download (save a copy), Open in app
   // (reader), Open in library (save for later), and — on desktop — Open on PC (OS default app).
+  /**
+   * Add a character reference photo, safely from either device.
+   *
+   * On a PHONE there is no local engine: this rides the relay to the desktop's worker as raw bytes.
+   * A photo straight off a phone camera is 5–12 MB, which base64-encodes past the frame ceiling and
+   * is dropped by the tunnel WITHOUT an error — the reference simply never arrived, no thumbnail
+   * appeared, and nothing said why. Chat attachments have been shrunk for this exact reason since
+   * they were added; character references were sending full-res into the same ceiling.
+   *
+   * Downscaled only when it has a relay to cross. On the desktop the bytes go straight to the store
+   * at full resolution, exactly as before.
+   */
+  const addCharacterReferencePhoto = useCallback(
+    async (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }): Promise<void> => {
+      addCharacterReference(characterId, isRemoteClient ? await downscaleImageForRelay(image) : image);
+    },
+    [addCharacterReference, isRemoteClient],
+  );
+
   const buddyFileActions = useMemo<FileActions>(
     () => ({
       download: async (ref0) => {
@@ -9635,7 +9654,7 @@ export function App() {
                             // The display image is raw bytes OR a host-converted Blob; get bytes
                             // either way, COPYING so the capture never disturbs the shown image.
                             const bytes = "bytes" in img ? img.bytes.slice(0) : await img.blob.arrayBuffer();
-                            addCharacterReference(c.id, { bytes, mimeType: img.mimeType });
+                            await addCharacterReferencePhoto(c.id, { bytes, mimeType: img.mimeType });
                             noteAction(`✓ Locked this image as ${c.name}'s look — future beats will match it. Regenerate a beat to re-illustrate it with the new reference.`);
                           })();
                         }}
@@ -9697,7 +9716,7 @@ export function App() {
           onSave={(id, patch) => updateCharacter(id, patch)}
           onRemove={(id) => removeBibleEntry("character", id)}
           onRestore={(id) => restoreBibleEntry("character", id)}
-          onAddReference={addCharacterReference}
+          onAddReference={(characterId, image) => void addCharacterReferencePhoto(characterId, image)}
           onRemoveReference={removeCharacterReference}
           getReferenceImage={getCharacterReference}
           onClose={() => setShowCharacters(false)}
