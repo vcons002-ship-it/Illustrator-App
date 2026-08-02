@@ -19,6 +19,7 @@ export * from "./llm/local-server-provider.js";
 export * from "./llm/vram.js";
 export * from "./image/image-provider.js";
 export * from "./image/video-models.js";
+export * from "./image/ipadapter-install.js";
 export * from "./image/video-stitch.js";
 export * from "./image/video-continuity.js";
 export * from "./image/sd-prompt.js";

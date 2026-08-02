@@ -2571,6 +2571,8 @@ export function App() {
     onDownloadModel,
     onDownloadModelUrl,
     onDownloadVideoModel,
+    onInstallIpAdapter,
+    ipAdapterNote,
     onDownloadFfmpeg,
     onPullTextModel,
     onDownloadStyleLora,
@@ -9002,6 +9004,8 @@ export function App() {
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
             onDownloadVideoModel={onDownloadVideoModel}
+            onInstallIpAdapter={onInstallIpAdapter}
+            {...(ipAdapterNote ? { ipAdapterNote } : {})}
             onDownloadFfmpeg={onDownloadFfmpeg}
             downloadProgress={modelProgress}
             downloadStage={downloadStage}

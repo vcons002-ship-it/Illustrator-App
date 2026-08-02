@@ -18,7 +18,9 @@ import {
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
+  IPADAPTER_DOWNLOADS,
   VIDEO_MODELS,
+  ipAdapterDownloadSizeGB,
   videoModelById,
   VIDEO_RENDER_DEFAULTS,
   serverModelVramCostGb,
@@ -608,6 +610,10 @@ export interface SettingsPanelProps {
   onDownloadModelUrl?: (url: string) => void;
   /** Download the selected image-to-video model's files into ComfyUI's subfolders (desktop). */
   onDownloadVideoModel?: (id: string) => void;
+  /** Install the IP-Adapter nodes + models so reference photos condition local renders. */
+  onInstallIpAdapter?: () => void;
+  /** What the last IP-Adapter install did (it always ends in "restart the engine"). */
+  ipAdapterNote?: string;
   /** Download a self-contained ffmpeg build (Windows) into the app's own managed folder — needed for
    * long-form video stitching, without depending on PATH/winget (desktop). Progress rides
    * `downloadProgress.ffmpeg`, same as a catalog model. */
@@ -686,6 +692,8 @@ export function SettingsPanel({
   onDownloadModel,
   onDownloadModelUrl,
   onDownloadVideoModel,
+  onInstallIpAdapter,
+  ipAdapterNote,
   onDownloadFfmpeg,
   downloadProgress = {},
   downloadStage = {},
@@ -913,6 +921,51 @@ export function SettingsPanel({
                 </span>
               </div>
             )}
+            {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Character reference photos (IP-Adapter)</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                  {onInstallIpAdapter ? (
+                    <button type="button" onClick={() => onInstallIpAdapter()}>
+                      Set up reference photos (~{ipAdapterDownloadSizeGB()} GB)
+                    </button>
+                  ) : null}
+                </div>
+                {ipAdapterNote ? (
+                  <span style={{ display: "block", fontSize: 11, marginTop: 4, color: ACCENT_BLUE }}>{ipAdapterNote}</span>
+                ) : null}
+                <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+                  Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
+                  condition local renders (add photos per character in Characters). Works on{" "}
+                  <strong>SD 1.5 and SDXL checkpoints only</strong> — Flux, Z-Image, Qwen-Image and HiDream can&rsquo;t
+                  use them. <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
+                  Cloud Gemini and gpt-image-1 take reference photos on any of their models, with nothing to install.
+                </span>
+                <div style={{ marginTop: 8, fontSize: 11 }}>
+                  <span style={{ opacity: 0.75, fontWeight: 600 }}>Required files (for manual download):</span>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+                    {IPADAPTER_DOWNLOADS.map((d) => (
+                      <li key={d.filename} style={{ marginTop: 3, lineHeight: 1.5 }}>
+                        <code style={{ userSelect: "all", fontSize: 11 }}>{d.filename}</code>
+                        <span style={{ opacity: 0.6 }}>
+                          {" → "}ComfyUI/models/{d.folder}/ — {d.note}{" "}
+                        </span>
+                        <a href={d.url} target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
+                          source ↗
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                  <span style={{ display: "block", opacity: 0.5, marginTop: 3 }}>
+                    Plus the nodes themselves:{" "}
+                    <a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
+                      ComfyUI_IPAdapter_plus ↗
+                    </a>{" "}
+                    cloned into ComfyUI/custom_nodes/.
+                  </span>
+                </div>
+              </div>
+            ) : null}
             {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
