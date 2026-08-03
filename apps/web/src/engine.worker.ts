@@ -5578,6 +5578,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(result.calc ? { calc: result.calc } : {}),
         ...(result.wolfram ? { wolfram: result.wolfram } : {}),
         ...(result.memory ? { memory: result.memory } : {}),
+        ...(result.quote ? { quote: result.quote } : {}),
+        ...(result.indicators ? { indicators: result.indicators } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
       post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [] });

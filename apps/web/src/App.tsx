@@ -161,6 +161,8 @@ import {
   buildOptionOrder,
   describeOrder,
   tvActionScript,
+  formatQuote,
+  formatIndicators,
   summarizeProbe,
   POLISH_PRESETS,
   type ConceptIntro,
@@ -6709,6 +6711,11 @@ export function App() {
               ...(h.title ? { title: h.title } : {}),
             })),
           });
+        } else if (e.quote) {
+          // The slash path runs the tool with no LLM, so nothing else would say what came back.
+          appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote)}` });
+        } else if (e.indicators) {
+          appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators)}` });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
         } else if (e.wolfram) {
@@ -6729,6 +6736,15 @@ export function App() {
           appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
         } else if (typed.startsWith("/") && e.error) {
           appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
+        } else if (e.call.tool === "stock_quote" || e.call.tool === "market_analysis") {
+          // A market tool that returned NOTHING (no proxy on plain web, or an unknown ticker) —
+          // say which, rather than leaving a slash command looking like it did nothing at all.
+          appendBuddy({
+            role: "tool",
+            text:
+              `⚠ No market data for “${"symbol" in e.call ? e.call.symbol : ""}”. The keyless feed needs the desktop app ` +
+              "or the extension (it can't run in a plain browser tab), and the ticker has to be one Yahoo knows.",
+          });
         } else if (
           typed.startsWith("/") &&
           (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web")

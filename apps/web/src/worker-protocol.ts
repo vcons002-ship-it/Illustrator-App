@@ -455,6 +455,10 @@ export type WorkerToMain =
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
+      /** /quote and /ta — the slash path runs the tool with no LLM, so the numbers have to cross
+       * this boundary to be shown. Without them the command ran and the chat stayed empty. */
+      quote?: StockQuote;
+      indicators?: Indicators;
       /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       /** What this tool left behind — something that didn't exist before ("created") or a change to

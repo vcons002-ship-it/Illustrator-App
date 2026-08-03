@@ -453,6 +453,9 @@ export type BuddyStreamEvent =
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
+      /** /quote and /ta results — the slash path has no LLM to narrate them. */
+      quote?: StockQuote;
+      indicators?: Indicators;
       /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       /** What this tool left behind — "created" (a thing that didn't exist) or "changed" (an edit to
@@ -1215,6 +1218,8 @@ export function useEngineWorker(
             ...(msg.calc ? { calc: msg.calc } : {}),
             ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
+            ...(msg.quote ? { quote: msg.quote } : {}),
+            ...(msg.indicators ? { indicators: msg.indicators } : {}),
             ...(msg.openedImage ? { openedImage: msg.openedImage } : {}),
             ...(msg.artifact ? { artifact: msg.artifact } : {}),
             ...(msg.error ? { error: msg.error } : {}),

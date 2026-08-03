@@ -43,6 +43,11 @@ export const BUDDY_SLASH_COMMANDS: SlashCommandInfo[] = [
   { name: "images", args: "<query>", description: "Find a real figure/diagram/photo" },
   { name: "draw", args: "<prompt>", description: "Generate a new image (one-click confirm)" },
   { name: "calc", args: "<expression>", description: "Exact arithmetic (sqrt, sin, ^, !, pi…)" },
+  // The DETERMINISTIC way to a real number. Everything else about the market tools is persuasion —
+  // the model deciding, each turn, whether a price question warrants loading a toolset — and a
+  // reader who just wants the quote shouldn't be relying on that judgement going their way.
+  { name: "quote", args: "<ticker>", description: "Live quote for a ticker — price, day range, volume" },
+  { name: "ta", args: "<ticker> [interval] [range]", description: "Technicals for a ticker — VWAP, moving averages, RSI" },
   { name: "style", args: "<art style>", description: "Set the app's art style" },
   { name: "remember", args: "<note>", description: "Save a note to long-term memory" },
   { name: "forget", args: "<text>", description: "Remove memory notes containing this text" },
@@ -133,6 +138,22 @@ export function parseBuddySlashCommand(
       return { call: { tool: "random_books" } };
     case "calc": {
       const call = viaParser(parseBuddyToolCall, { tool: "calculate", expression: s.args });
+      return call ? { call } : usage(info);
+    }
+    case "quote": {
+      // Only the first word is the ticker; "/quote AAPL please" is a ticker, not a symbol lookup.
+      const symbol = s.args.split(/\s+/)[0] ?? "";
+      const call = viaParser(parseBuddyToolCall, { tool: "stock_quote", symbol: symbol.toUpperCase() });
+      return call ? { call } : usage(info);
+    }
+    case "ta": {
+      const [symbol, interval, range] = s.args.split(/\s+/);
+      const call = viaParser(parseBuddyToolCall, {
+        tool: "market_analysis",
+        symbol: (symbol ?? "").toUpperCase(),
+        ...(interval ? { interval } : {}),
+        ...(range ? { range } : {}),
+      });
       return call ? { call } : usage(info);
     }
     case "style": {
