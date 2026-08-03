@@ -55,6 +55,7 @@ describe("renderPromptRecord — what the render was actually told", () => {
     // words doing the suppressing.
     const out = renderPromptRecord("a portrait of me", "lowres, blurry", {
       engine: "ComfyUI",
+      model: "sd_xl_base_1.0.safetensors",
       family: "sdxl",
       sampler: "euler",
       scheduler: "normal",
@@ -63,7 +64,7 @@ describe("renderPromptRecord — what the render was actually told", () => {
     });
     expect(out).toContain("a portrait of me");
     expect(out).toContain("Negative: lowres, blurry");
-    expect(out).toContain("Engine: ComfyUI · sdxl · euler/normal · cfg 7 · 28 steps");
+    expect(out).toContain("Engine: ComfyUI · sd_xl_base_1.0.safetensors · sdxl · euler/normal · cfg 7 · 28 steps");
   });
 
   it("says '(none)' rather than going quiet when there IS no negative", () => {
@@ -75,6 +76,24 @@ describe("renderPromptRecord — what the render was actually told", () => {
   it("leaves out settings it wasn't given, without leaving gaps", () => {
     const out = renderPromptRecord("x", "y", { engine: "AUTOMATIC1111", family: "sd15", cfg: 7 });
     expect(out).toContain("Engine: AUTOMATIC1111 · sd15 · cfg 7");
+    expect(out).not.toContain("··");
+  });
+});
+
+describe("the record names the checkpoint FILE", () => {
+  it("because two engines keep separate models folders", () => {
+    // The decisive field. When one engine handles a subject and another doesn't with "the same
+    // model", that sameness is an assumption until the two filenames are read side by side — and a
+    // base checkpoint and a community fine-tune of it behave nothing alike on the same prompt.
+    const comfy = renderPromptRecord("x", "", { engine: "ComfyUI", model: "sd_xl_base_1.0.safetensors", family: "sdxl" });
+    const a1111 = renderPromptRecord("x", "", { engine: "AUTOMATIC1111", model: "myFineTune_v6.safetensors", family: "sdxl" });
+    expect(comfy).toContain("sd_xl_base_1.0.safetensors");
+    expect(a1111).toContain("myFineTune_v6.safetensors");
+  });
+
+  it("omits it cleanly when the engine uses whatever it already has loaded", () => {
+    const out = renderPromptRecord("x", "", { engine: "AUTOMATIC1111", family: "sdxl" });
+    expect(out).toContain("Engine: AUTOMATIC1111 · sdxl");
     expect(out).not.toContain("··");
   });
 });

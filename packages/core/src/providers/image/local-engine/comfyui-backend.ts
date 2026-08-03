@@ -1282,6 +1282,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         mimeType: "image/png",
         prompt: renderPromptRecord(prompt, negative, {
           engine: "ComfyUI",
+          model: checkpoint,
           family,
           sampler: sampler.sampler,
           scheduler: sampler.scheduler,

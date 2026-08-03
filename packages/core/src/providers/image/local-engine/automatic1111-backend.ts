@@ -209,6 +209,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
         mimeType: "image/png",
         prompt: renderPromptRecord(prompt, String(body.negative_prompt ?? ""), {
           engine: "AUTOMATIC1111",
+          ...(checkpoint ? { model: checkpoint } : {}),
           family,
           sampler: this.sampler,
           cfg: Number(body.cfg_scale),

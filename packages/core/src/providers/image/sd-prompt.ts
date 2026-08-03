@@ -298,10 +298,22 @@ export function resolveNegative(
 export function renderPromptRecord(
   positive: string,
   negative: string,
-  engine: { engine: string; family: ModelFamily; sampler?: string; scheduler?: string; cfg?: number; steps?: number },
+  engine: {
+    engine: string;
+    family: ModelFamily;
+    /** The checkpoint FILE the engine actually loaded. The most important field here: two engines
+     * keep separate models folders, so "the same model" is an assumption until the filenames are put
+     * side by side — and a base checkpoint and a community fine-tune of it behave nothing alike. */
+    model?: string;
+    sampler?: string;
+    scheduler?: string;
+    cfg?: number;
+    steps?: number;
+  },
 ): string {
   const bits = [
     engine.engine,
+    engine.model,
     engine.family,
     engine.sampler && engine.scheduler ? `${engine.sampler}/${engine.scheduler}` : engine.sampler,
     engine.cfg !== undefined ? `cfg ${engine.cfg}` : undefined,
