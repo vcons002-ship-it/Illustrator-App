@@ -194,6 +194,8 @@ import {
   producedArtifactFrom,
   type ArtifactKind,
   loadActionHistory,
+  loadLastScan,
+  scanHealthNote,
   harvestTaskContext,
   completeStepById,
   setTaskPlanComplete,
@@ -4959,8 +4961,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         })),
       // The assistant reading back its OWN unattended work. Every entry was already being written
       // here, with a timestamp; only the reader could see it.
-      recentActions: async (kind, limit) =>
-        formatActionHistory(filterActionHistory(await loadActionHistory(store), kind, limit)),
+      recentActions: async (kind, limit) => {
+        const history = formatActionHistory(filterActionHistory(await loadActionHistory(store), kind, limit));
+        // The automatic email/calendar scan is the one piece of unattended work whose ABSENCE from
+        // the list above means nothing on its own — a quiet sweep is deliberately not logged, so
+        // "no scan entries" reads identically to "the scan is dead". Its own record says which.
+        return `${history}\n\n${scanHealthNote(await loadLastScan(store), Date.now())}`;
+      },
       cancelScheduled: async (id) => {
         await deleteScheduledTask(store, id);
         post({ type: "buddyScheduledChanged", requestId: msg.requestId });

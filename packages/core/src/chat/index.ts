@@ -21,6 +21,7 @@ export * from "./toolsets.js";
 export * from "./remote-link.js";
 export * from "./activity.js";
 export * from "./action-history.js";
+export * from "./background-scan.js";
 export * from "./mcp.js";
 export * from "./subagent.js";
 export * from "./coding-agents.js";

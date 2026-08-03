@@ -120,6 +120,14 @@ import {
   unseenCount,
   type ActionEntry,
   type ActionKind,
+  loadLastScan,
+  saveLastScan,
+  agoLabel,
+  nextScanRecord,
+  shouldLogScan,
+  summarizeScan,
+  scanChangedSomething,
+  type ScanCounts,
   nextOccurrence,
   describeRecurrence,
   type TaskRecurrence,
@@ -3242,44 +3250,42 @@ export function App() {
   // Phase-2 idle scan: while the app is open, Google's connected, automation is on, AND the app is
   // IDLE — no in-flight process and no chat/request for IDLE_MS — periodically scan recent email +
   // calendar for actionable items, then plan a couple. Never interrupts active work (no daemon).
-  const scanningRef = useRef(false);
-  // Set once the calendar refresher is defined below; lets the scan sync the app calendar
-  // without a forward reference / re-subscribing the interval.
-  const refreshCalendarRef = useRef<() => void>(() => {});
+  //
+  // The scan pass itself is `runScanPass`, defined below with the calendar loader and the activity
+  // log in scope; the sweep reaches it through this ref rather than duplicating it. It used to have
+  // its OWN copy of the scan, which is how the two drifted: the button reported what it found, what
+  // it synced and any Google error, and the automatic sweep reported nothing at all — not to the
+  // status pill, not to the action history, not to the panel — and swallowed every failure in a bare
+  // `.catch(() => {})`. One implementation, one report, for both.
+  const runScanPassRef = useRef<(auto: boolean) => Promise<void>>(async () => {});
   useEffect(() => {
     // Runs by DEFAULT once Google is connected (set autoTaskScan=false to stop background scans).
     // Each idle sweep does TWO things, read/research-only (no email/calendar writes): (1) scan for
     // new items and surface them as unplanned stubs, then (2) PLAN a couple of the still-unplanned
     // backlog — so heavy planning happens in the background while you're away, not on demand.
-    if (!googleConnected || settings.autoTaskScan === false) return;
+    //
+    // The phone doesn't sweep: it has no Google tokens of its own (its connected status is MIRRORED
+    // from the desktop, so `googleConnected` is true there too) and no store to write findings into.
+    // Every other background sweep in this file already stands down on the phone; this one didn't.
+    if (isRemoteClient || !googleConnected || settings.autoTaskScan === false) return;
     const IDLE_MS = 3 * 60_000;
     const rate = settings.backgroundPlanRate ?? 2;
     const id = setInterval(() => {
-      // IDLE = this sweep isn't already running, nothing else is in flight (chat/plan/scan/render),
-      // and no chat message or user request within IDLE_MS.
-      if (scanningRef.current || processActiveRef.current || Date.now() - lastRequestAt.current < IDLE_MS) return;
-      scanningRef.current = true;
-      void scanInbox()
-        .then(async (r) => {
-          if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
-          // Pull any Google Tasks not yet mirrored locally (e.g. created on another device).
-          const imp = await importGoogleTasks().catch(() => ({ imported: 0, edited: 0, mirrored: 0 }));
-          // `edited` = notes the reader changed (now flagged needsReplan → re-planned below this same
-          // sweep); `mirrored` = ignore/complete/delete mirrored back from Google Tasks.
-          const i = imp as { imported?: number; edited?: number; mirrored?: number };
-          if ((i.imported ?? 0) > 0 || (i.edited ?? 0) > 0 || (i.mirrored ?? 0) > 0) refreshTaskPlans();
-          refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
+      // IDLE = nothing else is in flight (chat/plan/scan/render) and no chat message or user request
+      // within IDLE_MS. A scan already running counts as in-flight — runScanPass sets `scanningNow`,
+      // which feeds processActiveRef — so the sweep and the Scan button can no longer overlap.
+      if (processActiveRef.current || Date.now() - lastRequestAt.current < IDLE_MS) return;
+      void runScanPassRef
+        .current(true)
+        .then(() =>
           // Plan up to `rate` of the unplanned backlog, but stop early the moment the reader sends a
           // message or makes a request (lastRequestAt bumps → this returns false → the sweep yields).
-          await planPendingTasks(rate, () => Date.now() - lastRequestAt.current >= IDLE_MS);
-        })
-        .catch(() => {})
-        .finally(() => {
-          scanningRef.current = false;
-        });
+          planPendingTasks(rate, () => Date.now() - lastRequestAt.current >= IDLE_MS),
+        )
+        .catch(() => {});
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, planPendingTasks]);
+  }, [isRemoteClient, googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, planPendingTasks]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
@@ -3328,9 +3334,6 @@ export function App() {
   const refreshCalendar = useCallback(() => {
     if (googleConnected) void loadCalendarFor(calendarMonthRef.current, true);
   }, [googleConnected, loadCalendarFor]);
-  useEffect(() => {
-    refreshCalendarRef.current = refreshCalendar;
-  }, [refreshCalendar]);
   // Manually add an event to the (Google) calendar from the in-app grid, then refresh so it shows.
   const onCreateCalendarEvent = useCallback(
     async (ev: { summary: string; start: string; end: string; description?: string; location?: string }): Promise<{ ok: boolean; error?: string }> => {
@@ -3527,53 +3530,112 @@ export function App() {
   // nothing": it reports what it found/synced, or surfaces the actual Google error instead of
   // failing silently.
   const [scanMessage, setScanMessage] = useState<string | undefined>();
-  const scanNow = useCallback(async () => {
-    if (!googleConnected || scanningNowRef.current) return;
-    markUserRequest();
-    scanningNowRef.current = true;
-    setScanningNow(true);
-    setScanMessage(undefined);
-    const act = beginActivity("Searching email & calendar");
-    try {
-      // Run both Google reads; surface the first real error rather than swallowing it.
-      const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
-      if (scan.candidates?.length) await addCandidatesAsTasks(scan.candidates);
-      const editedInGoogle = imported.edited ?? 0;
-      const mirroredFromGoogle = imported.mirrored ?? 0;
-      if ((imported.imported ?? 0) > 0 || editedInGoogle > 0 || mirroredFromGoogle > 0) refreshTaskPlans();
-      const cal = await loadCalendarFor(calendarMonthRef.current, true);
-      const err = scan.error || imported.error || cal?.error;
-      if (err) {
-        setScanMessage(`⚠ Scan failed: ${err}`);
-        act.finish({ status: "error", detail: err });
-        buddyNoteRef.current(`🔍 Scan failed: ${err}`);
-      } else {
-        const found = scan.candidates?.length ?? 0;
-        const added = imported.imported ?? 0;
-        const events = cal?.count ?? 0;
-        const bits = [
-          found ? `${found} new item${found === 1 ? "" : "s"} from email/calendar` : "",
-          added ? `${added} Google task${added === 1 ? "" : "s"} imported` : "",
-          editedInGoogle ? `${editedInGoogle} edited in Google Tasks — re-planning` : "",
-          mirroredFromGoogle ? `${mirroredFromGoogle} mirrored from Google Tasks (done/removed/ignored)` : "",
-          `${events} calendar event${events === 1 ? "" : "s"} synced`,
-        ].filter(Boolean);
-        const summary = bits.join(" · ");
-        setScanMessage(found || added || editedInGoogle || mirroredFromGoogle ? `✓ ${summary}` : `✓ Up to date — ${summary}`);
-        act.finish({ detail: summary });
-        buddyNoteRef.current(`🔍 Scanned email & calendar — ${summary}.`);
-        logActionRef.current("scan", "Scanned email & calendar", summary);
+  // Seed that line from the STORED record on startup. The state above only covers this session, so
+  // opening Tasks after a reload showed nothing at all — which is the same blank a reader sees when
+  // the scan is dead. Now the panel says when it last ran and whether it worked, without asking.
+  useEffect(() => {
+    if (isRemoteClient) return;
+    void loadLastScan(libraryStore)
+      .then((rec) => {
+        if (!rec) return;
+        const ago = agoLabel(Math.max(0, Date.now() - rec.at));
+        setScanMessage((cur) => cur ?? (rec.ok ? `✓ Last scan ${ago} — ${rec.detail}` : `⚠ Scan failing (last tried ${ago}): ${rec.detail}`));
+      })
+      .catch(() => {});
+  }, [isRemoteClient, libraryStore]);
+  /**
+   * ONE scan pass, for both the Scan button (`auto: false`) and the idle sweep (`auto: true`).
+   *
+   * They were two implementations, and only one of them reported anything. The automatic sweep —
+   * the thing that is supposed to be finding your tasks while you're away — wrote nothing to the
+   * status pill, nothing to the action history, nothing to the panel, and swallowed every error,
+   * so a scan that had been dead since the Google token expired was indistinguishable from a scan
+   * running perfectly against a quiet inbox. Neither the reader nor the assistant could tell.
+   *
+   * What differs by mode is only the VOLUME of reporting, not whether it happens: a sweep every 90
+   * seconds can't push a chat note or a history entry each time (200 entries would be gone within
+   * the hour), so it always writes its own last-pass record and defers to `shouldLogScan` for the
+   * rest — found something, newly broken, still broken an hour on, or the every-few-hours heartbeat
+   * that keeps "no scan entries" from meaning two different things.
+   */
+  const runScanPass = useCallback(
+    async (auto = false) => {
+      if (isRemoteClient || !googleConnected || scanningNowRef.current) return;
+      if (!auto) markUserRequest();
+      scanningNowRef.current = true;
+      // Also what makes a background pass visible to the OTHER idle sweeps (via processActiveRef),
+      // so the scheduled runner and the task-step runner stand down while it's reading.
+      setScanningNow(true);
+      if (!auto) setScanMessage(undefined);
+      const act = beginActivity(auto ? "Checking email & calendar" : "Searching email & calendar");
+      let counts: ScanCounts | undefined;
+      let error: string | undefined;
+      try {
+        // Run both Google reads; surface the first real error rather than swallowing it.
+        const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
+        if (scan.candidates?.length) await addCandidatesAsTasks(scan.candidates);
+        const editedInGoogle = imported.edited ?? 0;
+        const mirroredFromGoogle = imported.mirrored ?? 0;
+        if ((imported.imported ?? 0) > 0 || editedInGoogle > 0 || mirroredFromGoogle > 0) refreshTaskPlans();
+        const cal = await loadCalendarFor(calendarMonthRef.current, true);
+        error = scan.error || imported.error || cal?.error;
+        if (!error) {
+          counts = {
+            found: scan.candidates?.length ?? 0,
+            imported: imported.imported ?? 0,
+            edited: editedInGoogle,
+            mirrored: mirroredFromGoogle,
+            events: cal?.count ?? 0,
+          };
+        }
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      } finally {
+        scanningNowRef.current = false;
+        setScanningNow(false);
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setScanMessage(`⚠ Scan failed: ${msg}`);
-      act.finish({ status: "error", detail: msg });
-      buddyNoteRef.current(`🔍 Scan failed: ${msg}`);
-    } finally {
-      scanningNowRef.current = false;
-      setScanningNow(false);
-    }
-  }, [googleConnected, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, loadCalendarFor, beginActivity]);
+      const summary = counts ? summarizeScan(counts) : "";
+      const changed = counts ? scanChangedSomething(counts) : false;
+      if (error) {
+        act.finish({ status: "error", detail: error });
+        setScanMessage(`⚠ ${auto ? "Automatic scan" : "Scan"} failed: ${error}`);
+      } else {
+        act.finish({ detail: summary });
+        setScanMessage(`✓ ${auto ? "Auto-scan · " : ""}${changed ? "" : "Up to date — "}${summary}`);
+      }
+      // The durable record — written on EVERY pass, including the quiet ones that never reach the
+      // action history. It's what answers "when did it last run, and did it work?".
+      const prev = await loadLastScan(libraryStore).catch(() => undefined);
+      const rec = nextScanRecord(prev, { at: Date.now(), ok: !error, detail: error ?? summary, auto });
+      const worthLogging = shouldLogScan(prev, rec, counts);
+      if (worthLogging) {
+        if (error) {
+          buddyNoteRef.current(`🔍 ${auto ? "Automatic scan" : "Scan"} failed: ${error}`);
+          logActionRef.current("scan", `${auto ? "Automatic scan" : "Scan"} of email & calendar FAILED`, error);
+        } else {
+          buddyNoteRef.current(`🔍 Scanned email & calendar — ${summary}.`);
+          logActionRef.current("scan", auto ? "Scanned email & calendar (automatic)" : "Scanned email & calendar", summary);
+        }
+      }
+      await saveLastScan(libraryStore, worthLogging ? { ...rec, loggedAt: rec.at } : rec).catch(() => {});
+    },
+    [
+      isRemoteClient,
+      googleConnected,
+      scanInbox,
+      importGoogleTasks,
+      addCandidatesAsTasks,
+      refreshTaskPlans,
+      loadCalendarFor,
+      beginActivity,
+      markUserRequest,
+      libraryStore,
+    ],
+  );
+  useEffect(() => {
+    runScanPassRef.current = runScanPass;
+  }, [runScanPass]);
+  const scanNow = useCallback(() => runScanPass(false), [runScanPass]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
