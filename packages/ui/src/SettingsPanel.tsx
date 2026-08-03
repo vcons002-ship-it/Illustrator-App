@@ -369,7 +369,7 @@ export interface ReaderSettings {
    * Schwab or the TradingView bridge auto-enables them regardless. */
   allowMarkets?: boolean;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
-   * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
+   * (set symbol, add studies, read its state/studies/bars) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
   allowTradingViewBridge?: boolean;
   /** OFF by default: after a multi-step task the buddy distills a reusable "skill" (playbook)
@@ -2313,7 +2313,7 @@ export function SettingsPanel({
                     Let the assistant control my TradingView Desktop chart (experimental)
                     <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
                       Connects to <b>TradingView Desktop</b> via its developer/debug port so the assistant can set the
-                      symbol, add studies (VWAP, RSI…), read the chart state, and inject Pine — <b>chart-only, it never
+                      symbol, add studies (VWAP, RSI…), and read what the chart is showing — <b>chart-only, it never
                       trades</b>. Requires launching TradingView Desktop with remote debugging on; it’s version-sensitive
                       and may conflict with TradingView’s Terms. Off by default. Setup + update steps in
                       <b> MARKETS-BRIDGE.md</b>.

@@ -256,7 +256,7 @@ A **📈 Markets** panel for following and researching stocks. *Not financial ad
   research + grounded P/E/EPS/yield. *(no setup keyless; richer with a Schwab key)*
 - **Review-and-place orders** — it **composes** the exact order and opens a review dialog; **you**
   tick a box and click *Place order* — it never submits on its own. *(Schwab key; desktop)*
-- **Control your TradingView Desktop chart** — set the symbol/interval, add studies, inject Pine —
+- **Control your TradingView Desktop chart** — set the symbol/interval, add studies, read what it's showing —
   *"put VWAP on my chart"*. **Chart-only — never trades.** See [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md). *(desktop · opt-in; TradingView Desktop with remote debugging)*
 
 ### 📱 Remote & mobile control

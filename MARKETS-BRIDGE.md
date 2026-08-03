@@ -1,9 +1,9 @@
 # TradingView Desktop bridge — setup, update & troubleshooting
 
-This is the **experimental, opt-in** feature that lets the assistant set things up **directly in
-your TradingView Desktop chart** — set the symbol, add studies (VWAP, RSI…), read the chart
-state, inject Pine — the same approach the community "TradingView MCP" tools use. It is
-**chart-only and never places trades.**
+This is the **experimental, opt-in** feature that lets the assistant work **directly in your
+TradingView Desktop chart** — set the symbol, add studies (VWAP, RSI…), and read back what the
+chart is showing (its state, its studies, and the bars themselves) — the same approach the
+community "TradingView MCP" tools use. It is **chart-only and never places trades.**
 
 It works by talking to TradingView Desktop over **Chrome DevTools Protocol (CDP)**: TradingView
 Desktop is an Electron/Chromium app, and when it's launched with remote debugging it exposes a
@@ -30,6 +30,36 @@ conflict with **TradingView's Terms of Use** — use at your own discretion.
    (Make a shortcut with that flag so you don't retype it.)
 4. In **📈 Markets → Bridge**, click **Test bridge**. You should see *"Connected to TradingView."*
    Then ask the assistant things like *"put VWAP on my chart"* or *"switch my chart to AAPL 5-min."*
+
+### What it can read
+
+| Action | Returns |
+|---|---|
+| `read_state` | the chart's symbol + interval |
+| `read_studies` | the studies on the chart, with their ids |
+| `read_series` | the OHLCV bars the chart is displaying (`bars`: 1–500, default 100) |
+| `probe` | what this TradingView build actually exposes — run this first when something stops working |
+
+**On "live" data.** `read_series` returns exactly what TradingView is showing *you*. It is
+real-time only where your own TradingView plan carries a real-time feed; on a free plan most
+exchanges are delayed. The bridge cannot make a delayed feed live, and the assistant is told to say
+so rather than call a delayed price current. For entitled real-time quotes, connect Schwab instead
+(`schwab_quote`).
+
+**`read_series` depends on `exportData`**, a charting-library call that the desktop build is not
+guaranteed to expose. If it isn't there the action says so and points you here — run `probe` and
+read `canReadSeries`.
+
+### Removed: Pine injection and chart alerts
+
+Earlier versions advertised `inject_pine` and `create_alert`. Neither worked. `inject_pine` called a
+`window.__vrPineInject` helper that was never added to the codebase, so it threw every time;
+`create_alert` checked that an alert API existed and then returned a success string **without
+creating an alert**. Both are gone rather than left as stubs. Use `trading_script` to generate Pine
+you paste in yourself, and set alerts in TradingView directly. If you want either done properly,
+`probe` is how to find out what your build supports first.
+
+---
 
 The default debug port is **9222**. If you use a different one, the Rust command accepts a `port`
 (it defaults to 9222); change the call site or the launch flag to match.

@@ -3882,7 +3882,7 @@ export function App() {
       ...(call.symbol ? { symbol: call.symbol } : {}),
       ...(call.interval ? { interval: call.interval } : {}),
       ...(call.study ? { study: call.study } : {}),
-      ...(call.pine ? { pine: call.pine } : {}),
+      ...(call.bars !== undefined ? { bars: call.bars } : {}),
     });
     const r = await tvBridgeEval(script);
     appendBuddy({

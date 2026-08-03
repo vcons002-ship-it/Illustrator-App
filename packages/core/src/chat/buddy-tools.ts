@@ -143,15 +143,18 @@ export type BuddyToolCall =
       orderType: "MARKET" | "LIMIT";
       price?: number;
     }
-  /** Drive the reader's TradingView Desktop chart (when the bridge is on): set symbol/
-   * interval, add/clear studies, read state, inject Pine. Host-run (stops the loop). */
+  /** Drive the reader's TradingView Desktop chart (when the bridge is on): set symbol/interval,
+   * add/clear studies, and READ what the chart is showing — its state, its studies, and the bars
+   * themselves. `probe` reports what this TradingView build actually exposes, which is the thing to
+   * run when an action stops working. Host-run (stops the loop). */
   | {
       tool: "tv_chart";
-      action: "set_symbol" | "set_interval" | "add_study" | "remove_studies" | "read_state" | "inject_pine";
+      action: "set_symbol" | "set_interval" | "add_study" | "remove_studies" | "read_state" | "read_series" | "read_studies" | "probe";
       symbol?: string;
       interval?: string;
       study?: string;
-      pine?: string;
+      /** read_series: how many of the most recent bars to return (1–500, default 100). */
+      bars?: number;
     }
   /** Generate a ready-to-paste TradingView Pine Script or thinkorswim thinkScript
    * alert/study (the reader pastes it into their own platform). */
@@ -1755,10 +1758,17 @@ export function buildBuddySystemPrompt(raw: {
     (opts.canTvBridge
       ? '- {"tool":"tv_chart","action":"add_study","study":"Volume Weighted Average Price"} — DRIVE the reader\'s ' +
         'TradingView Desktop chart directly (the bridge is on). actions: "set_symbol" (symbol), "set_interval" ' +
-        '(interval e.g. "60"/"D"), "add_study" (study name), "remove_studies", "read_state", "inject_pine" (pine). Use ' +
-        'when they ask to set up/change their TradingView chart ("put VWAP on my chart", "switch to AAPL 5-min"). It ' +
-        "controls the CHART only — never trades. If it reports the chart/API wasn't found, tell them to open a chart in " +
-        "TradingView Desktop (launched with remote debugging — see the Markets panel).\n"
+        '(interval e.g. "60"/"D"), "add_study" (study name), "remove_studies", "read_state", "read_studies", ' +
+        '"read_series" (optional "bars", 1-500 — the OHLCV the chart is currently displaying), "probe". Use ' +
+        'when they ask to set up/change their TradingView chart ("put VWAP on my chart", "switch to AAPL 5-min") or ' +
+        "to read what's on it. It controls the CHART only — never trades. " +
+        // Being straight about whose data this is: the app can't make a delayed feed live, and a
+        // reader told "here's the live price" when their plan is delayed is being misinformed.
+        "read_series returns exactly what TradingView is showing THEM, so it is real-time only if their own " +
+        "TradingView plan is — say which you don't know rather than calling it live. If an action reports the API " +
+        'wasn\'t found, run {"tool":"tv_chart","action":"probe"} and tell them what it actually exposes; if the ' +
+        "CHART wasn't found, tell them to open one in TradingView Desktop (launched with remote debugging — see the " +
+        "Markets panel).\n"
       : "") +
     (opts.mcpServers && opts.mcpServers.length > 0
       ? `- {"tool":"mcp_tools","server":"${opts.mcpServers[0]}"} / {"tool":"mcp_call","server":"${opts.mcpServers[0]}",` +
@@ -3048,7 +3058,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   if (tool === "schwab_positions") return { tool };
   if (tool === "schwab_watchlists") return { tool };
   if (tool === "tv_chart") {
-    const actions = ["set_symbol", "set_interval", "add_study", "remove_studies", "read_state", "inject_pine"];
+    const actions = ["set_symbol", "set_interval", "add_study", "remove_studies", "read_state", "read_series", "read_studies", "probe"];
     if (typeof obj.action !== "string" || !actions.includes(obj.action)) return undefined;
     return {
       tool,
@@ -3056,7 +3066,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(strArg(obj.symbol, MAX_NAME_CHARS) ? { symbol: strArg(obj.symbol, MAX_NAME_CHARS)! } : {}),
       ...(strArg(obj.interval, 8) ? { interval: strArg(obj.interval, 8)! } : {}),
       ...(strArg(obj.study, MAX_TITLE_CHARS) ? { study: strArg(obj.study, MAX_TITLE_CHARS)! } : {}),
-      ...(strArg(obj.pine, MAX_PASTE_CHARS) ? { pine: strArg(obj.pine, MAX_PASTE_CHARS)! } : {}),
+      ...(typeof obj.bars === "number" && Number.isFinite(obj.bars) ? { bars: obj.bars } : {}),
     };
   }
   if (tool === "prep_order") {

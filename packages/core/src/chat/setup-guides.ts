@@ -194,7 +194,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
       "tradingview", "trading view", "tradingview bridge", "tv bridge", "chart bridge", "tradingview desktop",
       "tradingview mcp", "control my chart", "set up my chart", "remote debugging", "cdp",
     ],
-    when: "You want the assistant to set things up directly in your TradingView Desktop chart — set the symbol/interval, add studies (VWAP, RSI…), read the chart, inject Pine — instead of only generating scripts to paste. Chart-only: it can never place trades.",
+    when: "You want the assistant to set things up directly in your TradingView Desktop chart — set the symbol/interval, add studies (VWAP, RSI…), and read what it's displaying (state, studies, bars) — instead of only generating scripts to paste. Chart-only: it can never place trades.",
     steps: [
       "Use the desktop app and rebuild it so the bridge command is present (it talks to TradingView over a local debug port a browser can't reach) — see MARKETS-BRIDGE.md.",
       "Enable it: Settings → 🛠 Assistant abilities → \"Let the assistant control my TradingView Desktop chart\" (off by default).",
