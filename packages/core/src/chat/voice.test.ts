@@ -266,3 +266,17 @@ describe("the downloaded voice gets longer pieces than the browser does", () => 
     expect(speechChunks(para, MAX_NATURAL_CHARS).join(" ").split(/\s+/)).toEqual(para.split(/\s+/));
   });
 });
+
+describe("neither stamp is ever read aloud", () => {
+  it("strips the leading stamp in both forms", () => {
+    expect(speakableText("[2026-08-01 09:14] Here you go.")).toBe("Here you go.");
+    expect(speakableText("[2026-08-01 09:14:37] Here you go.")).toBe("Here you go.");
+  });
+
+  it("strips the assistant's TRAILING stamp, which it never used to", () => {
+    // The leading form was handled; the trailing one wasn't, so a reply that reached the voice with
+    // one signed off by reading the clock out.
+    expect(speakableText("All done.\n[sent 2026-08-01 09:14:37]")).toBe("All done.");
+    expect(speakableText("All done.\n[sent 2026-08-01 09:14]")).toBe("All done.");
+  });
+});

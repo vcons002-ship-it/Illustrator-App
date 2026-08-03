@@ -4423,6 +4423,10 @@ function currentDateTimeLabel(): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    // Seconds, so the clock the model compares message stamps against is as precise as the stamps
+    // themselves. Without it, everything inside the current minute reads as "just now" or "a minute
+    // ago" depending on which side of the rounding it fell.
+    second: "2-digit",
   });
   const offMin = now.getTimezoneOffset(); // minutes BEHIND UTC (positive west of UTC)
   const sign = offMin <= 0 ? "+" : "-";

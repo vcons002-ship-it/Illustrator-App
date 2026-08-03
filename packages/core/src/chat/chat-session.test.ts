@@ -486,7 +486,7 @@ describe("stampTurnContent — when a message was sent", () => {
   const at = new Date(2026, 7, 1, 9, 14).getTime(); // local time, like the reader's clock
 
   it("puts the local date and time in front", () => {
-    expect(stampTurnContent("what's left on the party list?", at)).toBe("[2026-08-01 09:14] what's left on the party list?");
+    expect(stampTurnContent("what's left on the party list?", at)).toBe("[2026-08-01 09:14:00] what's left on the party list?");
   });
 
   it("is idempotent, because history is rebuilt every turn", () => {
@@ -502,7 +502,7 @@ describe("stampTurnContent — when a message was sent", () => {
     // answer. A trailing marker can't be produced instead of content — to write it, the reply has to
     // exist first.
     const out = stampAssistantContent("I added those to the event.", at);
-    expect(out).toBe("I added those to the event.\n[sent 2026-08-01 09:14]");
+    expect(out).toBe("I added those to the event.\n[sent 2026-08-01 09:14:00]");
     expect(out.startsWith("[")).toBe(false);
   });
 
@@ -514,7 +514,7 @@ describe("stampTurnContent — when a message was sent", () => {
   it("re-stamps rather than accumulating, however often history is rebuilt", () => {
     const once = stampAssistantContent("done", at);
     expect(stampAssistantContent(once, at)).toBe(once);
-    expect(stampAssistantContent(once, at + 3_600_000)).toBe("done\n[sent 2026-08-01 10:14]");
+    expect(stampAssistantContent(once, at + 3_600_000)).toBe("done\n[sent 2026-08-01 10:14:00]");
   });
 
   it("strips either stamp the app adds", () => {
@@ -541,7 +541,7 @@ describe("stampTurnContent — when a message was sent", () => {
     // always wins and a mimicked prefix costs nothing. A convention it cannot break, not one it has
     // to be told to follow.
     const mimicked = "[2019-01-01 00:00] I looked that up for you";
-    expect(stampTurnContent(stripTurnStamp(mimicked), at)).toBe("[2026-08-01 09:14] I looked that up for you");
+    expect(stampTurnContent(stripTurnStamp(mimicked), at)).toBe("[2026-08-01 09:14:00] I looked that up for you");
   });
 
   it("leaves a message with no stamp exactly as it is", () => {
@@ -554,6 +554,33 @@ describe("stampTurnContent — when a message was sent", () => {
   });
 
   it("pads so the stamps line up and sort", () => {
-    expect(stampTurnContent("x", new Date(2026, 0, 5, 4, 7).getTime())).toBe("[2026-01-05 04:07] x");
+    expect(stampTurnContent("x", new Date(2026, 0, 5, 4, 7, 5).getTime())).toBe("[2026-01-05 04:07:05] x");
+  });
+});
+
+describe("the stamp carries SECONDS, and still reads the ones written before it did", () => {
+  const at = new Date(2026, 7, 1, 9, 14, 37).getTime();
+
+  it("writes seconds, so events inside one minute can be ordered", () => {
+    // A scheduled run, the tool results it produced and the reply it wrote all land in the same
+    // minute — and "what did you do, and in what order" is what these stamps are read for. At
+    // minute resolution two events a second apart looked simultaneous.
+    expect(stampTurnContent("hello", at)).toBe("[2026-08-01 09:14:37] hello");
+    expect(stampAssistantContent("done", at)).toBe("done\n[sent 2026-08-01 09:14:37]");
+  });
+
+  it("still strips a stamp written in the OLD minute-only form", () => {
+    // A reader's chat outlives a format change. A stamp that stops being recognised stops being
+    // stripped — which puts a bare clock back in front of an old message, and back into the model's
+    // mouth as something to imitate.
+    expect(stripTurnStamp("[2026-08-01 09:14] hello")).toBe("hello");
+    expect(stripTurnStamp("done\n[sent 2026-08-01 09:14]")).toBe("done");
+    expect(isOnlyTurnStamp("[2026-08-02 10:05]")).toBe(true);
+    expect(isOnlyTurnStamp("[2026-08-02 10:05:41]")).toBe(true);
+  });
+
+  it("doesn't double-stamp a message that already carries either form", () => {
+    expect(stampTurnContent("[2026-08-01 09:14] hi", at)).toBe("[2026-08-01 09:14] hi");
+    expect(stampTurnContent("[2026-08-01 09:14:37] hi", at)).toBe("[2026-08-01 09:14:37] hi");
   });
 });
