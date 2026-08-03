@@ -147,7 +147,14 @@ export class GeminiNativeImageProvider implements ImageProvider {
       if (b64) {
         const mimeType =
           (part.inlineData?.mimeType ?? part.inline_data?.mime_type) || "image/png";
-        return { bytes: base64ToBytes(b64), mimeType };
+        // Every reference rides as its own inline part, so all of them reached the model. Said out
+        // loud because "did my photos get used?" is otherwise unanswerable from the picture.
+        const supplied = input.ipAdapterRefs?.length ?? 0;
+        return {
+          bytes: base64ToBytes(b64),
+          mimeType,
+          ...(supplied ? { references: { supplied, used: supplied, how: "native" as const } } : {}),
+        };
       }
     }
     throw new Error("Gemini native image response contained no image data");

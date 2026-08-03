@@ -166,6 +166,56 @@ export interface ImageGenerationOutput {
    * caller persists it instead. Omit when the provider sent `input.prompt` unchanged.
    */
   prompt?: string;
+  /**
+   * What actually happened to the reference photos this render was given.
+   *
+   * The entire failure mode of reference conditioning is SILENCE. A provider that can't read them
+   * ignores them; a ComfyUI without the IP-Adapter nodes renders seed-only; a checkpoint family
+   * IP-Adapter can't attach to skips the chain; an upload can fail. Every one of those produces a
+   * perfectly good picture that simply isn't of the person, and nothing said so — the reader was
+   * left comparing faces and guessing which of four causes it was.
+   *
+   * So a provider that RECEIVES references says what it did with them. Absent while references were
+   * supplied means the provider ignored them entirely, which is itself the answer (see
+   * `referenceOutcome`).
+   */
+  references?: {
+    /** How many were handed to this provider. */
+    supplied: number;
+    /** How many reached the model. Zero is a real answer, and `why` says which zero it is. */
+    used: number;
+    /** The route they took — the reader-facing difference between "installed" and "built in". */
+    how?: "ipadapter" | "reference-latent" | "native";
+    /** Why fewer were used than supplied. Absent when all of them were. */
+    why?: string;
+  };
+}
+
+/**
+ * What to TELL the reader about the reference photos a render was given.
+ *
+ * Every way this can go wrong produces a perfectly good picture that just isn't of the person, so
+ * "did it work?" was unanswerable from the outside — the reader compared faces and guessed between
+ * four different causes. This turns the render's own report into one sentence.
+ *
+ * A provider that received references and reported NOTHING is the important case: it ignored them
+ * outright (Automatic1111, Flux, DALL·E, ONNX), which is silence that has to be spoken. PURE.
+ */
+export function referenceOutcome(
+  supplied: number,
+  report: ImageGenerationOutput["references"],
+): { ok: boolean; text: string } | undefined {
+  if (supplied <= 0) return undefined; // none were offered — nothing to report
+  const photos = (n: number): string => `${n} reference photo${n === 1 ? "" : "s"}`;
+  if (!report) {
+    return { ok: false, text: `⚠ This image model can't use reference photos — ${photos(supplied)} were ignored.` };
+  }
+  if (report.used === 0) {
+    return { ok: false, text: `⚠ ${photos(supplied)} weren't used${report.why ? ` — ${report.why}` : ""}.` };
+  }
+  const how = report.how === "ipadapter" ? " (IP-Adapter)" : report.how === "reference-latent" ? " (built into the model)" : "";
+  const dropped = report.used < supplied ? ` of ${supplied}${report.why ? ` — ${report.why}` : ""}` : "";
+  return { ok: true, text: `🖼 Used ${photos(report.used)}${dropped}${how}.` };
 }
 
 /** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).

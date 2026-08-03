@@ -79,6 +79,8 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  referenceOutcome,
+  type ImageGenerationOutput,
   soulRefSeeds,
   type SoulImage,
   rememberSoul,
@@ -2122,7 +2124,7 @@ async function renderFromText(
     /** Cancellation: aborting it interrupts the in-flight ComfyUI render (the Stop button). */
     signal?: AbortSignal;
   } = {},
-): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
+): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string; references?: ImageGenerationOutput["references"] }> {
   const isLocal = tier.tier === "local";
   const localModelLease = isLocal
     ? await acquireLocalModelLease({
@@ -2190,7 +2192,7 @@ async function renderFromText(
     ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
-  return { bytes: out.bytes, mimeType: out.mimeType, prompt };
+  return { bytes: out.bytes, mimeType: out.mimeType, prompt, ...(out.references ? { references: out.references } : {}) };
   } finally {
     localModelLease?.release();
   }
@@ -6080,12 +6082,17 @@ async function handleChatTool(
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });
+    // Say what became of the reference photos. Every way this goes wrong yields a perfectly good
+    // picture that just isn't of the person, so without this the reader is left comparing faces and
+    // guessing between "wrong model", "nodes missing", "upload failed" and "it worked, badly".
+    const note = referenceOutcome(soulRefs?.length ?? 0, out.references);
     post(
       {
         type: "chatToolResult",
         requestId,
         call,
         image: { bytes: out.bytes, mimeType: out.mimeType },
+        ...(note ? { referenceNote: note } : {}),
       },
       [out.bytes],
     );

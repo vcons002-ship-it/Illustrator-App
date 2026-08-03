@@ -5597,9 +5597,13 @@ export function App() {
       buddyRenderingRef.current = false;
     }
     setBuddyActivity("");
-    const imageFeedback = formatToolResult(call, {
+    let imageFeedback = formatToolResult(call, {
       image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
     });
+    // Tell the MODEL what became of the reference photos too, not just the reader. Without it, asked
+    // "did you use my photo?", it can only guess — and a model guessing about its own tools invents a
+    // confident yes.
+    if (out.referenceNote) imageFeedback = `${imageFeedback} [${out.referenceNote.text}]`;
     // A working checklist with steps left → advance the QUEUE: feed the render result back and let the
     // model tick the current step + start the next one, so the plan runs to completion on its own (each
     // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
@@ -5621,6 +5625,9 @@ export function App() {
       // One-shot image (no checklist): still label it with what it depicts.
       tagCaption = `🖼 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`;
     }
+    // The reference outcome goes on the caption, under the picture, where the reader is already
+    // looking to judge the likeness — that's the moment "did my photos get used?" is being asked.
+    if (out.referenceNote) tagCaption = tagCaption ? `${tagCaption}\n${out.referenceNote.text}` : out.referenceNote.text;
     // Superseded mid-render (Clear / session switch / Stop) → drop this result silently; appending or
     // dispatching now would leak the old session's render into the new one.
     if (buddyTurnSeq.current !== seq) return;

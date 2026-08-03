@@ -407,6 +407,9 @@ export type WorkerToMain =
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** A grounded analyze_data result table (rendered inline in the chat). */
       analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
+      /** What became of the reference photos this render was given — shown under the image, because
+       * every way reference conditioning fails still produces a good picture of the wrong person. */
+      referenceNote?: { ok: boolean; text: string };
       error?: string;
     }
   /** Chat round complete: final prose + the turns to append to the stored history. */
