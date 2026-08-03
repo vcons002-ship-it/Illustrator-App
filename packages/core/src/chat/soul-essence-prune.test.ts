@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { removeSoulEssenceFact, type SoulEssence } from "./souls.js";
+import { reconcileSoulAppearance, removeSoulEssenceFact, type SoulEssence } from "./souls.js";
 
 const essence = (): SoulEssence =>
   ({
@@ -57,5 +57,44 @@ describe("removeSoulEssenceFact — pruning a misfiled line", () => {
     const before = essence();
     removeSoulEssenceFact(before, "exactAppearance", 1);
     expect(before.exactAppearance).toHaveLength(3);
+  });
+});
+
+describe("a garment word used as a VERB isn't physical appearance", () => {
+  const appearanceOf = (text: string): string[] =>
+    reconcileSoulAppearance([{ at: 1, text }]).activeFacts.map((f) => f.text);
+
+  it("doesn't file a note about perceived time under physical appearance", () => {
+    // The reported leak, verbatim. The extractor is a word test and `mask` is a thing people wear,
+    // so a sentence about the brain masking latency was filed as the reader's LOOK — from where it
+    // described their face to every image model that asked.
+    expect(
+      appearanceOf(
+        "I am fascinated by the discrepancy between physical time and perceived time, particularly " +
+          "how the brain curates a 'specious present' to mask the inherent latencies of biological hardware.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("skips the other everyday verbs that are also things you wear", () => {
+    expect(appearanceOf("his answers mask the uncertainty underneath")).toEqual([]);
+    expect(appearanceOf("the deadline will cap the scope")).toEqual([]);
+    expect(appearanceOf("a second pass to coat the surface")).toEqual([]);
+  });
+
+  it("still keeps every one of them when it IS something worn", () => {
+    // The fix must cost no real appearance data. A worn one always has a determiner or adjective in
+    // front; a verb has an infinitive, a modal, or an object after it.
+    for (const text of [
+      "wears a black mask",
+      "a masked figure in a long coat",
+      "she wears the hood up",
+      "wearing a wool cap",
+      "a silver ring on her left hand",
+      "a heavy coat and leather gloves",
+      "auburn hair, green eyes",
+    ]) {
+      expect(appearanceOf(text), text).not.toEqual([]);
+    }
   });
 });
