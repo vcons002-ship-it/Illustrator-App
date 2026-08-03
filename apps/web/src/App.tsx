@@ -2285,6 +2285,7 @@ export function App() {
     setBuddyPlan(undefined);
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
+    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
   }, [libraryStore]);
@@ -6220,11 +6221,14 @@ export function App() {
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
-    // A turn STARTED by the reader carries only the pictures they attached to it. Cleared here (not
-    // when the render finishes) so a follow-up turn can still use them for a second image — "another
-    // one, but at night" — while a fresh, unattached message can't inherit a stale photo.
-    if (userBubbleText !== undefined && !attachmentsThisTurn.current) turnRefImagesRef.current = [];
-    attachmentsThisTurn.current = false;
+    // NOT cleared here. The reader's attached pictures stay available for the rest of the session,
+    // because the natural way to use them is over several turns — attach a photo, ask what it is,
+    // THEN ask for an image of it. Clearing on the next message (which is what this did) meant the
+    // only way to get the reference used was to ask for the picture in the very same breath as the
+    // upload, and any conversation about the photo first threw it away.
+    //
+    // Safe to keep because it is no longer silent: every render that uses them says so underneath.
+    // Attaching different pictures replaces them; clearing or switching the chat drops them.
     // CONSUME the creative-run flag HERE, synchronously, before anything below awaits.
     //
     // It used to be read at the buddyChat call far below and cleared by a setTimeout(0) at the call
@@ -6913,9 +6917,7 @@ export function App() {
    * and are cleared at the start of the next one so an old photo can't leak into a later picture.
    */
   const turnRefImagesRef = useRef<{ bytes: ArrayBuffer; mimeType: string }[]>([]);
-  /** Set for the one dispatch that follows an attachment send, so the clear above doesn't wipe the
-   * pictures before the turn that carried them has run. */
-  const attachmentsThisTurn = useRef(false);
+
 
   const onAttachBuddyFile = useCallback(async (file: File) => {
     const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -6968,17 +6970,26 @@ export function App() {
       turnRefImagesRef.current = atts
         .filter((a) => a.kind === "image" && a.image)
         .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType }));
-      attachmentsThisTurn.current = turnRefImagesRef.current.length > 0;
       for (const att of atts) {
         if (att.kind === "image" && att.image) {
           // Show the picture the reader attached, inline in the chat (display-only — the full
           // content is folded into `combined` for this turn, so it carries no model turn of its own).
           appendBuddy({ role: "user", text: `🖼 ${att.name}`, image: { bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, turns: [] });
           const r = await assessImage({ bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, userText);
+          // The description answers "what is this?". It must NOT become the prompt for a new image —
+          // the picture itself is going to the image model as a reference, so a prompt that re-types
+          // the description throws the likeness away and renders someone who merely matches the
+          // words. The model can't know that unless it's told, and handing it a paragraph of prose
+          // about a face is a strong invitation to copy it.
+          const alsoAReference =
+            " This picture is ALSO going to the image model as a REFERENCE for anything you generate" +
+            " this turn, so do not describe its appearance back into a generate_image prompt — write" +
+            " only the NEW scene (what happens, where, the light) and let the likeness come from the" +
+            " picture.";
           parts.push(
             r.text
-              ? `[Attached image "${att.name}" — what it shows]\n${r.text}`
-              : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}]`,
+              ? `[Attached image "${att.name}" — what it shows]\n${r.text}\n[${alsoAReference.trim()}]`
+              : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}.${alsoAReference}]`,
           );
         } else if (att.kind === "doc" && att.text) {
           appendBuddy({ role: "user", text: `📎 ${att.name}`, turns: [] });
@@ -7595,6 +7606,7 @@ export function App() {
     buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
+    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // else a cleared step's nudge budget leaks into the next chat (H7)
     setBuddyPendingTool(undefined);
@@ -7632,6 +7644,7 @@ export function App() {
     buddyPlanRef.current = undefined;
     setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
     buddyWorkflowRef.current = undefined;
+    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // per-session nudge budget — don't leak across a switch (H7)
     setBuddyPendingTool(undefined);
