@@ -74,6 +74,29 @@ export function parseStooqQuote(csv: string, requested: string): StockQuote | un
   };
 }
 
+/**
+ * Why a Yahoo response is unusable, in words — or undefined when the response is fine.
+ *
+ * No call site checked the status. Yahoo's failures don't come back as JSON (a rate-limit is the
+ * plain text "Edge: Too Many Requests"), so the response went straight to `.json()` and the reader
+ * — and the model — got a JSON parse error. "Unexpected token E" says nothing about waiting a minute
+ * or about the symbol being wrong, and it reads like a bug in the app rather than a throttle at a
+ * free endpoint we don't own.
+ *
+ * Rate limiting is the one to name explicitly: it is temporary, it is per-IP, and the fix is to wait
+ * or to use an entitled feed — none of which is guessable from a parse error. PURE.
+ */
+export function yahooFetchError(status: number): string | undefined {
+  if (status >= 200 && status < 300) return undefined;
+  if (status === 429) {
+    return "Yahoo is rate-limiting the free quote feed right now (HTTP 429). Wait a minute and try again — or connect Schwab in Settings for entitled quotes.";
+  }
+  if (status === 404) return "Yahoo doesn't recognise that symbol (HTTP 404) — check the ticker.";
+  if (status === 401 || status === 403) return `Yahoo refused the request (HTTP ${status}) — the free feed may be blocking this connection.`;
+  if (status >= 500) return `Yahoo's quote feed is having problems right now (HTTP ${status}) — try again shortly.`;
+  return `Yahoo returned HTTP ${status} for that quote.`;
+}
+
 /** Yahoo's keyless chart URL for a single-day quote (works with the desktop proxy's UA,
  * unlike Stooq). The `meta` block carries the live price + day range we surface. */
 export function yahooQuoteUrl(symbol: string): string {

@@ -290,7 +290,7 @@ export const StockChartPanel = memo(function StockChartPanel({
           </div>
         ) : null}
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
-          Charts by TradingView (free, no account). Quotes from Stooq (keyless). Alerts run while the app is open. Not
+          Charts by TradingView (free, no account). Quotes from Yahoo (keyless, and delayed for most exchanges). Alerts run while the app is open. Not
           investment advice.
         </div>
       </div>
