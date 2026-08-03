@@ -32,6 +32,8 @@ export type ToolsetFlag =
   | "canWolfram"
   | "canGoogle"
   | "canMarkets"
+  | "canSchwab"
+  | "canTvBridge"
   | "canTaskTools"
   | "canSubAgents"
   | "canDocuments"
@@ -156,12 +158,20 @@ export const TOOLSETS: readonly Toolset[] = [
   },
   {
     id: "markets",
-    trigger: "stock quotes, market analysis, price alerts and trading scripts",
-    flags: ["canMarkets"],
+    trigger: "stock quotes, market analysis, price alerts, trading scripts, the reader's broker account and their TradingView chart",
+    // canSchwab and canTvBridge gate real blocks of prompt text and belonged to no toolset, so the
+    // broker tools and the whole TradingView bridge were documented on EVERY turn — while
+    // `prep_order` and `tv_chart` were listed here as loadable, which is the advertise-then-refuse
+    // shape the tests below already forbid. They only ever turn OFF (never in `newFlags`): loading a
+    // toolset must not claim a broker connection or a chart bridge the reader hasn't set up.
+    flags: ["canMarkets", "canSchwab", "canTvBridge"],
     // set_price_alert, not price_alert — a name no tool has matched nothing, so the real tool sat in
     // no toolset at all: its documentation deferred with the rest of markets, but with no group to
     // load and nothing to gate it. Invisible and unloadable. The roster test below now forbids it.
-    tools: ["stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "trading_script", "tv_chart", "prep_order"],
+    tools: [
+      "stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "trading_script",
+      "tv_chart", "prep_order", "schwab_quote", "schwab_options", "schwab_positions", "schwab_watchlists",
+    ],
   },
   {
     id: "agents",
