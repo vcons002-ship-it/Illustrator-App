@@ -226,6 +226,10 @@ export type MainToWorker =
   | { type: "scanInbox"; requestId: number }
   /** Mirror the user's existing Google Tasks INTO the app's task list (those not already present). */
   | { type: "importGoogleTasks"; requestId: number }
+  /** Push ONE task plan's current state to Google Tasks — which steps are done, the task's own
+   * title/date/done-state, and the plan in the parent's notes. Fired after the app's OWN checkboxes
+   * change a plan, which used to write to the local store and stop there. */
+  | { type: "syncTaskGoogle"; requestId: number; planId: string }
   /** Create a bare Google Task (parent) for a freshly-surfaced scan stub, so it shows up in Google
    * Tasks right away; planning later pushes its sub-tasks + the plan under this parent. */
   | { type: "createGoogleTask"; requestId: number; title: string; notes?: string; due?: string }
@@ -536,6 +540,7 @@ export type WorkerToMain =
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
   | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
   | { type: "googleTasksImported"; requestId: number; ok: boolean; imported?: number; edited?: number; mirrored?: number; error?: string }
+  | { type: "taskGoogleSynced"; requestId: number }
   | { type: "googleTaskCreated"; requestId: number; ok: boolean; id?: string; error?: string }
   | { type: "eventCreated"; requestId: number; ok: boolean; id?: string; error?: string }
   | { type: "eventUpdated"; requestId: number; ok: boolean; id?: string; error?: string }

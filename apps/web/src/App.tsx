@@ -819,6 +819,7 @@ export function App() {
     planTask,
     scanInbox,
     importGoogleTasks,
+    syncTaskToGoogle,
     createGoogleTask,
     createEvent: createCalendarEvent,
     updateEvent: updateCalendarEvent,
@@ -1482,10 +1483,13 @@ export function App() {
       if (step && step.status !== "done") {
         await upsertTaskPlan(libraryStore, advanceStep(plan).plan);
         refreshTaskPlans();
+        // The app's own checkboxes used to stop at the local store, so Google Tasks — and therefore
+        // the reader's phone — kept showing finished work as outstanding.
+        void syncTaskToGoogle(planId);
         await maybeRollRecurring(planId);
       }
     },
-    [libraryStore, refreshTaskPlans, maybeRollRecurring],
+    [libraryStore, refreshTaskPlans, maybeRollRecurring, syncTaskToGoogle],
   );
   // Toggle ONE specific step done/undone (the timeline checkbox + the detail ticks) — unlike
   // onAdvanceTaskStep this targets any step, not just the next-due one.
@@ -1493,9 +1497,11 @@ export function App() {
     async (planId: string, stepId: string, done: boolean) => {
       await updateTaskStep(libraryStore, planId, stepId, { status: done ? "done" : "ready" });
       refreshTaskPlans();
+      // Both directions: un-ticking pushes the sub-task back to needsAction in Google too.
+      void syncTaskToGoogle(planId);
       if (done) await maybeRollRecurring(planId);
     },
-    [libraryStore, refreshTaskPlans, maybeRollRecurring],
+    [libraryStore, refreshTaskPlans, maybeRollRecurring, syncTaskToGoogle],
   );
   // Mark a WHOLE task complete (or reopen it) — the per-card "✓ Complete task" button. Works for a
   // plain to-do with no steps as well as a multi-step plan; completing a repeating task rolls it on.
@@ -1503,9 +1509,10 @@ export function App() {
     async (planId: string, complete: boolean) => {
       await setTaskPlanComplete(libraryStore, planId, complete);
       refreshTaskPlans();
+      void syncTaskToGoogle(planId);
       if (complete) await maybeRollRecurring(planId);
     },
-    [libraryStore, refreshTaskPlans, maybeRollRecurring],
+    [libraryStore, refreshTaskPlans, maybeRollRecurring, syncTaskToGoogle],
   );
   // Add a task with an optional due date: the assistant researches it and plans the steps
   // (the worker persists the plan), then we honour the user's explicit deadline.

@@ -188,6 +188,7 @@ import {
   describeAlert,
   updateTaskStep,
   applyStepEdits,
+  googleParentPatch,
   applyPlanEdit,
   applyTaskDocEdit,
   mergeReplan,
@@ -1961,6 +1962,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "importGoogleTasks":
       void handleImportGoogleTasks(msg);
       break;
+    case "syncTaskGoogle":
+      void mirrorPlanToGoogle(msg.planId).finally(() => post({ type: "taskGoogleSynced", requestId: msg.requestId }));
+      break;
     case "createGoogleTask":
       void handleCreateGoogleTask(msg);
       break;
@@ -3580,6 +3584,36 @@ function fileResearchDeps(force = false): Partial<BuddyDeps> {
  * steps are marked complete; superseded sub-tasks are LEFT IN PLACE (never deleted — kept for
  * history, and Google access is read-and-create only). Refreshes the parent's notes. Best-effort;
  * returns the plan with each step's googleTaskId. */
+/**
+ * MAKE GOOGLE TASKS MATCH THE APP for one plan, from anywhere.
+ *
+ * The write-back used to be scattered and partial: two chat tools patched a single sub-task's
+ * status, a re-plan ran the full sync, and everything else — the new editing tools, and every
+ * checkbox in the app's own Tasks panel and timeline — wrote to the local store and stopped there.
+ * So a reader who ticked steps off in the app watched Google Tasks (and therefore their phone) keep
+ * showing the whole list as outstanding, with no way to tell which copy was current.
+ *
+ * Best-effort by design: the in-app plan is already saved before this runs, and a failed Google call
+ * must never lose it.
+ */
+async function mirrorPlanToGoogle(planId: string): Promise<void> {
+  const googleId = settings?.keys?.googleClientId;
+  const googleSecret = settings?.keys?.googleClientSecret;
+  if (!googleId || !googleSecret) return;
+  const store = memoryStore();
+  const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
+  if (!plan?.googleTaskId) return; // never linked to Google — nothing to mirror
+  try {
+    if (!(await loadGoogleTokens(store))) return;
+    const t = new DirectTransport(corsFetch());
+    const tok = (): Promise<string> => getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport: t });
+    const synced = await syncPlanToGoogleTasks(plan, t, tok);
+    await upsertTaskPlan(store, synced); // keeps the sub-task ids the sync just learned
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport, tok: () => Promise<string>): Promise<TaskPlan> {
   const parentId = plan.googleTaskId;
   if (!parentId) return plan;
@@ -3610,9 +3644,13 @@ async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport,
         /* keep the in-app step even if its Google write failed */
       }
     }
-    if (gid && action.needsComplete) {
+    // Push the step's CURRENT state: complete it, reopen it, and correct any wording/date/detail
+    // that has drifted. Reopening and correcting are new — the sync only ever pushed completions, so
+    // un-ticking a step or renaming it was a change Google never heard about.
+    const status = action.needsComplete ? ("completed" as const) : action.needsReopen ? ("needsAction" as const) : undefined;
+    if (gid && (status || action.patch)) {
       try {
-        await patchTask(transport, await tok(), gid, { status: "completed" });
+        await patchTask(transport, await tok(), gid, { ...(status ? { status } : {}), ...action.patch });
       } catch {
         /* best-effort */
       }
@@ -3623,10 +3661,13 @@ async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport,
   // Write the WHOLE plan into the parent task's notes, so the current plan (summary + numbered
   // steps + deadline) is readable right in Google Tasks — not just a title with child rows. Remember
   // the exact string as the baseline so a later edit the reader makes in Google Tasks is detectable.
+  // …along with its TITLE, DUE DATE and DONE/NOT-DONE state. Only the notes used to be refreshed, so
+  // a renamed, re-dated or completed task still showed on the reader's phone under the old title, on
+  // the old date, as something still to do.
   const notes = formatPlanForGoogleNotes({ ...plan, steps });
   let googleNotesSynced = plan.googleNotesSynced;
   try {
-    await patchTask(transport, await tok(), parentId, { notes });
+    await patchTask(transport, await tok(), parentId, googleParentPatch(plan, notes));
     googleNotesSynced = notes;
   } catch {
     /* best-effort — keep the previous baseline if the write failed */
@@ -4824,15 +4865,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const r = completeStepById(plan, stepId);
         if (!r) return undefined;
         await upsertTaskPlan(store, r.plan);
-        if (r.step.googleTaskId && googleConnected) {
-          try {
-            const t = new DirectTransport(corsFetch());
-            const at = await getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
-            await patchTask(t, at, r.step.googleTaskId, { status: "completed" });
-          } catch {
-            /* best-effort write-back */
-          }
-        }
+        // The WHOLE plan, not just this step: finishing one step can complete the task, and the
+        // parent's notes carry the step list that just changed.
+        await mirrorPlanToGoogle(r.plan.id);
         return { planTitle: r.plan.title, ...(r.ready ? { nextStep: r.ready.title } : {}), completed: r.completed };
       },
       // Persist new conversation context onto the task (planId absent = this chat's active task),
@@ -4849,18 +4884,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
         if (!plan) return undefined;
         await setTaskPlanComplete(store, planId, done);
-        if (googleConnected && (plan.googleTaskId || plan.steps.some((s) => s.googleTaskId))) {
-          try {
-            const t = new DirectTransport(corsFetch());
-            const at = await getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
-            const status = done ? ("completed" as const) : ("needsAction" as const);
-            for (const id of [plan.googleTaskId, ...plan.steps.map((s) => s.googleTaskId)]) {
-              if (id) await patchTask(t, at, id, { status }).catch(() => {});
-            }
-          } catch {
-            /* best-effort write-back — the in-app plan is saved regardless */
-          }
-        }
+        // Reopening is now carried too — the old loop pushed needsAction to every child, but the
+        // shared sync is what keeps the parent's title, date and notes right at the same time.
+        await mirrorPlanToGoogle(planId);
         return { planTitle: plan.title, completed: done };
       },
       updateTaskStep: async (planId, stepId, patch) => {
@@ -4874,6 +4900,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           ...(patch.dueIso !== undefined ? { dueIso: patch.dueIso } : {}),
           ...(patch.actor ? { actor: patch.actor } : {}),
         });
+        await mirrorPlanToGoogle(planId);
         return { planTitle: plan.title };
       },
       // Edit the TASK, and the DOCUMENTS on it. Both default to the task this chat is working, so the
@@ -4884,6 +4911,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         if (!plan) return undefined;
         const next = applyPlanEdit(plan, patch);
         await upsertTaskPlan(store, next);
+        await mirrorPlanToGoogle(next.id);
         return { planTitle: next.title };
       },
       updateTaskDoc: async (planId, edit) => {

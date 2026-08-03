@@ -386,6 +386,8 @@ export interface EngineWorkerApi {
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[]; error?: string }>;
   /** Mirror existing Google Tasks into the app's task list; resolves with how many were imported. */
   importGoogleTasks: () => Promise<{ ok: boolean; imported?: number; edited?: number; mirrored?: number; error?: string }>;
+  /** Push one task plan's current state (step completions, title, date, done-state) to Google Tasks. */
+  syncTaskToGoogle: (planId: string) => Promise<void>;
   /** Create a bare Google Task (parent) for a surfaced stub; resolves with its id when connected. */
   createGoogleTask: (args: { title: string; notes?: string; due?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Create a Google Calendar event (manual "+ Add event"); resolves with its id when connected. */
@@ -702,6 +704,7 @@ export function useEngineWorker(
   const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[]; error?: string }) => void>>(new Map());
   // In-flight Google-Task imports, resolved by `googleTasksImported`.
   const importTaskRequests = useRef<Map<number, (r: { ok: boolean; imported?: number; edited?: number; mirrored?: number; error?: string }) => void>>(new Map());
+  const syncTaskRequests = useRef<Map<number, () => void>>(new Map());
   // In-flight Google-Task creations (for surfaced stubs), resolved by `googleTaskCreated`.
   const createTaskRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
   // In-flight manual calendar-event creations, resolved by `eventCreated`.
@@ -751,6 +754,7 @@ export function useEngineWorker(
     drain(planRequests, (r) => r.resolve({ ok: false, error }));
     drain(scanRequests, (resolve) => resolve({ ok: false, error }));
     drain(importTaskRequests, (resolve) => resolve({ ok: false, error }));
+    drain(syncTaskRequests, (resolve) => resolve());
     drain(createTaskRequests, (resolve) => resolve({ ok: false, error }));
     drain(createEventRequests, (resolve) => resolve({ ok: false, error }));
     drain(updateEventRequests, (resolve) => resolve({ ok: false, error }));
@@ -1388,6 +1392,12 @@ export function useEngineWorker(
           const resolve = importTaskRequests.current.get(msg.requestId);
           importTaskRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(typeof msg.imported === "number" ? { imported: msg.imported } : {}), ...(typeof msg.edited === "number" ? { edited: msg.edited } : {}), ...(typeof msg.mirrored === "number" ? { mirrored: msg.mirrored } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "taskGoogleSynced": {
+          const resolve = syncTaskRequests.current.get(msg.requestId);
+          syncTaskRequests.current.delete(msg.requestId);
+          resolve?.();
           break;
         }
         case "googleTaskCreated": {
@@ -2464,6 +2474,23 @@ export function useEngineWorker(
       }),
     [],
   );
+  /** Push one plan's current state to Google Tasks. Fire-and-forget from the caller's point of view
+   * — the in-app change is already saved, and a Google failure must never block the UI. */
+  const syncTaskToGoogle = useCallback(
+    (planId: string): Promise<void> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (syncTaskRequests.current.delete(requestId)) resolve();
+        }, 60_000);
+        syncTaskRequests.current.set(requestId, () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        send({ type: "syncTaskGoogle", requestId, planId });
+      }),
+    [],
+  );
   const createGoogleTask = useCallback(
     (args: { title: string; notes?: string; due?: string }): Promise<{ ok: boolean; id?: string; error?: string }> =>
       new Promise((resolve) => {
@@ -2723,6 +2750,7 @@ export function useEngineWorker(
     planTask,
     scanInbox,
     importGoogleTasks,
+    syncTaskToGoogle,
     createGoogleTask,
     createEvent,
     updateEvent,

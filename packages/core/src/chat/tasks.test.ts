@@ -40,6 +40,7 @@ import {
   taskDossier,
   applyTaskDocEdit,
   applyPlanEdit,
+  googleParentPatch,
   mergeReplan,
   taskSourceNote,
   resolveActiveTaskPlanId,
@@ -199,7 +200,8 @@ describe("normalizeTaskPlan", () => {
       [{ title: "Renamed step", status: "pending", googleTaskId: "g9" }],
       [{ id: "g9", title: "Original wording", status: "needsAction" }],
     );
-    expect(a[0]).toEqual({ title: "Renamed step", existingId: "g9", create: false, needsComplete: false });
+    // …and the new wording is PUSHED, rather than leaving Google showing the old one forever.
+    expect(a[0]).toEqual({ title: "Renamed step", existingId: "g9", create: false, needsComplete: false, patch: { title: "Renamed step" } });
   });
 
   it("carries the Google Task link (parent) + per-step Google sub-task ids", () => {
@@ -1051,5 +1053,48 @@ describe("finished work stays finished and stays visible", () => {
     const p = plan({ steps: [{ title: "Obsolete step", actor: "user_action", status: "ready" }] });
     const merged = mergeReplan(p, plan({ steps: [{ title: "The real work", actor: "ai_prep" }] }));
     expect(merged.steps.map((s) => s.title)).toEqual(["The real work"]);
+  });
+});
+
+describe("pushing the app's state back to Google Tasks", () => {
+  it("reopens a sub-task Google still shows as completed", () => {
+    // The sync only ever pushed completions, so un-ticking a step in the app was a change Google
+    // never heard about — the reader saw it reopen here and stay struck through there.
+    const a = reconcileGoogleSubtasks(
+      [{ title: "Tailor resume", status: "ready", googleTaskId: "g1" }],
+      [{ id: "g1", title: "Tailor resume", status: "completed" }],
+    );
+    expect(a[0]!.needsReopen).toBe(true);
+    expect(a[0]!.needsComplete).toBe(false);
+  });
+
+  it("writes back only the fields that actually drifted", () => {
+    const a = reconcileGoogleSubtasks(
+      [{ title: "Submit", status: "pending", googleTaskId: "g1", detail: "before 5pm", dueIso: "2026-08-10" }],
+      [{ id: "g1", title: "Submit", status: "needsAction", notes: "before 5pm", due: "2026-08-10T00:00:00.000Z" }],
+    );
+    // Same day, same notes, same title → nothing to write. (Google stores a full timestamp and only
+    // honours the date, so comparing raw strings would report drift on every single sync.)
+    expect(a[0]!.patch).toBeUndefined();
+    const drifted = reconcileGoogleSubtasks(
+      [{ title: "Submit", status: "pending", googleTaskId: "g1", detail: "before 5pm", dueIso: "2026-08-12" }],
+      [{ id: "g1", title: "Submit", status: "needsAction", notes: "before 5pm", due: "2026-08-10T00:00:00.000Z" }],
+    );
+    expect(drifted[0]!.patch).toEqual({ due: "2026-08-12" });
+  });
+
+  it("carries the task's own title, date and done-state onto the parent", () => {
+    // Only the notes were ever refreshed, so a renamed, re-dated or completed task still showed on
+    // the reader's phone under the old title, on the old date, as something still to do.
+    const p = plan({ title: "Ada's party", deadlineIso: "2026-08-01" });
+    expect(googleParentPatch(p, "the notes")).toEqual({
+      title: "Ada's party",
+      status: "needsAction",
+      notes: "the notes",
+      due: "2026-08-01",
+    });
+    expect(googleParentPatch({ ...p, status: "completed" }, "n").status).toBe("completed");
+    const { due } = googleParentPatch({ title: "x", status: "active" }, "n");
+    expect(due).toBeUndefined();
   });
 });

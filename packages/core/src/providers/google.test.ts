@@ -405,6 +405,22 @@ describe("listEvents / createTask network shape", () => {
     expect(t.requests[0]!.url).toContain("/tasks/t3");
     expect(t.requests[0]!.body).toEqual({ status: "completed" });
   });
+
+  it("patchTask can rename and re-date a task, widening a bare date the API would reject", () => {
+    // Title and due weren't patchable at all, so renaming or moving a task in the app left Google
+    // Tasks showing the old wording on the old date forever. A bare YYYY-MM-DD is a 400 that would
+    // fail the whole patch, so it goes through the same widening as a create.
+    const t = new FakeTransport({ id: "t4", title: "Ada's party", status: "needsAction" });
+    return patchTask(t, "tok", "t4", { title: "Ada's party", due: "2026-08-01", status: "needsAction" }).then(() => {
+      expect(t.requests[0]!.body).toEqual({ status: "needsAction", title: "Ada's party", due: "2026-08-01T00:00:00.000Z" });
+    });
+  });
+
+  it("patchTask omits an unparseable due rather than sending one Google will reject", async () => {
+    const t = new FakeTransport({ id: "t5", title: "x", status: "needsAction" });
+    await patchTask(t, "tok", "t5", { title: "x", due: "next Tuesday" });
+    expect(t.requests[0]!.body).toEqual({ title: "x" });
+  });
 });
 
 /** Fake transport that returns a DIFFERENT scripted body per call (for read-modify-write paths). */
