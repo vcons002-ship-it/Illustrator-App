@@ -963,6 +963,87 @@ export function whenLabel(ms: number, now = Date.now()): string {
   return `${day} (${days} days ago)`;
 }
 
+/**
+ * WHERE ELSE this task's detail lives — named, with the id needed to go and get it.
+ *
+ * A task carries its origin in `source`, and nothing ever told the model. So a task raised from a
+ * calendar event — whose DESCRIPTION is where its running detail lives, an RSVP list, a packing
+ * list, a status per person — arrived looking like a bare title and three steps, and a model asked
+ * to "update the RSVP list" searched the places it knew about, found nothing, and reported that
+ * there was nothing to find. The list was two fields away the whole time.
+ *
+ * A `typed` task has no elsewhere, so it gets no line rather than a line saying so. PURE.
+ */
+export function taskSourceNote(source: TaskSource): string {
+  const eventLine = (eventId: string, summary?: string): string =>
+    `SOURCE: a CALENDAR EVENT${summary ? ` — “${summary}”` : ""} (eventId: ${eventId}). An event's DESCRIPTION is ` +
+    `where its running detail lives (an RSVP or attendance list, a packing list, a status per person). READ IT with ` +
+    `list_events${summary ? ` (query: "${summary}")` : ""} before concluding this task has no list/detail attached — ` +
+    'and update it in place with update_event "setLines" rather than rewriting it.';
+  const emailLine = (emailId: string, subject?: string, from?: string): string =>
+    `SOURCE: an EMAIL${subject ? ` — “${subject}”` : ""}${from ? ` from ${from}` : ""} (emailId: ${emailId}). ` +
+    "Read it with read_email (and read_attachment for anything on it) before saying you can't find what it referred to.";
+  switch (source.kind) {
+    case "calendar":
+      return eventLine(source.eventId, source.summary);
+    case "email":
+      return emailLine(source.emailId, source.subject, source.from);
+    case "scan":
+      // A scanned item is one or the other; it was surfaced FROM whichever id it carries.
+      if (source.eventId) return eventLine(source.eventId);
+      if (source.emailId) return emailLine(source.emailId, undefined, source.from);
+      return "";
+    case "google":
+      return `SOURCE: Google Tasks (taskId: ${source.taskId}) — its notes may carry detail the reader added there.`;
+    default:
+      return "";
+  }
+}
+
+/** How much accumulated context rides along in the prompt before the rest is left to get_task_plan. */
+const DOSSIER_NOTES_CHARS = 1500;
+
+/** Keep the END of a body of notes (the newest writing) and say how much went. PURE. */
+function tailNotes(text: string, limit: number): string {
+  const t = text.trim();
+  if (t.length <= limit) return t;
+  const cut = t.slice(t.length - limit);
+  const at = cut.indexOf("\n");
+  const kept = at >= 0 ? cut.slice(at + 1) : cut;
+  return `[earlier notes trimmed — get_task_plan returns them in full]\n${kept}`;
+}
+
+/**
+ * EVERYTHING A TASK ALREADY KNOWS, rendered for the model.
+ *
+ * The app works hard to accumulate this — `harvestTaskContext` records every link and attachment
+ * name the reader hands a task chat, `save_task_context` records what each session and each bound
+ * background run found, the planner leaves its research behind, and steps carry generated documents.
+ * None of it was ever read back. It went into `userNotes` and came out only when the task was
+ * RE-PLANNED, which is to say: the model that needed it never saw it, and the reader watched it
+ * search too narrowly and give up on material it had been handed directly.
+ *
+ * Bounded, and honest about the bound — the notes are tailed to the NEWEST and say when they were
+ * cut, because a task worked over weeks accumulates more than belongs in every turn. PURE.
+ */
+export function taskDossier(plan: TaskPlan, notesChars = DOSSIER_NOTES_CHARS): string {
+  const docs = plan.steps.flatMap((s) => (s.docs ?? []).map((d) => ({ doc: d, step: s })));
+  const sections = [
+    taskSourceNote(plan.source),
+    plan.userNotes?.trim()
+      ? "SAVED CONTEXT ON THIS TASK (links and files the reader handed it, and what earlier sessions and background " +
+        `runs found — this is the task's memory, treat it as given):\n${tailNotes(plan.userNotes, notesChars)}`
+      : "",
+    plan.researchNotes?.trim() ? `RESEARCH FROM PLANNING THIS TASK:\n${tailNotes(plan.researchNotes, notesChars)}` : "",
+    docs.length
+      ? "DOCUMENTS THIS TASK ALREADY HAS (get_task_plan returns their contents — read the relevant one BEFORE " +
+        `building anything that duplicates it):\n${docs.map(({ doc, step }) => `- “${doc.title}” (${doc.kind}) — on step “${step.title}”`).join("\n")}`
+      : "",
+    plan.watches?.length ? `BACKGROUND WATCHES on this task:\n${plan.watches.map((w) => `- ${w.title}: ${w.prompt}`).join("\n")}` : "",
+  ].filter(Boolean);
+  return sections.join("\n");
+}
+
 export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
   const ready = nextReadyStep(plan);
   const done = plan.steps.filter((s) => s.status === "done");
@@ -987,6 +1068,10 @@ export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
         `${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` +
         (ready.links.length ? `\nLinks: ${ready.links.map((l) => l.url).join(", ")}` : "")
       : "All steps are done.",
+    // What the task already knows. Inline, not behind a tool call, because the failure this fixes is
+    // the model not KNOWING there was anything to fetch — it searched the places it could see, found
+    // nothing, and said so. Material it can't see is material it will not go looking for.
+    taskDossier(plan),
   ].filter(Boolean);
   return lines.join("\n");
 }

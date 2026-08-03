@@ -18,7 +18,7 @@ import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
 import { formatMcpTools, type McpTool } from "./mcp.js";
-import type { TaskPlan } from "./tasks.js";
+import { taskDossier, type TaskPlan } from "./tasks.js";
 import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
 import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
 
@@ -1860,7 +1860,18 @@ export function buildBuddySystemPrompt(raw: {
         '"replace":true to swap the whole list). When the reader says "plan/redo/refine/update this" (or once ' +
         "they've answered the OPEN QUESTIONS) and the plan needs a full rebuild, re-plan THIS task in place with " +
         "plan_task — don't ask which task they mean or start a new one; it's the task above. When all steps are done, " +
-        "offer to re-plan it, mark a step not-done to redo it, or wrap up.\n"
+        "offer to re-plan it, mark a step not-done to redo it, or wrap up.\n" +
+        // The reader asked it to update an existing RSVP tracker that was BOTH attached to the task
+        // and in the task's calendar event, and it reported that it couldn't find one. It had looked
+        // in the chat and nowhere else. A task is a folder, not a title — so say where the folder is.
+        "BEFORE YOU SAY SOMETHING ISN'T THERE: this task carries more than its checklist, and the reader counts " +
+        "everything they attached to it as being IN it. Check ALL of these first — (1) the SAVED CONTEXT and the " +
+        'DOCUMENTS listed above, with {"tool":"get_task_plan","id":"…"} for their full contents; (2) the task\'s ' +
+        "SOURCE — a calendar event's description or the source email, named above with the id you need to fetch it; " +
+        "(3) the files listed in this chat, and read/read_document for anything named in the saved context. Only " +
+        "after all of those may you say you couldn't find it, and then name WHERE YOU LOOKED so the reader can point " +
+        "you at the right place instead of explaining it again. NEVER rebuild a list, tracker or document from " +
+        "scratch because you didn't find the existing one — you would be replacing their real one with a guess.\n"
       : "") +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
@@ -4597,12 +4608,30 @@ function formatBuddyToolResultBody(
   if (call.tool === "get_task_plan") {
     const p = result.taskPlan;
     if (!p) return `[get_task_plan: no plan with id ${call.id}]`;
-    return (
-      `[task plan "${p.title}"${p.deadlineIso ? ` — deadline ${p.deadlineIso}` : ""}]\n` +
+    // The prompt has always advertised this as "ONE task in full: its steps, notes and any context
+    // saved on earlier runs", and it returned a bare checklist. Everything else — the source it came
+    // from, the links and attachment names the reader handed it, what earlier sessions and bound
+    // background runs recorded, the planner's research, the documents the plan itself generated —
+    // was on `result.taskPlan` the whole time and thrown away here. A model that asked the one tool
+    // named for the job, and was told it had the task "in full", then answered from a checklist.
+    const dossier = taskDossier(p, 4000);
+    const docs = p.steps.flatMap((s) => s.docs ?? []);
+    // The documents' actual CONTENTS: the "existing tracker" a reader asks you to update is usually
+    // one of these, and a title alone can't be updated.
+    const bodies = docs
+      .slice(0, 4)
+      .map((d) => `--- “${d.title}” (${d.kind}) ---\n${d.body.length > 3000 ? `${d.body.slice(0, 3000)}\n[…document CUT — read the rest in the task panel]` : d.body}`)
+      .join("\n\n");
+    return [
+      `[task plan "${p.title}"${p.deadlineIso ? ` — deadline ${p.deadlineIso}` : ""}${p.summary ? `\n${p.summary}` : ""}]`,
       p.steps
         .map((s, i) => `${i + 1}. [${s.status}] ${s.title} (${s.actor === "ai_prep" ? "AI preps" : "reader does"}) (step id: ${s.id})`)
-        .join("\n")
-    );
+        .join("\n"),
+      dossier,
+      bodies ? `DOCUMENT CONTENTS:\n${bodies}${docs.length > 4 ? `\n(${docs.length - 4} more document(s) on this task)` : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   if (call.tool === "mcp_tools") {
     const r = result.mcpToolsList;

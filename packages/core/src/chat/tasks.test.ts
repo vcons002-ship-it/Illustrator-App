@@ -37,6 +37,8 @@ import {
   formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
+  taskDossier,
+  taskSourceNote,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
   updateTaskStep,
@@ -772,5 +774,84 @@ describe("a task carries its dates where the model can read them", () => {
     expect(done.step.doneAt).toBe(NOW);
     const reopened = completeStepById(done.plan, "s3", false)!;
     expect(reopened.step.doneAt).toBeUndefined();
+  });
+});
+
+describe("taskSourceNote (where else a task's detail lives)", () => {
+  it("names the calendar event a task came from, with the id needed to read it", () => {
+    // Reported: asked to update an RSVP tracker that was on the task's calendar event, the model
+    // searched what it could see, found nothing, and said there was nothing to find.
+    const note = taskSourceNote({ kind: "calendar", eventId: "ev-9", summary: "Ada's party" });
+    expect(note).toContain("ev-9");
+    expect(note).toContain("Ada's party");
+    expect(note).toMatch(/description/i);
+    expect(note).toContain("list_events");
+  });
+
+  it("names the source email and how to read it", () => {
+    const note = taskSourceNote({ kind: "email", emailId: "m-3", subject: "Invite", from: "ada@x.com" });
+    expect(note).toContain("m-3");
+    expect(note).toContain("read_email");
+  });
+
+  it("resolves a scanned item to whichever id it actually carries", () => {
+    expect(taskSourceNote({ kind: "scan", eventId: "ev-1" })).toContain("list_events");
+    expect(taskSourceNote({ kind: "scan", emailId: "m-1" })).toContain("read_email");
+    expect(taskSourceNote({ kind: "scan" })).toBe("");
+  });
+
+  it("says nothing for a typed task, which has no elsewhere", () => {
+    expect(taskSourceNote({ kind: "typed", text: "renew my registration" })).toBe("");
+  });
+});
+
+describe("taskDossier (what the task already knows)", () => {
+  it("surfaces saved context, research, documents and watches", () => {
+    const p = plan({
+      source: { kind: "calendar", eventId: "ev-9", summary: "Ada's party" },
+      userNotes: "• [2026-07-01] Attached in chat: invite-list.csv",
+      researchNotes: "Venue holds 40.",
+      steps: [
+        {
+          title: "Track replies",
+          actor: "ai_prep",
+          docs: [{ title: "RSVP status tracker", kind: "reference", body: "- Ada: yes\n- Bo: ?" }],
+        },
+      ],
+      watches: [{ title: "RSVP check", prompt: "check replies", rule: "daily", time: "08:00" }],
+    });
+    const d = taskDossier(p);
+    expect(d).toContain("ev-9");
+    expect(d).toContain("invite-list.csv"); // the file the reader handed it, by name
+    expect(d).toContain("Venue holds 40.");
+    expect(d).toContain("RSVP status tracker"); // the document it was told didn't exist
+    expect(d).toContain("(reference)");
+    expect(d).toContain("RSVP check");
+  });
+
+  it("keeps the NEWEST notes when they don't fit, and says they were cut", () => {
+    const old = Array.from({ length: 40 }, (_, i) => `• [2026-01-01] old note ${i}`).join("\n");
+    const p = plan({ userNotes: `${old}\n• [2026-07-01] the newest thing` });
+    const d = taskDossier(p, 200);
+    expect(d).toContain("the newest thing");
+    expect(d).toContain("earlier notes trimmed");
+    expect(d).not.toContain("old note 0");
+  });
+
+  it("is empty for a bare typed task with nothing accumulated", () => {
+    expect(taskDossier(plan())).toBe("");
+  });
+});
+
+describe("tasksIndexBlock carries the task's own material", () => {
+  it("puts saved context in the prompt, not behind a tool call", () => {
+    // The model doesn't fetch what it doesn't know exists — that was the whole failure.
+    const p = plan({
+      source: { kind: "calendar", eventId: "ev-9", summary: "Ada's party" },
+      userNotes: "• [2026-07-01] Attached in chat: rsvp-tracker.md",
+    });
+    const block = tasksIndexBlock(p, Date.parse("2026-07-02T12:00:00Z"));
+    expect(block).toContain("rsvp-tracker.md");
+    expect(block).toContain("ev-9");
   });
 });
