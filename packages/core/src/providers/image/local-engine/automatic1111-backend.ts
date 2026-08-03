@@ -10,6 +10,7 @@ import {
   nameHandlingFor,
   resolveModelFamily,
   resolveNegative,
+  renderPromptRecord,
   samplerFor,
 } from "../sd-prompt.js";
 import { expandPrompt } from "../bible-injection.js";
@@ -201,7 +202,19 @@ export class Automatic1111Backend implements LocalEngineBackend {
       const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
       // `prompt` is what actually went to A1111 — expanded, tagged, with the LoRA tag — so the
       // reader's "as sent to the model" is true rather than the pre-expansion text.
-      return { bytes: base64ToBytes(clean), mimeType: "image/png", prompt };
+      // The same record ComfyUI keeps — positive, negative and sampler settings — so the two engines
+      // can be compared directly when one appears to treat a model differently from the other.
+      return {
+        bytes: base64ToBytes(clean),
+        mimeType: "image/png",
+        prompt: renderPromptRecord(prompt, String(body.negative_prompt ?? ""), {
+          engine: "AUTOMATIC1111",
+          family,
+          sampler: this.sampler,
+          cfg: Number(body.cfg_scale),
+          steps,
+        }),
+      };
     } finally {
       signal?.removeEventListener("abort", onAbort);
     }

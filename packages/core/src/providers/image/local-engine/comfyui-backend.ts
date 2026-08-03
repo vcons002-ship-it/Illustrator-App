@@ -22,6 +22,7 @@ import {
   isNaturalLanguage,
   nameHandlingFor,
   resolveModelFamily,
+  renderPromptRecord,
   resolveNegative,
   samplerFor,
 } from "../sd-prompt.js";
@@ -1263,8 +1264,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
       });
       if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
       input.onProgress?.(1);
-      // `prompt` is what actually went to the encoder — expanded, tagged, LoRA-triggered — so
-      // the reader's "as sent to the model" is true rather than the pre-expansion text.
+      // `prompt` is what actually went to the encoder — expanded, tagged, LoRA-triggered — plus the
+      // NEGATIVE and the sampler settings, so "as sent to the model" is the whole instruction rather
+      // than its positive half. The negative is where a subject gets suppressed and it is generated,
+      // not typed: without it in the record, an engine that treats a model differently from another
+      // can't be compared with one.
       const supplied = input.ipAdapterRefs?.length ?? 0;
       const used = referenceLatents?.length ?? ipAdapter?.refs.length ?? 0;
       const capped =
@@ -1276,7 +1280,14 @@ export class ComfyUIBackend implements LocalEngineBackend {
       return {
         bytes: await view.arrayBuffer(),
         mimeType: "image/png",
-        prompt,
+        prompt: renderPromptRecord(prompt, negative, {
+          engine: "ComfyUI",
+          family,
+          sampler: sampler.sampler,
+          scheduler: sampler.scheduler,
+          cfg: sampler.cfg,
+          steps,
+        }),
         ...(supplied
           ? {
               references: {
