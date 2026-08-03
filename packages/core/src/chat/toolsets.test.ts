@@ -174,8 +174,12 @@ describe("the loader is reachable", () => {
 
 describe("the registry describes the prompt it actually gates", () => {
   // Everything a fully-equipped desktop permits, so every toolset SHOULD have something to hand back.
+  // canSchwab and canTvBridge were missing here, and their absence is why the guard below passed
+  // while the broker tools and the whole TradingView bridge sat in every prompt: the fixture never
+  // switched them on, so the blocks they gate were never rendered for it to check.
   const EQUIPPED = {
     ...FULL, canGoogle: true, canMarkets: true, canTaskTools: true, canSubAgents: true,
+    canSchwab: true, canTvBridge: true,
     loadedToolsets: [],
   } as unknown as Parameters<typeof toolsetDoc>[1];
 
@@ -509,5 +513,47 @@ describe("the assistant can always reach its own record", () => {
   it("the tasks index line says the group covers scheduled actions", () => {
     // So "which scheduled tasks ran today?" has something to match on when list_scheduled is wanted.
     expect(toolsetIndexBlock(["tasks"], [])).toContain("scheduled actions");
+  });
+});
+
+describe("tools added since the deferral scheme was built", () => {
+  const build = (extra: Record<string, unknown> = {}): string =>
+    buildBuddySystemPrompt({ persona: "default", library: [], ...extra } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
+
+  // A tool documented outside any toolset's flags rides in EVERY prompt — which is what the whole
+  // scheme exists to prevent, and what silently happened to the broker + TradingView blocks. Each
+  // entry: the tool, the toolset that owns it, and the flags its documentation needs.
+  const RECENT: { tool: string; set: string; on: Record<string, unknown> }[] = [
+    { tool: "update_task", set: "tasks", on: { canTaskTools: true } },
+    { tool: "update_task_doc", set: "tasks", on: { canTaskTools: true } },
+    { tool: "tv_chart", set: "markets", on: { canMarkets: true, canTvBridge: true } },
+    { tool: "schwab_quote", set: "markets", on: { canSchwab: true } },
+    { tool: "prep_order", set: "markets", on: { canSchwab: true } },
+  ];
+
+  it("are absent with nothing loaded, and arrive when their toolset is", () => {
+    for (const { tool, set, on } of RECENT) {
+      expect(build({ ...on, loadedToolsets: [] }), `${tool} is documented before anything is loaded`)
+        .not.toContain(`"tool":"${tool}"`);
+      expect(build({ ...on, loadedToolsets: [set] }), `${tool} is missing after loading "${set}"`)
+        .toContain(`"tool":"${tool}"`);
+    }
+  });
+
+  it("are each answerable by a real toolset, so a call before loading isn't a dead end", () => {
+    for (const { tool, set } of RECENT) {
+      expect(toolsetForTool(tool)?.id, `${tool} belongs to no toolset`).toBe(set);
+      expect(isToolAvailable(tool, [set])).toBe(true);
+      expect(isToolAvailable(tool, [])).toBe(false);
+    }
+  });
+
+  it("loading a toolset never claims hardware or an account the reader hasn't got", () => {
+    // canSchwab/canTvBridge describe what the reader actually connected. On-demand loading may only
+    // turn them off — a `markets` load must not advertise a broker they never linked.
+    const lean = build({ canMarkets: true, canSchwab: false, canTvBridge: false, loadedToolsets: ["markets"] });
+    expect(lean).not.toContain('"tool":"schwab_quote"');
+    expect(lean).not.toContain('"tool":"tv_chart"');
+    expect(lean).toContain('"tool":"stock_quote"'); // the keyless half still loads
   });
 });
