@@ -1893,6 +1893,15 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     const wf = workflowOf(t);
     expect(wf["300"]!.class_type).toBe("LoadImage");
     expect(wf["301"]!.class_type).toBe("ImageScaleToTotalPixels");
+    // Every input the node declares, not just the ones its UI shows. `resolution_steps` is marked
+    // advanced — which hides it in the editor and does NOT make it optional to the prompt API. Left
+    // out, ComfyUI rejected the entire workflow with a 400 before running a step.
+    expect(wf["301"]!.inputs).toEqual({
+      image: ["300", 0],
+      upscale_method: "lanczos",
+      megapixels: 1,
+      resolution_steps: 1,
+    });
     expect(wf["302"]!.class_type).toBe("VAEEncode");
     expect(wf["303"]!.class_type).toBe("ReferenceLatent");
     // Chained, so several references compose rather than the last one winning.
