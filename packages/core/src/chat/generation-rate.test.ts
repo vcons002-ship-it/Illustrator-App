@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildBuddySystemPrompt } from "./buddy-tools.js";
 import { generationRateNote, measureGeneration } from "./generation-rate.js";
 
 describe("measureGeneration", () => {
@@ -37,5 +38,28 @@ describe("generationRateNote", () => {
     expect(note).toContain("20s");
     expect(note).toContain("cannot time your own reply");
     expect(note).toContain("approximate");
+  });
+});
+
+describe("where the model is told to look for a time", () => {
+  const prompt = () =>
+    buildBuddySystemPrompt({ persona: "assistant", library: [], now: "Monday, 3 August 2026 at 14:02:09" });
+
+  it("scopes recent_actions to UNATTENDED work, not this conversation", () => {
+    // Reported by the assistant itself: asked when messages were sent, it called recent_actions,
+    // found nothing, and apologised — "I looked in a filing cabinet for something already on my
+    // desk". The instruction said "never answer from memory … when you last did something", which
+    // reads as covering the chat too, and then argued against reading the transcript.
+    const p = prompt();
+    expect(p).toContain("IT DOES NOT COVER THIS CONVERSATION");
+    expect(p).toMatch(/records UNATTENDED work/);
+    expect(p).toMatch(/TIMESTAMPS ON THE MESSAGES THEMSELVES/);
+  });
+
+  it("and the timestamp block claims those questions for itself", () => {
+    // Both halves, so neither instruction can be read alone and send it to the wrong place.
+    const p = prompt();
+    expect(p).toContain("THESE STAMPS ARE THE ANSWER");
+    expect(p).toMatch(/no tool is needed to read them/);
   });
 });

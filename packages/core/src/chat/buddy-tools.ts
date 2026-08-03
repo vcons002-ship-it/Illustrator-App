@@ -1257,7 +1257,9 @@ export function buildBuddySystemPrompt(raw: {
       "[sent YYYY-MM-DD HH:MM:SS.mmm] — so you can tell when you last said or did something even where the reader " +
       "wasn't involved, and in what ORDER things happened when several land together (a scheduled run, its tool " +
       "results and its reply are milliseconds apart). Read them at whatever precision you need — the date alone " +
-      "answers most questions. Older messages carry shorter forms; read them the same way. " +
+      "answers most questions. Older messages carry shorter forms; read them the same way. THESE STAMPS ARE THE " +
+      "ANSWER to any question about this conversation — when something was said, how long ago, in what order — and " +
+      "no tool is needed to read them (recent_actions records unattended work, not this chat). " +
       "The app writes both; NEVER write either yourself. A timestamp is not part of " +
       "an answer, and a reply that is one is a reply that said nothing. Compare them against the time above rather " +
       "than assuming the conversation is recent, and don't raise something settled weeks ago as if it were new.\n\n"
@@ -1663,6 +1665,16 @@ export function buildBuddySystemPrompt(raw: {
     'task steps you worked alone. Add "kind" to narrow it ("scheduled_run", "scan", "plan", "create_task", ' +
     '"task_auto"). READ IT — never answer from memory — whenever the reader asks what you have done, what ran today, ' +
     "or when you last did something; and before repeating work you may already have done.\n" +
+    // Scoped, because "never answer from memory … when you last did something" reads as covering the
+    // CONVERSATION too. It sent the model to this tool for a question about the chat's own
+    // timestamps, which are sitting in the transcript in front of it — and "never answer from
+    // memory" then argued against reading them. An instruction that captures more than it covers is
+    // worse than a missing one: it points somewhere confidently wrong.
+    "  IT DOES NOT COVER THIS CONVERSATION. It records UNATTENDED work — things done while the reader " +
+    "wasn't here. Anything about the messages you and the reader have exchanged (when something was " +
+    "said, how long ago, what order things happened in, how long a reply took) is answered from the " +
+    "TIMESTAMPS ON THE MESSAGES THEMSELVES, which are already in front of you. Don't call this tool " +
+    "for that, and don't report that you have no record of it when the record is the transcript.\n" +
     checklistCatalog +
     // Settings + setup guides — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canAppSettings
