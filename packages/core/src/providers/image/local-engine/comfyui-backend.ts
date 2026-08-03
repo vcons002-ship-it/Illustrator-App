@@ -1940,7 +1940,12 @@ function addReferenceLatents(
     graph[load] = { class_type: "LoadImage", inputs: { image: filename } };
     graph[scale] = {
       class_type: "ImageScaleToTotalPixels",
-      inputs: { image: [load, 0], upscale_method: "lanczos", megapixels: 1 },
+      // EVERY declared input is sent, including `resolution_steps`. It is marked `advanced` in the
+      // node's schema, which controls whether the UI shows it — NOT whether the prompt API requires
+      // it. Omitting it was read as a missing required input and the whole workflow was rejected
+      // (400 prompt_outputs_failed_validation) before a single step ran. A default in the schema is
+      // for the node's own UI; the API fills nothing in.
+      inputs: { image: [load, 0], upscale_method: "lanczos", megapixels: 1, resolution_steps: 1 },
     };
     graph[encode] = { class_type: "VAEEncode", inputs: { pixels: [scale, 0], vae: vaeRef } };
     graph[ref] = { class_type: "ReferenceLatent", inputs: { conditioning, latent: [encode, 0] } };
