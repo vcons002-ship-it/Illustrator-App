@@ -2286,6 +2286,7 @@ export function App() {
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
     turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    turnUserTextRef.current = "";
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
   }, [libraryStore]);
@@ -5591,6 +5592,7 @@ export function App() {
       out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
         ...(turnRefImagesRef.current.length ? { refImages: turnRefImagesRef.current } : {}),
+        ...(turnUserTextRef.current ? { userText: turnUserTextRef.current } : {}),
       });
     } finally {
       // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
@@ -6221,6 +6223,7 @@ export function App() {
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
+    if (userBubbleText !== undefined) turnUserTextRef.current = userBubbleText;
     // NOT cleared here. The reader's attached pictures stay available for the rest of the session,
     // because the natural way to use them is over several turns — attach a photo, ask what it is,
     // THEN ask for an image of it. Clearing on the next message (which is what this did) meant the
@@ -6917,6 +6920,9 @@ export function App() {
    * and are cleared at the start of the next one so an old photo can't leak into a later picture.
    */
   const turnRefImagesRef = useRef<{ bytes: ArrayBuffer; mimeType: string }[]>([]);
+  /** What the reader asked for on the turn in flight. The render's Soul detection reads it beside
+   * the model's prompt — see the `userText` note on the chatTool message. */
+  const turnUserTextRef = useRef("");
 
 
   const onAttachBuddyFile = useCallback(async (file: File) => {
@@ -7607,6 +7613,7 @@ export function App() {
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
     turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    turnUserTextRef.current = "";
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // else a cleared step's nudge budget leaks into the next chat (H7)
     setBuddyPendingTool(undefined);
@@ -7645,6 +7652,7 @@ export function App() {
     setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
     buddyWorkflowRef.current = undefined;
     turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    turnUserTextRef.current = "";
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // per-session nudge budget — don't leak across a switch (H7)
     setBuddyPendingTool(undefined);

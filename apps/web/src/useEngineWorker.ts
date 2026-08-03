@@ -278,7 +278,12 @@ export interface EngineWorkerApi {
   /** Run a user-approved generate_image tool call. */
   chatTool: (
     call: ToolCall,
-    opts?: { onProgress?: (fraction: number) => void; refImages?: { bytes: ArrayBuffer; mimeType: string }[] },
+    opts?: {
+      onProgress?: (fraction: number) => void;
+      refImages?: { bytes: ArrayBuffer; mimeType: string }[];
+      /** What the reader asked for this turn (Soul detection reads it beside the model's prompt). */
+      userText?: string;
+    },
   ) => Promise<ChatToolRender>;
   /** Run an approved generate_video call: the host resolves the source image bytes + model files. */
   chatVideo: (
@@ -1961,7 +1966,11 @@ export function useEngineWorker(
   const chatTool = useCallback(
     (
       call: ToolCall,
-      opts?: { onProgress?: (fraction: number) => void; refImages?: { bytes: ArrayBuffer; mimeType: string }[] },
+      opts?: {
+        onProgress?: (fraction: number) => void;
+        refImages?: { bytes: ArrayBuffer; mimeType: string }[];
+        userText?: string;
+      },
     ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1992,7 +2001,13 @@ export function useEngineWorker(
             opts?.onProgress?.(fraction);
           },
         });
-        send({ type: "chatTool", requestId, call, ...(opts?.refImages?.length ? { refImages: opts.refImages } : {}) });
+        send({
+          type: "chatTool",
+          requestId,
+          call,
+          ...(opts?.refImages?.length ? { refImages: opts.refImages } : {}),
+          ...(opts?.userText ? { userText: opts.userText } : {}),
+        });
       }),
     [],
   );

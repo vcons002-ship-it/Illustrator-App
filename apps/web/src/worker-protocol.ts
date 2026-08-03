@@ -145,7 +145,16 @@ export type MainToWorker =
   // turn can be conditioned on them ("here's a photo, now draw X from it"). Until this existed an
   // attachment was described by the vision model and the BYTES were dropped, so the render only ever
   // saw somebody's words about the picture.
-  | { type: "chatTool"; requestId: number; call: ToolCall; refImages?: { bytes: ArrayBuffer; mimeType: string }[] }
+  // `userText` — what the READER actually asked for this turn. The render's Soul detection tests it
+  // alongside the model's prompt: "generate an image of yourself" is unmistakable, and a model that
+  // paraphrases it into "a portrait of a woman in a garden" drops every word the detection looks for.
+  | {
+      type: "chatTool";
+      requestId: number;
+      call: ToolCall;
+      refImages?: { bytes: ArrayBuffer; mimeType: string }[];
+      userText?: string;
+    }
   /** Run a user-APPROVED generate_video call: the host resolved the SOURCE image bytes + the model files
    * (the worker has no access to the chat's images / library); answered by `chatToolResult` (video field). */
   | {

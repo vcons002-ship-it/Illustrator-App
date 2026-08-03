@@ -59,6 +59,7 @@ import {
   SOUL_EVIDENCE_PROMPT_BUDGET_CHARS,
   isSelfPortraitRequest,
   isUserPortraitRequest,
+  userPortraitPrompt,
 } from "./souls.js";
 
 describe("selfPortraitPrompt", () => {
@@ -1644,5 +1645,40 @@ describe("an image can be of BOTH souls at once", () => {
   it("still refuses 'draw me a castle' — that's a request FOR the reader, not OF them", () => {
     expect(isUserPortraitRequest("draw me a castle", "Sam")).toBe(false);
     expect(isSelfPortraitRequest("draw me a castle", "Aria")).toBe(false);
+  });
+});
+
+describe("a paraphrased prompt doesn't lose the Soul", () => {
+  const notes = [{ id: "n1", text: "silver hair, green eyes", at: 0 }];
+
+  it("detects from the READER'S request when the model's prompt no longer says it", () => {
+    // "Generate an image of yourself" is unmistakable. The prompt the model then writes can be "a
+    // portrait of a woman in a garden" — nothing in it to match — so the Soul's look AND its
+    // reference photos were skipped for the one request that named it outright.
+    const modelPrompt = "a portrait of a woman standing in a walled garden at dusk";
+    const request = `generate an image of yourself\n${modelPrompt}`;
+    expect(isSelfPortraitRequest(modelPrompt, "Aria")).toBe(false); // the bug, stated
+    expect(isSelfPortraitRequest(request, "Aria")).toBe(true);
+    expect(selfPortraitPrompt(modelPrompt, "Aria", notes, request)).toContain("silver hair");
+  });
+
+  it("does the same for the reader's own Soul", () => {
+    const modelPrompt = "a cyclist on a coastal road";
+    const request = `draw me riding along the coast\n${modelPrompt}`;
+    expect(isUserPortraitRequest(modelPrompt, "Sam")).toBe(false);
+    expect(isUserPortraitRequest(request, "Sam")).toBe(true);
+    expect(userPortraitPrompt(modelPrompt, "Sam", notes, request)).toContain("silver hair");
+  });
+
+  it("still leaves an unrelated request alone, however it's phrased", () => {
+    const modelPrompt = "a red apple on a wooden table";
+    const request = `draw me an apple\n${modelPrompt}`;
+    expect(isUserPortraitRequest(request, "Sam")).toBe(false);
+    expect(userPortraitPrompt(modelPrompt, "Sam", notes, request)).toBe(modelPrompt);
+  });
+
+  it("defaults to testing the prompt itself, so existing callers are unchanged", () => {
+    expect(selfPortraitPrompt("draw yourself", "Aria", notes)).toContain("silver hair");
+    expect(selfPortraitPrompt("a red apple", "Aria", notes)).toBe("a red apple");
   });
 });
