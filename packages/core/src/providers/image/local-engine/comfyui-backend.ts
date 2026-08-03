@@ -1092,7 +1092,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
       input.bookTitle,
     );
     let prompt = composeSdPositive(family, expanded);
-    const negative = resolveNegative(family, input.negativePrompt);
+    // Filtered against what was actually ASKED for: the default negative suppresses portrait /
+    // headshot / close-up / simple background, which is right for a book illustration and directly
+    // fights a reader who requested one of them.
+    const negative = resolveNegative(family, input.negativePrompt, prompt);
     // Flux.2 (and any UNET-only diffusion file) can't load via CheckpointLoaderSimple —
     // it needs a separate text-encoder + VAE; pick the load kind once here.
     const loadKind = await this.resolveLoadKind(checkpoint, family);
