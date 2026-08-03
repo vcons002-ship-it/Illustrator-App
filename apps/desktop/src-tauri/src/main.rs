@@ -1124,6 +1124,145 @@ async fn tv_cdp_eval(request: TvCdpRequest) -> Result<TvCdpResult, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Is TradingView's debug port answering? One cheap GET — the same endpoint `tv_cdp_eval` discovers
+/// targets on, so "up" here means exactly "the bridge will work".
+fn tv_port_up(port: u16) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_millis(1200))
+        .build()
+        .ok()
+        .and_then(|c| c.get(format!("http://127.0.0.1:{port}/json/list")).send().ok())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Where TradingView Desktop installs itself, per platform — the same paths MARKETS-BRIDGE.md tells
+/// the reader to type by hand. Only existing files come back, so the caller can treat an empty
+/// result as "not installed" without stat-ing anything itself.
+fn tradingview_paths() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            out.push(std::path::PathBuf::from(local).join("Programs/TradingView/TradingView.exe"));
+        }
+        for root in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(p) = std::env::var(root) {
+                out.push(std::path::PathBuf::from(p).join("TradingView/TradingView.exe"));
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        out.push(std::path::PathBuf::from("/Applications/TradingView.app/Contents/MacOS/TradingView"));
+        if let Ok(home) = std::env::var("HOME") {
+            out.push(std::path::PathBuf::from(home).join("Applications/TradingView.app/Contents/MacOS/TradingView"));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for p in ["/opt/TradingView/tradingview", "/usr/bin/tradingview", "/usr/local/bin/tradingview", "/var/lib/flatpak/exports/bin/com.tradingview.TradingView"] {
+            out.push(std::path::PathBuf::from(p));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            out.push(std::path::PathBuf::from(home).join(".local/share/flatpak/exports/bin/com.tradingview.TradingView"));
+        }
+    }
+    out.retain(|p| p.is_file());
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct TvLaunchRequest {
+    port: Option<u16>,
+}
+
+#[derive(serde::Serialize)]
+struct TvLaunchResult {
+    /// The debug port is answering — the bridge will work.
+    ok: bool,
+    /// It was ALREADY up; nothing was launched (relaunching would have done nothing but steal focus).
+    already: bool,
+    /// TradingView Desktop isn't installed anywhere we know to look — the UI offers the download page.
+    missing: bool,
+    /// The executable that was launched, for the status line.
+    path: Option<String>,
+    error: Option<String>,
+}
+
+/// LAUNCH TradingView Desktop the way the bridge needs it — with the remote-debugging port on.
+///
+/// The setup doc asked the reader to find their install path, retype it with a flag, and make a
+/// shortcut so they wouldn't have to do it again. That is the step the whole feature died on, and
+/// it's one this app can just do.
+///
+/// It checks the port FIRST and returns without launching when it's already up: a second TradingView
+/// process doesn't get a second debug port, it hands off to the running instance and the flag is
+/// quietly ignored. That same behaviour is why a failure after spawning is reported the way it is —
+/// the overwhelmingly likely cause is an instance already running WITHOUT the flag, which no amount
+/// of relaunching will fix until it's quit.
+#[tauri::command]
+async fn tv_launch(request: TvLaunchRequest) -> Result<TvLaunchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let port = request.port.unwrap_or(9222);
+        if tv_port_up(port) {
+            return TvLaunchResult { ok: true, already: true, missing: false, path: None, error: None };
+        }
+        let Some(exe) = tradingview_paths().into_iter().next() else {
+            return TvLaunchResult {
+                ok: false,
+                already: false,
+                missing: true,
+                path: None,
+                error: Some("TradingView Desktop isn't installed (or isn't in a standard location).".into()),
+            };
+        };
+        let mut cmd = quiet_command(&exe);
+        cmd.arg(format!("--remote-debugging-port={port}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        if let Err(e) = cmd.spawn() {
+            return TvLaunchResult {
+                ok: false,
+                already: false,
+                missing: false,
+                path: Some(exe.display().to_string()),
+                error: Some(format!("Couldn't start TradingView: {e}")),
+            };
+        }
+        // It's an Electron app with a splash; give it room to come up rather than declaring failure
+        // on a cold start.
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            if tv_port_up(port) {
+                return TvLaunchResult { ok: true, already: false, missing: false, path: Some(exe.display().to_string()), error: None };
+            }
+        }
+        TvLaunchResult {
+            ok: false,
+            already: false,
+            missing: false,
+            path: Some(exe.display().to_string()),
+            error: Some(
+                "TradingView started but the debug port never opened. It's almost always because a copy was ALREADY \
+                 running without the flag — a second launch just reuses that one. Quit TradingView completely (check \
+                 the tray/menu bar), then press this again."
+                    .into(),
+            ),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
     let port = req.port.unwrap_or(9222);
     // Discover the TradingView page target (HTTP), then evaluate over its websocket.
@@ -3838,6 +3977,7 @@ fn main() {
             pick_folder,
             oauth_loopback,
             tv_cdp_eval,
+            tv_launch,
             start_remote_server,
             stop_remote_server,
             remote_server_status,

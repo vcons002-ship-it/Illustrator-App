@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cdpEvaluate, describeBridgeStatus, findTradingViewTarget, tvActionScript, type CdpTarget } from "./tv-bridge.js";
+import { cdpEvaluate, describeBridgeStatus, findTradingViewTarget, summarizeProbe, tvActionScript, type CdpTarget } from "./tv-bridge.js";
 
 describe("findTradingViewTarget", () => {
   it("picks the TradingView page target (by url or title) that has a debugger url", () => {
@@ -65,5 +65,35 @@ describe("describeBridgeStatus", () => {
   it("reports connected / not detected", () => {
     expect(describeBridgeStatus(undefined)).toMatch(/not detected/);
     expect(describeBridgeStatus({ title: "Apple — TradingView" })).toMatch(/Connected to TradingView/);
+  });
+});
+
+describe("summarizeProbe", () => {
+  const probe = { widget: "tvWidget", canReadSeries: true, canListStudies: true, chartMethods: ["exportData"] };
+
+  it("unwraps the double encoding and leads with the answer people run a probe for", () => {
+    // The action returns a JSON string and the CDP transport stringifies the result value again, so
+    // printed raw it's a wall of escaped quotes with `canReadSeries` buried in the middle.
+    const doubled = JSON.stringify(JSON.stringify(probe));
+    const out = summarizeProbe(doubled);
+    expect(out.split("\n")[0]).toContain("Can read the chart's bars: YES");
+    expect(out).toContain('"chartMethods"');
+    expect(out).not.toContain('\\"'); // no escaped quotes left
+  });
+
+  it("handles a single encoding too, and says no when it can't read bars", () => {
+    const out = summarizeProbe(JSON.stringify({ ...probe, canReadSeries: false }));
+    expect(out).toContain("Can read the chart's bars: no");
+  });
+
+  it("says the chart API wasn't found rather than reporting a capable-looking 'no'", () => {
+    // widget:null means no chart was open — a different problem from a build that can't export data.
+    expect(summarizeProbe(JSON.stringify({ widget: null, tvGlobals: [] }))).toMatch(/No TradingView chart API found/);
+  });
+
+  it("shows anything it can't parse verbatim instead of swallowing it", () => {
+    expect(summarizeProbe("Uncaught TypeError: c.exportData is not a function")).toContain("Uncaught TypeError");
+    expect(summarizeProbe(undefined)).toMatch(/returned nothing/);
+    expect(summarizeProbe("   ")).toMatch(/returned nothing/);
   });
 });
