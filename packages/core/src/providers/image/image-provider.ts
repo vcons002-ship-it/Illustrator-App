@@ -204,18 +204,47 @@ export interface ImageGenerationOutput {
 export function referenceOutcome(
   supplied: number,
   report: ImageGenerationOutput["references"],
+  from?: string,
 ): { ok: boolean; text: string } | undefined {
   if (supplied <= 0) return undefined; // none were offered — nothing to report
   const photos = (n: number): string => `${n} reference photo${n === 1 ? "" : "s"}`;
+  // WHERE they came from, when the caller knows. "Used 3 reference photos" doesn't tell you whether
+  // your Soul photos did anything, and the Soul is the case a reader is least able to check: an
+  // attachment they just picked is on screen, a Soul photo lives two panels away.
+  const src = from ? ` — from ${from}` : "";
   if (!report) {
-    return { ok: false, text: `⚠ This image model can't use reference photos — ${photos(supplied)} were ignored.` };
+    return { ok: false, text: `⚠ This image model can't use reference photos — ${photos(supplied)}${src} were ignored.` };
   }
   if (report.used === 0) {
-    return { ok: false, text: `⚠ ${photos(supplied)} weren't used${report.why ? ` — ${report.why}` : ""}.` };
+    return { ok: false, text: `⚠ ${photos(supplied)}${src} weren't used${report.why ? ` — ${report.why}` : ""}.` };
   }
   const how = report.how === "ipadapter" ? " (IP-Adapter)" : report.how === "reference-latent" ? " (built into the model)" : "";
   const dropped = report.used < supplied ? ` of ${supplied}${report.why ? ` — ${report.why}` : ""}` : "";
-  return { ok: true, text: `🖼 Used ${photos(report.used)}${dropped}${how}.` };
+  return { ok: true, text: `🖼 Used ${photos(report.used)}${dropped}${src}${how}.` };
+}
+
+/**
+ * Name where a render's reference photos came from, in the reader's own terms.
+ *
+ * A Soul photo is the one a reader can't verify by looking: the picture they attached is right there
+ * in the transcript, but the assistant's or their own stored photos are two panels away and there is
+ * nothing on screen to say they were involved. Naming the source is the difference between "some
+ * photos were used" and "your Soul photos were used". PURE.
+ */
+export function describeReferenceSources(sources: {
+  attached?: number;
+  self?: number;
+  user?: number;
+  /** The assistant's name, so its Soul reads as a person rather than a slot. */
+  selfName?: string;
+}): string | undefined {
+  const parts: string[] = [];
+  if (sources.attached) parts.push(sources.attached === 1 ? "the photo you attached" : `the ${sources.attached} photos you attached`);
+  if (sources.self) parts.push(`${sources.selfName?.trim() || "the assistant"}'s Soul photos`);
+  if (sources.user) parts.push("your Soul photos");
+  if (parts.length === 0) return undefined;
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 /** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).

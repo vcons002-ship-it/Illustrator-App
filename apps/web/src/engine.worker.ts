@@ -79,6 +79,7 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  describeReferenceSources,
   referenceOutcome,
   type ImageGenerationOutput,
   soulRefSeeds,
@@ -1990,7 +1991,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handlePolish(msg);
       break;
     case "chatTool":
-      void handleChatTool(msg.requestId, msg.call, msg.refImages);
+      void handleChatTool(msg.requestId, msg.call, msg.refImages, msg.userText);
       break;
     case "chatVideo":
       void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage, msg.keepResident);
@@ -5987,6 +5988,7 @@ async function handleChatTool(
   requestId: number,
   call: ToolCall,
   refImages?: { bytes: ArrayBuffer; mimeType: string }[],
+  userText?: string,
 ): Promise<void> {
   // Register an abort controller under THIS render's requestId so the Stop button (chatCancel)
   // can interrupt the ComfyUI render — without this the image kept rendering after Stop.
@@ -6064,17 +6066,32 @@ async function handleChatTool(
     // went into the prompt, and the bytes were dropped, so "make an image from this" rendered from
     // somebody's words about the picture rather than the picture.
     const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
-    if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(call.prompt, portraitSelfName)) {
-      prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes);
-      refs.push(...(await loadSoulRefs(store, "self")));
+    // Counted by SOURCE as they're gathered, so the note under the picture can name where they came
+    // from. "Used 3 reference photos" leaves the Soul case unanswered — an attachment is visible in
+    // the transcript, but a Soul photo lives two panels away with nothing on screen to say it helped.
+    const sources: { attached?: number; self?: number; user?: number; selfName?: string } = {};
+    // Tested against the READER'S OWN WORDS as well as the model's prompt. "Generate an image of
+    // yourself" is unmistakable; the prompt the model then writes may be "a portrait of a woman in a
+    // garden", which contains nothing this can match — so the Soul was skipped for the one request
+    // that named it outright.
+    const request = userText?.trim() ? `${userText}\n${call.prompt}` : call.prompt;
+    if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(request, portraitSelfName)) {
+      prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes, request);
+      const own = await loadSoulRefs(store, "self");
+      refs.push(...own);
+      if (own.length) sources.self = own.length;
     }
-    if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(call.prompt, portraitUserName)) {
-      prompt = userPortraitPrompt(prompt, portraitUserName, userNotes);
-      refs.push(...(await loadSoulRefs(store, "user")));
+    if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(request, portraitUserName)) {
+      prompt = userPortraitPrompt(prompt, portraitUserName, userNotes, request);
+      const own = await loadSoulRefs(store, "user");
+      refs.push(...own);
+      if (own.length) sources.user = own.length;
     }
     // The reader's own attachment is the strongest statement of intent there is — they picked THIS
     // picture for THIS turn — so it leads, and at a higher weight than a stored Soul photo.
     for (const im of refImages ?? []) refs.push({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 });
+    if (refImages?.length) sources.attached = refImages.length;
+    if (portraitSelfName.trim()) sources.selfName = portraitSelfName;
     const soulRefs = refs.length ? refs.slice(0, MAX_CHAT_REFS) : undefined;
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
@@ -6085,7 +6102,7 @@ async function handleChatTool(
     // Say what became of the reference photos. Every way this goes wrong yields a perfectly good
     // picture that just isn't of the person, so without this the reader is left comparing faces and
     // guessing between "wrong model", "nodes missing", "upload failed" and "it worked, badly".
-    const note = referenceOutcome(soulRefs?.length ?? 0, out.references);
+    const note = referenceOutcome(soulRefs?.length ?? 0, out.references, describeReferenceSources(sources));
     post(
       {
         type: "chatToolResult",

@@ -4155,16 +4155,32 @@ function escapeRegExp(s: string): string {
  * (whole word) OR self-references it ("yourself", "a selfie", "portrait/picture of you", "draw you").
  * Returns the prompt UNCHANGED when it isn't about the assistant or there's no look to add (so an
  * ordinary "draw an apple" is untouched).
+ *
+ * `request` is what gets TESTED, defaulting to the prompt itself. They are usually different things:
+ * the prompt is what the MODEL wrote for the render, and the reader said "generate an image of
+ * yourself". A model that paraphrases into "a portrait of a woman in a garden" has dropped every
+ * word this looks for — so the Soul's photos and look were skipped for a request that could not have
+ * been clearer. The caller passes the reader's own words alongside.
  */
-export function selfPortraitPrompt(prompt: string, name: string, notes: readonly SoulNote[]): string {
-  if (!prompt.trim() || !isSelfPortraitRequest(prompt, name)) return prompt;
+export function selfPortraitPrompt(
+  prompt: string,
+  name: string,
+  notes: readonly SoulNote[],
+  request = prompt,
+): string {
+  if (!prompt.trim() || !isSelfPortraitRequest(request, name)) return prompt;
   return foldSoulLook(prompt, name, notes, "the assistant");
 }
 
 /** Symmetric to selfPortraitPrompt for the USER soul — when the image is of the READER ("draw me", "a
  * picture of me", their character name), fold the user soul's appearance into the prompt. */
-export function userPortraitPrompt(prompt: string, name: string, notes: readonly SoulNote[]): string {
-  if (!prompt.trim() || !isUserPortraitRequest(prompt, name)) return prompt;
+export function userPortraitPrompt(
+  prompt: string,
+  name: string,
+  notes: readonly SoulNote[],
+  request = prompt,
+): string {
+  if (!prompt.trim() || !isUserPortraitRequest(request, name)) return prompt;
   return foldSoulLook(prompt, name, notes, "the reader");
 }
 

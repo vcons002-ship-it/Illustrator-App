@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { referenceOutcome } from "./image-provider.js";
+import { describeReferenceSources, referenceOutcome } from "./image-provider.js";
 
 describe("referenceOutcome — the answer to \"did my photos get used?\"", () => {
   it("says nothing when no photos were offered", () => {
@@ -43,5 +43,58 @@ describe("referenceOutcome — the answer to \"did my photos get used?\"", () =>
 
   it("gets the singular right", () => {
     expect(referenceOutcome(1, undefined)!.text).toContain("1 reference photo ");
+  });
+});
+
+describe("describeReferenceSources — which photos, in the reader's terms", () => {
+  it("names a Soul, because that's the one you can't see for yourself", () => {
+    // The picture you attached is right there in the transcript. Your Soul photos are two panels
+    // away, and "used 2 reference photos" says nothing about whether they were involved.
+    expect(describeReferenceSources({ user: 2 })).toBe("your Soul photos");
+    expect(describeReferenceSources({ self: 1, selfName: "Aria" })).toBe("Aria's Soul photos");
+  });
+
+  it("falls back to a role when the assistant has no name set", () => {
+    expect(describeReferenceSources({ self: 1 })).toBe("the assistant's Soul photos");
+    expect(describeReferenceSources({ self: 1, selfName: "   " })).toBe("the assistant's Soul photos");
+  });
+
+  it("counts attachments and gets the singular right", () => {
+    expect(describeReferenceSources({ attached: 1 })).toBe("the photo you attached");
+    expect(describeReferenceSources({ attached: 3 })).toBe("the 3 photos you attached");
+  });
+
+  it("reads as a sentence when several sources contributed", () => {
+    expect(describeReferenceSources({ attached: 1, self: 2, user: 1, selfName: "Aria" })).toBe(
+      "the photo you attached, Aria's Soul photos and your Soul photos",
+    );
+    expect(describeReferenceSources({ self: 1, user: 1, selfName: "Aria" })).toBe(
+      "Aria's Soul photos and your Soul photos",
+    );
+  });
+
+  it("says nothing when nothing contributed", () => {
+    expect(describeReferenceSources({})).toBeUndefined();
+    expect(describeReferenceSources({ attached: 0, self: 0, user: 0 })).toBeUndefined();
+  });
+});
+
+describe("referenceOutcome names the source in every outcome", () => {
+  const from = "your Soul photos";
+  it("in the success line", () => {
+    expect(referenceOutcome(2, { supplied: 2, used: 2, how: "reference-latent" }, from)!.text).toBe(
+      "🖼 Used 2 reference photos — from your Soul photos (built into the model).",
+    );
+  });
+  it("in the ignored line — knowing WHICH photos were wasted is the point", () => {
+    expect(referenceOutcome(2, undefined, from)!.text).toContain("from your Soul photos");
+  });
+  it("in the unused line", () => {
+    expect(referenceOutcome(2, { supplied: 2, used: 0, why: "the nodes aren't installed" }, from)!.text).toContain(
+      "from your Soul photos",
+    );
+  });
+  it("and is omitted cleanly when the caller doesn't know", () => {
+    expect(referenceOutcome(1, { supplied: 1, used: 1 })!.text).toBe("🖼 Used 1 reference photo.");
   });
 });
