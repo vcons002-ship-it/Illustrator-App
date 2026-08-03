@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { dayToIso, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
+import { ConfirmButton } from "./ConfirmButton.js";
 
 /**
  * The Task Orchestrator's panel — the durable plans the assistant built, shown two ways:
@@ -254,9 +255,17 @@ function PlanCard({
             🚫 Ignore
           </button>
         ) : null}
-        <button style={btn} onClick={onDelete} title="Remove this task (kept in the Removed list — you can undo)">
-          ✕ Remove
-        </button>
+        {/* Confirmed HERE, on the screen the reader is actually looking at. This used to be confirmed
+            on the desktop with `window.confirm` — which a phone can neither see nor answer, and which
+            froze the phone outright while it was up (see ConfirmButton). */}
+        <ConfirmButton
+          style={btn}
+          label="✕ Remove"
+          confirmLabel="Remove — sure?"
+          title="Remove this task (kept in the Removed list — you can undo)"
+          confirmTitle="Press again to remove it (you can restore it from the Removed list)"
+          onConfirm={onDelete}
+        />
       </div>
     </div>
   );
@@ -558,9 +567,14 @@ export const TasksPanel = memo(function TasksPanel({
                       </button>
                     ) : null}
                     {onDeleteForever ? (
-                      <button style={btn} onClick={() => onDeleteForever(p.id)} title="Delete permanently (cannot undo)">
-                        Delete forever
-                      </button>
+                      <ConfirmButton
+                        style={btn}
+                        label="Delete forever"
+                        confirmLabel="Delete forever — sure?"
+                        title="Delete permanently (cannot undo)"
+                        confirmTitle="Press again to delete it permanently — this can't be undone"
+                        onConfirm={() => onDeleteForever(p.id)}
+                      />
                     ) : null}
                   </div>
                 ))}

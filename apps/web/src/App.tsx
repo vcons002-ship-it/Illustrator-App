@@ -1381,9 +1381,15 @@ export function App() {
     [libraryStore, refreshTaskPlans, ignoreRuleFor],
   );
   // Soft-remove (the per-card "Remove" button) — archive without a broad ignore rule. Undoable.
+  //
+  // NO DIALOG HERE. This runs on the desktop for BOTH callers: the desktop's own button and a phone
+  // relaying `deleteTask` over the planner bus. A `window.confirm` at this point put the question on
+  // a screen the phone reader couldn't see or answer — and, because it blocks the desktop's main
+  // thread, it also stalled the mirror and the relay pump, so the phone appeared to freeze until
+  // someone walked over to the desktop. The confirmation lives in TasksPanel's ConfirmButton, on
+  // whichever screen actually pressed it.
   const removeTask = useCallback(
     async (planId: string) => {
-      if (!window.confirm("Remove this task? You can restore it from the Removed list.")) return;
       await archiveTaskPlan(libraryStore, planId, "removed");
       refreshTaskPlans();
     },
@@ -1420,10 +1426,10 @@ export function App() {
     [libraryStore, refreshTaskPlans],
   );
   // Permanently delete (from the Removed list) — gone for good (a fresh scan/import could surface
-  // a still-existing source again later).
+  // a still-existing source again later). Confirmed by the caller's ConfirmButton, not a dialog —
+  // see removeTask for why a `window.confirm` here was unanswerable from a linked phone.
   const deleteTaskForever = useCallback(
     async (planId: string) => {
-      if (!window.confirm("Permanently delete this task? This can't be undone.")) return;
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
