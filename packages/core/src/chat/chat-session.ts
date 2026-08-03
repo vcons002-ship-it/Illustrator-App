@@ -489,7 +489,12 @@ export async function runChatTool(
 // The trailing space is OPTIONAL. Requiring it missed the case that mattered most: a reply that is
 // the stamp and NOTHING else, which is what the model produced when it mistook the prefix for a turn
 // delimiter. The stricter pattern left that unrecognised and unstripped.
-const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/;
+// Seconds are OPTIONAL in the pattern and always WRITTEN. Two different jobs: what gets written is
+// the new format, but what gets matched has to include every stamp already sitting in a stored
+// history — a reader's chat outlives a format change, and a stamp that stops being recognised stops
+// being stripped, which puts a bare `[2026-08-03 10:05]` back in front of an old message and back
+// into the model's mouth as something to imitate.
+const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\]\s*/;
 
 /**
  * Strip a stamp off the front of a message.
@@ -510,15 +515,36 @@ const TURN_STAMP = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/;
  * write it the model has to have written the reply first. If it imitates this one, the cost is a line
  * at the end that gets stripped, not a turn that says nothing.
  */
-const ASSISTANT_STAMP = /\n?\[sent \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*$/;
+const ASSISTANT_STAMP = /\n?\[sent \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\]\s*$/;
+
+/**
+ * `YYYY-MM-DD HH:MM:SS.mmm` in local time — the one place the stamp format is decided.
+ *
+ * Minutes couldn't order the things that happen inside one, and seconds can't either: this app
+ * writes several turns programmatically in a burst — a scheduled run, an auto-advancing checklist,
+ * a story beat and its render — and those land far closer together than a second. "What did you do,
+ * and in what order" is exactly what these stamps are read for.
+ *
+ * MILLISECONDS, not tenths or hundredths, because `at` IS a millisecond value. Rounding to a coarser
+ * unit means two different timestamps can print identically — the same collision, one decimal place
+ * further down — and a stamp that can't distinguish two events is the thing being fixed. Printing
+ * the number in full also makes the stamp a faithful rendering of what was stored rather than a
+ * lossy view of it, which matters the moment anyone compares one against a stored `at`. PURE.
+ */
+export function stampClock(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`
+  );
+}
 
 export function stampAssistantContent(content: string, at: number | undefined): string {
   if (at === undefined || !Number.isFinite(at) || at <= 0) return content;
   const body = content.replace(ASSISTANT_STAMP, "");
   if (!body.trim()) return content;
-  const d = new Date(at);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${body}\n[sent ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}]`;
+  return `${body}\n[sent ${stampClock(at)}]`;
 }
 
 /** Remove either stamp the app adds — the reader's leading one, or the assistant's trailing one. */
@@ -553,7 +579,5 @@ export function isOnlyTurnStamp(content: string): boolean {
 export function stampTurnContent(content: string, at: number | undefined): string {
   if (at === undefined || !Number.isFinite(at) || at <= 0) return content;
   if (TURN_STAMP.test(content)) return content;
-  const d = new Date(at);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}] ${content}`;
+  return `[${stampClock(at)}] ${content}`;
 }
