@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildBuddySystemPrompt } from "./buddy-tools.js";
 import { reconcileSoulAppearance, rememberRouteFor, removeSoulEssenceFact, type SoulEssence } from "./souls.js";
 
 const essence = (): SoulEssence =>
@@ -124,5 +125,26 @@ describe("rememberRouteFor — an appearance fact must not land in preference me
 
   it("doesn't confuse a verb for a garment, now that appearance knows the difference", () => {
     expect(rememberRouteFor("I like notes that mask the complexity", undefined)).toBe("reader");
+  });
+});
+
+describe("mature mode reaches the image prompt, not just the prose", () => {
+  const promptWith = (allowMature: boolean): string =>
+    buildBuddySystemPrompt({ persona: "assistant", library: [], allowMature });
+
+  it("tells the model the generate_image prompt must be literal", () => {
+    // The gap this closes: a model can discuss a subject freely in prose and still hand
+    // generate_image a euphemism, because it's writing "a prompt" rather than an answer. Nothing
+    // filters content between there and the engine, so a softened word IS the softened picture.
+    const p = promptWith(true);
+    expect(p).toContain("generate_image");
+    expect(p).toMatch(/literal, concrete terms/);
+    expect(p).toMatch(/euphemism renders as the euphemism/);
+  });
+
+  it("says none of it when mature mode is off", () => {
+    const p = promptWith(false);
+    expect(p).not.toMatch(/reader has enabled mature mode/);
+    expect(p).not.toMatch(/euphemism renders as the euphemism/);
   });
 });

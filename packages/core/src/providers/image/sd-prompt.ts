@@ -283,6 +283,56 @@ export function resolveNegative(
 }
 
 /**
+ * The record of what a render was ACTUALLY told — positive, negative, and the settings that decide
+ * how hard the negative bites.
+ *
+ * "Full prompt (as sent to the model)" only ever showed the positive half. The negative is where a
+ * subject gets suppressed, and it is generated rather than typed, so a reader comparing two engines
+ * that treat the same model differently had nothing to compare: both showed the same positive text
+ * and neither showed the words doing the suppressing. Recording all of it turns "this engine seems
+ * to censor things" into a diff anyone can read in ten seconds.
+ *
+ * The sampler line is there because CFG is what gives a negative its force — the same negative at
+ * cfg 7 and cfg 1 are different renders. PURE.
+ */
+export function renderPromptRecord(
+  positive: string,
+  negative: string,
+  engine: {
+    engine: string;
+    family: ModelFamily;
+    /** The checkpoint FILE the engine actually loaded. The most important field here: two engines
+     * keep separate models folders, so "the same model" is an assumption until the filenames are put
+     * side by side — and a base checkpoint and a community fine-tune of it behave nothing alike. */
+    model?: string;
+    sampler?: string;
+    scheduler?: string;
+    cfg?: number;
+    steps?: number;
+    /** Third-party nodes installed on the engine that can filter a finished image. Named here
+     * because this is the line a reader reads when a render didn't come back as asked. */
+    filterNodes?: readonly string[];
+  },
+): string {
+  const bits = [
+    engine.engine,
+    engine.model,
+    engine.family,
+    engine.sampler && engine.scheduler ? `${engine.sampler}/${engine.scheduler}` : engine.sampler,
+    engine.cfg !== undefined ? `cfg ${engine.cfg}` : undefined,
+    engine.steps !== undefined ? `${engine.steps} steps` : undefined,
+  ].filter((b): b is string => !!b);
+  const filters = engine.filterNodes?.length
+    ? `\n\n⚠ Image-filtering nodes are installed on this engine: ${engine.filterNodes.join(", ")}. ` +
+      "This app never wires one into a render, but a workflow or node pack can."
+    : "";
+  return (
+    [positive, negative.trim() ? `Negative: ${negative.trim()}` : "Negative: (none)", `Engine: ${bits.join(" · ")}`]
+      .join("\n\n") + filters
+  );
+}
+
+/**
  * Drop any negative term the POSITIVE prompt actually asks for.
  *
  * The default negative ends with `portrait, headshot, close-up, simple background`, and it is there

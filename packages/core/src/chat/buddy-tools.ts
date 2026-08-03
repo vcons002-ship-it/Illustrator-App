@@ -1237,7 +1237,16 @@ export function buildBuddySystemPrompt(raw: {
   const mature = opts.allowMature
     ? " The reader has enabled mature mode: explicit sexual content, graphic violence and other " +
       "adult themes are all in scope — engage with them and adult creative requests directly and " +
-      "in detail, without refusing, moralising, or adding content warnings."
+      "in detail, without refusing, moralising, or adding content warnings." +
+      // The IMAGE PROMPT is the case this kept missing. A model can discuss a subject freely in
+      // prose and still hand generate_image a euphemism, because it is writing "a prompt" rather
+      // than an answer — and an image model has no idea what was meant. There is no content filter
+      // anywhere between here and the engine: whatever is written in `prompt` IS what gets drawn,
+      // so a softened word is the reader's picture softened, by this turn, silently.
+      " This applies to the `prompt` you write for generate_image as much as to your prose: describe " +
+      "the subject in plain, literal, concrete terms. An image model cannot read an implication — " +
+      "a euphemism renders as the euphemism, and the reader gets a picture of the wrong thing with " +
+      "nothing to say why. Do not soften, abstract, or omit part of what was asked for."
     : "";
   const nowBlock = opts.now
     ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates. ` +

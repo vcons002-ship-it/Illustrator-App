@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_NEGATIVE, resolveNegative, withoutRequestedTerms } from "./sd-prompt.js";
+import { DEFAULT_NEGATIVE, renderPromptRecord, resolveNegative, withoutRequestedTerms } from "./sd-prompt.js";
 
 describe("the negative prompt must not fight what was asked for", () => {
   it("drops a term the reader actually requested", () => {
@@ -44,5 +44,56 @@ describe("the negative prompt must not fight what was asked for", () => {
     }
     // HiDream is the exception — an EMPTY negative crashes its embedder, so it must stay non-empty.
     expect(resolveNegative("hidream", undefined, "a portrait of me").length).toBeGreaterThan(0);
+  });
+});
+
+describe("renderPromptRecord — what the render was actually told", () => {
+  it("records the negative, which is where a subject actually gets suppressed", () => {
+    // "Full prompt (as sent to the model)" only ever showed the positive half. The negative is
+    // generated rather than typed, so a reader comparing two engines that treat the same model
+    // differently had nothing to compare — both showed the same positive and neither showed the
+    // words doing the suppressing.
+    const out = renderPromptRecord("a portrait of me", "lowres, blurry", {
+      engine: "ComfyUI",
+      model: "sd_xl_base_1.0.safetensors",
+      family: "sdxl",
+      sampler: "euler",
+      scheduler: "normal",
+      cfg: 7,
+      steps: 28,
+    });
+    expect(out).toContain("a portrait of me");
+    expect(out).toContain("Negative: lowres, blurry");
+    expect(out).toContain("Engine: ComfyUI · sd_xl_base_1.0.safetensors · sdxl · euler/normal · cfg 7 · 28 steps");
+  });
+
+  it("says '(none)' rather than going quiet when there IS no negative", () => {
+    // An empty line would read as "the field wasn't recorded". For Flux/Z-Image/Qwen the absence is
+    // the point — they must not get one — and that's worth stating.
+    expect(renderPromptRecord("a dragon", "", { engine: "ComfyUI", family: "flux2" })).toContain("Negative: (none)");
+  });
+
+  it("leaves out settings it wasn't given, without leaving gaps", () => {
+    const out = renderPromptRecord("x", "y", { engine: "AUTOMATIC1111", family: "sd15", cfg: 7 });
+    expect(out).toContain("Engine: AUTOMATIC1111 · sd15 · cfg 7");
+    expect(out).not.toContain("··");
+  });
+});
+
+describe("the record names the checkpoint FILE", () => {
+  it("because two engines keep separate models folders", () => {
+    // The decisive field. When one engine handles a subject and another doesn't with "the same
+    // model", that sameness is an assumption until the two filenames are read side by side — and a
+    // base checkpoint and a community fine-tune of it behave nothing alike on the same prompt.
+    const comfy = renderPromptRecord("x", "", { engine: "ComfyUI", model: "sd_xl_base_1.0.safetensors", family: "sdxl" });
+    const a1111 = renderPromptRecord("x", "", { engine: "AUTOMATIC1111", model: "myFineTune_v6.safetensors", family: "sdxl" });
+    expect(comfy).toContain("sd_xl_base_1.0.safetensors");
+    expect(a1111).toContain("myFineTune_v6.safetensors");
+  });
+
+  it("omits it cleanly when the engine uses whatever it already has loaded", () => {
+    const out = renderPromptRecord("x", "", { engine: "AUTOMATIC1111", family: "sdxl" });
+    expect(out).toContain("Engine: AUTOMATIC1111 · sdxl");
+    expect(out).not.toContain("··");
   });
 });
