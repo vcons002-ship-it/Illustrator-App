@@ -17,10 +17,10 @@ export function speakableText(text: string): string {
     // already stored with one don't keep reading it out.
     // Seconds optional: stamps written before the format gained them are still in stored histories,
     // and one that stops matching here starts being read aloud as a string of numbers.
-    .replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?\]\s*/, "")
+    .replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\]\s*/, "")
     // The assistant's own stamp is a TRAILING line — it was never stripped here at all, so a reply
     // that reached the voice with one ended by reading the clock out.
-    .replace(/\n?\[sent \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?\]\s*$/, "")
+    .replace(/\n?\[sent \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\]\s*$/, "")
     .replace(/```[\s\S]*?```/g, " (code block) ") // don't read code aloud
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // images

@@ -486,7 +486,7 @@ describe("stampTurnContent — when a message was sent", () => {
   const at = new Date(2026, 7, 1, 9, 14).getTime(); // local time, like the reader's clock
 
   it("puts the local date and time in front", () => {
-    expect(stampTurnContent("what's left on the party list?", at)).toBe("[2026-08-01 09:14:00] what's left on the party list?");
+    expect(stampTurnContent("what's left on the party list?", at)).toBe("[2026-08-01 09:14:00.000] what's left on the party list?");
   });
 
   it("is idempotent, because history is rebuilt every turn", () => {
@@ -502,7 +502,7 @@ describe("stampTurnContent — when a message was sent", () => {
     // answer. A trailing marker can't be produced instead of content — to write it, the reply has to
     // exist first.
     const out = stampAssistantContent("I added those to the event.", at);
-    expect(out).toBe("I added those to the event.\n[sent 2026-08-01 09:14:00]");
+    expect(out).toBe("I added those to the event.\n[sent 2026-08-01 09:14:00.000]");
     expect(out.startsWith("[")).toBe(false);
   });
 
@@ -514,7 +514,7 @@ describe("stampTurnContent — when a message was sent", () => {
   it("re-stamps rather than accumulating, however often history is rebuilt", () => {
     const once = stampAssistantContent("done", at);
     expect(stampAssistantContent(once, at)).toBe(once);
-    expect(stampAssistantContent(once, at + 3_600_000)).toBe("done\n[sent 2026-08-01 10:14:00]");
+    expect(stampAssistantContent(once, at + 3_600_000)).toBe("done\n[sent 2026-08-01 10:14:00.000]");
   });
 
   it("strips either stamp the app adds", () => {
@@ -541,7 +541,7 @@ describe("stampTurnContent — when a message was sent", () => {
     // always wins and a mimicked prefix costs nothing. A convention it cannot break, not one it has
     // to be told to follow.
     const mimicked = "[2019-01-01 00:00] I looked that up for you";
-    expect(stampTurnContent(stripTurnStamp(mimicked), at)).toBe("[2026-08-01 09:14:00] I looked that up for you");
+    expect(stampTurnContent(stripTurnStamp(mimicked), at)).toBe("[2026-08-01 09:14:00.000] I looked that up for you");
   });
 
   it("leaves a message with no stamp exactly as it is", () => {
@@ -554,19 +554,19 @@ describe("stampTurnContent — when a message was sent", () => {
   });
 
   it("pads so the stamps line up and sort", () => {
-    expect(stampTurnContent("x", new Date(2026, 0, 5, 4, 7, 5).getTime())).toBe("[2026-01-05 04:07:05] x");
+    expect(stampTurnContent("x", new Date(2026, 0, 5, 4, 7, 5).getTime())).toBe("[2026-01-05 04:07:05.000] x");
   });
 });
 
 describe("the stamp carries SECONDS, and still reads the ones written before it did", () => {
-  const at = new Date(2026, 7, 1, 9, 14, 37).getTime();
+  const at = new Date(2026, 7, 1, 9, 14, 37, 480).getTime();
 
-  it("writes seconds, so events inside one minute can be ordered", () => {
+  it("writes MILLISECONDS, because a burst of turns lands closer together than a second", () => {
     // A scheduled run, the tool results it produced and the reply it wrote all land in the same
     // minute — and "what did you do, and in what order" is what these stamps are read for. At
     // minute resolution two events a second apart looked simultaneous.
-    expect(stampTurnContent("hello", at)).toBe("[2026-08-01 09:14:37] hello");
-    expect(stampAssistantContent("done", at)).toBe("done\n[sent 2026-08-01 09:14:37]");
+    expect(stampTurnContent("hello", at)).toBe("[2026-08-01 09:14:37.480] hello");
+    expect(stampAssistantContent("done", at)).toBe("done\n[sent 2026-08-01 09:14:37.480]");
   });
 
   it("still strips a stamp written in the OLD minute-only form", () => {
@@ -577,10 +577,34 @@ describe("the stamp carries SECONDS, and still reads the ones written before it 
     expect(stripTurnStamp("done\n[sent 2026-08-01 09:14]")).toBe("done");
     expect(isOnlyTurnStamp("[2026-08-02 10:05]")).toBe(true);
     expect(isOnlyTurnStamp("[2026-08-02 10:05:41]")).toBe(true);
+    expect(isOnlyTurnStamp("[2026-08-02 10:05:41.900]")).toBe(true);
   });
 
   it("doesn't double-stamp a message that already carries either form", () => {
     expect(stampTurnContent("[2026-08-01 09:14] hi", at)).toBe("[2026-08-01 09:14] hi");
     expect(stampTurnContent("[2026-08-01 09:14:37] hi", at)).toBe("[2026-08-01 09:14:37] hi");
+    expect(stampTurnContent("[2026-08-01 09:14:37.480] hi", at)).toBe("[2026-08-01 09:14:37.480] hi");
+  });
+});
+
+describe("the stamp never loses precision the stored time has", () => {
+  it("two turns a few milliseconds apart print differently", () => {
+    // The point of going below a second, and the reason for milliseconds rather than tenths: `at` IS
+    // a millisecond value, so anything coarser lets two different timestamps print identically —
+    // the same collision this exists to remove, one decimal place further down.
+    const a = new Date(2026, 7, 1, 9, 14, 37, 12).getTime();
+    const b = new Date(2026, 7, 1, 9, 14, 37, 94).getTime();
+    expect(stampTurnContent("x", a)).not.toBe(stampTurnContent("x", b));
+  });
+
+  it("pads the milliseconds so the stamps stay the same width and sort as text", () => {
+    expect(stampTurnContent("x", new Date(2026, 7, 1, 9, 14, 37, 7).getTime())).toBe("[2026-08-01 09:14:37.007] x");
+  });
+
+  it("reads back every earlier form, so an old history still strips clean", () => {
+    for (const old of ["[2026-08-01 09:14]", "[2026-08-01 09:14:37]", "[2026-08-01 09:14:37.4]", "[2026-08-01 09:14:37.480]"]) {
+      expect(stripTurnStamp(`${old} hello`), old).toBe("hello");
+      expect(isOnlyTurnStamp(old), old).toBe(true);
+    }
   });
 });
