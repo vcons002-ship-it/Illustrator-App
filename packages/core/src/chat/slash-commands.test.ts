@@ -153,3 +153,28 @@ describe("parseBuddySlashCommand", () => {
     });
   });
 });
+
+describe("/quote and /ta — the deterministic path to a real number", () => {
+  it("runs the market tools directly, with no model judgement in the way", () => {
+    // Everything else about these tools is persuasion: the model deciding, each turn, whether a
+    // price question is worth loading a toolset for. A reader who just wants the quote shouldn't
+    // be relying on that going their way.
+    expect(parseBuddySlashCommand("/quote aapl", [])).toEqual({ call: { tool: "stock_quote", symbol: "AAPL" } });
+    expect(parseBuddySlashCommand("/ta msft", [])).toEqual({ call: { tool: "market_analysis", symbol: "MSFT" } });
+  });
+
+  it("takes only the first word as the ticker", () => {
+    expect(parseBuddySlashCommand("/quote AAPL please", [])).toEqual({ call: { tool: "stock_quote", symbol: "AAPL" } });
+  });
+
+  it("passes an interval and range through to /ta", () => {
+    expect(parseBuddySlashCommand("/ta AAPL 1d 6mo", [])).toEqual({
+      call: { tool: "market_analysis", symbol: "AAPL", interval: "1d", range: "6mo" },
+    });
+  });
+
+  it("shows usage rather than fetching a blank ticker", () => {
+    const r = parseBuddySlashCommand("/quote", []) as { error: string };
+    expect(r.error).toContain("/quote <ticker>");
+  });
+});
