@@ -6298,7 +6298,18 @@ export function App() {
     setBuddySteps([]);
     setBuddyPendingTool(undefined);
     let openedBook = false;
-    const res = await buddyChat(history, userText, buddyPersona, library, (e) => {
+    // Stamp the message being answered RIGHT NOW, the same way its history is stamped.
+    //
+    // Only the stored history went through chatTurnsOf, so every message the model could see carried
+    // a time EXCEPT the one it was replying to — the single most useful clock in the conversation,
+    // and the only one it needs to answer "how long did that take" or "what time is it now" about
+    // this exchange. It read as the timestamps not working at all, because the question is always
+    // about the turn in progress.
+    //
+    // Skipped for an internal step directive: those are control flow, not a message from anyone, and
+    // dating them would put a turn delimiter in front of an instruction.
+    const stampedUserText = ephemeralDirective ? userText : stampTurnContent(userText, Date.now());
+    const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
         setBuddyStreaming(stripTurnStamp(buddyStreamingRef.current));

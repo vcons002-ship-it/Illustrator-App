@@ -79,6 +79,8 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  measureGeneration,
+  type GenerationRate,
   describeReferenceSources,
   referenceOutcome,
   type ImageGenerationOutput,
@@ -4414,6 +4416,9 @@ let buddyBookSearch: GutenbergSearch | undefined;
 /** The reader's current local date/time + UTC offset (e.g. "Sunday, June 15, 2026,
  * 4:58 PM (UTC-04:00)") — fed to the buddy prompt so "today"/"this week"/"by when"
  * and the ISO ranges it builds are anchored to their own clock. */
+/** The last buddy reply's measured speed, handed to the next turn's prompt. */
+let lastGeneration: GenerationRate | undefined;
+
 function currentDateTimeLabel(): string {
   const now = new Date();
   const label = now.toLocaleString(undefined, {
@@ -4571,6 +4576,7 @@ async function handleResolveConflicts(msg: Extract<MainToWorker, { type: "resolv
 
 async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>): Promise<void> {
   const ac = new AbortController();
+  const turnStartedAt = Date.now();
   chatAborts.set(msg.requestId, ac);
   try {
     const { llm, imageSearch } = chatProviders();
@@ -5573,6 +5579,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
         // own clock (the worker runs in their browser, so this is their local time/zone).
         now: currentDateTimeLabel(),
+        // How fast the PREVIOUS reply came out. Measured here because the model cannot measure it:
+        // its own stamp is written after the reply exists, so asked to time itself it invents a
+        // figure or loops working it out from timestamps that don't include the one it needs.
+        ...(lastGeneration ? { lastGeneration } : {}),
         // Which bundle this is — so "which build are you on?" is answerable and a stale build stops
         // looking like an unfixed bug. Resolved before the turn (see below); "" until then, and the
         // prompt omits the line rather than showing a blank.
@@ -5914,6 +5924,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Best-effort: if the beat can't append, the prose still shows in the chat below.
       }
     }
+    // Measure what just came out, for the NEXT turn's prompt. Wall time from the start of the turn
+    // to here, against the reply's own length — the only vantage point from which "how fast do you
+    // generate" has an answer, since the model is inside the thing being timed.
+    lastGeneration = measureGeneration(outcome.text.length, Date.now() - turnStartedAt) ?? lastGeneration;
     post({
       type: "buddyDone",
       requestId: msg.requestId,

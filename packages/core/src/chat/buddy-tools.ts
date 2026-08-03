@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import { generationRateNote, type GenerationRate } from "./generation-rate.js";
 import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
@@ -870,6 +871,8 @@ export function buildBuddySystemPrompt(raw: {
    * 2026, 4:58 PM (UTC-04:00)") — anchors "today"/"this week"/"by when" answers
    * and the ISO ranges/due dates the model builds. */
   now?: string;
+  /** How fast the PREVIOUS reply was generated. The model can't time its own — see generationRateNote. */
+  lastGeneration?: GenerationRate;
   /** This bundle's git sha + build time. Told to the model so "which build are you running?" has a
    * straight answer — the app self-updates, and a stale bundle is otherwise indistinguishable from a
    * bug that was already fixed. */
@@ -1439,7 +1442,7 @@ export function buildBuddySystemPrompt(raw: {
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
-    `${nowBlock}${buildBlock}${creativeBlock}` +
+    `${nowBlock}${generationRateNote(opts.lastGeneration)}${buildBlock}${creativeBlock}` +
     `${planBlock}` +
     (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
