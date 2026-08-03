@@ -536,6 +536,9 @@ export interface ChatToolRender {
   image?: { bytes: ArrayBuffer; mimeType: string };
   /** An image-to-video render's output clip. */
   video?: { bytes: ArrayBuffer; mimeType: string };
+  /** What became of the reference photos, when any were given. Shown under the picture — every way
+   * reference conditioning fails still returns a good image, of the wrong person. */
+  referenceNote?: { ok: boolean; text: string };
   error?: string;
 }
 
@@ -1136,6 +1139,7 @@ export function useEngineWorker(
             toolReq.resolve({
               ...(msg.image ? { image: msg.image } : {}),
               ...(msg.video ? { video: msg.video } : {}),
+              ...(msg.referenceNote ? { referenceNote: msg.referenceNote } : {}),
               ...(msg.error ? { error: msg.error } : {}),
             });
             break;

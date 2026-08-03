@@ -1112,6 +1112,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // seed-only (graceful, never an error).
     let ipAdapter: IpAdapterGraph | undefined;
     let referenceLatents: string[] | undefined;
+    // Why references didn't reach the model, when they didn't. Every branch below already knows;
+    // this is what carries that out to the reader instead of leaving it in a console line.
+    let refsSkipped: string | undefined;
     if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && referenceLatentSupports(family)) {
       // This family reads the photo itself — no adapter, and nothing to install. Same reference
       // images, a different route into the same render.
@@ -1123,12 +1126,14 @@ export class ComfyUIBackend implements LocalEngineBackend {
         );
       } catch {
         referenceLatents = undefined; // upload failed → render without the reference, not at all
+        refsSkipped = "the engine wouldn't accept the upload";
       }
     } else if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && !ipAdapterSupports(family)) {
       // Splicing the chain in anyway was worse than doing nothing: IPAdapterUnifiedLoader resolves
       // its models from the base model's architecture, so on a Flux/Z-Image/Qwen/HiDream checkpoint
       // it raises rather than degrading, and the whole render fails. A reference photo the model
       // can't use should cost the reader the likeness, not the picture.
+      refsSkipped = `this model (${family}) can't use reference photos here`;
       if (!this.warnedIpAdapterFamily) {
         this.warnedIpAdapterFamily = true;
         console.info(
@@ -1152,8 +1157,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
           ipAdapter = { caps, refs };
         } catch {
           ipAdapter = undefined; // upload failed → fall back to seed-only
+          refsSkipped = "the engine wouldn't accept the upload";
         }
-      } else if (!this.warnedNoIpAdapter) {
+      } else if (((refsSkipped = "the IP-Adapter nodes aren't installed"), !this.warnedNoIpAdapter)) {
         this.warnedNoIpAdapter = true;
         console.info(
           "[visual-reader] ComfyUI IP-Adapter nodes/models not installed — using seed-only character consistency.",
@@ -1256,7 +1262,29 @@ export class ComfyUIBackend implements LocalEngineBackend {
       input.onProgress?.(1);
       // `prompt` is what actually went to the encoder — expanded, tagged, LoRA-triggered — so
       // the reader's "as sent to the model" is true rather than the pre-expansion text.
-      return { bytes: await view.arrayBuffer(), mimeType: "image/png", prompt };
+      const supplied = input.ipAdapterRefs?.length ?? 0;
+      const used = referenceLatents?.length ?? ipAdapter?.refs.length ?? 0;
+      const capped =
+        used > 0 && used < supplied
+          ? referenceLatents
+            ? `this model takes at most ${REFERENCE_LATENT_MAX_REFS}`
+            : `IP-Adapter uses at most ${IPADAPTER_MAX_REFS}`
+          : refsSkipped;
+      return {
+        bytes: await view.arrayBuffer(),
+        mimeType: "image/png",
+        prompt,
+        ...(supplied
+          ? {
+              references: {
+                supplied,
+                used,
+                ...(used > 0 ? { how: referenceLatents ? ("reference-latent" as const) : ("ipadapter" as const) } : {}),
+                ...(capped ? { why: capped } : {}),
+              },
+            }
+          : {}),
+      };
     } finally {
       socket?.close();
       signal?.removeEventListener("abort", onAbort);

@@ -85,7 +85,13 @@ export class OpenAINativeImageProvider implements ImageProvider {
     const data = await res.json<ImagesResponse>();
     const b64 = data.data?.[0]?.b64_json;
     if (!b64) throw new Error("OpenAI native image response contained no image data");
-    return { bytes: base64ToBytes(b64), mimeType: "image/png" };
+    const supplied = refs.length;
+    return {
+      bytes: base64ToBytes(b64),
+      mimeType: "image/png",
+      // Each reference went up as a file on /images/edits, so all of them reached the model.
+      ...(supplied ? { references: { supplied, used: supplied, how: "native" as const } } : {}),
+    };
   }
 }
 
