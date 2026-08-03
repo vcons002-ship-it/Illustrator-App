@@ -79,6 +79,7 @@ import {
   loadSoul,
   loadSoulName,
   loadSoulImages,
+  describeReferenceSources,
   referenceOutcome,
   type ImageGenerationOutput,
   soulRefSeeds,
@@ -6064,17 +6065,27 @@ async function handleChatTool(
     // went into the prompt, and the bytes were dropped, so "make an image from this" rendered from
     // somebody's words about the picture rather than the picture.
     const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
+    // Counted by SOURCE as they're gathered, so the note under the picture can name where they came
+    // from. "Used 3 reference photos" leaves the Soul case unanswered — an attachment is visible in
+    // the transcript, but a Soul photo lives two panels away with nothing on screen to say it helped.
+    const sources: { attached?: number; self?: number; user?: number; selfName?: string } = {};
     if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(call.prompt, portraitSelfName)) {
       prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes);
-      refs.push(...(await loadSoulRefs(store, "self")));
+      const own = await loadSoulRefs(store, "self");
+      refs.push(...own);
+      if (own.length) sources.self = own.length;
     }
     if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(call.prompt, portraitUserName)) {
       prompt = userPortraitPrompt(prompt, portraitUserName, userNotes);
-      refs.push(...(await loadSoulRefs(store, "user")));
+      const own = await loadSoulRefs(store, "user");
+      refs.push(...own);
+      if (own.length) sources.user = own.length;
     }
     // The reader's own attachment is the strongest statement of intent there is — they picked THIS
     // picture for THIS turn — so it leads, and at a higher weight than a stored Soul photo.
     for (const im of refImages ?? []) refs.push({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 });
+    if (refImages?.length) sources.attached = refImages.length;
+    if (portraitSelfName.trim()) sources.selfName = portraitSelfName;
     const soulRefs = refs.length ? refs.slice(0, MAX_CHAT_REFS) : undefined;
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
@@ -6085,7 +6096,7 @@ async function handleChatTool(
     // Say what became of the reference photos. Every way this goes wrong yields a perfectly good
     // picture that just isn't of the person, so without this the reader is left comparing faces and
     // guessing between "wrong model", "nodes missing", "upload failed" and "it worked, badly".
-    const note = referenceOutcome(soulRefs?.length ?? 0, out.references);
+    const note = referenceOutcome(soulRefs?.length ?? 0, out.references, describeReferenceSources(sources));
     post(
       {
         type: "chatToolResult",
