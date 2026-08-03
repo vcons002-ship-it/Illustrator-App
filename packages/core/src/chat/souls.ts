@@ -235,6 +235,34 @@ export interface SoulEssence {
 /** The two source-exact lists a reader can prune by hand. */
 export type SoulEssenceExactList = "exactAppearance" | "exactPersonalityDirections";
 
+/** Where a `remember` note actually belongs: the reader's preference memory, or one of the Souls. */
+export type RememberStore = "reader" | "self" | "user";
+
+/**
+ * Correct the one `remember` misroute the app can be sure about.
+ *
+ * Three destinations, two of them "about the reader" — the reader's preference MEMORY and the
+ * reader's SOUL — separated by a distinction a model re-reads from prose on every call and gets
+ * wrong about half the time. The consequence isn't symmetric, which is what makes this fixable:
+ *
+ *   - A preference filed in the Soul is untidy. It still gets read; nothing is lost.
+ *   - An APPEARANCE fact filed in memory is inert. The Soul is what portraits, stories and reference
+ *     conditioning read, so "I have green eyes" saved as a preference never reaches a picture, and
+ *     the reader has no way to see why.
+ *
+ * So only that one is redirected: a note about how the READER looks, headed for preference memory,
+ * goes to their Soul instead. Everything else is left exactly where the model put it — including a
+ * preference it chose to file in a Soul, because "I prefer watercolour" may well be a real trait and
+ * this has no way to know it isn't.
+ *
+ * `about: "self"` is never touched: the assistant's own appearance is unambiguous. PURE.
+ */
+export function rememberRouteFor(note: string, about: RememberStore | undefined): RememberStore {
+  const chosen: RememberStore = about ?? "reader";
+  if (chosen !== "reader") return chosen;
+  return isAppearanceNote(note) ? "user" : "reader";
+}
+
 /**
  * Drop one item from a generated Essence.
  *
@@ -2745,6 +2773,12 @@ const NON_APPEARANCE_LOOK_IDIOMS =
  */
 const LOOK_WORDS_USED_AS_VERBS =
   /\b(?:to|and|or|that|which|will|would|can|could|should|may|might|must|helps?|serves?|used?|tries|try)\s+(?:mask|cap|coat|ring|crown|dress|sport|don)\b|\b(?:mask|cap|coat|ring|crown|dress)(?:s|ed|ing)?\s+(?:the|a|an|its|their|his|her|my|our|your|out|off|up)\b/gi;
+
+/** True when a note is a description of how someone LOOKS. Exported so the memory router can tell a
+ * Soul fact from an app preference — see {@link rememberRouteFor}. PURE. */
+export function isAppearanceNote(text: string): boolean {
+  return isLookNote(text);
+}
 
 function isLookNote(text: string): boolean {
   const literal = text

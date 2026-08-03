@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reconcileSoulAppearance, removeSoulEssenceFact, type SoulEssence } from "./souls.js";
+import { reconcileSoulAppearance, rememberRouteFor, removeSoulEssenceFact, type SoulEssence } from "./souls.js";
 
 const essence = (): SoulEssence =>
   ({
@@ -96,5 +96,33 @@ describe("a garment word used as a VERB isn't physical appearance", () => {
     ]) {
       expect(appearanceOf(text), text).not.toEqual([]);
     }
+  });
+});
+
+describe("rememberRouteFor — an appearance fact must not land in preference memory", () => {
+  it("redirects a reader's LOOK from memory to their Soul", () => {
+    // Not symmetric, which is what makes it safe to correct: a preference filed in a Soul is untidy
+    // but still read, while an appearance fact filed as a preference is INERT — the Soul is what
+    // portraits, stories and reference conditioning read, so it never reaches a picture.
+    expect(rememberRouteFor("I have green eyes", undefined)).toBe("user");
+    expect(rememberRouteFor("auburn hair, shoulder length", "reader")).toBe("user");
+  });
+
+  it("leaves a genuine preference in memory", () => {
+    expect(rememberRouteFor("I prefer watercolor", undefined)).toBe("reader");
+    expect(rememberRouteFor("never spoil endings", "reader")).toBe("reader");
+    expect(rememberRouteFor("always use metric", undefined)).toBe("reader");
+  });
+
+  it("never overrides a Soul the model chose deliberately", () => {
+    // "I prefer watercolour" may well be a real trait; this has no way to know it isn't, so a
+    // deliberate Soul choice stands. Only the inert direction is corrected.
+    expect(rememberRouteFor("I prefer watercolor", "user")).toBe("user");
+    expect(rememberRouteFor("I prefer watercolor", "self")).toBe("self");
+    expect(rememberRouteFor("silver hair", "self")).toBe("self");
+  });
+
+  it("doesn't confuse a verb for a garment, now that appearance knows the difference", () => {
+    expect(rememberRouteFor("I like notes that mask the complexity", undefined)).toBe("reader");
   });
 });

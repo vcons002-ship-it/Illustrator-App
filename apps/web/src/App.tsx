@@ -461,6 +461,18 @@ interface BuddySession {
   closed?: boolean;
 }
 
+/**
+ * Where a remembered note went, said out loud.
+ *
+ * Every one of these read "🧠 Remembered: …" regardless of destination, and there are three: the
+ * reader's preference memory, the reader's Soul, and the assistant's Soul. Identical confirmations
+ * for three different stores is why saving felt inconsistent — the routing varies, and nothing on
+ * screen ever said which one it picked, so there was no way to notice a wrong one, let alone fix it.
+ */
+function memoryStoreLabel(about: "reader" | "self" | "user" | undefined): string {
+  return about === "self" ? "(your Soul)" : about === "user" ? "(the reader's Soul)" : "(memory)";
+}
+
 /** Downscale a phone-attached photo before it rides the relay to the desktop. A full-res phone photo
  * (5–12 MB) base64-encodes to a 7–16 MB frame that a Cloudflare tunnel silently drops (the relay
  * documents a ~3 MB frame ceiling), so "send photo from phone" would do nothing. Bounded to ≤1280 px
@@ -4023,7 +4035,7 @@ export function App() {
             } else if (e.memory) {
               appendChat({
                 role: "tool",
-                text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
+                text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"} ${memoryStoreLabel(e.memory.about)}: “${e.memory.note}”`,
               });
               if (e.memory.about === "self" || e.memory.about === "user") {
                 void refreshSoul(e.memory.about);
@@ -6563,7 +6575,7 @@ export function App() {
         } else if (e.memory) {
           appendBuddy({
             role: "tool",
-            text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
+            text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"} ${memoryStoreLabel(e.memory.about)}: “${e.memory.note}”`,
           });
           if (e.memory.about === "self" || e.memory.about === "user") {
             void refreshSoul(e.memory.about);

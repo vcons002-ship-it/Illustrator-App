@@ -1624,11 +1624,16 @@ export function buildBuddySystemPrompt(raw: {
       : "") +
     // Memory and checklist tools are always on: the model must not need a manual before it can
     // remember a durable fact or advance work it is already doing.
-    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
-    'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
-    '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
-    'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
-    '"remember…". One short note, not conversation recap. An appearance correction is a REPLACEMENT, not another ' +
+    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. ONE QUESTION picks the store: is this ' +
+    "about WHO SOMEONE IS, or about HOW THE APP SHOULD BEHAVE?\n" +
+    '    · WHO SOMEONE IS → a Soul. about:"self" for you (your look, voice, persona); about:"user" for the reader ' +
+    "(their look, their personality, the character they play). Souls are what portraits, stories and reference " +
+    "photos read, so an appearance fact belongs here and NOWHERE else.\n" +
+    '    · HOW THE APP SHOULD BEHAVE → about:"reader" (the default): preferences and standing instructions — ' +
+    '"I prefer watercolor", "never spoil endings", "always use metric".\n' +
+    '    The trap is that "reader" and "user" are BOTH about the reader. "I have green eyes" is who they are ' +
+    '(about:"user"); "I like green" is how to behave (about:"reader"). Use when they state a lasting preference or ' +
+    'identity detail, or say "remember…". One short note, not conversation recap. An appearance correction is a REPLACEMENT, not another ' +
     'trait to stack: for about:"self" or about:"user", forget the superseded appearance note first, then remember one ' +
     'clean positive current fact (for example "green eyes", never "green eyes, not blue"). Do not save a former/negated ' +
     "look or an appearance that exists only inside a fictional story as a current Soul fact.\n" +
