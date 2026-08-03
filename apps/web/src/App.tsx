@@ -161,6 +161,7 @@ import {
   buildOptionOrder,
   describeOrder,
   tvActionScript,
+  summarizeProbe,
   POLISH_PRESETS,
   type ConceptIntro,
   type PageAnchored,
@@ -353,6 +354,7 @@ import {
   pickFolder,
   googleOauthLoopback,
   tvBridgeEval,
+  tvLaunch,
   startRemoteServer,
   stopRemoteServer,
   remoteServerStatus,
@@ -3846,10 +3848,55 @@ export function App() {
   // TradingView Desktop bridge status (probed on startup + when opening Markets).
   const [tvBridgeStatus, setTvBridgeStatus] = useState<string | null>(null);
   const tvBridgeEnabled = isDesktop && !!settings.allowTradingViewBridge;
+  const [tvBridgeDetail, setTvBridgeDetail] = useState<string | undefined>();
+  const [tvBridgeBusy, setTvBridgeBusy] = useState(false);
+  const [tvMissing, setTvMissing] = useState(false);
   const testTvBridge = useCallback(async () => {
     setTvBridgeStatus("checking…");
     const r = await tvBridgeEval(tvActionScript("read_state"));
     setTvBridgeStatus(r.ok ? "Connected to TradingView" : r.error ?? "TradingView not detected");
+    setTvBridgeDetail(r.ok ? `Chart state: ${r.value ?? "(none)"}` : undefined);
+  }, []);
+  /**
+   * Start TradingView the way the bridge needs it, then re-test.
+   *
+   * The one manual step this feature had — find your install path, retype it with a debug flag, keep
+   * a shortcut — is the step it died on. The launcher waits for the port before reporting success,
+   * so a green status here means the bridge actually works, not that a process was spawned.
+   */
+  const launchTradingView = useCallback(async () => {
+    setTvBridgeBusy(true);
+    setTvMissing(false);
+    setTvBridgeStatus("starting TradingView…");
+    setTvBridgeDetail(undefined);
+    try {
+      const r = await tvLaunch();
+      setTvMissing(r.missing);
+      if (r.ok) {
+        setTvBridgeDetail(r.already ? "TradingView was already running with debugging on." : `Started ${r.path ?? "TradingView"} with --remote-debugging-port=9222.`);
+        await testTvBridge();
+      } else {
+        setTvBridgeStatus(r.missing ? "TradingView Desktop not installed" : "Couldn't start TradingView");
+        setTvBridgeDetail(
+          r.missing
+            ? `${r.error ?? ""}\n\nInstall it from tradingview.com, then press Launch again. (The app only ever STARTS TradingView — it won't download or run an installer for you.)`.trim()
+            : (r.error ?? "Unknown error."),
+        );
+      }
+    } finally {
+      setTvBridgeBusy(false);
+    }
+  }, [testTvBridge]);
+  /** Ask the build what it exposes — read-only, and the only thing that answers "can it read my bars?". */
+  const probeTvBridge = useCallback(async () => {
+    setTvBridgeBusy(true);
+    setTvBridgeDetail("probing…");
+    try {
+      const r = await tvBridgeEval(tvActionScript("probe"));
+      setTvBridgeDetail(r.ok ? summarizeProbe(r.value) : `⚠ ${r.error ?? "probe failed"}`);
+    } finally {
+      setTvBridgeBusy(false);
+    }
   }, []);
   useEffect(() => {
     if (tvBridgeEnabled) void testTvBridge();
@@ -10390,7 +10437,20 @@ export function App() {
               if (!r.ok && r.error) setLocalError(r.error);
             });
           }}
-          {...(tvBridgeEnabled ? { tvBridge: { status: tvBridgeStatus, onTest: () => void testTvBridge() } } : {})}
+          {...(tvBridgeEnabled
+            ? {
+                tvBridge: {
+                  status: tvBridgeStatus,
+                  onTest: () => void testTvBridge(),
+                  onLaunch: () => void launchTradingView(),
+                  onProbe: () => void probeTvBridge(),
+                  onGetApp: () => void openExternalUrl("https://www.tradingview.com/desktop/"),
+                  missing: tvMissing,
+                  busy: tvBridgeBusy,
+                  ...(tvBridgeDetail ? { detail: tvBridgeDetail } : {}),
+                },
+              }
+            : {})}
           onAnalyze={(s) => {
             setShowStocks(false);
             onBuddySendText(

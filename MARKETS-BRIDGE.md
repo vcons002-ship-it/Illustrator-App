@@ -23,13 +23,24 @@ conflict with **TradingView's Terms of Use** — use at your own discretion.
    app,"* you're on an older build.
 2. **Enable it:** Settings → 🛠 Assistant abilities → **"Let the assistant control my TradingView
    Desktop chart."** Off by default.
-3. **Launch TradingView Desktop with remote debugging on**, then open a chart:
+3. **Press "Launch TradingView"** in 📈 Markets → Bridge. It finds your install, starts it with the
+   debug flag, and waits for the port to answer before reporting success — so a green status means
+   the bridge actually works, not that something was spawned. If TradingView is already open
+   *without* the flag, quit it first: a second launch just hands off to the running copy and the flag
+   is ignored (the button says so when that happens).
+
+   The app only ever **starts** TradingView. It will not download or run an installer for you — if
+   it isn't installed, the button offers **Get TradingView Desktop ↗**, which opens the download page
+   in your browser.
+
+   To do it by hand instead:
    - **Windows:** `"%LOCALAPPDATA%\Programs\TradingView\TradingView.exe" --remote-debugging-port=9222`
    - **macOS:** `/Applications/TradingView.app/Contents/MacOS/TradingView --remote-debugging-port=9222`
    - **Linux:** `tradingview --remote-debugging-port=9222`
    (Make a shortcut with that flag so you don't retype it.)
-4. In **📈 Markets → Bridge**, click **Test bridge**. You should see *"Connected to TradingView."*
-   Then ask the assistant things like *"put VWAP on my chart"* or *"switch my chart to AAPL 5-min."*
+4. **Test bridge** confirms the connection. **Probe** reports what your build actually exposes —
+   the first line answers *can the assistant read my chart's bars?* Then ask the assistant things
+   like *"put VWAP on my chart"*, *"switch my chart to AAPL 5-min"*, or *"read the last 20 bars"*.
 
 ### What it can read
 

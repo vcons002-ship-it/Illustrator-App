@@ -145,6 +145,34 @@ export function tvActionScript(action: TvAction, params: TvActionParams = {}): s
   // real later, `probe` above is how to find out what this build actually supports first.
 }
 
+/**
+ * A probe result, made readable — with the answer to the question people actually ask on top.
+ *
+ * The value arrives JSON-stringified TWICE: the action returns a JSON string, and the CDP transport
+ * stringifies the result value again on the way back. Printed raw that's a wall of escaped quotes,
+ * and `canReadSeries` — the whole reason to run a probe — is buried in the middle of it. Anything
+ * that doesn't parse is shown verbatim rather than swallowed, because an unexpected shape is exactly
+ * what a reader running a probe needs to see. PURE.
+ */
+export function summarizeProbe(raw: string | undefined): string {
+  const text = (raw ?? "").trim();
+  if (!text) return "(the probe returned nothing)";
+  let parsed: unknown;
+  try {
+    const once: unknown = JSON.parse(text);
+    parsed = typeof once === "string" ? JSON.parse(once) : once;
+  } catch {
+    return text;
+  }
+  if (!parsed || typeof parsed !== "object") return text;
+  const p = parsed as { canReadSeries?: boolean; canListStudies?: boolean; widget?: string | null };
+  const head =
+    p.widget === null || p.widget === undefined
+      ? "No TradingView chart API found — open a chart, then probe again."
+      : `Can read the chart's bars: ${p.canReadSeries ? "YES" : "no"} · list studies: ${p.canListStudies ? "yes" : "no"} · via ${p.widget}`;
+  return `${head}\n\n${JSON.stringify(parsed, null, 2)}`;
+}
+
 /** A one-line status for the bridge (for the UI + the model). */
 export function describeBridgeStatus(target: CdpTarget | undefined): string {
   if (!target) return "TradingView Desktop not detected on the debug port";

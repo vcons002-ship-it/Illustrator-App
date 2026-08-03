@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatQuote, parseStooqQuote, parseYahooQuote, stooqQuoteUrl, stooqSymbol, yahooQuoteUrl } from "./stocks.js";
+import { formatQuote, parseStooqQuote, parseYahooQuote, stooqQuoteUrl, stooqSymbol, yahooFetchError, yahooQuoteUrl } from "./stocks.js";
 
 describe("stooqSymbol", () => {
   it("lower-cases and adds .us for bare US tickers", () => {
@@ -77,5 +77,33 @@ describe("yahooQuoteUrl / parseYahooQuote (the keyless quote source)", () => {
     expect(parseYahooQuote({ chart: { result: [{ meta: {} }] } }, "ZZZZ")).toBeUndefined();
     expect(parseYahooQuote({ chart: { result: [] } }, "X")).toBeUndefined();
     expect(parseYahooQuote("not json", "X")).toBeUndefined();
+  });
+});
+
+describe("yahooFetchError", () => {
+  it("names a rate limit as a rate limit, with what to do about it", () => {
+    // Yahoo's failures aren't JSON — a 429 body is the plain text "Edge: Too Many Requests" — so
+    // reading the response as JSON turned a throttle into "Unexpected token E", which names neither
+    // the cause nor the cure and reads like a bug in the app.
+    const msg = yahooFetchError(429)!;
+    expect(msg).toMatch(/rate-limit/i);
+    expect(msg).toMatch(/wait a minute/i);
+    expect(msg).toMatch(/schwab/i); // the entitled way out
+  });
+
+  it("separates an unknown ticker from a feed that's down", () => {
+    expect(yahooFetchError(404)).toMatch(/check the ticker/i);
+    expect(yahooFetchError(503)).toMatch(/having problems/i);
+    expect(yahooFetchError(403)).toMatch(/blocking this connection/i);
+  });
+
+  it("passes a usable response through untouched", () => {
+    expect(yahooFetchError(200)).toBeUndefined();
+    expect(yahooFetchError(204)).toBeUndefined();
+    expect(yahooFetchError(299)).toBeUndefined();
+  });
+
+  it("still says something for a status it doesn't recognise", () => {
+    expect(yahooFetchError(302)).toContain("302");
   });
 });

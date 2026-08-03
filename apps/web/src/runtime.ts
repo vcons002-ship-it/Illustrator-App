@@ -762,6 +762,35 @@ export async function tvBridgeEval(expression: string, port?: number): Promise<{
   }
 }
 
+export interface TvLaunchResult {
+  ok: boolean;
+  /** The port was already open — nothing was launched. */
+  already: boolean;
+  /** TradingView Desktop isn't installed where we know to look; offer the download page. */
+  missing: boolean;
+  path?: string;
+  error?: string;
+}
+
+/**
+ * Start TradingView Desktop with its remote-debugging port on — the one manual step the bridge
+ * needed and the one the whole feature died on. Waits for the port to answer before reporting
+ * success, so "ok" means the bridge will actually work rather than "a process was spawned".
+ */
+export async function tvLaunch(port?: number): Promise<TvLaunchResult> {
+  if (!isDesktop) return { ok: false, already: false, missing: false, error: "Launching TradingView needs the desktop app." };
+  try {
+    return await invoke<TvLaunchResult>("tv_launch", { request: { ...(port ? { port } : {}) } });
+  } catch (err) {
+    return {
+      ok: false,
+      already: false,
+      missing: false,
+      error: err instanceof Error ? err.message : "TradingView launcher unavailable (rebuild the desktop app).",
+    };
+  }
+}
+
 /** Remote-link (LAN) server status: running + the URL/token to show as text/QR. */
 export interface RemoteServerStatus {
   running: boolean;

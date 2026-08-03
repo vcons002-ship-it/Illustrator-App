@@ -557,3 +557,19 @@ describe("tools added since the deferral scheme was built", () => {
     expect(lean).toContain('"tool":"stock_quote"'); // the keyless half still loads
   });
 });
+
+describe("the markets index line is the only thing standing between a price question and a guess", () => {
+  it("names the words a reader actually uses, and forbids answering from memory", () => {
+    // With the docs deferred, `stock_quote` and `market_analysis` are invisible until `markets` is
+    // loaded — so this one line has to be what makes the model reach for them instead of reciting a
+    // price it half-remembers.
+    const markets = TOOLSETS.find((t) => t.id === "markets")!;
+    for (const word of ["stock", "ticker", "price", "chart", "trade"]) {
+      expect(markets.trigger.toLowerCase(), `the markets trigger never says "${word}"`).toContain(word);
+    }
+    expect(markets.trigger).toMatch(/never from memory/i);
+    // And it has to actually reach the prompt.
+    const block = toolsetIndexBlock(["markets"], []);
+    expect(block).toContain(markets.trigger);
+  });
+});

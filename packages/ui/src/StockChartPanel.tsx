@@ -30,7 +30,22 @@ export interface StockChartPanelProps {
    * refused by the browser itself. Absent/false → say so instead of offering a button that can't work. */
   canConnectSchwab?: boolean;
   /** TradingView Desktop bridge (when enabled): connection status + a re-check. */
-  tvBridge?: { status: string | null; onTest: () => void };
+  tvBridge?: {
+    status: string | null;
+    onTest: () => void;
+    /** Start TradingView Desktop with its remote-debugging port on. */
+    onLaunch: () => void;
+    /** Ask the build what it exposes (read-only) — the answer to "can it read my chart?". */
+    onProbe: () => void;
+    /** Open TradingView's download page; shown only once a launch reports it isn't installed. */
+    onGetApp?: () => void;
+    /** The last launch said TradingView Desktop isn't installed. */
+    missing?: boolean;
+    /** A launch/probe is in flight (a cold TradingView start takes a while). */
+    busy?: boolean;
+    /** The last probe's JSON, or a launch's explanation — shown verbatim. */
+    detail?: string;
+  };
   onClose: () => void;
 }
 
@@ -226,22 +241,56 @@ export const StockChartPanel = memo(function StockChartPanel({
         ) : null}
 
         {tvBridge ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12 }}>
-            <span style={{ fontWeight: 600 }}>🔌 TV bridge</span>
-            <span style={{ opacity: 0.75, color: tvBridge.status?.startsWith("Connected") ? "#5dd19b" : "#ffcf8b" }}>
-              {tvBridge.status ?? "—"}
-            </span>
-            <button style={miniBtn} onClick={tvBridge.onTest}>
-              Test bridge
-            </button>
-            <span style={{ fontSize: 11, opacity: 0.5 }}>
-              Launch TradingView Desktop with remote debugging — see MARKETS-BRIDGE.md. Then ask the assistant to set up
-              your chart.
-            </span>
+          <div style={{ marginTop: 8, fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600 }}>🔌 TV bridge</span>
+              <span style={{ opacity: 0.75, color: tvBridge.status?.startsWith("Connected") ? "#5dd19b" : "#ffcf8b" }}>
+                {tvBridge.status ?? "—"}
+              </span>
+              {/* Launch does the step the setup doc used to ask readers to do by hand: find the
+                  install path, retype it with --remote-debugging-port, and keep a shortcut. */}
+              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onLaunch} title="Start TradingView Desktop with its debug port on (or report why it can't)">
+                {tvBridge.busy ? "Starting…" : "Launch TradingView"}
+              </button>
+              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onTest}>
+                Test bridge
+              </button>
+              {/* Probe answers "can it read my chart's data?" — which nothing could say before. */}
+              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onProbe} title="Ask this TradingView build what it actually exposes (read-only)">
+                Probe
+              </button>
+              {tvBridge.missing && tvBridge.onGetApp ? (
+                <button style={miniBtn} onClick={tvBridge.onGetApp} title="Open TradingView's download page in your browser">
+                  Get TradingView Desktop ↗
+                </button>
+              ) : null}
+            </div>
+            {tvBridge.detail ? (
+              <pre
+                style={{
+                  marginTop: 6,
+                  padding: 8,
+                  maxHeight: 200,
+                  overflow: "auto",
+                  fontSize: 11,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  background: "rgba(255,255,255,0.05)",
+                  borderRadius: 6,
+                }}
+              >
+                {tvBridge.detail}
+              </pre>
+            ) : (
+              <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
+                Launch starts TradingView with remote debugging on. Probe reports what your build exposes — including
+                whether the assistant can read the chart&apos;s bars. See MARKETS-BRIDGE.md.
+              </div>
+            )}
           </div>
         ) : null}
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
-          Charts by TradingView (free, no account). Quotes from Stooq (keyless). Alerts run while the app is open. Not
+          Charts by TradingView (free, no account). Quotes from Yahoo (keyless, and delayed for most exchanges). Alerts run while the app is open. Not
           investment advice.
         </div>
       </div>

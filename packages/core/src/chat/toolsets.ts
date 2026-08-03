@@ -158,7 +158,13 @@ export const TOOLSETS: readonly Toolset[] = [
   },
   {
     id: "markets",
-    trigger: "stock quotes, market analysis, price alerts, trading scripts, the reader's broker account and their TradingView chart",
+    // Phrased as the SITUATION, not the capability. With the docs deferred, this line is the only
+    // thing standing between "what's AAPL at?" and a price answered from training data — so it names
+    // the trigger words and says outright that a number must not come from memory.
+    trigger:
+      "ANY question about a stock, ticker, price, chart or trade — live quotes, technical indicators " +
+      "(VWAP/RSI/moving averages), price alerts, Pine/thinkScript, the reader's broker account and their " +
+      "TradingView chart. A price or indicator must come from here, never from memory",
     // canSchwab and canTvBridge gate real blocks of prompt text and belonged to no toolset, so the
     // broker tools and the whole TradingView bridge were documented on EVERY turn — while
     // `prep_order` and `tv_chart` were listed here as loadable, which is the advertise-then-refuse

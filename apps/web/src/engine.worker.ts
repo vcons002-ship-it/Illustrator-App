@@ -32,6 +32,7 @@ import {
   recalcTable,
   tableToText,
   yahooQuoteUrl,
+  yahooFetchError,
   parseYahooQuote,
   yahooChartUrl,
   parseYahooChart,
@@ -4133,6 +4134,10 @@ async function handleStockQuote(msg: Extract<MainToWorker, { type: "stockQuote" 
       return;
     }
     const res = await new DirectTransport(cf).send({ url: yahooQuoteUrl(msg.symbol), method: "GET" });
+    // A failed Yahoo response isn't JSON — a rate-limit is the plain text "Edge: Too Many Requests" —
+    // so reading it as JSON turned a throttle into a parse error that named neither cause nor cure.
+    const bad = yahooFetchError(res.status);
+    if (bad) throw new Error(bad);
     const quote = parseYahooQuote(await res.json(), msg.symbol);
     post({ type: "stockQuoted", requestId: msg.requestId, ok: true, ...(quote ? { quote } : {}) });
   } catch (err) {
@@ -4151,6 +4156,8 @@ async function handleMarketIndicators(msg: Extract<MainToWorker, { type: "market
       url: yahooChartUrl(msg.symbol, { interval: msg.interval || "5m", range: msg.range || "1d" }),
       method: "GET",
     });
+    const bad = yahooFetchError(res.status);
+    if (bad) throw new Error(bad);
     const indicators = computeIndicators(msg.symbol, parseYahooChart(await res.json()));
     post({ type: "marketIndicatorsResult", requestId: msg.requestId, ok: true, ...(indicators ? { indicators } : {}) });
   } catch (err) {
@@ -4779,6 +4786,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const cf = corsFetch();
         if (!cf) return undefined;
         const res = await new DirectTransport(cf).send({ url: yahooQuoteUrl(symbol), method: "GET" });
+        // Thrown, not swallowed: runBuddyTool turns it into `{ error }`, so the model is told the
+        // feed is throttled instead of silently reporting "no quote for AAPL".
+        const bad = yahooFetchError(res.status);
+        if (bad) throw new Error(bad);
         return parseYahooQuote(await res.json(), symbol);
       },
       // Keyless technical indicators from Yahoo's chart JSON (over the CORS-exempt
@@ -4790,6 +4801,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           url: yahooChartUrl(symbol, { interval: interval || "5m", range: range || "1d" }),
           method: "GET",
         });
+        const bad = yahooFetchError(res.status);
+        if (bad) throw new Error(bad);
         return computeIndicators(symbol, parseYahooChart(await res.json()));
       },
       // Schwab Trader API (real quotes, option chains + Greeks, positions) — wired only
