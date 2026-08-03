@@ -6306,9 +6306,17 @@ export function App() {
     // this exchange. It read as the timestamps not working at all, because the question is always
     // about the turn in progress.
     //
-    // Skipped for an internal step directive: those are control flow, not a message from anyone, and
-    // dating them would put a turn delimiter in front of an instruction.
-    const stampedUserText = ephemeralDirective ? userText : stampTurnContent(userText, Date.now());
+    // STEP DIRECTIVES ARE STAMPED TOO, and excluding them was a mistake I made in the same change
+    // that added this. A checklist running itself produces a long run of turns with NO reader message
+    // at all — every one of them a directive — so leaving those undated left the model without a
+    // clock for exactly the stretch of work these stamps exist to date: the part done unattended,
+    // where "when did I do this, and in what order" has no other answer.
+    //
+    // The delimiter worry that prompted the exclusion was about the ASSISTANT'S turns, which is why
+    // those are stamped at the end instead. A directive is delivered as a USER turn like any other,
+    // and it is never persisted — so it carries no more imitation risk than the reader's own
+    // messages, which have been stamped in front all along.
+    const stampedUserText = stampTurnContent(userText, Date.now());
     const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
