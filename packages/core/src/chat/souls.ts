@@ -2730,8 +2730,28 @@ function buildAppearanceAxis(slot: string): string {
 const NON_APPEARANCE_LOOK_IDIOMS =
   /\b(?:(?:keep(?:s|ing)?|kept|has|have|had)\s+)?(?:an?|one|the)?\s*eye\s+(?:on|for)\b|\bfresh(?:\s+pair\s+of)?\s+eyes?\b|\b(?:through|in|from)\s+the\s+eyes?\s+of\b|\btall order\b/gi;
 
+/**
+ * Garment words that are also everyday VERBS, stripped when they're being used as one.
+ *
+ * The appearance extractor is a word test, and several things a person wears are also things a
+ * sentence does. "…to mask the inherent latencies of biological hardware" was filed as PHYSICAL
+ * APPEARANCE — from where it went on to describe the reader's face to every image model that asks —
+ * because it contains the word `mask`. A note about how the brain perceives time is not a hat.
+ *
+ * Matched on the grammar rather than the topic: an infinitive ("to mask"), a modal or conjunction
+ * before it ("will cap", "and coat"), or a third-person verb taking an object ("masks the latency").
+ * A worn one always has a determiner or adjective in front — "a mask", "wearing the hood", "black
+ * cap" — and none of those shapes are touched.
+ */
+const LOOK_WORDS_USED_AS_VERBS =
+  /\b(?:to|and|or|that|which|will|would|can|could|should|may|might|must|helps?|serves?|used?|tries|try)\s+(?:mask|cap|coat|ring|crown|dress|sport|don)\b|\b(?:mask|cap|coat|ring|crown|dress)(?:s|ed|ing)?\s+(?:the|a|an|its|their|his|her|my|our|your|out|off|up)\b/gi;
+
 function isLookNote(text: string): boolean {
-  const literal = text.replace(NON_APPEARANCE_LOOK_IDIOMS, " ").replace(/\s+/g, " ").trim();
+  const literal = text
+    .replace(NON_APPEARANCE_LOOK_IDIOMS, " ")
+    .replace(LOOK_WORDS_USED_AS_VERBS, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!literal) return false;
   return (
     LOOK_WORDS.test(literal) ||
