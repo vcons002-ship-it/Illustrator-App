@@ -188,6 +188,9 @@ import {
   describeAlert,
   updateTaskStep,
   applyStepEdits,
+  applyPlanEdit,
+  applyTaskDocEdit,
+  mergeReplan,
   appendTaskContext,
   filterActionHistory,
   formatActionHistory,
@@ -3681,23 +3684,14 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       { signal: ac.signal },
     );
     if (!plan) throw new Error("Couldn't produce a usable plan — try rephrasing the task.");
-    // Re-planning an existing task (a scan stub, or a refresh) keeps its id + chat session so the
-    // planned version REPLACES the stub in place instead of adding a duplicate — and PRESERVES its
-    // Google link + repeat rule (runTaskPlanning doesn't know about them).
+    // Re-planning an existing task MERGES onto it (see mergeReplan) rather than replacing it. The
+    // planner is never shown the current plan — it works from a prose blob of title/summary/deadline
+    // /reader-notes — so it cannot re-emit what was already there, and this used to carry five keys
+    // forward and drop everything else: completed steps came back un-ticked, step ids the chat was
+    // holding went dangling, per-step findings vanished, and every document on the task was
+    // destroyed. Dropping `needsReplan` is still what CLEARS the re-attack flag.
     const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
-    const baseFinal: TaskPlan = existing
-      ? {
-          ...plan,
-          id: existing.id,
-          createdAt: existing.createdAt,
-          ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
-          ...(existing.googleTaskId ? { googleTaskId: existing.googleTaskId } : {}),
-          ...(existing.recurrence ? { recurrence: existing.recurrence } : {}),
-          // Keep the reader's added details as context (sourceText already folded them in); dropping
-          // `needsReplan` here is what CLEARS the re-attack flag once the refined plan is produced.
-          ...(existing.userNotes ? { userNotes: existing.userNotes } : {}),
-        }
-      : plan;
+    const baseFinal: TaskPlan = existing ? mergeReplan(existing, plan) : plan;
     // When the task came FROM an email, drop a Gmail link on the step that needs the reply/send, so
     // the reader can jump straight to it from the plan (and from Google Tasks, via the notes).
     const srcEmailId =
@@ -4870,8 +4864,42 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         await updateTaskStep(store, planId, stepId, {
           ...(patch.status ? { status: patch.status as never } : {}),
           ...(patch.notes ? { researchNotes: patch.notes } : {}),
+          ...(patch.title ? { title: patch.title } : {}),
+          ...(patch.detail !== undefined ? { detail: patch.detail } : {}),
+          ...(patch.dueIso !== undefined ? { dueIso: patch.dueIso } : {}),
+          ...(patch.actor ? { actor: patch.actor } : {}),
         });
         return { planTitle: plan.title };
+      },
+      // Edit the TASK, and the DOCUMENTS on it. Both default to the task this chat is working, so the
+      // model doesn't have to fetch an id to correct something the reader just said.
+      updateTask: async (planId, patch) => {
+        const id = planId ?? msg.taskPlanId;
+        const plan = id ? (await loadTaskPlans(store)).find((p) => p.id === id) : undefined;
+        if (!plan) return undefined;
+        const next = applyPlanEdit(plan, patch);
+        await upsertTaskPlan(store, next);
+        return { planTitle: next.title };
+      },
+      updateTaskDoc: async (planId, edit) => {
+        const id = planId ?? msg.taskPlanId;
+        const plan = id ? (await loadTaskPlans(store)).find((p) => p.id === id) : undefined;
+        if (!plan) return undefined;
+        const r = applyTaskDocEdit(plan, edit);
+        if (r.error) {
+          return { planTitle: plan.title, title: edit.title, kind: edit.kind ?? "reference", body: "", created: false, replaced: [], added: [], ambiguous: [], error: r.error };
+        }
+        await upsertTaskPlan(store, r.plan);
+        return {
+          planTitle: plan.title,
+          title: r.doc!.title,
+          kind: r.doc!.kind,
+          body: r.doc!.body,
+          created: r.created,
+          replaced: r.replaced,
+          added: r.added,
+          ambiguous: r.ambiguous,
+        };
       },
       // Capture sub-tasks the reader worked out in chat onto the EXISTING (active) plan, then mirror
       // to Google Tasks. planId defaults to the task this chat is working (msg.taskPlanId).

@@ -6610,7 +6610,7 @@ export function App() {
           });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
-        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step")) refreshTaskPlans();
+        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step" || e.call.tool === "update_task" || e.call.tool === "update_task_doc")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).

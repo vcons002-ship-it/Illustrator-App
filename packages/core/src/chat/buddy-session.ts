@@ -216,9 +216,51 @@ export interface BuddyDeps {
   completeTask?: (planId: string, done: boolean) => Promise<{ planTitle: string; completed: boolean } | undefined>;
   /** Persist new conversation context onto a task plan (planId absent = the chat's active task). */
   saveTaskContext?: (planId: string | undefined, note: string, replan: boolean) => Promise<{ planTitle: string } | undefined>;
-  updateTaskStep?: (planId: string, stepId: string, patch: { status?: string; notes?: string }) => Promise<{ planTitle: string } | undefined>;
+  updateTaskStep?: (
+    planId: string,
+    stepId: string,
+    patch: { status?: string; notes?: string; title?: string; detail?: string; dueIso?: string; actor?: "ai_prep" | "user_action" },
+  ) => Promise<{ planTitle: string } | undefined>;
+  /** Edit the task's OWN fields (planId absent = the chat's active task). */
+  updateTask?: (
+    planId: string | undefined,
+    patch: {
+      title?: string;
+      summary?: string;
+      deadlineIso?: string;
+      leadTimeDays?: number;
+      estCost?: string;
+      researchNotes?: string;
+      clarifyingQuestions?: string[];
+    },
+  ) => Promise<{ planTitle: string } | undefined>;
+  /** Create/edit a document ON the task — the write half of the documents a task carries. */
+  updateTaskDoc?: (
+    planId: string | undefined,
+    edit: {
+      stepId?: string;
+      title: string;
+      kind?: "draft" | "reference" | "checklist";
+      body?: string;
+      setLines?: { match: string; line: string; dedupe?: boolean }[];
+      fence?: string;
+    },
+  ) => Promise<
+    | {
+        planTitle: string;
+        title: string;
+        kind: string;
+        body: string;
+        created: boolean;
+        replaced: string[];
+        added: string[];
+        ambiguous: { match: string; lines: string[] }[];
+        error?: string;
+      }
+    | undefined
+  >;
   /** Add/replace the steps of an existing plan (defaults to the active task when planId omitted). */
-  addTaskSteps?: (args: { planId?: string; steps: { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }) => Promise<{ planTitle: string; count: number; replaced: boolean } | undefined>;
+  addTaskSteps?: (args: { planId?: string; steps: { id?: string; title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }) => Promise<{ planTitle: string; count: number; replaced: boolean } | undefined>;
   listTaskPlans?: () => Promise<{ id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[]>;
   getTaskPlan?: (id: string) => Promise<TaskPlan | undefined>;
 }
@@ -1161,8 +1203,37 @@ export async function runBuddyTool(
         const r = await deps.updateTaskStep(call.planId, call.stepId, {
           ...(call.status ? { status: call.status } : {}),
           ...(call.notes ? { notes: call.notes } : {}),
+          ...(call.title ? { title: call.title } : {}),
+          ...(call.detail !== undefined ? { detail: call.detail } : {}),
+          ...(call.dueIso !== undefined ? { dueIso: call.dueIso } : {}),
+          ...(call.actor ? { actor: call.actor } : {}),
         });
         return r ? { taskAction: { planTitle: r.planTitle } } : {};
+      }
+      case "update_task": {
+        if (!deps.updateTask) return { error: "task plans aren't available" };
+        const r = await deps.updateTask(call.planId, {
+          ...(call.title ? { title: call.title } : {}),
+          ...(call.summary !== undefined ? { summary: call.summary } : {}),
+          ...(call.deadlineIso !== undefined ? { deadlineIso: call.deadlineIso } : {}),
+          ...(call.leadTimeDays !== undefined ? { leadTimeDays: call.leadTimeDays } : {}),
+          ...(call.estCost !== undefined ? { estCost: call.estCost } : {}),
+          ...(call.researchNotes !== undefined ? { researchNotes: call.researchNotes } : {}),
+          ...(call.clarifyingQuestions ? { clarifyingQuestions: call.clarifyingQuestions } : {}),
+        });
+        return r ? { taskAction: { planTitle: r.planTitle } } : {};
+      }
+      case "update_task_doc": {
+        if (!deps.updateTaskDoc) return { error: "task plans aren't available" };
+        const r = await deps.updateTaskDoc(call.planId, {
+          title: call.title,
+          ...(call.stepId ? { stepId: call.stepId } : {}),
+          ...(call.kind ? { kind: call.kind } : {}),
+          ...(call.body !== undefined ? { body: call.body } : {}),
+          ...(call.setLines?.length ? { setLines: call.setLines } : {}),
+          ...(call.fence ? { fence: call.fence } : {}),
+        });
+        return r ? { taskDoc: r } : {};
       }
       case "add_task_steps": {
         if (!deps.addTaskSteps) return { error: "task plans aren't available" };

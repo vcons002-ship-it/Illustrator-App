@@ -38,6 +38,9 @@ import {
   taskStubFromCandidate,
   tasksIndexBlock,
   taskDossier,
+  applyTaskDocEdit,
+  applyPlanEdit,
+  mergeReplan,
   taskSourceNote,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
@@ -853,5 +856,163 @@ describe("tasksIndexBlock carries the task's own material", () => {
     const block = tasksIndexBlock(p, Date.parse("2026-07-02T12:00:00Z"));
     expect(block).toContain("rsvp-tracker.md");
     expect(block).toContain("ev-9");
+  });
+});
+
+describe("applyTaskDocEdit (writing a task's documents)", () => {
+  const tracker = () =>
+    plan({
+      steps: [
+        { title: "Send invites", actor: "user_action", status: "done" },
+        {
+          title: "Track replies",
+          actor: "ai_prep",
+          docs: [{ title: "RSVP status tracker", kind: "reference", body: "RSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?" }],
+        },
+      ],
+    });
+
+  it("updates one entry IN PLACE and leaves the rest alone", () => {
+    // Rewriting the whole body from a partial view is how a tracker loses the lines the model
+    // didn't happen to have in front of it.
+    const r = applyTaskDocEdit(tracker(), { title: "RSVP status tracker", setLines: [{ match: "Bo", line: "Bo: yes" }] });
+    expect(r.error).toBeUndefined();
+    expect(r.created).toBe(false);
+    expect(r.replaced).toEqual(["Bo"]);
+    expect(r.doc!.body).toBe("RSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?");
+  });
+
+  it("adds a new entry into the list rather than at the bottom", () => {
+    const r = applyTaskDocEdit(tracker(), { title: "RSVP status tracker", setLines: [{ match: "Dee", line: "Dee: yes" }] });
+    expect(r.added).toEqual(["Dee"]);
+    expect(r.doc!.body).toBe("RSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\n- Dee: yes");
+  });
+
+  it("matches the document by title, case-insensitively, and doesn't start a second one", () => {
+    const r = applyTaskDocEdit(tracker(), { title: "rsvp STATUS tracker", setLines: [{ match: "Ada", line: "Ada: no" }] });
+    expect(r.created).toBe(false);
+    expect(r.plan.steps.flatMap((s) => s.docs)).toHaveLength(1);
+  });
+
+  it("creates a document when there isn't one, on the step being worked", () => {
+    const p = plan({ steps: [{ title: "Send invites", actor: "user_action" }] });
+    const r = applyTaskDocEdit(p, { title: "Packing list", kind: "checklist", body: "- tent" });
+    expect(r.created).toBe(true);
+    expect(r.plan.steps[0]!.docs[0]).toMatchObject({ title: "Packing list", kind: "checklist", body: "- tent" });
+  });
+
+  it("reports an ambiguous label instead of guessing which line to overwrite", () => {
+    const p = plan({
+      steps: [{ title: "Track", actor: "ai_prep", docs: [{ title: "T", kind: "reference", body: "- Bo: chips\n- Bo: nut allergy" }] }],
+    });
+    const r = applyTaskDocEdit(p, { title: "T", setLines: [{ match: "Bo", line: "Bo: yes" }] });
+    expect(r.ambiguous).toHaveLength(1);
+    expect(r.doc!.body).toBe("- Bo: chips\n- Bo: nut allergy"); // untouched
+  });
+
+  it("refuses an edit with nothing in it, and one with nowhere to go", () => {
+    expect(applyTaskDocEdit(tracker(), { title: "RSVP status tracker" }).error).toMatch(/nothing to change/i);
+    const stub = plan({ steps: [] });
+    expect(applyTaskDocEdit(stub, { title: "New doc", body: "x" }).error).toMatch(/no step/i);
+  });
+});
+
+describe("mergeReplan (re-planning must not destroy the record)", () => {
+  const before = () =>
+    plan({
+      userNotes: "• [2026-07-01] Attached in chat: invite-list.csv",
+      steps: [
+        { title: "Send invites", actor: "user_action", status: "done" },
+        {
+          title: "Track replies",
+          actor: "ai_prep",
+          status: "ready",
+          researchNotes: "Ada replied by text",
+          docs: [{ title: "RSVP status tracker", kind: "reference", body: "- Ada: yes" }],
+        },
+      ],
+    });
+
+  const after = () =>
+    plan({
+      title: "Party — refined",
+      steps: [
+        { title: "Send invites", actor: "user_action" },
+        { title: "Track replies", actor: "ai_prep" },
+        { title: "Order the cake", actor: "user_action" },
+      ],
+    });
+
+  it("keeps completed work ticked and step ids stable", () => {
+    // A re-plan used to un-tick every finished step and mint fresh ids, so any stepId the chat was
+    // holding pointed at nothing.
+    const old = before();
+    const merged = mergeReplan(old, after());
+    expect(merged.steps[0]!.status).toBe("done");
+    expect(merged.steps[0]!.id).toBe(old.steps[0]!.id);
+    expect(merged.steps[2]!.status).toBe("pending"); // genuinely new step
+  });
+
+  it("carries the documents and per-step findings across", () => {
+    const merged = mergeReplan(before(), after());
+    expect(merged.steps[1]!.docs[0]!.body).toBe("- Ada: yes");
+    expect(merged.steps[1]!.researchNotes).toBe("Ada replied by text");
+  });
+
+  it("rehomes a document whose step the new plan dropped, instead of losing it", () => {
+    const dropped = plan({ title: "Party", steps: [{ title: "Something else", actor: "ai_prep" }] });
+    const merged = mergeReplan(before(), dropped);
+    expect(merged.steps[0]!.docs.map((d) => d.title)).toContain("RSVP status tracker");
+  });
+
+  it("takes the new WORDING while keeping the old history", () => {
+    const old = before();
+    const merged = mergeReplan(old, after());
+    expect(merged.title).toBe("Party — refined"); // the plan is the planner's to change
+    expect(merged.userNotes).toContain("invite-list.csv"); // the record is not
+    expect(merged.id).toBe(old.id);
+  });
+
+  it("does not quietly un-archive a task the reader removed", () => {
+    const archived = { ...before(), status: "archived" as const, archivedReason: "removed" as const, archivedAt: 5 };
+    const merged = mergeReplan(archived, after());
+    expect(merged.status).toBe("archived");
+    expect(merged.archivedReason).toBe("removed");
+  });
+
+  it("doesn't erase the previous research when the new pass gathered none", () => {
+    const withResearch = { ...before(), researchNotes: "Venue holds 40." };
+    const merged = mergeReplan(withResearch, after());
+    expect(merged.researchNotes).toBe("Venue holds 40.");
+  });
+});
+
+describe("editing a task and its steps without re-planning", () => {
+  it("changes the task's own fields and clears answered questions", () => {
+    const p = plan({ clarifyingQuestions: ["Which venue?"] });
+    const next = applyPlanEdit(p, { title: "Ada's party", deadlineIso: "2026-08-01", clarifyingQuestions: [] });
+    expect(next.title).toBe("Ada's party");
+    expect(next.deadlineIso).toBe("2026-08-01");
+    expect(next.clarifyingQuestions).toEqual([]);
+  });
+
+  it("edits an existing step in place instead of cloning its id", () => {
+    // Concatenating an edit that carried an existing id produced TWO steps sharing it, and the
+    // impostor — with no docs, no links and status "pending" — won every lookup by id.
+    const p = plan({
+      steps: [{ title: "Track replies", actor: "ai_prep", status: "in_progress", docs: [{ title: "T", kind: "reference", body: "x" }] }],
+    });
+    const id = p.steps[0]!.id;
+    const next = applyStepEdits(p, [{ id, title: "Track replies + chase" }]);
+    expect(next.steps).toHaveLength(1);
+    expect(next.steps[0]!.id).toBe(id);
+    expect(next.steps[0]!.title).toBe("Track replies + chase");
+    expect(next.steps[0]!.status).toBe("in_progress");
+    expect(next.steps[0]!.docs[0]!.body).toBe("x");
+  });
+
+  it("still appends a step that names no existing id", () => {
+    const p = plan();
+    expect(applyStepEdits(p, [{ title: "Order the cake" }]).steps).toHaveLength(4);
   });
 });
