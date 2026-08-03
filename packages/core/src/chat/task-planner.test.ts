@@ -137,3 +137,18 @@ describe("parsePlan", () => {
     expect(parsePlan(JSON.stringify({ title: "x", steps: [{ detail: "no title" }] }))).toBeUndefined();
   });
 });
+
+describe("re-planning is told what is already finished", () => {
+  it("lists the completed steps and forbids re-emitting them", () => {
+    const [, user] = buildPlanPrompt("Ada's party", "Venue holds 40.", "2026-08-01", ["Book the venue", "Send invites"]);
+    expect(user!.content).toContain("ALREADY FINISHED");
+    expect(user!.content).toContain("Book the venue");
+    expect(user!.content).toMatch(/Do NOT re-emit them as steps/i);
+    expect(user!.content).toMatch(/Plan only what REMAINS/i);
+  });
+
+  it("says nothing about finished work on a first plan", () => {
+    const [, user] = buildPlanPrompt("Ada's party", "Venue holds 40.", "2026-08-01");
+    expect(user!.content).not.toContain("ALREADY FINISHED");
+  });
+});

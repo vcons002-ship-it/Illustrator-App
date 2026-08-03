@@ -67,7 +67,7 @@ export function buildResearchSystemPrompt(): string {
 }
 
 /** PLAN phase — one chat() returning the strict-JSON structured plan. */
-export function buildPlanPrompt(sourceText: string, researchNotes: string, todayIso: string): ChatTurn[] {
+export function buildPlanPrompt(sourceText: string, researchNotes: string, todayIso: string, alreadyDone: readonly string[] = []): ChatTurn[] {
   const system =
     "You are turning your research into a concrete, ordered TASK PLAN the reader can execute. " +
     `${FAITHFULNESS_RULES}\n\n${TASK_AUTONOMY_RULE}\n\n` +
@@ -115,8 +115,18 @@ export function buildPlanPrompt(sourceText: string, researchNotes: string, today
     "nothing to check is noise. Omit the key entirely when there's nothing to watch.\n" +
     "Omit a field rather than inventing it. Base every fact on the research below — never invent " +
     "deadlines, costs, URLs or steps.";
+  // A RE-PLAN was given no idea what had already happened — the planner saw a title, a summary and a
+  // deadline, and dutifully rebuilt the whole task from the beginning, deadlines and all. So a
+  // reader four steps into a plan would refine it and be handed those four steps back as work still
+  // to do. Listing them (and only them — no ids, no statuses, nothing the planner has to maintain)
+  // is what lets it plan the REMAINDER.
+  const finished = alreadyDone.filter((t) => t.trim()).slice(0, 25);
+  const done = finished.length
+    ? "\n\nALREADY FINISHED — the reader has done these. Do NOT re-emit them as steps, do not schedule " +
+      `them, and do not plan around doing them again. Plan only what REMAINS:\n${finished.map((t) => `- ${t}`).join("\n")}`
+    : "";
   const user =
-    `TASK (from the reader): ${describeSource(sourceText)}\n\n` +
+    `TASK (from the reader): ${describeSource(sourceText)}${done}\n\n` +
     `RESEARCH FINDINGS:\n${researchNotes.trim().slice(0, 12_000) || "(no research gathered)"}`;
   return [
     { role: "system", content: system },
@@ -290,6 +300,9 @@ export interface TaskPlanningOpts {
   /** The task in words (typed text, or the source email/event content the host read). */
   sourceText: string;
   todayIso: string;
+  /** RE-PLAN ONLY: the titles of steps the reader has already finished, so the planner plans the
+   * REMAINDER instead of handing back completed work as a fresh to-do list. */
+  alreadyDone?: readonly string[];
   signal?: AbortSignal;
   onPhase?: (phase: "research" | "plan", note?: string) => void;
 }
@@ -338,7 +351,7 @@ export async function runTaskPlanning(opts: TaskPlanningOpts): Promise<TaskPlan 
   opts.onPhase?.("research");
   const research = await gatherResearch(opts);
   opts.onPhase?.("plan");
-  const reply = await opts.llm.chat(buildPlanPrompt(opts.sourceText, research, opts.todayIso), {
+  const reply = await opts.llm.chat(buildPlanPrompt(opts.sourceText, research, opts.todayIso, opts.alreadyDone ?? []), {
     maxTokens: 2048,
     ...(opts.signal ? { signal: opts.signal } : {}),
   });

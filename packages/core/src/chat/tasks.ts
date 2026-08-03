@@ -1,4 +1,5 @@
 import type { VisualReaderStore } from "../storage/store.js";
+import { applyLineUpserts, type AmbiguousLine, type LineUpsert } from "./file-edits.js";
 
 /**
  * TASK PLANS — the persistent state behind the Task Orchestrator. A real-world task
@@ -19,6 +20,7 @@ export const TASK_IGNORE_KEY = "task-ignore";
 export const MAX_TASK_PLANS = 50;
 export const MAX_STEPS_PER_PLAN = 25;
 export const MAX_LINKS_PER_STEP = 6;
+export const MAX_DOCS_PER_STEP = 8;
 export const MAX_CLARIFYING_QS = 6;
 export const MAX_IGNORE_RULES = 300;
 const MAX_TITLE_CHARS = 200;
@@ -485,12 +487,133 @@ export async function setTaskPlanComplete(store: VisualReaderStore, id: string, 
   return next;
 }
 
+/**
+ * Edit a document ON a task — the write half of the documents a task carries.
+ *
+ * The planner could create these and the panel could show them, and nothing could change one. So the
+ * RSVP tracker a reader pointed at was, at best, readable: asked to update it, the only moves
+ * available were to write a second copy somewhere else or to re-plan the whole task and hope the
+ * planner regenerated it with the new information. Both lose the reader's document.
+ *
+ * `setLines` is the primitive that matters and it's the same one events and files use: upsert a
+ * labelled line in place, leave the rest of the document alone. A tracker updated by rewriting the
+ * whole body is a tracker that loses every line the model didn't happen to have in front of it —
+ * which is the failure mode this app has fixed in three other places already. Whole-body `body` is
+ * still there for authoring a document outright.
+ *
+ * A label matching several lines is reported, not guessed at (see applyLineUpserts). PURE.
+ */
+export interface TaskDocEdit {
+  /** Which document, matched case-insensitively on title. Created when there's no such document. */
+  title: string;
+  kind?: TaskDoc["kind"];
+  /** Replace the WHOLE body (authoring, or a rewrite the reader asked for). */
+  body?: string;
+  /** Upsert labelled lines in place — the tracker/checklist case. */
+  setLines?: readonly LineUpsert[];
+  /** Which step a NEW document attaches to. Defaults to the current ready step, else the first. */
+  stepId?: string;
+  fence?: string;
+}
+
+export interface TaskDocEditResult {
+  plan: TaskPlan;
+  /** The document as it now stands (absent only when the edit was refused). */
+  doc?: TaskDoc;
+  created: boolean;
+  /** Labels whose line was rewritten / added (setLines only). */
+  replaced: string[];
+  added: string[];
+  /** Labels that matched several lines and were therefore left alone. */
+  ambiguous: AmbiguousLine[];
+  /** Why nothing changed. */
+  error?: string;
+}
+
+export function applyTaskDocEdit(plan: TaskPlan, edit: TaskDocEdit): TaskDocEditResult {
+  const bare: Omit<TaskDocEditResult, "plan"> = { created: false, replaced: [], added: [], ambiguous: [] };
+  const wanted = edit.title.trim().toLowerCase();
+  if (!wanted) return { plan, ...bare, error: "a document needs a title" };
+  if (edit.body === undefined && !edit.setLines?.length) {
+    return { plan, ...bare, error: "nothing to change — pass body (whole document) or setLines (update entries in place)" };
+  }
+  const hostIdx = plan.steps.findIndex((s) => (s.docs ?? []).some((d) => d.title.trim().toLowerCase() === wanted));
+  // A NEW document lands on the step the reader is working, so it sits with the work it belongs to.
+  const targetIdx =
+    hostIdx >= 0
+      ? hostIdx
+      : edit.stepId
+        ? plan.steps.findIndex((s) => s.id === edit.stepId)
+        : Math.max(0, plan.steps.indexOf(nextReadyStep(plan) ?? plan.steps[0]!));
+  if (targetIdx < 0 || plan.steps.length === 0) {
+    return { plan, ...bare, error: "this task has no step to attach a document to — add one with add_task_steps first" };
+  }
+  const step = plan.steps[targetIdx]!;
+  const docs = step.docs ?? [];
+  const existing = hostIdx >= 0 ? docs.find((d) => d.title.trim().toLowerCase() === wanted) : undefined;
+  if (!existing && docs.length >= MAX_DOCS_PER_STEP) {
+    return { plan, ...bare, error: `that step already holds ${MAX_DOCS_PER_STEP} documents — edit one of those instead` };
+  }
+  // `body` sets the text; `setLines` then edits it. Passing both authors a document and populates it
+  // in one call, and on an existing document the body wins first so the lines land in the new text.
+  const base = edit.body !== undefined ? edit.body : (existing?.body ?? "");
+  const upsert = edit.setLines?.length ? applyLineUpserts(base, edit.setLines) : undefined;
+  const next: TaskDoc = {
+    title: cap(existing?.title ?? edit.title.trim(), MAX_TITLE_CHARS) || "document",
+    kind: edit.kind ?? existing?.kind ?? "reference",
+    body: cap(upsert ? upsert.text : base, MAX_DOC_BODY_CHARS),
+    ...(edit.fence ?? existing?.fence ? { fence: cap((edit.fence ?? existing?.fence)!, 12) } : {}),
+  };
+  const nextDocs = existing ? docs.map((d) => (d === existing ? next : d)) : [...docs, next];
+  return {
+    plan: {
+      ...plan,
+      updatedAt: Date.now(),
+      steps: plan.steps.map((s, i) => (i === targetIdx ? { ...s, docs: nextDocs } : s)),
+    },
+    doc: next,
+    created: !existing,
+    replaced: upsert?.replaced ?? [],
+    added: upsert?.added ?? [],
+    ambiguous: upsert?.ambiguous ?? [],
+  };
+}
+
+/**
+ * Carry a task's DOCUMENTS across a re-plan.
+ *
+ * Re-planning rebuilds the steps, and the documents hang off steps — so every re-plan silently
+ * destroyed the reader's tracker, checklist and drafts. That is the one thing a re-plan must not do:
+ * the plan is the app's guess and can be redone freely, but a document is content, and the reader
+ * asking to "refine the steps" is not asking to lose it.
+ *
+ * Matched by TITLE, since step ids don't survive. A document the new plan regenerated under the same
+ * title keeps the OLD body — it's the one that has been maintained. Anything with no home in the new
+ * plan lands on its first step rather than being dropped. PURE.
+ */
+export function carryDocsForward(previous: TaskPlan, replanned: TaskPlan): TaskPlan {
+  const old = previous.steps.flatMap((s) => s.docs ?? []);
+  if (old.length === 0 || replanned.steps.length === 0) return replanned;
+  const byTitle = new Map(old.map((d) => [d.title.trim().toLowerCase(), d]));
+  const steps = replanned.steps.map((s) => {
+    const docs = (s.docs ?? []).map((d) => byTitle.get(d.title.trim().toLowerCase()) ?? d);
+    for (const d of docs) byTitle.delete(d.title.trim().toLowerCase());
+    return { ...s, docs };
+  });
+  const orphans = [...byTitle.values()];
+  if (orphans.length > 0) {
+    const first = steps[0]!;
+    steps[0] = { ...first, docs: [...(first.docs ?? []), ...orphans].slice(0, MAX_DOCS_PER_STEP) };
+  }
+  return { ...replanned, steps };
+}
+
 /** Patch one step (status/notes/google ids); bumps updatedAt. Returns the saved plans. */
 export async function updateTaskStep(
   store: VisualReaderStore,
   planId: string,
   stepId: string,
-  patch: Partial<Pick<TaskStep, "status" | "researchNotes" | "googleTaskId" | "googleEventId">>,
+  patch: Partial<Pick<TaskStep, "status" | "researchNotes" | "googleTaskId" | "googleEventId" | "title" | "detail" | "dueIso" | "actor">>,
 ): Promise<TaskPlan[]> {
   const plans = await loadTaskPlans(store);
   const next = plans.map((p) =>
@@ -508,6 +631,11 @@ export async function updateTaskStep(
                   ...(patch.researchNotes !== undefined ? { researchNotes: cap(patch.researchNotes, MAX_NOTES_CHARS) } : {}),
                   ...(patch.googleTaskId ? { googleTaskId: patch.googleTaskId } : {}),
                   ...(patch.googleEventId ? { googleEventId: patch.googleEventId } : {}),
+                  // The step's own WORDING, so a step can be corrected or re-dated without a re-plan.
+                  ...(patch.title?.trim() ? { title: cap(patch.title, MAX_TITLE_CHARS) } : {}),
+                  ...(patch.detail !== undefined ? { detail: cap(patch.detail, MAX_DETAIL_CHARS) } : {}),
+                  ...(patch.dueIso !== undefined ? { dueIso: cap(patch.dueIso, 40) } : {}),
+                  ...(patch.actor === "ai_prep" || patch.actor === "user_action" ? { actor: patch.actor } : {}),
                 },
           ),
         },
@@ -527,10 +655,125 @@ export function applyStepEdits(
   opts: { replace?: boolean } = {},
 ): TaskPlan {
   const base = opts.replace ? [] : plan.steps;
-  const steps = [...base, ...edits].slice(0, MAX_STEPS_PER_PLAN).map((s, i) => normalizeStep(s, i));
+  // An edit that NAMES an existing step edits THAT step. It used to be concatenated like any other,
+  // producing two steps sharing one id — and the impostor won every lookup that searched by id while
+  // carrying `docs: []`, `status: "pending"` and no links, because normalizeStep fills those from the
+  // partial edit alone. The doc comment above has always claimed a supplied id is "preserved"; this
+  // is that promise implemented, and it's what lets the model change a step's wording or due date
+  // without losing what the step was carrying.
+  const merged = base.map((s) => {
+    const edit = edits.find((e) => e.id === s.id);
+    return edit ? { ...s, ...edit } : s;
+  });
+  const fresh = edits.filter((e) => !e.id || !base.some((s) => s.id === e.id));
+  const steps = [...merged, ...fresh].slice(0, MAX_STEPS_PER_PLAN).map((s, i) => normalizeStep(s, i));
   const next: TaskPlan = { ...plan, steps, updatedAt: Date.now() };
   if (next.planned === false && steps.length > 0) delete next.planned;
   return next;
+}
+
+/** The plan-level fields a chat may edit directly (everything else is either derived or identity). */
+export interface TaskPlanPatch {
+  title?: string;
+  summary?: string;
+  deadlineIso?: string;
+  leadTimeDays?: number;
+  estCost?: string;
+  researchNotes?: string;
+  /** Replaces the open-questions list; `[]` clears it (they've been answered). */
+  clarifyingQuestions?: string[];
+}
+
+/**
+ * Edit the task itself — its title, summary, deadline, the rest.
+ *
+ * None of these could be changed at all. The only way to correct a title or move a deadline was to
+ * RE-PLAN, which regenerates the whole thing from a research pass, and so a one-word fix was priced
+ * at the loss of every step status and every document on the task. Answering the open questions had
+ * the same problem: nothing could clear them, so they sat in the prompt being asked again. PURE.
+ */
+export function applyPlanEdit(plan: TaskPlan, patch: TaskPlanPatch): TaskPlan {
+  return {
+    ...plan,
+    updatedAt: Date.now(),
+    ...(patch.title?.trim() ? { title: cap(patch.title, MAX_TITLE_CHARS) } : {}),
+    ...(patch.summary !== undefined ? { summary: cap(patch.summary, MAX_DETAIL_CHARS) } : {}),
+    ...(patch.deadlineIso !== undefined ? { deadlineIso: cap(patch.deadlineIso, 40) } : {}),
+    ...(typeof patch.leadTimeDays === "number" && Number.isFinite(patch.leadTimeDays)
+      ? { leadTimeDays: Math.max(0, Math.round(patch.leadTimeDays)) }
+      : {}),
+    ...(patch.estCost !== undefined ? { estCost: cap(patch.estCost, 60) } : {}),
+    ...(patch.researchNotes !== undefined ? { researchNotes: cap(patch.researchNotes, MAX_NOTES_CHARS) } : {}),
+    ...(patch.clarifyingQuestions
+      ? { clarifyingQuestions: patch.clarifyingQuestions.map((q) => cap(q, MAX_DETAIL_CHARS)).filter(Boolean).slice(0, MAX_CLARIFYING_QS) }
+      : {}),
+  };
+}
+
+/**
+ * MERGE a re-plan onto the task it re-plans, instead of replacing it.
+ *
+ * Re-planning was a regenerate-and-overwrite: the planner is never shown the existing plan (it gets
+ * the title, summary, deadline and reader notes as a prose blob), so it cannot re-emit what was
+ * there — and the host carried forward five plan-level keys and threw away the rest. Every re-plan
+ * therefore un-ticked completed steps, reset their ids so any stepId the chat was holding went
+ * dangling, discarded per-step findings, and destroyed every document on the task. A reader who
+ * added one detail and let the app "refine the plan" lost the tracker they had been maintaining.
+ *
+ * Steps are matched by TITLE, the same signal the Google Tasks sync already reconciles on, since ids
+ * cannot survive a regeneration. A matched step keeps everything that is HISTORY (its id, status,
+ * when it was done, what was found on it, its Google ids, its documents) and takes everything that
+ * is PLAN (wording, detail, due date, actor, links) from the new pass. That split is the whole idea:
+ * re-planning may change the plan, and must not change the record of what happened.
+ *
+ * Status follows the steps rather than being reset — and an ARCHIVED task stays archived, because
+ * re-planning something the reader removed must not quietly put it back in their list. PURE.
+ */
+export function mergeReplan(previous: TaskPlan, replanned: TaskPlan): TaskPlan {
+  const key = (t: string): string => t.trim().toLowerCase();
+  const unclaimed = new Map<string, TaskStep>();
+  for (const s of previous.steps) if (!unclaimed.has(key(s.title))) unclaimed.set(key(s.title), s);
+  const steps = replanned.steps.map((s) => {
+    const old = unclaimed.get(key(s.title));
+    if (!old) return s;
+    unclaimed.delete(key(s.title));
+    return {
+      ...s,
+      id: old.id,
+      status: old.status,
+      ...(old.doneAt !== undefined ? { doneAt: old.doneAt } : {}),
+      // Per-step findings are what the assistant recorded while working it — not something a fresh
+      // research pass can regenerate.
+      ...(old.researchNotes ? { researchNotes: old.researchNotes } : {}),
+      ...(old.googleTaskId ? { googleTaskId: old.googleTaskId } : {}),
+      ...(old.googleEventId ? { googleEventId: old.googleEventId } : {}),
+      docs: old.docs.length ? old.docs : s.docs,
+    };
+  });
+  // FINISHED steps the new plan didn't re-emit are KEPT, at the front, in the order they happened.
+  // The planner is now told what's already done so it plans only the remainder — which means a
+  // faithful re-plan returns steps 5-8 and nothing else, and mapping over its list alone would
+  // delete the record of steps 1-4. Unclaimed steps that were NOT done are a different matter: the
+  // planner dropping those is the re-plan doing its job.
+  const keptDone = previous.steps.filter((s) => s.status === "done" && unclaimed.get(key(s.title)) === s);
+  const withDocs = carryDocsForward(previous, { ...replanned, steps: [...keptDone, ...steps].map((s, i) => ({ ...s, order: i })) });
+  const allDone = withDocs.steps.length > 0 && withDocs.steps.every((s) => s.status === "done");
+  return {
+    ...withDocs,
+    id: previous.id,
+    createdAt: previous.createdAt,
+    updatedAt: Date.now(),
+    // An archived task keeps its archive; otherwise the status is whatever the steps now say.
+    status: previous.status === "archived" ? "archived" : allDone ? "completed" : "active",
+    ...(previous.archivedReason ? { archivedReason: previous.archivedReason } : {}),
+    ...(previous.archivedAt ? { archivedAt: previous.archivedAt } : {}),
+    ...(previous.sessionId ? { sessionId: previous.sessionId } : {}),
+    ...(previous.googleTaskId ? { googleTaskId: previous.googleTaskId } : {}),
+    ...(previous.recurrence ? { recurrence: previous.recurrence } : {}),
+    ...(previous.userNotes ? { userNotes: previous.userNotes } : {}),
+    // A fresh research pass replaces the old one; an empty one must not ERASE it.
+    ...(replanned.researchNotes?.trim() ? {} : previous.researchNotes ? { researchNotes: previous.researchNotes } : {}),
+  };
 }
 
 // ------------------------------------------------------------- pure selectors
@@ -963,6 +1206,87 @@ export function whenLabel(ms: number, now = Date.now()): string {
   return `${day} (${days} days ago)`;
 }
 
+/**
+ * WHERE ELSE this task's detail lives — named, with the id needed to go and get it.
+ *
+ * A task carries its origin in `source`, and nothing ever told the model. So a task raised from a
+ * calendar event — whose DESCRIPTION is where its running detail lives, an RSVP list, a packing
+ * list, a status per person — arrived looking like a bare title and three steps, and a model asked
+ * to "update the RSVP list" searched the places it knew about, found nothing, and reported that
+ * there was nothing to find. The list was two fields away the whole time.
+ *
+ * A `typed` task has no elsewhere, so it gets no line rather than a line saying so. PURE.
+ */
+export function taskSourceNote(source: TaskSource): string {
+  const eventLine = (eventId: string, summary?: string): string =>
+    `SOURCE: a CALENDAR EVENT${summary ? ` — “${summary}”` : ""} (eventId: ${eventId}). An event's DESCRIPTION is ` +
+    `where its running detail lives (an RSVP or attendance list, a packing list, a status per person). READ IT with ` +
+    `list_events${summary ? ` (query: "${summary}")` : ""} before concluding this task has no list/detail attached — ` +
+    'and update it in place with update_event "setLines" rather than rewriting it.';
+  const emailLine = (emailId: string, subject?: string, from?: string): string =>
+    `SOURCE: an EMAIL${subject ? ` — “${subject}”` : ""}${from ? ` from ${from}` : ""} (emailId: ${emailId}). ` +
+    "Read it with read_email (and read_attachment for anything on it) before saying you can't find what it referred to.";
+  switch (source.kind) {
+    case "calendar":
+      return eventLine(source.eventId, source.summary);
+    case "email":
+      return emailLine(source.emailId, source.subject, source.from);
+    case "scan":
+      // A scanned item is one or the other; it was surfaced FROM whichever id it carries.
+      if (source.eventId) return eventLine(source.eventId);
+      if (source.emailId) return emailLine(source.emailId, undefined, source.from);
+      return "";
+    case "google":
+      return `SOURCE: Google Tasks (taskId: ${source.taskId}) — its notes may carry detail the reader added there.`;
+    default:
+      return "";
+  }
+}
+
+/** How much accumulated context rides along in the prompt before the rest is left to get_task_plan. */
+const DOSSIER_NOTES_CHARS = 1500;
+
+/** Keep the END of a body of notes (the newest writing) and say how much went. PURE. */
+function tailNotes(text: string, limit: number): string {
+  const t = text.trim();
+  if (t.length <= limit) return t;
+  const cut = t.slice(t.length - limit);
+  const at = cut.indexOf("\n");
+  const kept = at >= 0 ? cut.slice(at + 1) : cut;
+  return `[earlier notes trimmed — get_task_plan returns them in full]\n${kept}`;
+}
+
+/**
+ * EVERYTHING A TASK ALREADY KNOWS, rendered for the model.
+ *
+ * The app works hard to accumulate this — `harvestTaskContext` records every link and attachment
+ * name the reader hands a task chat, `save_task_context` records what each session and each bound
+ * background run found, the planner leaves its research behind, and steps carry generated documents.
+ * None of it was ever read back. It went into `userNotes` and came out only when the task was
+ * RE-PLANNED, which is to say: the model that needed it never saw it, and the reader watched it
+ * search too narrowly and give up on material it had been handed directly.
+ *
+ * Bounded, and honest about the bound — the notes are tailed to the NEWEST and say when they were
+ * cut, because a task worked over weeks accumulates more than belongs in every turn. PURE.
+ */
+export function taskDossier(plan: TaskPlan, notesChars = DOSSIER_NOTES_CHARS): string {
+  const docs = plan.steps.flatMap((s) => (s.docs ?? []).map((d) => ({ doc: d, step: s })));
+  const sections = [
+    taskSourceNote(plan.source),
+    plan.userNotes?.trim()
+      ? "SAVED CONTEXT ON THIS TASK (links and files the reader handed it, and what earlier sessions and background " +
+        `runs found — this is the task's memory, treat it as given):\n${tailNotes(plan.userNotes, notesChars)}`
+      : "",
+    plan.researchNotes?.trim() ? `RESEARCH FROM PLANNING THIS TASK:\n${tailNotes(plan.researchNotes, notesChars)}` : "",
+    docs.length
+      ? "DOCUMENTS THIS TASK ALREADY HAS (get_task_plan returns their contents — read the relevant one BEFORE " +
+        `building anything that duplicates it):\n${docs.map(({ doc, step }) => `- “${doc.title}” (${doc.kind}) — on step “${step.title}”`).join("\n")}`
+      : "",
+    plan.watches?.length ? `BACKGROUND WATCHES on this task:\n${plan.watches.map((w) => `- ${w.title}: ${w.prompt}`).join("\n")}` : "",
+  ].filter(Boolean);
+  return sections.join("\n");
+}
+
 export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
   const ready = nextReadyStep(plan);
   const done = plan.steps.filter((s) => s.status === "done");
@@ -982,11 +1306,34 @@ export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
         "then refine the plan with their answers:\n" +
         plan.clarifyingQuestions.map((q) => `- ${q}`).join("\n")
       : "",
+    // WHAT IS ALREADY FINISHED, by name. The block used to say "3 of 7 steps done" and never say
+    // WHICH three, so the model had a count it could not act on: it re-proposed finished work, and a
+    // re-plan re-planned it. Naming them is what makes "don't redo these" checkable.
+    done.length
+      ? "ALREADY DONE — do NOT redo, re-plan or re-propose these; they are finished:\n" +
+        [...done]
+          .sort((a, b) => (a.doneAt ?? 0) - (b.doneAt ?? 0))
+          .map((s) => `- ✓ ${s.title}${s.doneAt ? ` (${isoDay(new Date(s.doneAt))})` : ""}`)
+          .join("\n")
+      : "",
     ready
       ? `Current step (${ready.actor === "ai_prep" ? "you can prep this" : "the reader does this"}, step id: ${ready.id}): ` +
         `${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` +
         (ready.links.length ? `\nLinks: ${ready.links.map((l) => l.url).join(", ")}` : "")
       : "All steps are done.",
+    // The rest of the outstanding work, so "what's left?" is answerable without a tool call and the
+    // model can see it isn't being asked to invent steps that already exist.
+    plan.steps.filter((s) => s.status !== "done" && s.id !== ready?.id).length
+      ? "STILL TO DO after that:\n" +
+        plan.steps
+          .filter((s) => s.status !== "done" && s.id !== ready?.id)
+          .map((s) => `- ${s.title}${s.dueIso ? ` (by ${s.dueIso})` : ""}${s.status === "blocked" ? " [BLOCKED]" : ""} (step id: ${s.id})`)
+          .join("\n")
+      : "",
+    // What the task already knows. Inline, not behind a tool call, because the failure this fixes is
+    // the model not KNOWING there was anything to fetch — it searched the places it could see, found
+    // nothing, and said so. Material it can't see is material it will not go looking for.
+    taskDossier(plan),
   ].filter(Boolean);
   return lines.join("\n");
 }

@@ -608,3 +608,23 @@ describe("the stamp never loses precision the stored time has", () => {
     }
   });
 });
+
+describe("a step directive is a message like any other, and carries a time", () => {
+  const at = new Date(2026, 7, 3, 14, 2, 9, 310).getTime();
+
+  it("stamps in front of a directive without disturbing it", () => {
+    // A checklist running itself produces a long run of turns with NO reader message at all — every
+    // one of them a directive. Undated, the model has no clock for exactly the stretch of work these
+    // stamps exist to date: the part done unattended.
+    const directive = "[✓ Previous step done. Now do ONLY step 2 of 3: render the barn. Call its tool and stop.]";
+    const out = stampTurnContent(directive, at);
+    expect(out).toBe(`[2026-08-03 14:02:09.310] ${directive}`);
+    // The directive's own leading bracket is not mistaken for a stamp, in either direction.
+    expect(stripTurnStamp(out)).toBe(directive);
+    expect(stripTurnStamp(directive)).toBe(directive);
+  });
+
+  it("is not mistaken for a stamp-only reply", () => {
+    expect(isOnlyTurnStamp(stampTurnContent("[You haven't done step 1 yet. Do it now.]", at))).toBe(false);
+  });
+});

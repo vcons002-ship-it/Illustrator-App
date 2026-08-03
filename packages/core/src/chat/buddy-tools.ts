@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import { generationRateNote, type GenerationRate } from "./generation-rate.js";
 import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
@@ -17,7 +18,7 @@ import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
 import { formatMcpTools, type McpTool } from "./mcp.js";
-import type { TaskPlan } from "./tasks.js";
+import { taskDossier, type TaskPlan } from "./tasks.js";
 import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
 import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
 
@@ -481,10 +482,46 @@ export type BuddyToolCall =
    * gist, an answered question, a decision) so the task reflects the chat when the window closes.
    * planId defaults to the task this chat is working; replan flags an in-place re-plan. */
   | { tool: "save_task_context"; note: string; planId?: string; replan?: boolean }
-  | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
+  | {
+      tool: "update_task_step";
+      planId: string;
+      stepId: string;
+      status?: string;
+      notes?: string;
+      /** The step's own wording/date/owner — correctable without re-planning the whole task. */
+      title?: string;
+      detail?: string;
+      dueIso?: string;
+      actor?: "ai_prep" | "user_action";
+    }
+  /** Edit the TASK itself — its title, summary, deadline, or the open questions once they're
+   * answered. None of this was changeable without a full re-plan. planId defaults to this chat's task. */
+  | {
+      tool: "update_task";
+      planId?: string;
+      title?: string;
+      summary?: string;
+      deadlineIso?: string;
+      leadTimeDays?: number;
+      estCost?: string;
+      researchNotes?: string;
+      clarifyingQuestions?: string[];
+    }
+  /** Write a DOCUMENT on the task (a tracker, checklist, draft) — created if there's no document by
+   * that title. `setLines` updates entries in place; `body` replaces the whole thing. */
+  | {
+      tool: "update_task_doc";
+      planId?: string;
+      stepId?: string;
+      title: string;
+      kind?: "draft" | "reference" | "checklist";
+      body?: string;
+      setLines?: { match: string; line: string; dedupe?: boolean }[];
+      fence?: string;
+    }
   /** Add (or replace) the sub-tasks of an EXISTING plan — captures planning the reader worked out
    * in chat. `planId` defaults to the active task; `replace` swaps the whole step list. */
-  | { tool: "add_task_steps"; planId?: string; steps: { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }
+  | { tool: "add_task_steps"; planId?: string; steps: { id?: string; title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }
   | { tool: "list_task_plans" }
   | { tool: "get_task_plan"; id: string }
   /** Call the reader's own MCP servers (when configured): list a server's tools, or call one. */
@@ -562,7 +599,8 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
   "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "recent_actions",
-  "mark_step_done", "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
+  "mark_step_done", "complete_task", "save_task_context", "update_task_step", "update_task", "update_task_doc",
+  "add_task_steps", "list_task_plans",
   "get_task_plan", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
   "complete_step",
 ]);
@@ -870,6 +908,8 @@ export function buildBuddySystemPrompt(raw: {
    * 2026, 4:58 PM (UTC-04:00)") — anchors "today"/"this week"/"by when" answers
    * and the ISO ranges/due dates the model builds. */
   now?: string;
+  /** How fast the PREVIOUS reply was generated. The model can't time its own — see generationRateNote. */
+  lastGeneration?: GenerationRate;
   /** This bundle's git sha + build time. Told to the model so "which build are you running?" has a
    * straight answer — the app self-updates, and a stale bundle is otherwise indistinguishable from a
    * bug that was already fixed. */
@@ -1254,7 +1294,9 @@ export function buildBuddySystemPrompt(raw: {
       "[sent YYYY-MM-DD HH:MM:SS.mmm] — so you can tell when you last said or did something even where the reader " +
       "wasn't involved, and in what ORDER things happened when several land together (a scheduled run, its tool " +
       "results and its reply are milliseconds apart). Read them at whatever precision you need — the date alone " +
-      "answers most questions. Older messages carry shorter forms; read them the same way. " +
+      "answers most questions. Older messages carry shorter forms; read them the same way. THESE STAMPS ARE THE " +
+      "ANSWER to any question about this conversation — when something was said, how long ago, in what order — and " +
+      "no tool is needed to read them (recent_actions records unattended work, not this chat). " +
       "The app writes both; NEVER write either yourself. A timestamp is not part of " +
       "an answer, and a reply that is one is a reply that said nothing. Compare them against the time above rather " +
       "than assuming the conversation is recent, and don't raise something settled weeks ago as if it were new.\n\n"
@@ -1439,7 +1481,7 @@ export function buildBuddySystemPrompt(raw: {
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
-    `${nowBlock}${buildBlock}${creativeBlock}` +
+    `${nowBlock}${generationRateNote(opts.lastGeneration)}${buildBlock}${creativeBlock}` +
     `${planBlock}` +
     (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
@@ -1660,6 +1702,16 @@ export function buildBuddySystemPrompt(raw: {
     'task steps you worked alone. Add "kind" to narrow it ("scheduled_run", "scan", "plan", "create_task", ' +
     '"task_auto"). READ IT — never answer from memory — whenever the reader asks what you have done, what ran today, ' +
     "or when you last did something; and before repeating work you may already have done.\n" +
+    // Scoped, because "never answer from memory … when you last did something" reads as covering the
+    // CONVERSATION too. It sent the model to this tool for a question about the chat's own
+    // timestamps, which are sitting in the transcript in front of it — and "never answer from
+    // memory" then argued against reading them. An instruction that captures more than it covers is
+    // worse than a missing one: it points somewhere confidently wrong.
+    "  IT DOES NOT COVER THIS CONVERSATION. It records UNATTENDED work — things done while the reader " +
+    "wasn't here. Anything about the messages you and the reader have exchanged (when something was " +
+    "said, how long ago, what order things happened in, how long a reply took) is answered from the " +
+    "TIMESTAMPS ON THE MESSAGES THEMSELVES, which are already in front of you. Don't call this tool " +
+    "for that, and don't report that you have no record of it when the record is the transcript.\n" +
     checklistCatalog +
     // Settings + setup guides — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canAppSettings
@@ -1805,7 +1857,21 @@ export function buildBuddySystemPrompt(raw: {
         'add sub-tasks to an existing task when the work turns out to need them. Each step is an OBJECT with a "title" ' +
         '(optional "detail", "actor":"ai_prep"|"user_action", "dueIso"), not a bare string.\n' +
         '- {"tool":"update_task_step","planId":"…","stepId":"…","notes":"what you found","status":"in_progress"} — record ' +
-        "progress or findings on ONE sub-task without finishing it; use mark_step_done to check it off.\n" +
+        'progress or findings on ONE sub-task without finishing it; use mark_step_done to check it off. Also takes "title", ' +
+        '"detail", "dueIso" and "actor" to CORRECT a step, so re-wording or re-dating one never needs a re-plan.\n' +
+        // Everything on a task used to be read-only: the only way to change a title, a deadline or a
+        // document was plan_task, which regenerates the task from scratch. A one-word fix cost the
+        // reader every step status and every document on it.
+        '- {"tool":"update_task","title":"…","summary":"…","deadlineIso":"2026-07-20","clarifyingQuestions":[]} — edit the ' +
+        "TASK itself. Use it the moment something changes: the reader corrects the title, moves the deadline, or answers " +
+        'the OPEN QUESTIONS (pass "clarifyingQuestions":[] to clear them once answered, so they stop being asked). ' +
+        "Don't re-plan for a change this can make.\n" +
+        '- {"tool":"update_task_doc","title":"RSVP status tracker","setLines":[{"match":"Bo","line":"Bo: yes"}]} — write a ' +
+        "DOCUMENT on the task (a tracker, a checklist, a draft), created if there's no document by that title. " +
+        '"setLines" upserts entries IN PLACE by label and leaves the rest of the document alone — that is the right tool ' +
+        'for any running list. Use "body" only to author a document outright or when the reader asks for a full rewrite; ' +
+        "rewriting a list you only partly have in front of you DELETES the rest of it. Read the document first with " +
+        "get_task_plan, and NEVER start a second document because you couldn't find the first.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
         '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
@@ -1845,7 +1911,27 @@ export function buildBuddySystemPrompt(raw: {
         '"replace":true to swap the whole list). When the reader says "plan/redo/refine/update this" (or once ' +
         "they've answered the OPEN QUESTIONS) and the plan needs a full rebuild, re-plan THIS task in place with " +
         "plan_task — don't ask which task they mean or start a new one; it's the task above. When all steps are done, " +
-        "offer to re-plan it, mark a step not-done to redo it, or wrap up.\n"
+        "offer to re-plan it, mark a step not-done to redo it, or wrap up.\n" +
+        // The reader asked it to update an existing RSVP tracker that was BOTH attached to the task
+        // and in the task's calendar event, and it reported that it couldn't find one. It had looked
+        // in the chat and nowhere else. A task is a folder, not a title — so say where the folder is.
+        "BEFORE YOU SAY SOMETHING ISN'T THERE: this task carries more than its checklist, and the reader counts " +
+        "everything they attached to it as being IN it. Check ALL of these first — (1) the SAVED CONTEXT and the " +
+        'DOCUMENTS listed above, with {"tool":"get_task_plan","id":"…"} for their full contents; (2) the task\'s ' +
+        "SOURCE — a calendar event's description or the source email, named above with the id you need to fetch it; " +
+        "(3) the files listed in this chat, and read/read_document for anything named in the saved context. Only " +
+        "after all of those may you say you couldn't find it, and then name WHERE YOU LOOKED so the reader can point " +
+        "you at the right place instead of explaining it again. NEVER rebuild a list, tracker or document from " +
+        "scratch because you didn't find the existing one — you would be replacing their real one with a guess.\n" +
+        // "It should do it automatically and dynamically as the user plans" — the task is supposed to
+        // be the live record of the work, not a snapshot of what the planner guessed on day one.
+        "KEEP THE TASK ITSELF CURRENT, without being asked. As the conversation settles things, write them onto the " +
+        "task in the same turn: a changed deadline or title → update_task; an answered open question → update_task " +
+        'with the remaining "clarifyingQuestions" (or [] when they\'re all answered); a step that turns out to be worded ' +
+        "wrong or due on a different day → update_task_step; a new fact, reply, price, or status for someone on a list → " +
+        "update_task_doc setLines on the document that tracks it. The reader should never have to ask you to record " +
+        "something they just told you, and should never find the task saying something the conversation already " +
+        "corrected. Re-plan (plan_task) only when the SHAPE of the work changed — it rebuilds the steps.\n"
       : "") +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
@@ -3287,12 +3373,66 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const planId = strArg(obj.planId, MAX_ID_CHARS);
     const stepId = strArg(obj.stepId, MAX_ID_CHARS);
     if (!planId || !stepId) return undefined;
+    const actor = obj.actor === "ai_prep" ? "ai_prep" : obj.actor === "user_action" ? "user_action" : undefined;
     return {
       tool,
       planId,
       stepId,
       ...(strArg(obj.status, MAX_NAME_CHARS) ? { status: strArg(obj.status, MAX_NAME_CHARS)! } : {}),
       ...(strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS) ? { notes: strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+      ...(strArg(obj.title, MAX_QUERY_CHARS) ? { title: strArg(obj.title, MAX_QUERY_CHARS)! } : {}),
+      ...(strArg(obj.detail, MAX_GOOGLE_TEXT_CHARS) ? { detail: strArg(obj.detail, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+      ...(strArg(obj.dueIso, MAX_NAME_CHARS) ? { dueIso: strArg(obj.dueIso, MAX_NAME_CHARS)! } : {}),
+      ...(actor ? { actor } : {}),
+    };
+  }
+  if (tool === "update_task") {
+    const planId = strArg(obj.planId, MAX_ID_CHARS);
+    const qs = Array.isArray(obj.clarifyingQuestions)
+      ? obj.clarifyingQuestions.map((q) => strArg(q, MAX_GOOGLE_TEXT_CHARS)).filter((q): q is string => !!q).slice(0, 6)
+      : undefined;
+    const call: Extract<BuddyToolCall, { tool: "update_task" }> = {
+      tool: "update_task",
+      ...(planId ? { planId } : {}),
+      ...(strArg(obj.title, MAX_QUERY_CHARS) ? { title: strArg(obj.title, MAX_QUERY_CHARS)! } : {}),
+      ...(strArg(obj.summary, MAX_GOOGLE_TEXT_CHARS) ? { summary: strArg(obj.summary, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+      ...(strArg(obj.deadlineIso, MAX_NAME_CHARS) ? { deadlineIso: strArg(obj.deadlineIso, MAX_NAME_CHARS)! } : {}),
+      ...(typeof obj.leadTimeDays === "number" && Number.isFinite(obj.leadTimeDays) ? { leadTimeDays: obj.leadTimeDays } : {}),
+      ...(strArg(obj.estCost, MAX_NAME_CHARS) ? { estCost: strArg(obj.estCost, MAX_NAME_CHARS)! } : {}),
+      ...(strArg(obj.researchNotes, MAX_GOOGLE_TEXT_CHARS) ? { researchNotes: strArg(obj.researchNotes, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+      // An EMPTY array is a real instruction here — "these are answered, stop asking" — so it must
+      // survive the same check that drops an absent field.
+      ...(qs ? { clarifyingQuestions: qs } : {}),
+    };
+    // Nothing to change is a malformed call, not a silent no-op that reports success.
+    return Object.keys(call).length > (planId ? 2 : 1) ? call : undefined;
+  }
+  if (tool === "update_task_doc") {
+    const title = strArg(obj.title, MAX_QUERY_CHARS);
+    if (!title) return undefined;
+    const kind = obj.kind === "draft" || obj.kind === "checklist" || obj.kind === "reference" ? obj.kind : undefined;
+    const setLines = Array.isArray(obj.setLines)
+      ? obj.setLines
+          .map((e) => {
+            const en = (e ?? {}) as Record<string, unknown>;
+            const match = strArg(en.match, MAX_NAME_CHARS);
+            const line = strArg(en.line, MAX_GOOGLE_TEXT_CHARS);
+            return match && line ? { match, line, ...(en.dedupe === true ? { dedupe: true } : {}) } : undefined;
+          })
+          .filter((e): e is { match: string; line: string; dedupe?: boolean } => !!e)
+          .slice(0, 50)
+      : undefined;
+    const body = typeof obj.body === "string" ? obj.body.slice(0, 20_000) : undefined;
+    if (body === undefined && !setLines?.length) return undefined;
+    return {
+      tool,
+      title,
+      ...(strArg(obj.planId, MAX_ID_CHARS) ? { planId: strArg(obj.planId, MAX_ID_CHARS)! } : {}),
+      ...(strArg(obj.stepId, MAX_ID_CHARS) ? { stepId: strArg(obj.stepId, MAX_ID_CHARS)! } : {}),
+      ...(kind ? { kind } : {}),
+      ...(body !== undefined ? { body } : {}),
+      ...(setLines?.length ? { setLines } : {}),
+      ...(strArg(obj.fence, MAX_NAME_CHARS) ? { fence: strArg(obj.fence, MAX_NAME_CHARS)! } : {}),
     };
   }
   if (tool === "add_task_steps") {
@@ -3305,12 +3445,15 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
             const actor = st.actor === "ai_prep" ? "ai_prep" : st.actor === "user_action" ? "user_action" : undefined;
             return {
               title,
+              // An id names an EXISTING step, which applyStepEdits now edits in place instead of
+              // appending a second step under the same id.
+              ...(strArg(st.id, MAX_ID_CHARS) ? { id: strArg(st.id, MAX_ID_CHARS)! } : {}),
               ...(strArg(st.detail, MAX_GOOGLE_TEXT_CHARS) ? { detail: strArg(st.detail, MAX_GOOGLE_TEXT_CHARS)! } : {}),
               ...(actor ? { actor } : {}),
               ...(strArg(st.dueIso, MAX_NAME_CHARS) ? { dueIso: strArg(st.dueIso, MAX_NAME_CHARS)! } : {}),
             };
           })
-          .filter((s): s is { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string } => !!s)
+          .filter((s): s is { id?: string; title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string } => !!s)
           .slice(0, 25)
       : [];
     if (steps.length === 0) return undefined;
@@ -3910,6 +4053,18 @@ export interface BuddyToolResultPayload {
   }[];
   taskPlansList?: { id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[];
   taskPlan?: TaskPlan;
+  /** update_task_doc outcome — echoed back so the model is never editing text it can't see. */
+  taskDoc?: {
+    planTitle: string;
+    title: string;
+    kind: string;
+    body: string;
+    created: boolean;
+    replaced: string[];
+    added: string[];
+    ambiguous: { match: string; lines: string[] }[];
+    error?: string;
+  };
   /** Local files found by an approved find_files search (names fed back to the model). */
   files?: { path: string; name: string }[];
   /** load_toolset outcome (or the answer to calling a tool whose set wasn't loaded): the
@@ -4561,6 +4716,26 @@ function formatBuddyToolResultBody(
       ? `[saved to "${a.planTitle}" and flagged it for an in-place re-plan] Now answer the reader.`
       : `[saved to "${a.planTitle}"] Now answer the reader.`;
   }
+  if (call.tool === "update_task") {
+    return result.taskAction ? `[updated the task "${result.taskAction.planTitle}"] Confirm the change in one line.` : "[update_task: no such task]";
+  }
+  if (call.tool === "update_task_doc") {
+    const d = result.taskDoc;
+    if (!d) return "[update_task_doc: no such task]";
+    if (d.error) return `[update_task_doc did nothing: ${d.error}]`;
+    // Echo the document BACK. A model editing text it can't see is what writes the same entry twice
+    // — once in place and once at the bottom — everywhere else this pattern appears in the app.
+    const amb = d.ambiguous.length
+      ? `\nSKIPPED (each of these matched more than one line — nothing was changed for them; narrow the match, or ` +
+        `pass "dedupe":true once you've looked):\n${d.ambiguous.map((a) => `· "${a.match}" → ${a.lines.join(" | ")}`).join("\n")}`
+      : "";
+    const what = d.created ? "created" : d.replaced.length || d.added.length ? "updated" : "rewrote";
+    return (
+      `[${what} the task document “${d.title}” (${d.kind}) on "${d.planTitle}"` +
+      `${d.replaced.length ? ` — changed: ${d.replaced.join(", ")}` : ""}${d.added.length ? ` — added: ${d.added.join(", ")}` : ""}]` +
+      `${amb}\nIt now reads:\n${d.body.length > 3000 ? `${d.body.slice(0, 3000)}…` : d.body}\nConfirm the change in one line.`
+    );
+  }
   if (call.tool === "update_task_step") {
     return result.taskAction ? `[updated the step in "${result.taskAction.planTitle}"] Confirm briefly.` : "[update_task_step: not found]";
   }
@@ -4582,12 +4757,30 @@ function formatBuddyToolResultBody(
   if (call.tool === "get_task_plan") {
     const p = result.taskPlan;
     if (!p) return `[get_task_plan: no plan with id ${call.id}]`;
-    return (
-      `[task plan "${p.title}"${p.deadlineIso ? ` — deadline ${p.deadlineIso}` : ""}]\n` +
+    // The prompt has always advertised this as "ONE task in full: its steps, notes and any context
+    // saved on earlier runs", and it returned a bare checklist. Everything else — the source it came
+    // from, the links and attachment names the reader handed it, what earlier sessions and bound
+    // background runs recorded, the planner's research, the documents the plan itself generated —
+    // was on `result.taskPlan` the whole time and thrown away here. A model that asked the one tool
+    // named for the job, and was told it had the task "in full", then answered from a checklist.
+    const dossier = taskDossier(p, 4000);
+    const docs = p.steps.flatMap((s) => s.docs ?? []);
+    // The documents' actual CONTENTS: the "existing tracker" a reader asks you to update is usually
+    // one of these, and a title alone can't be updated.
+    const bodies = docs
+      .slice(0, 4)
+      .map((d) => `--- “${d.title}” (${d.kind}) ---\n${d.body.length > 3000 ? `${d.body.slice(0, 3000)}\n[…document CUT — read the rest in the task panel]` : d.body}`)
+      .join("\n\n");
+    return [
+      `[task plan "${p.title}"${p.deadlineIso ? ` — deadline ${p.deadlineIso}` : ""}${p.summary ? `\n${p.summary}` : ""}]`,
       p.steps
         .map((s, i) => `${i + 1}. [${s.status}] ${s.title} (${s.actor === "ai_prep" ? "AI preps" : "reader does"}) (step id: ${s.id})`)
-        .join("\n")
-    );
+        .join("\n"),
+      dossier,
+      bodies ? `DOCUMENT CONTENTS:\n${bodies}${docs.length > 4 ? `\n(${docs.length - 4} more document(s) on this task)` : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   if (call.tool === "mcp_tools") {
     const r = result.mcpToolsList;
