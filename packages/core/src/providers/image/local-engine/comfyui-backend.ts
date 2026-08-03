@@ -351,6 +351,25 @@ const IPADAPTER_FAMILIES: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["sd15
 const IPADAPTER_MAX_REFS = 4;
 const REFERENCE_LATENT_MAX_REFS = 10;
 
+/**
+ * Node classes that filter or obscure a finished image, matched by name.
+ *
+ * ComfyUI core ships NO safety checker — nothing between VAEDecode and SaveImage in the graph this
+ * backend builds touches the pixels. But `custom_nodes` is arbitrary third-party Python, and several
+ * published packs add exactly this: a detector that blurs, blacks out, or substitutes an image after
+ * it renders. Installed, they can be wired into a workflow — and the reader has no way to know a
+ * pack they added for something else brought one along.
+ *
+ * Matched on the class NAME because that is all `/object_info` gives, so this reports rather than
+ * concludes: the node being INSTALLED is not the same as it being in this graph, and this backend
+ * never wires one. It exists so "the engine seems to be censoring things" has somewhere to look
+ * other than a guess. PURE.
+ */
+export function contentFilterNodes(nodeNames: Iterable<string>): string[] {
+  const suspicious = /nsfw|safe[\s_-]?checker|safetychecker|censor|content[\s_-]?filter|nudenet|nudity/i;
+  return [...nodeNames].filter((n) => suspicious.test(n)).sort();
+}
+
 /** Can IP-Adapter condition a render on this checkpoint family? PURE. */
 export function ipAdapterSupports(family: ModelFamily): boolean {
   return IPADAPTER_FAMILIES.has(family);
@@ -554,6 +573,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly engineFilesTimeoutMs: number;
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
+  /** Image-filtering node classes seen on this engine, noted as a SIDE EFFECT of the /object_info
+   * read the IP-Adapter check already makes. Never fetched on its own: the render path is kept to
+   * its own traffic, and a diagnostic that adds a round-trip to every picture has bought the wrong
+   * thing. Undefined until that read has happened, and then the record simply doesn't mention it. */
+  private knownFilterNodes?: string[];
   private warnedNoIpAdapter = false;
   private warnedIpAdapterFamily = false;
   /**
@@ -977,6 +1001,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
           });
           if (!res.ok) return null;
           const nodes = await res.json<ObjectInfoNodes>();
+          // Free ride on a response we already have: what else is installed that could alter a
+          // finished image. See contentFilterNodes.
+          this.knownFilterNodes = contentFilterNodes(Object.keys(nodes));
           const has = (n: string): boolean => Boolean(nodes[n]);
           const apply: IpAdapterCaps["apply"] | undefined = has("IPAdapterAdvanced")
             ? "advanced"
@@ -1284,6 +1311,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
           engine: "ComfyUI",
           model: checkpoint,
           family,
+          // Reported, not concluded: this backend wires none of these, but an installed one is the
+          // only place left to look when an engine appears to alter finished images.
+          ...(this.knownFilterNodes?.length ? { filterNodes: this.knownFilterNodes } : {}),
           sampler: sampler.sampler,
           scheduler: sampler.scheduler,
           cfg: sampler.cfg,

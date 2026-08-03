@@ -309,6 +309,9 @@ export function renderPromptRecord(
     scheduler?: string;
     cfg?: number;
     steps?: number;
+    /** Third-party nodes installed on the engine that can filter a finished image. Named here
+     * because this is the line a reader reads when a render didn't come back as asked. */
+    filterNodes?: readonly string[];
   },
 ): string {
   const bits = [
@@ -319,8 +322,14 @@ export function renderPromptRecord(
     engine.cfg !== undefined ? `cfg ${engine.cfg}` : undefined,
     engine.steps !== undefined ? `${engine.steps} steps` : undefined,
   ].filter((b): b is string => !!b);
-  return [positive, negative.trim() ? `Negative: ${negative.trim()}` : "Negative: (none)", `Engine: ${bits.join(" · ")}`]
-    .join("\n\n");
+  const filters = engine.filterNodes?.length
+    ? `\n\n⚠ Image-filtering nodes are installed on this engine: ${engine.filterNodes.join(", ")}. ` +
+      "This app never wires one into a render, but a workflow or node pack can."
+    : "";
+  return (
+    [positive, negative.trim() ? `Negative: ${negative.trim()}` : "Negative: (none)", `Engine: ${bits.join(" · ")}`]
+      .join("\n\n") + filters
+  );
 }
 
 /**
