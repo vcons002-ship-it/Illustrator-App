@@ -991,7 +991,7 @@ export async function listSubtasks(
   transport: Transport,
   token: string,
   parentId: string,
-): Promise<{ id: string; title: string; status?: string }[]> {
+): Promise<{ id: string; title: string; status?: string; due?: string; notes?: string }[]> {
   const data = await apiGet<{ items?: RawTask[] }>(
     transport,
     token,
@@ -999,7 +999,16 @@ export async function listSubtasks(
   );
   return (data.items ?? [])
     .filter((t): t is RawTask & { id: string } => t.parent === parentId && !!t.id)
-    .map((t) => ({ id: t.id, title: t.title ?? "", ...(t.status ? { status: t.status } : {}) }));
+    // `due` and `notes` come back on the same response and are what let a sync tell a sub-task that
+    // has DRIFTED from one that's already right — without them every sync had to either rewrite
+    // every child or (as it did) never correct one at all.
+    .map((t) => ({
+      id: t.id,
+      title: t.title ?? "",
+      ...(t.status ? { status: t.status } : {}),
+      ...(t.due ? { due: t.due } : {}),
+      ...(t.notes ? { notes: t.notes } : {}),
+    }));
 }
 
 /** Top-level to-dos from the default list, each with its nested sub-tasks (a single Google Tasks
@@ -1106,11 +1115,19 @@ export async function patchTask(
   transport: Transport,
   token: string,
   id: string,
-  patch: { status?: "completed" | "needsAction"; notes?: string },
+  patch: { status?: "completed" | "needsAction"; notes?: string; title?: string; due?: string },
 ): Promise<TaskItem> {
   const body: Record<string, unknown> = {};
   if (patch.status) body.status = patch.status;
   if (patch.notes !== undefined) body.notes = patch.notes;
+  // Title and due were not patchable at all, so renaming or re-dating a task in the app left Google
+  // Tasks showing the old wording and the old date forever. `due` goes through the same widening as
+  // a create — a bare YYYY-MM-DD is rejected with a 400, which would fail the whole patch.
+  if (patch.title !== undefined) body.title = patch.title;
+  if (patch.due !== undefined) {
+    const due = toTaskDue(patch.due);
+    if (due) body.due = due;
+  }
   const res = await transport.send({
     url: `${TASKS}/${encodeURIComponent(id)}`,
     method: "PATCH",

@@ -944,6 +944,46 @@ export interface GoogleSubtaskAction {
   create: boolean;
   /** Patch the (existing or new) sub-task to "completed" — the step is done but Google isn't. */
   needsComplete: boolean;
+  /**
+   * Patch it back to "needsAction" — Google says completed and the app no longer does.
+   *
+   * The sync only ever pushed completions, so un-ticking a step in the app was a change Google never
+   * heard about: the reader saw it reopen here and stay struck through there, with no way to tell
+   * which was current.
+   */
+  needsReopen?: true;
+  /** Fields that have DRIFTED on an existing sub-task and should be written back (only what differs). */
+  patch?: { title?: string; notes?: string; due?: string };
+}
+
+/** Do two Google `due` values mean the same day? Google stores a full RFC-3339 timestamp and only
+ * honours the date part, so comparing the raw strings reports drift on every single sync. PURE. */
+function sameDueDay(a: string | undefined, b: string | undefined): boolean {
+  const day = (v: string | undefined): string => (v ?? "").trim().slice(0, 10);
+  return day(a) === day(b);
+}
+
+/**
+ * What to write on the PARENT Google Task so it matches the app.
+ *
+ * Only the notes were ever refreshed. So renaming a task, moving its deadline or completing it in
+ * the app left the Google Task saying the old thing — the reader's phone showed a to-do they had
+ * finished, under a title they had corrected, due on a date they had moved. PURE.
+ */
+export interface GoogleParentPatch {
+  title: string;
+  status: "completed" | "needsAction";
+  notes: string;
+  due?: string;
+}
+
+export function googleParentPatch(plan: Pick<TaskPlan, "title" | "deadlineIso" | "status">, notes: string): GoogleParentPatch {
+  return {
+    title: plan.title,
+    status: plan.status === "completed" ? "completed" : "needsAction",
+    notes,
+    ...(plan.deadlineIso ? { due: plan.deadlineIso } : {}),
+  };
 }
 
 const normTaskTitle = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -952,8 +992,8 @@ const normTaskTitle = (s: string): string => s.trim().toLowerCase().replace(/\s+
  * stored googleTaskId first, else by normalized title (so a re-plan reuses what's there instead of
  * duplicating); completed steps are marked complete; anything unmatched is a fresh create. */
 export function reconcileGoogleSubtasks(
-  steps: readonly { title: string; status: TaskStep["status"]; googleTaskId?: string }[],
-  existing: readonly { id: string; title: string; status?: string }[],
+  steps: readonly { title: string; status: TaskStep["status"]; googleTaskId?: string; detail?: string; dueIso?: string }[],
+  existing: readonly { id: string; title: string; status?: string; due?: string; notes?: string }[],
 ): GoogleSubtaskAction[] {
   const byId = new Map(existing.map((t) => [t.id, t]));
   const byTitle = new Map<string, { id: string; title: string; status?: string }>();
@@ -971,7 +1011,20 @@ export function reconcileGoogleSubtasks(
     }
     if (match) {
       used.add(match.id);
-      return { title: step.title, existingId: match.id, create: false, needsComplete: done && match.status !== "completed" };
+      // Only what actually differs, so a sync that changes nothing writes nothing.
+      const patch = {
+        ...(normTaskTitle(match.title) !== normTaskTitle(step.title) ? { title: step.title } : {}),
+        ...(step.detail && (match.notes ?? "") !== step.detail ? { notes: step.detail } : {}),
+        ...(step.dueIso && !sameDueDay(match.due, step.dueIso) ? { due: step.dueIso } : {}),
+      };
+      return {
+        title: step.title,
+        existingId: match.id,
+        create: false,
+        needsComplete: done && match.status !== "completed",
+        ...(!done && match.status === "completed" ? { needsReopen: true as const } : {}),
+        ...(Object.keys(patch).length ? { patch } : {}),
+      };
     }
     return { title: step.title, create: true, needsComplete: done };
   });
