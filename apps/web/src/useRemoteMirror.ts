@@ -7,6 +7,8 @@ import {
   saveSkill,
   saveSoul,
   saveSoulName,
+  saveSoulEssence,
+  loadSoul,
   type BookSource,
   type BookSummary,
   type BuddyToolCall,
@@ -571,6 +573,16 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             break;
           case "vrcmd:soulName":
             void saveSoulName(libraryStore, msg.kind, msg.name).then(() => refreshSoul(msg.kind)).catch(() => {});
+            break;
+          case "vrcmd:soulEssenceEdit":
+            // The phone removed a line from the generated Essence; persist it HERE and re-read, so
+            // our own vrsync:soul push brings the pruned version back down.
+            // Notes read from the store, not from a mirrored copy: saveSoulEssence validates the
+            // essence against them, and the authoritative list lives here.
+            void loadSoul(libraryStore, msg.kind)
+              .then((notes) => saveSoulEssence(libraryStore, msg.kind, msg.essence, notes))
+              .then(() => refreshSoul(msg.kind))
+              .catch(() => {});
             break;
           case "vrcmd:soulEssenceRefresh": {
             let correlation:

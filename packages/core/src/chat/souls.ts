@@ -232,6 +232,40 @@ export interface SoulEssence {
   exactPersonalityDirections: SoulEssenceDirectionFact[];
 }
 
+/** The two source-exact lists a reader can prune by hand. */
+export type SoulEssenceExactList = "exactAppearance" | "exactPersonalityDirections";
+
+/**
+ * Drop one item from a generated Essence.
+ *
+ * The distillation sorts each note into a slot, and it gets that wrong sometimes — "the discrepancy
+ * between physical time and perceived time" filed under physical APPEARANCE, where it then describes
+ * the reader's face to every image model that asks. Re-running the whole distillation to dislodge one
+ * misfiled line is a poor trade, and editing the note it came from may not be possible: several notes
+ * can feed one line, and the note itself was fine.
+ *
+ * So: remove the line. Deliberately narrow — the two SOURCE-EXACT lists only. The generalized essence
+ * is a synthesis, and pulling a sentence out of a synthesis leaves something no longer true of its
+ * sources; that needs a regeneration, not a delete.
+ *
+ * Returns the essence UNCHANGED when the index isn't there, so a stale click from a re-rendered list
+ * can't silently delete a neighbour. PURE.
+ */
+export function removeSoulEssenceFact(
+  essence: SoulEssence,
+  list: SoulEssenceExactList,
+  index: number,
+): SoulEssence {
+  const current = essence[list];
+  if (!Number.isInteger(index) || index < 0 || index >= current.length) return essence;
+  const next = current.filter((_, i) => i !== index);
+  // `generatedAt` is deliberately NOT bumped: this is a correction to that distillation, not a new
+  // one, and the fingerprint still names the notes it was made from.
+  return list === "exactAppearance"
+    ? { ...essence, exactAppearance: next as SoulEssenceAppearanceFact[] }
+    : { ...essence, exactPersonalityDirections: next as SoulEssenceDirectionFact[] };
+}
+
 export interface SoulEssenceDistillationPrompt {
   system: string;
   user: string;

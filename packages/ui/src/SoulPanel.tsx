@@ -6,6 +6,7 @@ import {
   soulEssenceViewForNotes,
   soulSourceFingerprint,
   type SoulEssence,
+  type SoulEssenceExactList,
   type SoulImage,
   type SoulNote,
 } from "@visual-reader/core";
@@ -59,6 +60,9 @@ export interface SoulPanelProps {
   /** Persist the WHOLE reference-photo list (capped at MAX_SOUL_IMAGES). ABSENT on a linked phone,
    * where the photos live on the computer that owns them — the section is then hidden entirely. */
   onSaveImages?: (images: SoulImage[]) => Promise<void>;
+  /** Drop one source-exact line from the generated Essence. Absent ⇒ the ✕ buttons don't render
+   * (a linked phone, where the desktop owns the store). */
+  onRemoveEssenceFact?: (list: SoulEssenceExactList, index: number) => Promise<void>;
   onClose: () => void;
   limits: { note: number; max: number; name: number };
 }
@@ -149,6 +153,7 @@ export const SoulPanel = memo(function SoulPanel({
   onSaveName,
   images,
   onSaveImages,
+  onRemoveEssenceFact,
   onClose,
   limits,
 }: SoulPanelProps) {
@@ -556,7 +561,15 @@ export const SoulPanel = memo(function SoulPanel({
                   </strong>
                   <ul style={{ fontSize: 12, lineHeight: 1.4, margin: 0, paddingLeft: 18 }}>
                     {visibleEssence.exactPersonalityDirections.map((fact, index) => (
-                      <li key={`${fact.sourceIds.join("-")}-${index}`}>{fact.text}</li>
+                      <li key={`${fact.sourceIds.join("-")}-${index}`}>
+                        {fact.text}
+                        <EssenceFactRemove
+                          {...(onRemoveEssenceFact
+                            ? { onRemove: () => onRemoveEssenceFact("exactPersonalityDirections", index) }
+                            : {})}
+                          label={fact.text}
+                        />
+                      </li>
                     ))}
                   </ul>
                 </div>
@@ -576,6 +589,10 @@ export const SoulPanel = memo(function SoulPanel({
                     {visibleEssence.exactAppearance.map((fact, index) => (
                       <li key={`${fact.sourceIds.join("-")}-${index}`}>
                         {renderSoulAppearanceFact(fact)}
+                        <EssenceFactRemove
+                          {...(onRemoveEssenceFact ? { onRemove: () => onRemoveEssenceFact("exactAppearance", index) } : {})}
+                          label={fact.text}
+                        />
                       </li>
                     ))}
                   </ul>
@@ -804,3 +821,45 @@ const removeBadge: React.CSSProperties = {
   cursor: "pointer",
   padding: 0,
 };
+
+/**
+ * The ✕ beside one source-exact Essence line.
+ *
+ * The distillation files each note into a slot and gets it wrong sometimes — an interest in how the
+ * brain perceives time landed under PHYSICAL APPEARANCE, from where it would describe the reader's
+ * face to every image model that asks. Regenerating the whole Essence to dislodge one line is a poor
+ * trade, and the note it came from may be perfectly good.
+ *
+ * Confirms first, quoting the line: these lists are short and the buttons sit close together, and
+ * this is the one control here that destroys something a model spent minutes building.
+ */
+function EssenceFactRemove({ onRemove, label }: { onRemove?: () => Promise<void>; label: string }) {
+  const [busy, setBusy] = useState(false);
+  if (!onRemove) return null;
+  const short = label.length > 60 ? `${label.slice(0, 60).trim()}…` : label;
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      title={`Remove “${short}” from the generated Soul`}
+      aria-label={`Remove ${short}`}
+      style={{
+        marginLeft: 6,
+        border: "none",
+        background: "none",
+        color: "inherit",
+        opacity: busy ? 0.4 : 0.45,
+        cursor: busy ? "default" : "pointer",
+        fontSize: 11,
+        padding: 0,
+      }}
+      onClick={() => {
+        if (!window.confirm(`Remove this from the generated Soul?\n\n${short}`)) return;
+        setBusy(true);
+        void onRemove().finally(() => setBusy(false));
+      }}
+    >
+      ✕
+    </button>
+  );
+}

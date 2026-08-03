@@ -58,6 +58,8 @@ import {
   loadSoulName,
   visualSoulNotes,
   saveSoulName,
+  saveSoulEssence,
+  removeSoulEssenceFact,
   loadSoulImages,
   saveSoulImages,
   MAX_SOUL_NOTES,
@@ -10113,6 +10115,25 @@ export function App() {
             }
             await saveSoulName(libraryStore, kind, name);
             setSoulName(kind, trimmed);
+          }}
+          // Prune a misfiled line from the generated Soul. The distillation sorts each note into a
+          // slot and gets it wrong sometimes; regenerating the whole Essence to dislodge one line is
+          // a poor trade when the note it came from was fine. Relayed from a phone like every other
+          // Soul edit — the desktop owns the store the assistant actually reads.
+          onRemoveEssenceFact={async (list, index) => {
+            const kind = showSoul;
+            const current = kind === "self" ? selfSoulEssence : userSoulEssence;
+            if (!current) return;
+            const next = removeSoulEssenceFact(current, list, index);
+            if (next === current) return; // stale click — the list moved under it
+            if (isRemoteClient) {
+              setSoulEssence(kind, next);
+              sendAppSync({ type: "vrcmd:soulEssenceEdit", kind, essence: next });
+              return;
+            }
+            const notes = kind === "self" ? selfSoulNotes : userSoulNotes;
+            await saveSoulEssence(libraryStore, kind, next, notes);
+            setSoulEssence(kind, next);
           }}
           // Reference PHOTOS stay on the computer that holds them: they're base64 and mirroring them
           // would put megabytes into every snapshot. The panel hides the section when it can't save.

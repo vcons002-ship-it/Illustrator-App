@@ -308,6 +308,9 @@ export type CmdToDesktop =
   // so a phone-local write would change nothing and be clobbered by the next vrsync:soul).
   | { type: "vrcmd:soulSave"; kind: SoulKind; notes: SoulNote[] }
   | { type: "vrcmd:soulName"; kind: SoulKind; name: string }
+  // Phone pruned a misfiled line from a generated Essence → save it on the desktop, which owns the
+  // store the assistant reads (a phone-local write changes nothing and is clobbered by vrsync:soul).
+  | { type: "vrcmd:soulEssenceEdit"; kind: SoulKind; essence: SoulEssence }
   | { type: "vrcmd:soulEssenceRefresh"; requestId: SoulEssenceRelayRequestId; kind: SoulKind }
   | { type: "vrcmd:soulEssenceCancel"; requestId: SoulEssenceRelayRequestId; kind: SoulKind }
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
