@@ -578,3 +578,61 @@ describe("buildWorkflow regional conditioning", () => {
     }
   });
 });
+
+describe("the Flux.2 graph is built entirely from CORE ComfyUI nodes", () => {
+  /**
+   * Every class the stock ComfyUI ships — base `nodes.py` plus `comfy_extras`. Kept as an explicit
+   * list rather than a rule, because the whole value of this test is that adding a node NOBODY
+   * vetted has to fail here rather than at someone's engine.
+   */
+  const CORE_NODES = new Set([
+    "CheckpointLoaderSimple", "UNETLoader", "CLIPLoader", "DualCLIPLoader", "QuadrupleCLIPLoader",
+    "VAELoader", "CLIPTextEncode", "CLIPVisionLoader", "EmptyLatentImage", "EmptySD3LatentImage",
+    "KSampler", "KSamplerAdvanced", "VAEDecode", "VAEDecodeTiled", "VAEEncode", "SaveImage",
+    "LoadImage", "ImageScale", "ImageScaleToTotalPixels", "LatentUpscale", "LoraLoader",
+    "LoraLoaderModelOnly", "FluxGuidance", "ModelSamplingSD3", "ModelSamplingAuraFlow",
+    "ReferenceLatent", "SolidMask", "MaskComposite", "ConditioningSetMask", "ConditioningCombine",
+  ]);
+
+  const flux2 = {
+    ...base,
+    family: "flux2" as const,
+    model: "flux2-klein.safetensors",
+    loadKind: "diffusion" as const,
+    components: {
+      textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_8b.safetensors", type: "flux2" } },
+      vaeName: "flux2-ae.safetensors",
+      weightDtype: "default",
+    },
+  };
+
+  it("uses no custom node at all — with references, regions, hi-res, img2img and a LoRA all on", () => {
+    // The question this answers: can anything the APP built be altering a Flux.2 render? Reference
+    // conditioning goes through ReferenceLatent, which is core (comfy_extras/nodes_edit_model.py) —
+    // unlike IP-Adapter, which is a third-party pack and is never reached on this family.
+    const g = buildWorkflow({
+      ...flux2,
+      referenceLatents: ["ref-a.png", "ref-b.png"],
+      initImage: { filename: "photo.png", denoise: 0.6 },
+      lora: { name: "style.safetensors", strength: 0.8 },
+      hires: { width: 1536, height: 1536, denoise: 0.45 },
+      regions: [
+        { name: "A", text: "a woman with auburn hair", x: 0, y: 0, width: 0.5, height: 1 },
+        { name: "B", text: "a man in a grey coat", x: 0.5, y: 0, width: 0.5, height: 1 },
+      ],
+    });
+    const used = Object.values(g).map((n) => (n as { class_type: string }).class_type);
+    expect(used.length).toBeGreaterThan(10); // the graph really was built
+    for (const cls of used) expect(CORE_NODES.has(cls), `${cls} is not a core ComfyUI node`).toBe(true);
+    expect(used).toContain("ReferenceLatent");
+    expect(used.some((c) => c.startsWith("IPAdapter"))).toBe(false);
+  });
+
+  it("and the IP-Adapter chain — the one custom pack — is only ever built for SD families", () => {
+    const sd = buildWorkflow({
+      ...base,
+      ipAdapter: { caps: { apply: "advanced", unified: true }, refs: [{ filename: "r.png", weight: 0.5 }] },
+    });
+    expect(Object.values(sd).some((n) => (n as { class_type: string }).class_type.startsWith("IPAdapter"))).toBe(true);
+  });
+});
