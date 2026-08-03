@@ -1016,3 +1016,40 @@ describe("editing a task and its steps without re-planning", () => {
     expect(applyStepEdits(p, [{ title: "Order the cake" }]).steps).toHaveLength(4);
   });
 });
+
+describe("finished work stays finished and stays visible", () => {
+  const worked = () =>
+    plan({
+      steps: [
+        { title: "Book the venue", actor: "user_action", status: "done" },
+        { title: "Send invites", actor: "user_action", status: "done" },
+        { title: "Track replies", actor: "ai_prep", status: "ready" },
+      ],
+    });
+
+  it("names the done steps in the prompt, not just a count", () => {
+    // "3 of 7 steps done" is a number the model can't act on: it re-proposed finished work because
+    // it was never told WHICH work was finished.
+    const block = tasksIndexBlock(worked(), Date.now());
+    expect(block).toContain("ALREADY DONE");
+    expect(block).toContain("Book the venue");
+    expect(block).toContain("Send invites");
+    expect(block).toMatch(/do NOT redo/i);
+  });
+
+  it("keeps finished steps when the planner returns only the remainder", () => {
+    // The planner is now TOLD what's done so it plans what's left — so a faithful re-plan comes
+    // back without them, and mapping over its list alone would erase the record.
+    const remainder = plan({ steps: [{ title: "Track replies", actor: "ai_prep" }, { title: "Order the cake", actor: "user_action" }] });
+    const merged = mergeReplan(worked(), remainder);
+    expect(merged.steps.map((s) => s.title)).toEqual(["Book the venue", "Send invites", "Track replies", "Order the cake"]);
+    expect(merged.steps.slice(0, 2).every((s) => s.status === "done")).toBe(true);
+    expect(merged.steps.map((s) => s.order)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("still drops an UNFINISHED step the re-plan deliberately removed", () => {
+    const p = plan({ steps: [{ title: "Obsolete step", actor: "user_action", status: "ready" }] });
+    const merged = mergeReplan(p, plan({ steps: [{ title: "The real work", actor: "ai_prep" }] }));
+    expect(merged.steps.map((s) => s.title)).toEqual(["The real work"]);
+  });
+});

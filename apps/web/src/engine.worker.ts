@@ -3668,6 +3668,11 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       removeLibraryBook: notUsed,
       setVisualStyle: notUsed,
     };
+    // Loaded BEFORE the planning run, not after, because the planner needs to know what's already
+    // finished. Without it a re-plan rebuilds the task from the beginning and hands the reader back
+    // the four steps they'd already done as work still to do.
+    const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
+    const alreadyDone = (existing?.steps ?? []).filter((s) => s.status === "done").map((s) => s.title);
     const plan = await withChatPriority(
       llm.id,
       () =>
@@ -3677,6 +3682,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
           source: msg.source,
           sourceText: msg.sourceText,
           todayIso: new Date().toISOString().slice(0, 10),
+          ...(alreadyDone.length ? { alreadyDone } : {}),
           signal: ac.signal,
           onPhase: (phase, note) =>
             post({ type: "planProgress", requestId: msg.requestId, phase, ...(note ? { note } : {}) }),
@@ -3690,7 +3696,6 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     // forward and drop everything else: completed steps came back un-ticked, step ids the chat was
     // holding went dangling, per-step findings vanished, and every document on the task was
     // destroyed. Dropping `needsReplan` is still what CLEARS the re-attack flag.
-    const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
     const baseFinal: TaskPlan = existing ? mergeReplan(existing, plan) : plan;
     // When the task came FROM an email, drop a Gmail link on the step that needs the reply/send, so
     // the reader can jump straight to it from the plan (and from Google Tasks, via the notes).

@@ -750,7 +750,13 @@ export function mergeReplan(previous: TaskPlan, replanned: TaskPlan): TaskPlan {
       docs: old.docs.length ? old.docs : s.docs,
     };
   });
-  const withDocs = carryDocsForward(previous, { ...replanned, steps });
+  // FINISHED steps the new plan didn't re-emit are KEPT, at the front, in the order they happened.
+  // The planner is now told what's already done so it plans only the remainder — which means a
+  // faithful re-plan returns steps 5-8 and nothing else, and mapping over its list alone would
+  // delete the record of steps 1-4. Unclaimed steps that were NOT done are a different matter: the
+  // planner dropping those is the re-plan doing its job.
+  const keptDone = previous.steps.filter((s) => s.status === "done" && unclaimed.get(key(s.title)) === s);
+  const withDocs = carryDocsForward(previous, { ...replanned, steps: [...keptDone, ...steps].map((s, i) => ({ ...s, order: i })) });
   const allDone = withDocs.steps.length > 0 && withDocs.steps.every((s) => s.status === "done");
   return {
     ...withDocs,
@@ -1300,11 +1306,30 @@ export function tasksIndexBlock(plan: TaskPlan, now = Date.now()): string {
         "then refine the plan with their answers:\n" +
         plan.clarifyingQuestions.map((q) => `- ${q}`).join("\n")
       : "",
+    // WHAT IS ALREADY FINISHED, by name. The block used to say "3 of 7 steps done" and never say
+    // WHICH three, so the model had a count it could not act on: it re-proposed finished work, and a
+    // re-plan re-planned it. Naming them is what makes "don't redo these" checkable.
+    done.length
+      ? "ALREADY DONE — do NOT redo, re-plan or re-propose these; they are finished:\n" +
+        [...done]
+          .sort((a, b) => (a.doneAt ?? 0) - (b.doneAt ?? 0))
+          .map((s) => `- ✓ ${s.title}${s.doneAt ? ` (${isoDay(new Date(s.doneAt))})` : ""}`)
+          .join("\n")
+      : "",
     ready
       ? `Current step (${ready.actor === "ai_prep" ? "you can prep this" : "the reader does this"}, step id: ${ready.id}): ` +
         `${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` +
         (ready.links.length ? `\nLinks: ${ready.links.map((l) => l.url).join(", ")}` : "")
       : "All steps are done.",
+    // The rest of the outstanding work, so "what's left?" is answerable without a tool call and the
+    // model can see it isn't being asked to invent steps that already exist.
+    plan.steps.filter((s) => s.status !== "done" && s.id !== ready?.id).length
+      ? "STILL TO DO after that:\n" +
+        plan.steps
+          .filter((s) => s.status !== "done" && s.id !== ready?.id)
+          .map((s) => `- ${s.title}${s.dueIso ? ` (by ${s.dueIso})` : ""}${s.status === "blocked" ? " [BLOCKED]" : ""} (step id: ${s.id})`)
+          .join("\n")
+      : "",
     // What the task already knows. Inline, not behind a tool call, because the failure this fixes is
     // the model not KNOWING there was anything to fetch — it searched the places it could see, found
     // nothing, and said so. Material it can't see is material it will not go looking for.

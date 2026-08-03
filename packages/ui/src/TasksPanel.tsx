@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
+import { dayToIso, isoDay, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 
@@ -62,6 +62,63 @@ function statusDot(status: TaskStep["status"]): string {
   return status === "done" ? "✓" : status === "ready" ? "▶" : status === "blocked" ? "⛔" : status === "in_progress" ? "…" : "○";
 }
 
+/** One step's row — the same renderer for the live list and the folded-away Done section, so a
+ *  finished step keeps its tick (and can be un-ticked) instead of becoming a dead line of text. */
+function StepRow({
+  step: s,
+  detailed,
+  onToggleStep,
+}: {
+  step: TaskStep;
+  detailed: boolean;
+  onToggleStep: (stepId: string, done: boolean) => void;
+}) {
+  const ready = s.status === "ready";
+  return (
+    <li
+      style={{
+        fontSize: 12,
+        padding: "4px 8px",
+        borderRadius: 6,
+        background: ready ? "rgba(122,162,255,0.14)" : "transparent",
+        border: ready ? "1px solid rgba(122,162,255,0.4)" : "1px solid transparent",
+        opacity: s.status === "done" ? 0.55 : 1,
+      }}
+    >
+      <button onClick={() => onToggleStep(s.id, s.status !== "done")} title={s.status === "done" ? "Mark not done" : "Mark done"} style={checkBtn}>
+        {statusDot(s.status)}
+      </button>
+      <span style={{ textDecoration: s.status === "done" ? "line-through" : "none" }}>{s.title}</span>
+      <span
+        style={{
+          marginLeft: 6,
+          fontSize: 10,
+          padding: "0 5px",
+          borderRadius: 4,
+          background: s.actor === "ai_prep" ? "rgba(90,209,155,0.2)" : "rgba(255,255,255,0.08)",
+        }}
+      >
+        {s.actor === "ai_prep" ? "AI preps" : "you do"}
+      </span>
+      {s.dueIso ? <span style={{ opacity: 0.5 }}> · {s.dueIso}</span> : null}
+      {/* WHEN it was finished — on a task worked across weeks, "done" with no date reads as though
+          it all happened at once, and there's no telling this morning's work from last month's. */}
+      {s.doneAt ? <span style={{ opacity: 0.5 }}> · done {isoDay(new Date(s.doneAt))}</span> : null}
+      {s.docs.length ? <span style={{ opacity: 0.5 }}> · 📄{s.docs.length}</span> : null}
+      {s.links.map((l) => (
+        <a key={l.url} href={l.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff", marginLeft: 6 }}>
+          {l.official ? "official ↗" : "link ↗"}
+        </a>
+      ))}
+      {/* The actual work: what to do for this step + (in the detail view) any research note. */}
+      {s.detail ? <div style={{ marginLeft: 26, opacity: 0.75, marginTop: 1 }}>{s.detail}</div> : null}
+      {detailed && s.researchNotes ? (
+        <div style={{ marginLeft: 26, marginTop: 2, fontSize: 11, opacity: 0.6, whiteSpace: "pre-wrap" }}>🔬 {s.researchNotes}</div>
+      ) : null}
+    </li>
+  );
+}
+
 function PlanCard({
   plan,
   detailed = false,
@@ -89,7 +146,9 @@ function PlanCard({
   onAddDetails?: (text: string) => void;
 }) {
   const [detailDraft, setDetailDraft] = useState("");
-  const doneCount = plan.steps.filter((s) => s.status === "done").length;
+  const doneSteps = plan.steps.filter((s) => s.status === "done");
+  const outstanding = plan.steps.filter((s) => s.status !== "done");
+  const doneCount = doneSteps.length;
   const current = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
   const noSteps = plan.steps.length === 0; // a simple to-do or a scan stub — no step-by-step plan yet
   const autoPlanning = needsPlanning(plan); // a scan stub the background sweep will plan on its own
@@ -157,56 +216,26 @@ function PlanCard({
           </button>
         </div>
       ) : null}
+      {/* OUTSTANDING work only. Finished steps fold away below — on a task worked over weeks the
+          done ones outnumber the live ones and push what's actually next off the bottom, which is
+          the opposite of what a plan is for. They're one click away, never deleted. */}
       <ol style={{ margin: "8px 0 0", paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
-        {plan.steps.map((s) => {
-          const ready = s.status === "ready";
-          return (
-            <li
-              key={s.id}
-              style={{
-                fontSize: 12,
-                padding: "4px 8px",
-                borderRadius: 6,
-                background: ready ? "rgba(122,162,255,0.14)" : "transparent",
-                border: ready ? "1px solid rgba(122,162,255,0.4)" : "1px solid transparent",
-                opacity: s.status === "done" ? 0.55 : 1,
-              }}
-            >
-              <button
-                onClick={() => onToggleStep(s.id, s.status !== "done")}
-                title={s.status === "done" ? "Mark not done" : "Mark done"}
-                style={checkBtn}
-              >
-                {statusDot(s.status)}
-              </button>
-              <span style={{ textDecoration: s.status === "done" ? "line-through" : "none" }}>{s.title}</span>
-              <span
-                style={{
-                  marginLeft: 6,
-                  fontSize: 10,
-                  padding: "0 5px",
-                  borderRadius: 4,
-                  background: s.actor === "ai_prep" ? "rgba(90,209,155,0.2)" : "rgba(255,255,255,0.08)",
-                }}
-              >
-                {s.actor === "ai_prep" ? "AI preps" : "you do"}
-              </span>
-              {s.dueIso ? <span style={{ opacity: 0.5 }}> · {s.dueIso}</span> : null}
-              {s.docs.length ? <span style={{ opacity: 0.5 }}> · 📄{s.docs.length}</span> : null}
-              {s.links.map((l) => (
-                <a key={l.url} href={l.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff", marginLeft: 6 }}>
-                  {l.official ? "official ↗" : "link ↗"}
-                </a>
-              ))}
-              {/* The actual work: what to do for this step + (in the detail view) any research note. */}
-              {s.detail ? <div style={{ marginLeft: 26, opacity: 0.75, marginTop: 1 }}>{s.detail}</div> : null}
-              {detailed && s.researchNotes ? (
-                <div style={{ marginLeft: 26, marginTop: 2, fontSize: 11, opacity: 0.6, whiteSpace: "pre-wrap" }}>🔬 {s.researchNotes}</div>
-              ) : null}
-            </li>
-          );
-        })}
+        {outstanding.map((s) => (
+          <StepRow key={s.id} step={s} detailed={detailed} onToggleStep={onToggleStep} />
+        ))}
       </ol>
+      {doneSteps.length ? (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: "pointer", fontSize: 12, opacity: 0.7 }}>
+            ✓ Done ({doneSteps.length}) {outstanding.length === 0 ? "— everything on this task" : ""}
+          </summary>
+          <ol style={{ margin: "4px 0 0", paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+            {doneSteps.map((s) => (
+              <StepRow key={s.id} step={s} detailed={detailed} onToggleStep={onToggleStep} />
+            ))}
+          </ol>
+        </details>
+      ) : null}
       {/* The work the planner captured — research it gathered and any documents it drafted — shown
           here so you can read it WITHOUT opening the task in chat. */}
       {detailed && plan.researchNotes ? (
