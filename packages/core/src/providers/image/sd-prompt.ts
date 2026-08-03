@@ -272,7 +272,43 @@ export function composeSdPositive(family: ModelFamily, basePrompt: string): stri
  * regardless of any override. HiDream is NOT in that set — it runs at real CFG and must get a
  * non-empty negative (an empty negative → None pooled → a crash in ComfyUI's HiDream embedder).
  */
-export function resolveNegative(family: ModelFamily, override: string | undefined): string {
+export function resolveNegative(
+  family: ModelFamily,
+  override: string | undefined,
+  positive?: string,
+): string {
   if (isNaturalLanguage(family) && family !== "hidream") return "";
-  return override && override.trim() ? override : DEFAULT_NEGATIVE;
+  const negative = override && override.trim() ? override : DEFAULT_NEGATIVE;
+  return positive ? withoutRequestedTerms(negative, positive) : negative;
+}
+
+/**
+ * Drop any negative term the POSITIVE prompt actually asks for.
+ *
+ * The default negative ends with `portrait, headshot, close-up, simple background`, and it is there
+ * for a good reason: a book illustration should be a SCENE, and without those the models drift to a
+ * face on a plain backdrop. But it is sent with EVERY SD render, including the ones where the reader
+ * asked for exactly that — "a portrait of me", "a close-up of her hands", "a headshot for my
+ * profile". The render then has the same words pulling in both directions, and what comes back is a
+ * weakened version of what was asked for, with nothing to explain it. From the outside that reads as
+ * the engine quietly censoring certain requests, because the terms it fights are a fixed short list
+ * that no one is shown.
+ *
+ * Whole-term, case-insensitive, on the comma-separated units the negative is built from. A negative
+ * the READER wrote is filtered too: they can't see this list either, and asking for a portrait while
+ * an old override still negates one is the same trap. PURE.
+ */
+export function withoutRequestedTerms(negative: string, positive: string): string {
+  const asked = positive.toLowerCase();
+  return negative
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => {
+      if (!t) return false;
+      // Word-boundary match so "text" in the negative isn't kept alive by "textured" in the prompt,
+      // and "close-up" matches "close up" as well.
+      const pattern = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[\s-]+/g, "[\\s-]+");
+      return !new RegExp(`\\b${pattern}\\b`, "i").test(asked);
+    })
+    .join(", ");
 }

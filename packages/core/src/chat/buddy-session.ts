@@ -1,3 +1,4 @@
+import { rememberRouteFor } from "./souls.js";
 import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
@@ -970,11 +971,20 @@ export async function runBuddyTool(
         return await deps.removeLibraryBook(call);
       case "set_visual_style":
         return { applied: await deps.setVisualStyle(call) };
-      case "remember":
+      case "remember": {
         if (!deps.remember) return { error: "memory isn't available right now" };
+        // An appearance fact filed as a preference is INERT — the Soul is what portraits, stories
+        // and reference conditioning read — so that one misroute is corrected. See rememberRouteFor.
+        const about = rememberRouteFor(call.note, call.about);
         return {
-          memory: { action: "remembered", note: call.note, about: call.about ?? "reader", count: await deps.remember(call.note, call.about) },
+          memory: {
+            action: "remembered",
+            note: call.note,
+            about,
+            count: await deps.remember(call.note, about === "reader" ? undefined : about),
+          },
         };
+      }
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
         return {

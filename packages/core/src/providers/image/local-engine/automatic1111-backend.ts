@@ -161,7 +161,8 @@ export class Automatic1111Backend implements LocalEngineBackend {
 
     const body: Record<string, unknown> = {
       prompt,
-      negative_prompt: resolveNegative(family, input.negativePrompt),
+      // Filtered against the positive: the default negative fights a requested portrait/close-up.
+      negative_prompt: resolveNegative(family, input.negativePrompt, prompt),
       steps,
       cfg_scale: isFlux(family) ? sampler.cfg : this.cfgScale,
       sampler_name: this.sampler,
