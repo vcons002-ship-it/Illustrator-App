@@ -573,3 +573,55 @@ describe("the markets index line is the only thing standing between a price ques
     expect(block).toContain(markets.trigger);
   });
 });
+
+describe("a price question must not be answered by a web search", () => {
+  const build = (extra: Record<string, unknown> = {}): string =>
+    buildBuddySystemPrompt({ persona: "default", library: [], ...extra } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
+
+  it("puts the redirect beside search_web, where the model is actually tempted", () => {
+    // Deferring the market docs left a fully-documented web search in front of the model and a
+    // one-line index entry off to the side. It searched. The rule has to sit next to the tool it
+    // is overriding, not only inside the group that hasn't been opened.
+    const lean = build({ canMarkets: true, loadedToolsets: [] });
+    expect(lean).toContain('"tool":"search_web"');
+    expect(lean).toContain("MARKET DATA IS NOT A WEB SEARCH");
+    expect(lean).toContain('{"tool":"load_toolset","name":"markets"}');
+    // It still says what search_web IS good for here, or the model just stops searching for news.
+    expect(lean).toMatch(/market NEWS/);
+  });
+
+  it("stays out of the way for a reader with no markets tools at all", () => {
+    expect(build({ loadedToolsets: [] })).not.toContain("MARKET DATA IS NOT A WEB SEARCH");
+  });
+
+  it("survives the group being loaded — the rule outlives the reminder", () => {
+    expect(build({ canMarkets: true, loadedToolsets: ["markets"] })).toContain("MARKET DATA IS NOT A WEB SEARCH");
+  });
+});
+
+describe("the native tool schemas say the same thing as the prompt", () => {
+  const desc = (opts: Record<string, unknown>): string =>
+    ollamaToolSchemas(opts as Parameters<typeof ollamaToolSchemas>[0]).find((s) => s.function.name === "search_web")!.function.description;
+
+  it("carves market data out of search_web for a reader who has the markets tools", () => {
+    // A native-tool-calling model sees ONLY this list — and search_web used to advertise itself for
+    // "current facts", which is exactly what a price is. Fixing the prompt alone would leave the two
+    // channels contradicting each other.
+    const d = desc({ canMarkets: true, loadedToolsets: [] });
+    expect(d).toMatch(/NOT for market data/i);
+    expect(d).toMatch(/markets/);
+    expect(d).toMatch(/never from search results/i);
+  });
+
+  it("says nothing about markets to a reader who hasn't got them", () => {
+    expect(desc({ loadedToolsets: [] })).not.toMatch(/market data/i);
+  });
+
+  it("withholds the market schemas themselves until the group is loaded", () => {
+    const names = (loaded: string[]): string[] =>
+      ollamaToolSchemas({ canMarkets: true, loadedToolsets: loaded } as Parameters<typeof ollamaToolSchemas>[0]).map((s) => s.function.name);
+    expect(names([])).not.toContain("stock_quote");
+    expect(names(["markets"])).toContain("stock_quote");
+    expect(names([])).toContain("load_toolset"); // the way back in is never withheld
+  });
+});

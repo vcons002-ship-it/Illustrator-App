@@ -5862,6 +5862,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               canSearchFiles: corsProxyAvailable,
               canRunCommands: corsProxyAvailable && !!settings?.allowCommands,
               canWolfram: !!settings?.keys?.wolfram,
+              // RAW availability, not the gated flag: the carve-out matters most before `markets`
+              // is loaded, which is exactly when the gated flag is false.
+              canMarkets: !!(settings?.allowMarkets || schwabConnected || (corsProxyAvailable && settings?.allowTradingViewBridge)),
               loadedToolsets,
             }),
           }
