@@ -89,6 +89,9 @@ import {
   scheduledRunNote,
   scheduledRunPrompt,
   stripPersistedDirectives,
+  referenceAdoptedNote,
+  referenceFailedNote,
+  openedImageNote,
   upsertScheduledTask,
   deleteScheduledTask,
   advanceSchedule,
@@ -903,8 +906,13 @@ export function App() {
   // App-wide activity log (the status center) + a way to drop a reference line into the buddy chat
   // when an out-of-chat button does something, so you can always see what worked. `buddyNoteRef` is
   // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
+  //
+  // `turns` is what makes a note DURABLE: a stored `tool` message without them contributes nothing
+  // to the rebuilt history, so the line is the reader's alone and the model never learns it happened
+  // (see buddy-notes.ts). Omit them for a note that is genuinely only the reader's business — a
+  // transient relay warning — and pass them for anything that records what the app actually did.
   const { activities, begin: beginActivity } = useActivityLog();
-  const buddyNoteRef = useRef<(text: string) => void>(() => {});
+  const buddyNoteRef = useRef<(text: string, turns?: ChatTurn[]) => void>(() => {});
   // Persistent agent-action history (survives reloads; the transient activity pill does not). The
   // header badge counts entries since the reader last opened the log.
   const [actionHistory, setActionHistory] = useState<ActionEntry[]>([]);
@@ -4538,7 +4546,8 @@ export function App() {
   // A reference line posted to the buddy chat when an out-of-chat button does something (scan,
   // plan, create task), so the buddy thread is a running record of "what worked". A `tool`-role
   // note renders as a system line (like a delegated-subtask note), not as the assistant talking.
-  buddyNoteRef.current = (text: string) => appendBuddy({ role: "tool", text });
+  buddyNoteRef.current = (text: string, turns?: ChatTurn[]) =>
+    appendBuddy({ role: "tool", text, ...(turns ? { turns } : {}) });
 
   // Open a local file the desktop `/find` surfaced: read its bytes via the Rust
   // bridge, then run it through the SAME importer as an upload. On a linked PHONE there's no
@@ -4591,13 +4600,14 @@ export function App() {
     (image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
       const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType, label }];
       turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
-      // The chat line is for the READER and does not survive into the persisted transcript. The
-      // LEDGER is for the model, rides after the cache prefix, and is restated every turn — which is
-      // the whole difference between a reference that works once and one that keeps working.
+      // Two different jobs, both needed. The LEDGER is the standing state — it rides after the cache
+      // prefix and is restated every turn, so a reference keeps working rather than working once.
+      // The NOTE is the event: this picture, at this point in the conversation. It used to be the
+      // reader's alone (a `tool` line with no turns of its own is dropped when history is rebuilt),
+      // which left the model unable to say when — or whether — a reference had been taken on.
       publishImageRefs();
-      buddyNoteRef.current(
-        `🖼 “${label}” is now a reference for pictures I make in this chat (${turnRefImagesRef.current.length} in use).`,
-      );
+      const note = referenceAdoptedNote(label, turnRefImagesRef.current.length);
+      buddyNoteRef.current(note.text, note.turns);
     },
     [publishImageRefs],
   );
@@ -6774,16 +6784,24 @@ export function App() {
           if (r.ok && r.base64) {
             useAsChatReference({ bytes: base64ToBytes(r.base64), mimeType: r.mimeType ?? "image/jpeg" }, r.title ?? "web picture");
           } else {
-            appendBuddy({ role: "tool", text: `⚠ Couldn't use that picture as a reference${r.error ? `: ${r.error}` : "."}` });
+            // Durable, like the success beside it: a failure the model can't see is one it will
+            // cheerfully answer over ("yes, I used your picture") on the very next message.
+            const failed = referenceFailedNote(r.error);
+            appendBuddy({ role: "tool", text: failed.text, turns: failed.turns });
           }
         } else if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
           const img = e.openedImage;
           const bytes = base64ToBytes(img.base64);
+          const shown = openedImageNote(img.name);
           appendBuddy({
             role: "tool",
-            text: `🖼 ${img.name}`,
+            text: shown.text,
             image: { bytes, mimeType: img.mimeType },
+            // The picture is in the chat for good, so the record of it being there has to be too.
+            // Without turns this message vanished from the rebuilt history on the next send, and the
+            // model was left answering about a picture it had no idea it had opened.
+            turns: shown.turns,
           });
           // Opened INTO the chat — so it is available to draw from, exactly like an attached photo.
           useAsChatReference({ bytes, mimeType: img.mimeType }, img.name);
