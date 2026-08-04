@@ -89,6 +89,7 @@ import {
   scheduledRunNote,
   scheduledRunPrompt,
   stripPersistedDirectives,
+  mergeChatReferences,
   referenceAdoptedNote,
   referenceFailedNote,
   openedImageNote,
@@ -4562,9 +4563,11 @@ export function App() {
    * than from the picture. Where it came from was never the point; that it is in front of both of
    * you is.
    *
-   * Appends rather than replaces, so opening a second photo builds a set (the render caps at
-   * MAX_CHAT_REFS anyway), and says so in the chat — a reference that acts silently is one the
-   * reader can't tell apart from one that was ignored.
+   * Adds to the set rather than replacing it, so opening a second photo builds one (the render caps
+   * at MAX_CHAT_REFS anyway), and says so in the chat — a reference that acts silently is one the
+   * reader can't tell apart from one that was ignored. The paperclip goes through the SAME rule
+   * (see mergeChatReferences): both routes are the reader pointing at a picture and saying use this,
+   * and only one of them used to survive the other.
    */
   // Held in refs because the session-clear sites sit ABOVE the callbacks that own them, and the
   // bytes and the model's ledger must never be cleared independently of each other.
@@ -4605,17 +4608,11 @@ export function App() {
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback(
     (image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
-      // ADOPTING THE SAME PICTURE TWICE IS ONE PICTURE. It used to append unconditionally, so a
-      // re-adoption — the model reaching for use_image_reference on a reference the reader had
-      // already saved — left two copies of it in the set. Both go to the image model, which then
-      // conditions on the same face twice and weights it against everything else in the render. The
-      // reader sees "2 in use" for one picture they chose once, and a picture that came out wrong.
-      //
-      // Replaced in place rather than skipped: a second adoption of the same label is the reader (or
-      // the model) pointing at that picture again, and the newer bytes are the ones they mean.
-      const fresh = { bytes: image.bytes.slice(0), mimeType: image.mimeType, label };
-      const kept = turnRefImagesRef.current.filter((r) => r.label !== label);
-      turnRefImagesRef.current = [...kept, fresh].slice(-MAX_TURN_REFS);
+      turnRefImagesRef.current = mergeChatReferences(
+        turnRefImagesRef.current,
+        [{ bytes: image.bytes.slice(0), mimeType: image.mimeType, label }],
+        MAX_TURN_REFS,
+      );
       // Two different jobs, both needed. The LEDGER is the standing state — it rides after the cache
       // prefix and is restated every turn, so a reference keeps working rather than working once.
       // The NOTE is the event: this picture, at this point in the conversation. It used to be the
@@ -7318,10 +7315,21 @@ export function App() {
       }
       const userText = text.trim() || "Please look at the attached file(s) and help me with them.";
       const parts: string[] = [];
-      // Keep the attached pictures for THIS turn's renders (see turnRefImagesRef).
-      turnRefImagesRef.current = atts
-        .filter((a) => a.kind === "image" && a.image)
-        .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType, label: a.name }));
+      // ADD the attached pictures to what this chat already draws from — don't replace it.
+      //
+      // This was a straight assignment, so a paperclip wiped every reference adopted before it: find
+      // a picture, save it, then attach one of your own, and you were down to the attachment alone.
+      // Nothing about attaching says "forget the others" — it says "this one as well" — and the
+      // render then quietly drew from one picture where the reader had chosen four. Same rule as
+      // every other route in, so a re-attached filename replaces its own earlier copy rather than
+      // doubling it, and the set stays bounded by MAX_TURN_REFS with the newest kept.
+      turnRefImagesRef.current = mergeChatReferences(
+        turnRefImagesRef.current,
+        atts
+          .filter((a) => a.kind === "image" && a.image)
+          .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType, label: a.name })),
+        MAX_TURN_REFS,
+      );
       publishImageRefsRef.current();
       for (const att of atts) {
         if (att.kind === "image" && att.image) {
