@@ -210,18 +210,40 @@ async function fetchImageBytes(
     if (!res.ok) return undefined;
     const bytes = await res.arrayBuffer();
     if (!bytes || bytes.byteLength === 0) return undefined;
-    return { bytes, mimeType: guessMime(url) };
+    // The bytes decide the type, not the URL. A refusal page is a 200 with a body, and calling it
+    // a PNG is what put an HTML document in front of ComfyUI's LoadImage. Rejecting here lets the
+    // ladder fall through to the thumbnail host, which is the one that reliably serves images.
+    const sniffed = sniffImageMime(bytes);
+    if (!sniffed) return undefined;
+    return { bytes, mimeType: sniffed };
   } catch {
     return undefined;
   }
 }
 
 /** Best-effort mime from the URL extension (the transport seam doesn't expose headers). */
-function guessMime(url: string): string {
-  const m = url.toLowerCase().match(/\.(png|jpe?g|gif|webp|svg)(\?|$)/);
-  if (!m) return "image/png";
-  const ext = m[1]!;
-  return ext === "svg" ? "image/svg+xml" : ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+/**
+ * WHAT THESE BYTES ACTUALLY ARE, read from the bytes themselves.
+ *
+ * A hotlink-blocking host answers 200 with an HTML page. Nothing checked: a non-empty body and an
+ * `.png` in the URL were enough, so the error page was saved as `vr-ref-….png`, handed to ComfyUI,
+ * and surfaced three layers away as `LoadImage: cannot identify image file` — a message that names
+ * neither the host that refused nor the fact that a refusal is what happened.
+ *
+ * Magic numbers, because the URL, the Content-Type header and the truth are three different things
+ * here. Returns undefined for anything that isn't a raster an image model can open. PURE.
+ */
+export function sniffImageMime(bytes: ArrayBuffer): string | undefined {
+  const b = new Uint8Array(bytes);
+  if (b.length < 12) return undefined;
+  const is = (offset: number, ...sig: number[]): boolean => sig.every((v, i) => b[offset + i] === v);
+  if (is(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "image/png";
+  if (is(0, 0xff, 0xd8, 0xff)) return "image/jpeg";
+  if (is(0, 0x47, 0x49, 0x46, 0x38)) return "image/gif";
+  if (is(0, 0x52, 0x49, 0x46, 0x46) && is(8, 0x57, 0x45, 0x42, 0x50)) return "image/webp";
+  if (is(0, 0x42, 0x4d)) return "image/bmp";
+  // SVG is text, and an image MODEL can't rasterise it — treat it like the HTML it resembles.
+  return undefined;
 }
 
 /**
