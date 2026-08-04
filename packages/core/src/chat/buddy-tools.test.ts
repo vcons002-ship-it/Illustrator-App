@@ -2759,6 +2759,28 @@ describe("use_image_reference — a searched picture, adopted deliberately", () 
     expect(p).toMatch(/search_images only SHOWS pictures/);
   });
 
+  it("says drawing is ONE step — this rule is needed exactly when the reference block is absent", () => {
+    // The don't-re-adopt rule lives in buildImageReferenceBlock, which only appears when references
+    // exist. This is the other half: asked for a picture of a real person with NO reference saved,
+    // the model invented the missing part of the job — a checklist reading "adopt a reference for
+    // the likeness", then "generate the image". Two steps where the reader asked for one, and the
+    // invented step is the one that goes wrong. So it has to be said where it is always read.
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toMatch(/Adopting is what the READER asks for/);
+    expect(p).toMatch(/never a step before a render/i);
+    expect(p).toMatch(/drawing is ONE step/i);
+  });
+
+  it("doesn't keep a second copy of the how-to-prompt advice the reference block owns", () => {
+    // The always-on prompt sits against a ratio guard (toolsets.test.ts), so a duplicated sentence
+    // is not free — it costs room a rule with nowhere else to live actually needs. #503 already
+    // ruled where this advice goes: buildImageReferenceBlock, which rides every turn a reference
+    // exists, which is exactly the "afterwards" this was describing.
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).not.toMatch(/Afterwards, prompt for what should CHANGE/i);
+    expect(buildImageReferenceBlock(["Terrace, Bath"])).toMatch(/prompt for what should CHANGE/i);
+  });
+
   it("names what was adopted, and stops there — saving a reference is the whole action", () => {
     // This used to end "Write your generate_image prompt for what should CHANGE…". That is standing
     // advice about how to prompt WHEN a render is asked for, but read here — freshest in context,
