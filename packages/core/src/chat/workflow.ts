@@ -153,6 +153,19 @@ function asksForANewOne(t: string): boolean {
  * satisfies, rather than something that could wrongly block. */
 export function inferDoneWhen(instruction: string): DoneWhen {
   const t = instruction.toLowerCase();
+  // ADOPTING a reference is not RENDERING one, and this has to be decided before the image test
+  // below — "save a reference image of a victorian terrace" contains "image of", so it was read as a
+  // step that needs a render. Nothing about adopting a reference produces one, so the step could
+  // never be satisfied by its own work; worse, `attemptedStepWork` saw no render attempt either, so
+  // the executor kept re-nudging without ever spending an attempt. The model, told repeatedly that
+  // it still had to make an image, eventually made one — an unprompted picture nobody asked for,
+  // which DID satisfy the contract and moved the run on. That is the "it failed, generated a random
+  // image, then tried again" report, and it starts here.
+  //
+  // A render VERB wins: "generate an image from the reference photo" is a render step that merely
+  // mentions the reference. Only a step whose verb is about establishing one lands here.
+  if (/\b(reference (image|picture|photo|pic)|as (a|the) reference)\b/.test(t) && !/\b(generate|draw|render|paint|illustrate)\b/.test(t))
+    return { kind: "tool_ok", tool: "use_image_reference" };
   if (
     /\b(generate|draw|render|paint|illustrate|create|make)\b[^.]*\b(image|images|picture|pictures|photo|art|artwork|portrait|drawing|illustration|illustrations|scene|render)\b/.test(t) ||
     /\bimage of\b/.test(t)
@@ -455,9 +468,14 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
         ? { done: true }
         : { done: false, reason: "no command exited cleanly" };
     case "tool_ok":
-      return toolSucceeded(evidence, dw.tool)
-        ? { done: true }
-        : { done: false, reason: `the ${dw.tool} tool didn't run successfully` };
+      if (toolSucceeded(evidence, dw.tool)) return { done: true };
+      // Same rule as `text` and `narration`, for the same reason: a GUESSED contract loses to
+      // observed work. A regex naming one specific tool is the easiest guess to get wrong — and when
+      // it is wrong the step is unsatisfiable by the work it describes, so the run doesn't fail, it
+      // circles. A contract the MODEL declared (needs/produces) stays strict; this only overrides a
+      // guess, and only when something real actually landed.
+      if (step.inferred && producedArtifact(evidence)) return { done: true };
+      return { done: false, reason: `the ${dw.tool} tool didn't run successfully` };
     case "text": {
       // A GUESSED answer-contract loses to observed work. The model rendered the picture, the render
       // suspended the turn (so there is no prose by construction), and a regex that had read the step

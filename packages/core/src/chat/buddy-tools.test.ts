@@ -2802,6 +2802,21 @@ describe("buildImageReferenceBlock — a reference the model still knows about o
     expect(block).toMatch(/matches your words instead of the reference/);
   });
 
+  it("says they are ALREADY attached, so the model doesn't adopt one it already has", () => {
+    // Reported as: asked to draw from a picture already saved from a search, it ran a two-step
+    // process — adopt a reference, THEN render — and ended up with two references for one picture.
+    // The list read as a topic rather than a state, and use_image_reference's own description tells
+    // it to reach for the tool whenever the reader wants a likeness. Nothing said "you already have
+    // it", so a plan step for work already done was the reasonable reading.
+    const block = buildImageReferenceBlock(["Terrace, Bath"]);
+    expect(block).toMatch(/ALREADY ATTACHED/);
+    expect(block).toMatch(/Do NOT call use_image_reference for a picture in this list/i);
+    expect(block).toMatch(/never make adopting one a step of a plan/i);
+    expect(block).toMatch(/go straight to generate_image/i);
+    // Still adoptable when it ISN'T one of these — the block must not read as a blanket ban.
+    expect(block).toMatch(/only for a picture that is NOT listed above/i);
+  });
+
   it("says nothing at all when no reference is attached", () => {
     expect(buildImageReferenceBlock([])).toBe("");
   });

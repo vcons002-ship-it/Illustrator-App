@@ -4605,8 +4605,17 @@ export function App() {
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback(
     (image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
-      const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType, label }];
-      turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
+      // ADOPTING THE SAME PICTURE TWICE IS ONE PICTURE. It used to append unconditionally, so a
+      // re-adoption — the model reaching for use_image_reference on a reference the reader had
+      // already saved — left two copies of it in the set. Both go to the image model, which then
+      // conditions on the same face twice and weights it against everything else in the render. The
+      // reader sees "2 in use" for one picture they chose once, and a picture that came out wrong.
+      //
+      // Replaced in place rather than skipped: a second adoption of the same label is the reader (or
+      // the model) pointing at that picture again, and the newer bytes are the ones they mean.
+      const fresh = { bytes: image.bytes.slice(0), mimeType: image.mimeType, label };
+      const kept = turnRefImagesRef.current.filter((r) => r.label !== label);
+      turnRefImagesRef.current = [...kept, fresh].slice(-MAX_TURN_REFS);
       // Two different jobs, both needed. The LEDGER is the standing state — it rides after the cache
       // prefix and is restated every turn, so a reference keeps working rather than working once.
       // The NOTE is the event: this picture, at this point in the conversation. It used to be the
@@ -6778,7 +6787,18 @@ export function App() {
           // and since the payload was gone, nothing downstream could tell either.
           buddyStepEvidenceRef.current.toolResults.push({
             call: e.call,
-            result: e.error ? { error: e.error } : e.artifact ? { artifact: e.artifact } : {},
+            // A FAILED ADOPTION IS A FAILURE. use_image_reference reports it NESTED — `{referenceAdopted:
+            // {ok:false}}` with no top-level error — which is the same collar hole the nested-`ok`
+            // checks in `toolSucceeded` exist to close for renders, writes and clips. Left as `{}` it
+            // read as a clean run, so a step waiting on the adoption was ticked off by the attempt that
+            // failed it, and the run moved on to draw from a reference it never got.
+            result: e.error
+              ? { error: e.error }
+              : e.referenceAdopted && !e.referenceAdopted.ok
+                ? { error: e.referenceAdopted.error ?? "the picture couldn't be adopted as a reference" }
+                : e.artifact
+                  ? { artifact: e.artifact }
+                  : {},
           });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
