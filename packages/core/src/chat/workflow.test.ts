@@ -87,6 +87,89 @@ describe("inferDoneWhen", () => {
     expect(inferDoneWhen("Generate an image of the house from the reference photo")).toEqual({ kind: "image" });
     expect(inferDoneWhen("Draw the terrace using the reference picture")).toEqual({ kind: "image" });
   });
+
+  it("reads an adoption however the model words it — one adjective was enough to lose it", () => {
+    // The exact step off the reader's screen. The first pass matched "reference image/picture/photo"
+    // and "as a reference"; this says "as a VISUAL reference", which is neither — so it compiled to
+    // a render again, and the checklist's ADOPT step sat there generating a picture ("Preparing an
+    // image… Generating the image…" under a step about adopting one). English has too many ways to
+    // say this to enumerate; the shape is what holds.
+    const adopt = { kind: "tool_ok", tool: "use_image_reference" };
+    expect(inferDoneWhen("Adopt a high-quality image of Christian Bale as a visual reference for likeness")).toEqual(adopt);
+    expect(inferDoneWhen("Pick a photo of the actor to use as the primary style reference")).toEqual(adopt);
+    expect(inferDoneWhen("Find a reference photo of the terrace")).toEqual(adopt);
+    expect(inferDoneWhen("Attach a headshot as reference for the likeness")).toEqual(adopt);
+  });
+
+  it("leaves a real deliverable that merely says “reference” alone", () => {
+    // The broadening must not swallow steps that are about writing something. An inferred contract
+    // no work can satisfy is the re-nudge loop this whole area exists to stop, so a false positive
+    // here costs more than missing an unusual phrasing — hence the strict verb list.
+    expect(inferDoneWhen("Write a reference document describing the photos")).toEqual({ kind: "file", fresh: true });
+    expect(inferDoneWhen("List three reference books on the period")).toEqual({ kind: "text", min: 1 });
+    expect(inferDoneWhen("Summarize the photos and add a reference list")).toEqual({ kind: "text", min: 1 });
+    expect(inferDoneWhen("Use the photos to write a reference guide")).toEqual({ kind: "text", min: 1 });
+  });
+});
+
+describe("compileWorkflow — an adopt-then-draw plan for a chat that already has the picture", () => {
+  const adoptThenDraw: BuddyPlan = {
+    goal: "Generate an image of Christian Bale in a Christmas setting.",
+    steps: [
+      { text: "Adopt a high-quality image of Christian Bale as a visual reference for likeness", status: "pending" },
+      { text: "Generate the image of him posing for a festive Christmas photo", status: "pending" },
+    ],
+  };
+
+  it("drops the adoption step, because there is nothing left to adopt", () => {
+    // The reader saves a picture from a search, asks for an image, and watches a two-step checklist
+    // go looking for a reference it already has. buildImageReferenceBlock says not to in words, and
+    // words are the right place for it — but words are advice, and a model that plans the step
+    // anyway isn't corrected by re-reading them. Drawing is one step; the app makes it one.
+    const wf = compileWorkflow(adoptThenDraw, { hasChatReferences: true });
+    expect(wf.steps).toHaveLength(1);
+    expect(wf.steps[0]).toMatchObject({ id: "s1", doneWhen: { kind: "image" }, status: "active" });
+  });
+
+  it("keeps it when the chat has no reference yet — that step is real work", () => {
+    const wf = compileWorkflow(adoptThenDraw, { hasChatReferences: false });
+    expect(wf.steps).toHaveLength(2);
+    // And it is an ADOPTION, not a render — this is the step that used to generate a picture.
+    expect(wf.steps[0]!.doneWhen).toEqual({ kind: "tool_ok", tool: "use_image_reference" });
+    expect(wf.steps[1]!.doneWhen).toEqual({ kind: "image" });
+  });
+
+  it("keeps it when the reader asked ONLY to adopt — the drop is for an invented precursor", () => {
+    // No render in the plan means this isn't the "first I need a reference" shape; it's the job.
+    const wf = compileWorkflow(
+      { steps: [{ text: "Save the second search result as a reference picture", status: "pending" }] },
+      { hasChatReferences: true },
+    );
+    expect(wf.steps).toHaveLength(1);
+    expect(wf.steps[0]!.doneWhen).toEqual({ kind: "tool_ok", tool: "use_image_reference" });
+  });
+
+  it("never empties a checklist: a plan of nothing but adoptions keeps its steps", () => {
+    const wf = compileWorkflow(
+      {
+        steps: [
+          { text: "Adopt a photo of the terrace as a reference", status: "pending" },
+          { text: "Adopt a photo of the barn as a reference", status: "pending" },
+        ],
+      },
+      { hasChatReferences: true },
+    );
+    expect(wf.steps).toHaveLength(2);
+    expect(wf.steps[0]!.status).toBe("active");
+  });
+
+  it("re-compiling mid-run applies the same drop", () => {
+    // set_plan is how a model REVISES a checklist, and a confused model revises — so the rule has to
+    // hold on the way back in, not just the first time.
+    const wf = recompileWorkflow(undefined, adoptThenDraw, { hasChatReferences: true });
+    expect(wf.steps).toHaveLength(1);
+    expect(wf.steps[0]!.doneWhen).toEqual({ kind: "image" });
+  });
 });
 
 describe("compileWorkflow", () => {

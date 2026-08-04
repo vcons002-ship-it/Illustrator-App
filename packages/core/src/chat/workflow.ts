@@ -148,24 +148,68 @@ function asksForANewOne(t: string): boolean {
   return /\b(create|write|make|produce|generate|draft)\b/.test(t);
 }
 
+/** Verbs that mean "make a picture". A step carrying one is a RENDER, however much it also talks
+ * about references — "generate an image from the reference photo" owes a picture. */
+const RENDER_VERB = /\b(generate|draw|render|paint|illustrate)\b/;
+/** The words a step uses for the thing being adopted. `likeness` is here because that is what a
+ * model writes when the reference is a FACE ("as a visual reference for likeness"). */
+const PICTURE_WORD = /\b(image|images|picture|pictures|photo|photos|pic|pics|portrait|headshot|shot|still|likeness)\b/;
+/**
+ * Verbs that mean "put this picture in place", as opposed to producing or writing something.
+ *
+ * Deliberately excludes the weak ones — "use", "add", "get", "take". They carry no commitment to
+ * putting anything in place, and paired with the loose clause below they turn ordinary deliverables
+ * into adoptions: "summarize the photos and add a reference list" has a verb, a picture word and the
+ * word "reference", and is a piece of writing. Misreading it costs more than missing an unusual
+ * phrasing does — an inferred `tool_ok` no work can satisfy is the re-nudge loop this file exists to
+ * stop — and the two precise clauses above already carry the phrasings that actually show up.
+ */
+const ADOPT_VERB = /\b(adopt|save|set|pick|choose|select|attach|find|store|register|establish)\b/;
+
+/**
+ * Whether a step's work is ESTABLISHING a reference picture rather than drawing one.
+ *
+ * ADOPTING a reference is not RENDERING one, and telling them apart has to happen before the image
+ * test in {@link inferDoneWhen} — "save a reference image of a victorian terrace" contains "image
+ * of", so it was read as a step that needs a render. Nothing about adopting a reference produces
+ * one, so the step could never be satisfied by its own work; worse, `attemptedStepWork` saw no
+ * render attempt either, so the executor kept re-nudging without ever spending an attempt. The
+ * model, told repeatedly that it still had to make an image, eventually made one — an unprompted
+ * picture nobody asked for, which DID satisfy the contract and moved the run on. That is the "it
+ * failed, generated a random image, then tried again" report, and it starts here.
+ *
+ * The first pass at this matched two fixed phrasings — "reference image/picture/photo" and "as a
+ * reference" — and the very next report was a step neither one caught: "Adopt a high-quality IMAGE
+ * of Christian Bale as a visual REFERENCE for likeness". One adjective between "a" and "reference"
+ * was the whole difference, and the step compiled to a render again, so the checklist's ADOPT step
+ * sat there generating a picture. English has too many ways to say this for a list of phrases; what
+ * is actually invariant is the shape — no render verb, a word for putting something in place, a
+ * word for a picture, and the word "reference".
+ *
+ * A render VERB wins outright, so a step that merely MENTIONS the reference stays a render. PURE.
+ */
+export function isReferenceAdoptionStep(instruction: string): boolean {
+  const t = instruction.trim().toLowerCase();
+  if (RENDER_VERB.test(t)) return false;
+  // "a reference image of X" / "the reference photo" — the noun phrase names it outright.
+  if (/\breference (image|picture|photo|pic|shot|still)s?\b/.test(t)) return true;
+  // "as a reference", "as a visual reference", "as the primary style reference", "as reference" —
+  // the ROLE, with however many words the model chose to put in front of it. Bounded so it can't
+  // reach across a whole sentence into an unrelated mention of the word.
+  if (/\bas (a|an|the)\b[^.]{0,30}?\breference\b/.test(t) || /\bas reference\b/.test(t)) return true;
+  // Anything else plainly about putting a picture in place: "adopt the Bale photo for reference".
+  // All three parts are required, and the verb list is the strict one, so "write a reference
+  // document with photos" — a real deliverable — is left alone.
+  return /\breference\b/.test(t) && ADOPT_VERB.test(t) && PICTURE_WORD.test(t);
+}
+
 /** Heuristic fallback when a step declares no `needs`: read the instruction and guess the contract.
  * Conservative — a step we can't classify becomes a `text` (non-empty) check, which any real reply
  * satisfies, rather than something that could wrongly block. */
 export function inferDoneWhen(instruction: string): DoneWhen {
   const t = instruction.toLowerCase();
-  // ADOPTING a reference is not RENDERING one, and this has to be decided before the image test
-  // below — "save a reference image of a victorian terrace" contains "image of", so it was read as a
-  // step that needs a render. Nothing about adopting a reference produces one, so the step could
-  // never be satisfied by its own work; worse, `attemptedStepWork` saw no render attempt either, so
-  // the executor kept re-nudging without ever spending an attempt. The model, told repeatedly that
-  // it still had to make an image, eventually made one — an unprompted picture nobody asked for,
-  // which DID satisfy the contract and moved the run on. That is the "it failed, generated a random
-  // image, then tried again" report, and it starts here.
-  //
-  // A render VERB wins: "generate an image from the reference photo" is a render step that merely
-  // mentions the reference. Only a step whose verb is about establishing one lands here.
-  if (/\b(reference (image|picture|photo|pic)|as (a|the) reference)\b/.test(t) && !/\b(generate|draw|render|paint|illustrate)\b/.test(t))
-    return { kind: "tool_ok", tool: "use_image_reference" };
+  // Decided FIRST — an adoption step reads as a render to every test below it. See the function.
+  if (isReferenceAdoptionStep(instruction)) return { kind: "tool_ok", tool: "use_image_reference" };
   if (
     /\b(generate|draw|render|paint|illustrate|create|make)\b[^.]*\b(image|images|picture|pictures|photo|art|artwork|portrait|drawing|illustration|illustrations|scene|render)\b/.test(t) ||
     /\bimage of\b/.test(t)
@@ -242,10 +286,19 @@ function normalizeOnFail(onFail: string | undefined): OnFail {
   }
 }
 
+/** What the app knows about the chat that the plan's own text can't say. */
+export interface CompileContext {
+  /**
+   * The chat ALREADY holds reference pictures the reader chose — so a step about adopting one is
+   * work with nothing left to do, and `generate_image` draws from them whether or not a step says so.
+   */
+  hasChatReferences?: boolean;
+}
+
 /** Compile a model-authored plan (the existing `BuddyPlan`, whose steps may carry `needs`/`onFail`)
  * into an executable Workflow: every step gets a concrete DoneWhen (declared or inferred), defaults
  * filled, ids assigned, all `pending` and the first `active`. PURE. */
-export function compileWorkflow(plan: BuddyPlan): Workflow {
+export function compileWorkflow(plan: BuddyPlan, ctx: CompileContext = {}): Workflow {
   const steps: WorkflowStep[] = [];
   const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail, inferred = false, context?: string): WorkflowStep => ({
     id: `s${steps.length + 1}`,
@@ -261,13 +314,38 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
   // A leading "plan the actions" step is dropped before anything is compiled — see isPlanningStep.
   // Only when the model didn't DECLARE a contract for it (a step it tagged `needs:"text"` is a real
   // written deliverable), and only when there is actual work behind it to run.
-  const authored = plan.steps.filter((s, i) => !(i === 0 && plan.steps.length > 1 && !s.needs && !s.produces?.length && isPlanningStep(s.text)));
-  for (const s of authored) {
-    // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
-    // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
+  const planned = plan.steps.filter((s, i) => !(i === 0 && plan.steps.length > 1 && !s.needs && !s.produces?.length && isPlanningStep(s.text)));
+  // Contracts are resolved BEFORE the drop below, because the drop has to ask what each step
+  // actually produces — "is there a render in this plan?" is a question about contracts, not words.
+  //
+  // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
+  // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
+  const resolved = planned.map((s) => {
     const produces = s.produces?.map((p) => p.trim()).filter(Boolean);
     const declared: DoneWhen | undefined = produces?.length ? { kind: "files", paths: produces } : needsToDoneWhen(s.needs);
-    let doneWhen: DoneWhen = declared ?? inferDoneWhen(s.text);
+    return { s, declared, doneWhen: declared ?? inferDoneWhen(s.text) };
+  });
+  /**
+   * "ADOPT A REFERENCE, THEN DRAW" IS ONE STEP WHEN THE CHAT ALREADY HAS THE REFERENCE.
+   *
+   * Reported twice now: the reader saves a picture from a search, asks for an image, and watches a
+   * two-step checklist go and look for a reference it already has. buildImageReferenceBlock says so
+   * in words — "these are ALREADY ATTACHED … never make adopting one a step of a plan" — and the
+   * words are the right place for it, but words are advice. A model that plans the extra step
+   * anyway is not corrected by re-reading them, and the extra step is not merely wasted: it is the
+   * step that goes wrong, because the executor has to guess a contract for work that isn't there.
+   *
+   * So the app drops it. Narrowly: only when references are genuinely in place (there is nothing
+   * left to adopt), and only when the plan ALSO renders something (this is the invented "first I
+   * need a reference" precursor, not a reader who asked to adopt a picture and nothing else). A
+   * render step always survives it, so the checklist can never be emptied by this.
+   */
+  const rendersSomething = resolved.some((r) => r.doneWhen.kind === "image");
+  const authored = resolved.filter(
+    (r) => !(ctx.hasChatReferences && rendersSomething && r.doneWhen.kind !== "image" && isReferenceAdoptionStep(r.s.text)),
+  );
+  for (const { s, declared, doneWhen: resolvedDoneWhen } of authored) {
+    let doneWhen: DoneWhen = resolvedDoneWhen;
     // A step that classified only as the generic text FALLBACK, written as a continuation of the one
     // before it, means what that one meant: "generate an image of the goat" / "now do the same for the
     // barn" is two image steps, and reading the second alone turned it into a "write me a paragraph"
@@ -303,8 +381,8 @@ export function compileWorkflow(plan: BuddyPlan): Workflow {
  * text, since ids are positional and a revision may insert or drop steps. Genuinely new steps start
  * pending, so a real change of plan still takes effect. PURE.
  */
-export function recompileWorkflow(prev: Workflow | undefined, plan: BuddyPlan): Workflow {
-  const fresh = compileWorkflow(plan);
+export function recompileWorkflow(prev: Workflow | undefined, plan: BuddyPlan, ctx: CompileContext = {}): Workflow {
+  const fresh = compileWorkflow(plan, ctx);
   if (!prev) return fresh;
   const settled = new Map<string, WorkflowStep>();
   for (const s of prev.steps) if (s.status === "done" || s.status === "failed") settled.set(s.instruction.trim().toLowerCase(), s);

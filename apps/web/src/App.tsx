@@ -2365,12 +2365,20 @@ export function App() {
   }, []);
   // A dismissed working-checklist (vrcmd:chatPlanClear): clear the plan + workflow AND their memos,
   // so the ChatLive mirror stops re-pushing a checklist the phone dismissed.
+  //
+  // DISMISSING A CHECKLIST DOES NOT THROW AWAY THE PICTURES THE CHAT DRAWS FROM. This used to clear
+  // the reference set too, alongside the genuine session resets (new chat, switch chat, clear chat)
+  // that share the line — but this is not a session reset, it is one ✕ on one card, and the desktop's
+  // own ✕ (onDismissPlan) never did it. So the two halves of the same control disagreed, and on a
+  // PHONE — where the ✕ relays here — tidying a finished checklist silently deleted every reference
+  // the reader had saved, bytes and ledger together. The next "draw him at the beach" then had no
+  // reference block in the prompt at all, so the model went looking for a reference it had already
+  // been given: the "it keeps trying to find a reference image" report, with the reader's own tap as
+  // the cause. References are cleared where a session actually starts over; not here.
   const clearBuddyPlan = useCallback(() => {
     setBuddyPlan(undefined);
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
-    clearImageRefsRef.current(); // per-session — and the model's ledger clears with the bytes
-    turnUserTextRef.current = "";
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
   }, [libraryStore]);
@@ -6581,7 +6589,12 @@ export function App() {
           // RE-compile, keeping what is already finished: a mid-run set_plan is a model revising its
           // checklist (usually right after apologising for losing the thread), and starting the run
           // over from step 1 redoes finished work and reaches the rest in the wrong order.
-          applyWorkflow(recompileWorkflow(buddyWorkflowRef.current, e.plan));
+          // The chat's reference pictures are part of what the plan is compiled AGAINST: with one
+          // already in place, an "adopt a reference" step is work with nothing left to do, and the
+          // compiler drops it so a render is the single step it actually is.
+          applyWorkflow(
+            recompileWorkflow(buddyWorkflowRef.current, e.plan, { hasChatReferences: turnRefImagesRef.current.length > 0 }),
+          );
           buddyStepEvidenceRef.current = { toolResults: [], text: "" };
           planCompiledThisTurn.current = true;
         } else {
@@ -7974,8 +7987,12 @@ export function App() {
       sendAppSync({ type: "vrcmd:chatPlanClear" });
       return;
     }
-    void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore]);
+    // The same clear the phone's ✕ relays here — one meaning for one control. It used to drop only
+    // the plan and its memo, leaving the app-managed WORKFLOW running: since the plan card is just a
+    // projection of that workflow, the next step the executor advanced put the card straight back,
+    // and the reader's ✕ read as broken.
+    clearBuddyPlan();
+  }, [isRemoteClient, sendAppSync, clearBuddyPlan]);
   const onClearBuddy = useCallback(() => {
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
