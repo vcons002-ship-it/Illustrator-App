@@ -537,6 +537,27 @@ describe("formatBuddyToolResult", () => {
     expect(text).not.toContain("found on");
   });
 
+  it("SHOWING the results is the whole job — it never tells the model to adopt or render", () => {
+    // A regression I caused and this pins: the guidance about WHICH url to adopt with was written as
+    // a bare imperative ("Adopt one with use_image_reference…"), sitting in the freshest position in
+    // context, right under the results. A plain "find me a picture of X" then became: adopt a
+    // reference nobody asked for — and, that being two actions rather than one, compile a plan and
+    // render a picture nobody asked for either. It overrode the rule the tool's own description
+    // states: a plain search only SHOWS pictures, so a search made to illustrate a point can't steer
+    // the next render.
+    for (const hits of [
+      [{ link: "https://cdn.example.com/a.jpg", contextLink: "https://example.com/page", title: "A" }],
+      [{ link: "https://cdn.example.com/a.jpg", title: "A" }], // no attribution → shorter envelope
+    ]) {
+      const text = formatBuddyToolResult({ tool: "search_images", query: "a thing" }, { imageHits: hits });
+      expect(text).toMatch(/do NOT adopt one as a reference/i);
+      expect(text).toMatch(/do NOT generate an image/i);
+      expect(text).toMatch(/unless the reader asks/i);
+      // No sentence that instructs the model to act on a result on its own initiative.
+      expect(text).not.toMatch(/^\s*Adopt one\b/im);
+    }
+  });
+
   it("shows To/Cc in email results so the assistant can answer 'who was this sent to'", () => {
     const search = formatBuddyToolResult(
       { tool: "gmail_search", query: "party" },
@@ -2738,14 +2759,20 @@ describe("use_image_reference — a searched picture, adopted deliberately", () 
     expect(p).toMatch(/search_images only SHOWS pictures/);
   });
 
-  it("tells the model to prompt for what CHANGES once one is adopted", () => {
+  it("names what was adopted, and stops there — saving a reference is the whole action", () => {
+    // This used to end "Write your generate_image prompt for what should CHANGE…". That is standing
+    // advice about how to prompt WHEN a render is asked for, but read here — freshest in context,
+    // immediately after adopting — it is an instruction to write one now, so adopting a picture
+    // rendered one nobody asked for. The advice lives in buildImageReferenceBlock, which rides every
+    // turn; what belongs here is what just happened, and that it's finished.
     const out = formatBuddyToolResult(
       { tool: "use_image_reference", query: "victorian terrace" },
       { referenceAdopted: { ok: true, title: "Terrace, Bath", base64: "x", mimeType: "image/jpeg" } },
     );
     expect(out).toContain("Terrace, Bath");
-    expect(out).toMatch(/what should CHANGE/);
-    expect(out).toMatch(/Do not describe the reference back into the prompt/);
+    expect(out).toMatch(/is now a REFERENCE/);
+    expect(out).toMatch(/do NOT generate an image unless the reader asks/i);
+    expect(out).not.toMatch(/Write your generate_image prompt/i);
   });
 
   it("refuses to pretend a failed adoption worked", () => {
