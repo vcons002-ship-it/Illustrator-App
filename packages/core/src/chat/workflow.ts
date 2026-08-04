@@ -155,6 +155,18 @@ const RENDER_VERB = /\b(generate|draw|render|paint|illustrate)\b/;
  * model writes when the reference is a FACE ("as a visual reference for likeness"). */
 const PICTURE_WORD = /\b(image|images|picture|pictures|photo|photos|pic|pics|portrait|headshot|shot|still|likeness)\b/;
 /**
+ * Verbs that mean "go and look for one". Kept separate from the generic search rule further down,
+ * which is deliberately narrower: widening THAT one would newly route "look for the config file" at
+ * a web search. This set only ever chooses between two kinds of search.
+ */
+const SEARCH_VERB = /\b(search|find|look up|look for|google)\b/;
+/**
+ * Nouns that make a search a search for a PICTURE. Tighter than PICTURE_WORD on purpose: "shot",
+ * "still" and "likeness" earn their place when a step is about adopting a reference, and would
+ * misread ordinary sentences here — "find the best shot of the quarter" is not an image search.
+ */
+const PICTURE_NOUN = /\b(image|images|picture|pictures|photo|photos|photograph|photographs|pic|pics|portrait|portraits|headshot|headshots)\b/;
+/**
  * Verbs that mean "put this picture in place", as opposed to producing or writing something.
  *
  * Deliberately excludes the weak ones — "use", "add", "get", "take". They carry no commitment to
@@ -210,6 +222,22 @@ export function inferDoneWhen(instruction: string): DoneWhen {
   const t = instruction.toLowerCase();
   // Decided FIRST — an adoption step reads as a render to every test below it. See the function.
   if (isReferenceAdoptionStep(instruction)) return { kind: "tool_ok", tool: "use_image_reference" };
+  // LOOKING FOR A PICTURE IS NOT MAKING ONE, and like the adoption test this has to be settled
+  // before the render test below, for exactly the same reason: "search for an image of X" contains
+  // "image of", so it compiled to {kind:"image"} and the checklist's SEARCH step went off and
+  // GENERATED a picture — then moved on to adopt a reference from a search that had never happened.
+  //
+  // The other half was just as broken and much quieter. "Find images of X" has no render verb, so it
+  // fell past the render test to the generic search rule and compiled to tool_ok(search_web) — the
+  // wrong tool. The model does the right thing, calls search_images, and the collar sits waiting for
+  // a web search that is never coming: a step no correct behaviour can satisfy, which is the nudge
+  // loop this file keeps having to be taught about.
+  //
+  // A render verb still wins, so "find a reference and generate the portrait" stays a render — the
+  // deliverable is the picture. An adoption wins earlier still, because use_image_reference's query
+  // form searches AND adopts in one call, so "find a reference photo of X" is one action, not two.
+  if (SEARCH_VERB.test(t) && PICTURE_NOUN.test(t) && !RENDER_VERB.test(t))
+    return { kind: "tool_ok", tool: "search_images" };
   if (
     /\b(generate|draw|render|paint|illustrate|create|make)\b[^.]*\b(image|images|picture|pictures|photo|art|artwork|portrait|drawing|illustration|illustrations|scene|render)\b/.test(t) ||
     /\bimage of\b/.test(t)

@@ -101,6 +101,43 @@ describe("inferDoneWhen", () => {
     expect(inferDoneWhen("Attach a headshot as reference for the likeness")).toEqual(adopt);
   });
 
+  it("reads LOOKING for a picture as an image search, not as making one", () => {
+    // Reported as: image search doesn't work as a checklist step — it generates an image instead of
+    // searching, then moves on to adopting a reference from a search that never happened.
+    //
+    // "Search for an image of X" contains "image of", so it fell to the render test and compiled to
+    // {kind:"image"}: the collar then demanded a picture from a step whose whole job was to go and
+    // look at some. The step "succeeded" on a render nobody asked for, exactly as reported.
+    const search = { kind: "tool_ok", tool: "search_images" };
+    expect(inferDoneWhen("Search for an image of Christian Bale")).toEqual(search);
+    expect(inferDoneWhen("Look up a picture of a red panda")).toEqual(search);
+  });
+
+  it("and sends an image search to search_images, not search_web", () => {
+    // The quieter half of the same bug. These carry no render verb, so they fell PAST the render
+    // test to the generic search rule and compiled to tool_ok(search_web) — the wrong tool. The
+    // model does the right thing, calls search_images, and the collar waits for a web search that is
+    // never coming: a step no correct behaviour can satisfy, which is the nudge loop.
+    const search = { kind: "tool_ok", tool: "search_images" };
+    expect(inferDoneWhen("Search for images of Jennifer Lawrence")).toEqual(search);
+    expect(inferDoneWhen("Find a photo of the Eiffel Tower")).toEqual(search);
+    expect(inferDoneWhen("Find images of a victorian terrace")).toEqual(search);
+  });
+
+  it("keeps a plain web search, a render, and an adoption on their own paths", () => {
+    // The three neighbours this rule sits between. Each was correct before and has to stay correct:
+    // a search with no picture in it is still the web; a render verb still wins; and an adoption
+    // wins earlier still, because use_image_reference's query form searches AND adopts in one call.
+    expect(inferDoneWhen("Search the web for tide tables")).toEqual({ kind: "tool_ok", tool: "search_web" });
+    // "shot" is a picture word when a step is about adopting a reference, and is NOT one here —
+    // which is why PICTURE_NOUN is the tighter list. This stays whatever the generic search rule
+    // already made of it (search_web); what matters is that it is not an IMAGE search.
+    expect(inferDoneWhen("Find the best shot of the quarter in the deck")).toEqual({ kind: "tool_ok", tool: "search_web" });
+    expect(inferDoneWhen("Generate an image of a red castle")).toEqual({ kind: "image" });
+    expect(inferDoneWhen("Find a reference and generate the portrait")).toEqual({ kind: "image" });
+    expect(inferDoneWhen("Find a reference photo of the terrace")).toEqual({ kind: "tool_ok", tool: "use_image_reference" });
+  });
+
   it("leaves a real deliverable that merely says “reference” alone", () => {
     // The broadening must not swallow steps that are about writing something. An inferred contract
     // no work can satisfy is the re-nudge loop this whole area exists to stop, so a false positive
