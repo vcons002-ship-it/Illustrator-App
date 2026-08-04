@@ -6304,7 +6304,16 @@ async function handleChatTool(
     // silently: `sources.attached` was counted before the cut, so the note under the picture said
     // the reference had been used. A chat reference is the reader choosing, now; a Soul photo is
     // standing configuration. If anything has to go, it isn't the choice they just made.
-    const chatRefs = (refImages ?? []).map((im) => ({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 }));
+    //
+    // NEWEST FIRST, because every cap downstream takes the FIRST n: this list is trimmed to
+    // MAX_CHAT_REFS, and then the backend trims again to what it can actually use — four on
+    // IP-Adapter, ten on a ReferenceLatent family. The set is held oldest-first (that is what makes
+    // its own cap keep the newest), so passing it through unreversed meant a capped render kept the
+    // pictures chosen EARLIEST and dropped the ones just added. The most recent choice is the one
+    // most likely to be what the reader means now.
+    const chatRefs = [...(refImages ?? [])]
+      .reverse()
+      .map((im) => ({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 }));
     const ordered = [...chatRefs, ...refs];
     if (portraitSelfName.trim()) sources.selfName = portraitSelfName;
     const soulRefs = ordered.length ? ordered.slice(0, MAX_CHAT_REFS) : undefined;
