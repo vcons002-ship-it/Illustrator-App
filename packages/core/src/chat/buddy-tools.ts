@@ -2441,6 +2441,86 @@ const PRIMARY_PARAM: Record<string, string> = {
   forget: "match",
 };
 
+/** Short flags a model reaches for when it writes one of our tools as a command line. */
+const SHELL_FLAG_ALIASES: Record<string, string> = { u: "url", q: "query", p: "prompt", f: "path", n: "name", s: "symbol" };
+
+/** Strip one layer of matching quotes from a shell token. */
+function unquoteShellToken(t: string): string {
+  const q = t[0];
+  return (q === '"' || q === "'") && t.length >= 2 && t[t.length - 1] === q ? t.slice(1, -1) : t;
+}
+
+/**
+ * A `run_command` whose command is really one of OUR OWN tools, rewritten into that tool call.
+ *
+ * Reported as: saving a search result as a reference never works, and asking to draw from saved
+ * references still runs a two-step plan that never finishes. The screenshot had the answer, and it
+ * was not in any of the places the previous fixes looked:
+ *
+ *   [run_command "use_image_reference --url https://…/jennifer-lawrence.jpg" — exit code 1]
+ *   'use_image_reference' is not recognized as an internal or external command
+ *
+ * The model was shelling out to its own tool. There is no such program, so the adoption never
+ * happened — which is the whole bug behind every symptom: the reference set stays empty, so
+ * `buildImageReferenceBlock` contributes nothing, so the next turn plans to go and find a reference,
+ * and the compile-time drop that would collapse that plan to one step never fires because the app
+ * genuinely has no references. "Use the reference images and generate a picture" fails for the same
+ * reason: there are none to use.
+ *
+ * A command naming one of our tools can only ever fail — the shell has no such program, on any
+ * platform — so reading it as what it plainly means costs nothing and is not a guess. The rewrite
+ * only fires when the FIRST token is exactly a tool name, so `python use_image_reference.py` and
+ * anything with a path in front of it stay commands. (A real executable someone happens to have
+ * named `search_web` would now be shadowed; against that, every model that makes this mistake today
+ * fails 100% of the time.)
+ *
+ * The result goes back through `parseToolObject`, so a rewrite that doesn't validate is rejected
+ * rather than passed on half-built — a `use_image_reference` with neither url nor query is still
+ * `undefined`, exactly as if the model had written it out longhand. PURE.
+ */
+export function toolCallFromShellCommand(command: string): BuddyToolCall | undefined {
+  const raw = (command ?? "").trim();
+  const head = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(raw);
+  if (!head) return undefined;
+  const name = (head[1] ?? head[2] ?? head[3] ?? "").replace(/\.(?:exe|cmd|bat|sh|ps1)$/i, "");
+  // A path in front of it means the model meant a program on disk, not this tool. And run_command
+  // itself must never rewrite to run_command — that is the one name that would recurse.
+  if (name === "run_command" || /[\\/]/.test(name)) return undefined;
+  if (!BUDDY_TOOL_NAMES.has(name as BuddyToolName)) return undefined;
+  const args: Record<string, unknown> = { tool: name };
+  const bare: string[] = [];
+  const tokens = raw.slice(head[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    const flag = /^--?([A-Za-z][\w-]*)(?:=([\s\S]*))?$/.exec(t);
+    if (!flag) {
+      bare.push(unquoteShellToken(t));
+      continue;
+    }
+    const key = SHELL_FLAG_ALIASES[flag[1]!] ?? flag[1]!.replace(/-/g, "_");
+    let value = flag[2];
+    if (value === undefined) {
+      // `--url X` — take the next token unless it is itself a flag, in which case this was a switch.
+      const next = tokens[i + 1];
+      if (next !== undefined && !/^--?[A-Za-z]/.test(next)) {
+        value = next;
+        i++;
+      }
+    }
+    args[key] = value === undefined ? true : unquoteShellToken(value);
+  }
+  if (bare.length) {
+    // A positional argument: the tool's main parameter. use_image_reference is the one tool whose
+    // main parameter depends on what was passed — a URL names the exact picture, anything else is a
+    // search — and it is also the tool this whole rewrite exists for, so it decides by looking.
+    const joined = bare.join(" ");
+    const key =
+      name === "use_image_reference" ? (/^https?:\/\//i.test(joined) ? "url" : "query") : PRIMARY_PARAM[name];
+    if (key && args[key] === undefined) args[key] = joined;
+  }
+  return parseToolObject(args);
+}
+
 /** Coerce one Python/JS literal arg value (a quoted string, number, bool, or bareword) to a JS value. */
 function coerceCallValue(raw: string): unknown {
   const v = raw.trim();
@@ -3099,7 +3179,12 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   }
   if (tool === "run_command") {
     const { text: command, truncated } = clampArg(obj.command, MAX_COMMAND_CHARS);
-    return command ? { tool, command, ...(truncated ? { truncated: true } : {}) } : undefined;
+    if (!command) return undefined;
+    // THE MODEL SHELLING OUT TO ONE OF ITS OWN TOOLS. See toolCallFromShellCommand — the command is
+    // not a command, it is a tool call in the wrong clothes, and running it can only ever fail.
+    const asTool = toolCallFromShellCommand(command);
+    if (asTool) return asTool;
+    return { tool, command, ...(truncated ? { truncated: true } : {}) };
   }
   if (tool === "write_file") {
     const path = strArg(obj.path, MAX_PATH_CHARS);

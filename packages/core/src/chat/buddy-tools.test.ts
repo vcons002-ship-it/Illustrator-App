@@ -25,6 +25,7 @@ import {
   planQueueResumeFeedback,
   progressNudge,
   stripToolCallJson,
+  toolCallFromShellCommand,
   toolFailureDirective,
   toolLimitNudge,
 } from "./buddy-tools.js";
@@ -2868,5 +2869,63 @@ describe("buildImageReferenceBlock — a reference the model still knows about o
 
   it("says nothing at all when no reference is attached", () => {
     expect(buildImageReferenceBlock([])).toBe("");
+  });
+});
+
+describe("run_command that is really one of our own tools", () => {
+  // The bug this exists for, verbatim off the reader's screen:
+  //   [run_command "use_image_reference --url https://…/jennifer-lawrence.jpg" — exit code 1]
+  //   'use_image_reference' is not recognized as an internal or external command
+  // The model shelled out to its own tool. There is no such program, so nothing was ever adopted —
+  // which is why the reference set stayed empty, why the prompt carried no reference block, and why
+  // "use the reference images and generate a picture" still planned to go and find one first.
+  const url = "https://images.hellomagazine.com/horizon/landscape/ef04d1b74/jennifer-lawrence.jpg";
+
+  it("adopts the picture the model was trying to shell out for", () => {
+    expect(toolCallFromShellCommand(`use_image_reference --url ${url}`)).toEqual({ tool: "use_image_reference", url });
+    // And through the real parser, which is the path a turn actually takes.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: `use_image_reference --url ${url}` }))).toEqual({
+      tool: "use_image_reference",
+      url,
+    });
+  });
+
+  it("reads the flag forms and the positional form a model reaches for", () => {
+    expect(toolCallFromShellCommand(`use_image_reference --url=${url}`)).toEqual({ tool: "use_image_reference", url });
+    expect(toolCallFromShellCommand(`use_image_reference -u "${url}"`)).toEqual({ tool: "use_image_reference", url });
+    expect(toolCallFromShellCommand(`use_image_reference ${url}`)).toEqual({ tool: "use_image_reference", url });
+    // A bare positional that ISN'T a url is a search, which is that tool's other half.
+    expect(toolCallFromShellCommand('use_image_reference "victorian terrace"')).toEqual({
+      tool: "use_image_reference",
+      query: "victorian terrace",
+    });
+  });
+
+  it("works for the other tools a confused model shells out to", () => {
+    expect(toolCallFromShellCommand('search_web "tide tables"')).toEqual({ tool: "search_web", query: "tide tables" });
+    expect(toolCallFromShellCommand('generate_image --prompt "a red castle"')).toEqual({ tool: "generate_image", prompt: "a red castle" });
+    expect(toolCallFromShellCommand("read_file --path notes.md")).toEqual({ tool: "read_file", path: "notes.md" });
+  });
+
+  it("leaves a REAL command alone", () => {
+    // The rewrite only fires on an exact tool name in first position. Everything else is a command,
+    // including one that merely mentions a tool name or runs a file named after one.
+    expect(toolCallFromShellCommand("python use_image_reference.py --url x")).toBeUndefined();
+    expect(toolCallFromShellCommand("./use_image_reference --url x")).toBeUndefined();
+    expect(toolCallFromShellCommand("git status")).toBeUndefined();
+    expect(toolCallFromShellCommand("echo use_image_reference")).toBeUndefined();
+    expect(toolCallFromShellCommand("")).toBeUndefined();
+    // And a genuine run_command still parses as run_command.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "pytest -q" }))).toEqual({
+      tool: "run_command",
+      command: "pytest -q",
+    });
+  });
+
+  it("never recurses through run_command, and rejects a rewrite that doesn't validate", () => {
+    expect(toolCallFromShellCommand("run_command ls")).toBeUndefined();
+    // use_image_reference with neither url nor query is not a call — same as writing it out longhand.
+    expect(toolCallFromShellCommand("use_image_reference")).toBeUndefined();
+    expect(toolCallFromShellCommand("use_image_reference --dry-run")).toBeUndefined();
   });
 });
