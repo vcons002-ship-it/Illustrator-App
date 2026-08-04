@@ -200,7 +200,7 @@ import {
   evaluateStep,
   advanceWorkflow,
   activeStep,
-  isToolContract,
+  suppressesStepProse,
   attemptedStepWork,
   checklistMetaOnly,
   doneWhenToNeeds,
@@ -6945,7 +6945,7 @@ export function App() {
     // the tool call itself (which arrives via pendingTool, below). Answer steps (text/narration/reply)
     // and legacy non-app-managed mode keep their prose — there it IS the deliverable.
     const appManagedStep = appManagedActive ? activeStep(buddyWorkflowRef.current) : undefined;
-    const suppressProse = !!appManagedStep && isToolContract(appManagedStep.doneWhen.kind);
+    const suppressProse = !!appManagedStep && suppressesStepProse(appManagedStep.doneWhen);
     if (res.pendingTool) {
       // Persist any plain-text the model wrote BEFORE this tool — its "✓ finished X, ▸ now Y" per-step
       // narration — so that progress note stays documented in the chat instead of vanishing when the

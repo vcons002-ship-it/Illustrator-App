@@ -11,6 +11,7 @@ import {
   doneWhenToNeeds,
   evaluateStep,
   inferDoneWhen,
+  suppressesStepProse,
   isPlanningStep,
   isToolContract,
   needsToDoneWhen,
@@ -806,5 +807,34 @@ describe("three separate documents must come out as three documents", () => {
       ],
     });
     expect(evaluateStep(wf.steps[1]!, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }])).done).toBe(false);
+  });
+});
+
+describe("suppressesStepProse — a search step's answer is the deliverable", () => {
+  it("keeps the prose on a step whose work produces KNOWLEDGE", () => {
+    // The bug: suppression keyed off isToolContract, which covers tool_ok — and inferDoneWhen gives
+    // tool_ok:search_web to any step wording containing "search", "find" or "look up". So on a
+    // research checklist every step's answer was thrown away: the reader watched it search, and
+    // search, and never saw a word of what it found.
+    expect(suppressesStepProse({ kind: "tool_ok", tool: "search_web" })).toBe(false);
+    expect(suppressesStepProse({ kind: "tool_ok", tool: "read_url" })).toBe(false);
+    expect(suppressesStepProse({ kind: "tool_ok", tool: "wolfram" })).toBe(false);
+    expect(suppressesStepProse(inferDoneWhen("Find the best three options"))).toBe(false);
+  });
+
+  it("still hides narration on a step whose deliverable is a thing the reader can see", () => {
+    // There the prose is "I already did X, moving on" — noise beside the artifact itself.
+    expect(suppressesStepProse({ kind: "image" })).toBe(true);
+    expect(suppressesStepProse({ kind: "file" })).toBe(true);
+    expect(suppressesStepProse({ kind: "files", paths: ["a.md"] })).toBe(true);
+    expect(suppressesStepProse({ kind: "command_ok" })).toBe(true);
+    expect(suppressesStepProse({ kind: "tool_ok", tool: "generate_video" })).toBe(true);
+    expect(suppressesStepProse({ kind: "tool_ok", tool: "write_file" })).toBe(true);
+  });
+
+  it("never hides an answer step", () => {
+    expect(suppressesStepProse({ kind: "text", min: 1 })).toBe(false);
+    expect(suppressesStepProse({ kind: "narration" })).toBe(false);
+    expect(suppressesStepProse({ kind: "user_reply" })).toBe(false);
   });
 });

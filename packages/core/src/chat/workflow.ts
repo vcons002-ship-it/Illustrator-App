@@ -384,6 +384,34 @@ export function isToolContract(kind: DoneWhen["kind"]): boolean {
   return kind === "image" || kind === "file" || kind === "files" || kind === "command_ok" || kind === "tool_ok";
 }
 
+/**
+ * Tools whose result is KNOWLEDGE rather than a thing. What they produce lives in the answer, so on a
+ * step contracted to one of these the model's prose IS the deliverable.
+ */
+const KNOWLEDGE_TOOLS: ReadonlySet<string> = new Set([
+  "search_web", "read", "read_url", "search_books", "random_books", "search_images",
+  "calculate", "wolfram", "stock_quote", "market_analysis", "extract_from_document",
+  "gmail_search", "read_email", "read_attachment", "list_events", "list_tasks",
+]);
+
+/**
+ * Should the model's prose on this step be HIDDEN?
+ *
+ * Yes when the step's deliverable is something the reader sees anyway — a render, a file, a command.
+ * There, a plain-text settle is the model narrating instead of acting ("I already did X, moving
+ * on"), which is noise beside the artifact itself.
+ *
+ * But `isToolContract` — which this used to be — also covers `tool_ok`, and `inferDoneWhen` gives
+ * `tool_ok: search_web` to any step whose wording contains "search", "find" or "look up". So on a
+ * research checklist the answer to every step was thrown away: the reader watched it search, and
+ * search, and never saw a word of what it found. The searching was working; the reporting was being
+ * deleted. A search produces knowledge, and knowledge has nowhere to live except the prose. PURE.
+ */
+export function suppressesStepProse(doneWhen: DoneWhen): boolean {
+  if (doneWhen.kind === "tool_ok") return !KNOWLEDGE_TOOLS.has(doneWhen.tool);
+  return isToolContract(doneWhen.kind);
+}
+
 /** Whether every step has reached a terminal state (no `pending`/`active` left). */
 export function workflowFinished(wf: Workflow | undefined): boolean {
   return !!wf && !wf.steps.some((s) => s.status === "pending" || s.status === "active");
