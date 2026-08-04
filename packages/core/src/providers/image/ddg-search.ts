@@ -40,22 +40,69 @@ export class DuckDuckGoSearch {
     this.baseUrl = opts.baseUrl ?? "https://lite.duckduckgo.com/lite/";
   }
 
-  /** Top organic results (ads filtered), in page order. */
+  /**
+   * Top organic results (ads filtered), in page order.
+   *
+   * THREE ATTEMPTS, because one wasn't enough in practice. A bare GET with no
+   * User-Agent is the shape DuckDuckGo most readily answers with a bot wall — which
+   * parses to zero hits, looks exactly like "no results for that query", and sent
+   * every search quietly to Wikipedia. So: a browser UA on every request; a POST to
+   * the same Lite endpoint (the form the page itself submits, and the more reliable
+   * of the two); and the classic HTML host as a second origin in case Lite is the one
+   * being blocked.
+   *
+   * Only a TRANSPORT failure on the first attempt latches DDG off for the session —
+   * that's CORS, which is permanent for this realm. A bot wall or a bad status is
+   * transient and must not disable anything.
+   */
   async searchWeb(query: string, count = 5): Promise<WebSearchHit[]> {
-    const url = `${this.baseUrl}?q=${encodeURIComponent(query)}&kl=wt-wt`;
-    let res;
-    try {
-      res = await this.transport.send({ url, method: "GET" });
-    } catch (err) {
-      // The request never completed — CORS in a plain browser tab, or offline.
-      // CORS is PERMANENT for this realm, so this is what should latch DDG off
-      // (a non-ok HTTP status below is transient and must not).
-      throw new DdgUnavailableError(err instanceof Error ? err.message : String(err));
+    const want = Math.min(10, Math.max(1, count));
+    const q = encodeURIComponent(query);
+    let firstError: unknown;
+    const attempts: { url: string; method: "GET" | "POST"; body?: string }[] = [
+      { url: `${this.baseUrl}?q=${q}&kl=wt-wt`, method: "GET" },
+      { url: this.baseUrl, method: "POST", body: `q=${q}&kl=wt-wt` },
+      { url: `https://html.duckduckgo.com/html/?q=${q}&kl=wt-wt`, method: "GET" },
+    ];
+    for (const [i, attempt] of attempts.entries()) {
+      let res;
+      try {
+        res = await this.transport.send({
+          url: attempt.url,
+          method: attempt.method,
+          headers: {
+            // Without these DuckDuckGo serves a bot wall that parses to nothing.
+            "user-agent": BROWSER_UA,
+            "accept-language": "en-US,en;q=0.9",
+            ...(attempt.body ? { "content-type": "application/x-www-form-urlencoded" } : {}),
+          },
+          ...(attempt.body ? { body: attempt.body } : {}),
+        });
+      } catch (err) {
+        // CORS/offline. Only the FIRST attempt's transport failure is diagnostic —
+        // if the realm can't reach one host it can't reach the others either.
+        if (i === 0) throw new DdgUnavailableError(err instanceof Error ? err.message : String(err));
+        firstError ??= err;
+        continue;
+      }
+      if (!res.ok) {
+        firstError ??= new Error(`DuckDuckGo search failed with status ${res.status}`);
+        continue;
+      }
+      const hits = parseLiteResults(await res.text()).slice(0, want);
+      if (hits.length > 0) return hits;
     }
-    if (!res.ok) throw new Error(`DuckDuckGo search failed with status ${res.status}`);
-    return parseLiteResults(await res.text()).slice(0, Math.min(10, Math.max(1, count)));
+    // Every route answered and none of them parsed. A genuinely empty query looks the
+    // same as a bot wall from here, so say nothing more than the truth.
+    if (firstError instanceof Error) throw firstError;
+    return [];
   }
 }
+
+/** A real browser's UA. Sent because the alternative is a bot wall that parses to zero
+ * hits and reads, from every layer above, as "that query had no results". */
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 /** Marks a TRANSPORT-level failure (CORS/offline) — the only thing that should
  * disable DDG for the session. HTTP-status/parse errors are transient. */
@@ -126,8 +173,31 @@ function plainText(s: string): string {
  * scope = per JS realm (page or worker), resettable for tests. */
 export interface KeylessSearchState {
   ddgUnavailable: boolean;
+  /** Why full-web search was switched off for this session, if it was. */
+  ddgReason?: string;
 }
 const sharedState: KeylessSearchState = { ddgUnavailable: false };
+
+/**
+ * WHAT KEYLESS SEARCH ACTUALLY IS, in words, for the reader and the model.
+ *
+ * Two facts nothing surfaced. Image search without Google credentials is Wikimedia
+ * Commons — an archive, not the web — so it feels narrow and nobody could tell whether
+ * that was a failure or the design. And full-web text search latches OFF for the whole
+ * session on one CORS/offline failure, after which Wikipedia answers everything and the
+ * results look fine. Both were invisible; both are the reason to reach for a key. PURE.
+ */
+export function keylessSearchNote(state: KeylessSearchState = sharedState): string {
+  const web = state.ddgUnavailable
+    ? `Full-web search (DuckDuckGo) is OFF for this session — ${state.ddgReason ?? "it couldn't be reached"}. ` +
+      "Text searches are answering from Wikipedia only, so say when a question needs the wider web."
+    : "Full-web text search is on (DuckDuckGo).";
+  return (
+    `${web} IMAGE search is Wikimedia Commons only — a licensed archive, not the web — so it is strong on ` +
+    "diagrams, artworks and public-domain photographs and weak on everything else. For broader pictures the reader " +
+    "needs a Google Programmable Search key AND engine id in Settings."
+  );
+}
 
 /**
  * The keyless composite behind `search_web`/`search_images` when no Google
@@ -162,13 +232,26 @@ export class KeylessSearch implements FigureSearch {
         // Only a CORS/offline failure is permanent for the session; a transient
         // HTTP status or parse error falls through to Wikipedia for THIS call but
         // leaves DDG enabled for the next one.
-        if (err instanceof DdgUnavailableError) this.state.ddgUnavailable = true;
+        if (err instanceof DdgUnavailableError) {
+          this.state.ddgUnavailable = true;
+          // WHY, kept — a session that silently drops from full-web to Wikipedia
+          // still returns results, so nothing about the answers says it happened.
+          this.state.ddgReason = err.message;
+        }
       }
     }
     return this.wiki.searchWeb(query, count);
   }
 
-  /** Figures stay on Commons (licensed, labeled, hotlinkable). */
+  /**
+   * Figures come from Wikimedia Commons — licensed, labelled and hotlinkable.
+   *
+   * NOT DuckDuckGo: its image endpoint needs a per-session token scraped from a
+   * results page, which is exactly the brittle thing this file is careful not to
+   * depend on. The honest consequence is that keyless IMAGE search is an archive
+   * search, not a web one, and it will feel narrow next to Google's — see
+   * `keylessSearchNote`, which says so where a reader can read it.
+   */
   async search(query: string, count = 5): Promise<ImageSearchHit[]> {
     return this.wiki.search(query, count);
   }
