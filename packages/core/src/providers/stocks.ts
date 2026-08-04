@@ -146,7 +146,42 @@ export function parseYahooQuote(json: unknown, requested: string): StockQuote | 
 }
 
 /** A short human summary of a quote (for the chat + the panel). */
-export function formatQuote(q: StockQuote): string {
+/**
+ * WHERE A NUMBER CAME FROM — carried with the number itself.
+ *
+ * The app has four places a price can come from and they are not interchangeable: a keyless Yahoo
+ * feed that is delayed on most exchanges, a broker account whose freshness is the reader's own
+ * entitlement, a TradingView chart showing whatever that reader's plan carries, and — the one that
+ * matters most — the model's own memory, which is not a source at all. Printed bare, "MSFT: 512.30"
+ * looks identical in all four cases, and a reader who cannot tell a live quote from a half-remembered
+ * one has no way to know which they are acting on.
+ *
+ * `memory` exists here deliberately. Naming it is what makes an unsourced number sayable, and
+ * therefore refusable.
+ */
+export type QuoteSource = "yahoo" | "schwab" | "tradingview" | "web" | "memory";
+
+export function sourceLabel(source: QuoteSource): string {
+  switch (source) {
+    case "yahoo":
+      return "Yahoo (keyless — delayed on most exchanges)";
+    case "schwab":
+      return "your Schwab account (real-time where your entitlements allow)";
+    case "tradingview":
+      return "your TradingView chart (as it is displaying it)";
+    case "web":
+      return "a web page — UNVERIFIED, and as of whatever date that page carries";
+    case "memory":
+      return "NOT A SOURCE — this is recalled, not fetched, and must not be given as a price";
+  }
+}
+
+/** The source line appended to a formatted number. PURE. */
+export function sourceNote(source: QuoteSource): string {
+  return `\nSource: ${sourceLabel(source)}`;
+}
+
+export function formatQuote(q: StockQuote, source?: QuoteSource): string {
   const parts = [`${q.symbol}: ${q.close}`];
   if (q.open !== undefined && q.close !== undefined) {
     const chg = q.close - q.open;
@@ -156,5 +191,5 @@ export function formatQuote(q: StockQuote): string {
   if (q.high !== undefined && q.low !== undefined) parts.push(`H ${q.high} / L ${q.low}`);
   if (q.volume !== undefined) parts.push(`vol ${q.volume.toLocaleString("en-US")}`);
   if (q.date) parts.push(`@ ${q.date}${q.time ? ` ${q.time}` : ""}`);
-  return parts.join(" · ");
+  return parts.join(" · ") + (source ? sourceNote(source) : "");
 }

@@ -6,6 +6,8 @@
  * parsing, and every indicator are unit-tested; the network call lives in the host.
  */
 
+import { sourceNote, type QuoteSource } from "./stocks.js";
+
 export interface Bar {
   /** Epoch seconds. */
   t: number;
@@ -133,7 +135,7 @@ function round(n: number, dp = 2): number {
 }
 
 /** A short human summary of the indicators for the chat + the panel. */
-export function formatIndicators(ind: Indicators): string {
+export function formatIndicators(ind: Indicators, source?: QuoteSource): string {
   const parts = [`${ind.symbol} ${ind.last}`];
   if (ind.changePct !== undefined) parts.push(`${ind.changePct >= 0 ? "+" : ""}${ind.changePct}% over window`);
   if (ind.vwap !== undefined) parts.push(`VWAP ${ind.vwap} (${ind.last >= ind.vwap ? "above" : "below"})`);
@@ -141,5 +143,5 @@ export function formatIndicators(ind: Indicators): string {
   if (ind.sma50 !== undefined) parts.push(`SMA50 ${ind.sma50}`);
   if (ind.rsi14 !== undefined) parts.push(`RSI ${ind.rsi14}`);
   if (ind.high !== undefined) parts.push(`H ${ind.high}/L ${ind.low}`);
-  return parts.join(" · ");
+  return parts.join(" · ") + (source ? sourceNote(source) : "");
 }

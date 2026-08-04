@@ -4783,27 +4783,54 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // CORS-exempt transport; undefined on plain web (no proxy) so the model falls back to
       // search_web. Yahoo works with the proxy's UA — Stooq blocks it and times out.
       stockQuote: async (symbol: string) => {
+        // EVERY failure names itself. This used to return `undefined` for two unrelated reasons —
+        // no CORS transport, and a response that didn't parse — which the caller then reported as
+        // one vague "no market data for MSFT" covering causes with completely different fixes.
+        // Thrown rather than returned: runBuddyTool turns a throw into `{ error }`, which both the
+        // reader and the model actually see.
         const cf = corsFetch();
-        if (!cf) return undefined;
+        if (!cf) {
+          throw new Error(
+            "The keyless quote feed needs the desktop app or the browser extension — a plain browser tab is blocked " +
+              "from calling Yahoo directly (CORS). Everything else in the app still works.",
+          );
+        }
         const res = await new DirectTransport(cf).send({ url: yahooQuoteUrl(symbol), method: "GET" });
-        // Thrown, not swallowed: runBuddyTool turns it into `{ error }`, so the model is told the
-        // feed is throttled instead of silently reporting "no quote for AAPL".
         const bad = yahooFetchError(res.status);
         if (bad) throw new Error(bad);
-        return parseYahooQuote(await res.json(), symbol);
+        const quote = parseYahooQuote(await res.json(), symbol);
+        if (!quote) {
+          throw new Error(
+            `Yahoo answered for "${symbol}" but carried no price. Check the ticker — an index needs a caret (^GSPC) ` +
+              "and a non-US listing needs its exchange suffix (.TO, .L, .DE).",
+          );
+        }
+        return quote;
       },
       // Keyless technical indicators from Yahoo's chart JSON (over the CORS-exempt
       // transport; undefined on plain web).
       marketIndicators: async (symbol: string, interval?: string, range?: string) => {
         const cf = corsFetch();
-        if (!cf) return undefined;
+        if (!cf) {
+          throw new Error(
+            "The keyless indicator feed needs the desktop app or the browser extension — a plain browser tab is " +
+              "blocked from calling Yahoo directly (CORS).",
+          );
+        }
         const res = await new DirectTransport(cf).send({
           url: yahooChartUrl(symbol, { interval: interval || "5m", range: range || "1d" }),
           method: "GET",
         });
         const bad = yahooFetchError(res.status);
         if (bad) throw new Error(bad);
-        return computeIndicators(symbol, parseYahooChart(await res.json()));
+        const indicators = computeIndicators(symbol, parseYahooChart(await res.json()));
+        if (!indicators) {
+          throw new Error(
+            `Yahoo returned no bars for "${symbol}" at ${interval || "5m"}/${range || "1d"} — check the ticker, or ` +
+              'try a wider window (interval "1d", range "6mo").',
+          );
+        }
+        return indicators;
       },
       // Schwab Trader API (real quotes, option chains + Greeks, positions) — wired only
       // when the user connected their own Schwab app. A fresh access token per call.

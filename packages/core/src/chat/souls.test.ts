@@ -1682,3 +1682,39 @@ describe("a paraphrased prompt doesn't lose the Soul", () => {
     expect(selfPortraitPrompt("a red apple", "Aria", notes)).toBe("a red apple");
   });
 });
+
+describe("a Soul photo is used by DEFAULT, not on request", () => {
+  const self = (p: string) => isSelfPortraitRequest(p, "Aria");
+  const user = (p: string) => isUserPortraitRequest(p, "Sam");
+
+  it("recognises the words people actually use for a picture", () => {
+    // "send me a picture of you" worked; "send me a pic of you" didn't — so the reader had to
+    // discover by trial which synonym unlocked their own reference photo, which reads as the
+    // feature having stopped working.
+    for (const w of ["pic", "pics", "snap", "shot", "render", "headshot", "close-up", "photo", "picture"]) {
+      expect(self(`send me a ${w} of you`), `"${w} of you" missed`).toBe(true);
+      expect(user(`send me a ${w} of me`), `"${w} of me" missed`).toBe(true);
+    }
+  });
+
+  it("recognises a subject placed in a scene", () => {
+    for (const p of ["you as a wizard", "you in a spacesuit", "you wearing a red coat", "you standing on a cliff"]) {
+      expect(self(p), `"${p}" missed`).toBe(true);
+    }
+    expect(user("me as a knight in armour")).toBe(true);
+  });
+
+  it("recognises the question that precedes a portrait", () => {
+    expect(self("show me what you look like")).toBe(true);
+    expect(self("draw your face")).toBe(true);
+    expect(user("draw my face")).toBe(true);
+  });
+
+  it("still refuses a picture that merely MENTIONS the second person", () => {
+    // The frames are what keep this tight — a bare "you" isn't a request for a portrait.
+    expect(self("draw a dog you saw yesterday")).toBe(false);
+    expect(self("paint the house you live in")).toBe(false);
+    expect(self("a landscape you would like")).toBe(false);
+    expect(user("draw me a castle")).toBe(false);
+  });
+});

@@ -7,7 +7,7 @@ import {
   toolsetForTool,
   toolsetIndexBlock,
 } from "./toolsets.js";
-import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
+import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, formatBuddyToolResult, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
 
 /** Everything a fully-equipped desktop can do. */
 const FULL = {
@@ -623,5 +623,43 @@ describe("the native tool schemas say the same thing as the prompt", () => {
     expect(names([])).not.toContain("stock_quote");
     expect(names(["markets"])).toContain("stock_quote");
     expect(names([])).toContain("load_toolset"); // the way back in is never withheld
+  });
+});
+
+describe("a failed price feed is a fact to report, not a licence to guess", () => {
+  it("no longer tells the model to web-search for the price instead", () => {
+    // The old text ended "Use search_web for current prices instead, and proceed." — the exact thing
+    // the rest of the prompt forbids, arriving at the one moment the model is looking for permission.
+    const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "MSFT" }, {});
+    expect(out).not.toMatch(/use search_web for current prices/i);
+    expect(out).toMatch(/TELL THE READER/);
+    expect(out).toMatch(/unverified/i);
+    expect(out).toMatch(/Never present it as a live price/i);
+  });
+
+  it("won't let indicators be estimated when the bars didn't arrive", () => {
+    const out = formatBuddyToolResult({ tool: "market_analysis", symbol: "MSFT" }, {});
+    expect(out).toMatch(/cannot be estimated/i);
+    expect(out).toMatch(/VWAP, RSI/);
+  });
+});
+
+describe("numbers arrive with their source attached", () => {
+  it("puts a Source line on the quote the model is handed", () => {
+    const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "MSFT" }, { quote: { symbol: "MSFT", close: 512.3 } });
+    expect(out).toContain("Source: Yahoo");
+    expect(out).toMatch(/STATE THE SOURCE/);
+  });
+
+  it("marks a Schwab quote as NOT the keyless feed", () => {
+    const out = formatBuddyToolResult({ tool: "schwab_quote", symbol: "MSFT" }, { schwabQuote: { symbol: "MSFT", last: 512.3 } });
+    expect(out).toContain("Source: your Schwab account");
+    expect(out).toMatch(/NOT the keyless feed/);
+  });
+
+  it("tells the model to repeat the source, and to decline a figure it has no source for", () => {
+    const p = buildBuddySystemPrompt({ persona: "default", library: [], canMarkets: true, loadedToolsets: [] } as never);
+    expect(p).toContain("ALWAYS SAY WHERE A NUMBER CAME FROM");
+    expect(p).toMatch(/If you have no source for a figure, you do not have the figure/);
   });
 });

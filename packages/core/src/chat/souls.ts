@@ -4294,6 +4294,26 @@ function isPairRequest(p: string): boolean {
 /** True when an image request is of the ASSISTANT itself — it names the assistant (whole word) or
  * self-references it ("yourself", "a selfie", "portrait of you", "draw you"), or asks for the two of
  * them together. */
+/**
+ * The words people actually use for a picture, which the original list didn't cover.
+ *
+ * "pic", "pics", "snap", "shot", "render", "headshot" and "close-up" are ordinary ways to ask for
+ * one, and every one of them fell through — so "send me a pic of you" carried no Soul photo while
+ * "send me a picture of you" did. The reader is left to discover, by trial, which synonym unlocks
+ * their own reference image, which reads as the feature having stopped working.
+ */
+const PICTURE_WORDS = "portrait|picture|photo|pic|pics|image|drawing|painting|selfie|snap|shot|render|rendering|headshot|close-?up|avatar|likeness";
+
+/**
+ * DEPICTION VERBS AND FRAMES that put a subject in the picture.
+ *
+ * `you as a wizard`, `you in a spacesuit`, `you wearing a hat`, `you standing on a hill` — all
+ * unmistakably ask for a picture OF that subject, and none of them says "picture of you". The
+ * preposition/participle is what keeps this tight: "a dog you saw" and "the house you live in" don't
+ * match, because they aren't followed by one of these.
+ */
+const DEPICTED = "as|in|at|on|wearing|holding|dressed|standing|sitting|smiling|posing|looking";
+
 export function isSelfPortraitRequest(prompt: string, name: string): boolean {
   const p = prompt.toLowerCase();
   const t = name.trim();
@@ -4302,9 +4322,12 @@ export function isSelfPortraitRequest(prompt: string, name: string): boolean {
     named ||
     /\byourself\b/.test(p) ||
     /\ba selfie\b/.test(p) ||
-    /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+you\b/.test(p) ||
-    /\b(draw|paint|render|generate|make|create)\s+you\b/.test(p) ||
-    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p) ||
+    new RegExp(`\\b(${PICTURE_WORDS})\\s+of\\s+you\\b`).test(p) ||
+    /\b(draw|paint|render|generate|make|create|show|send)\s+(me\s+)?you\b/.test(p) ||
+    /\byour\s+(self-?portrait|portrait|avatar|likeness|face|appearance|look)\b/.test(p) ||
+    // "what you look like" — the question that most often precedes "…now draw it".
+    /\bwhat\s+you\s+look\s+like\b/.test(p) ||
+    new RegExp(`\\byou\\s+(${DEPICTED})\\s+`).test(p) ||
     isPairRequest(p)
   );
 }
@@ -4319,9 +4342,11 @@ export function isUserPortraitRequest(prompt: string, name: string): boolean {
   return (
     named ||
     /\bmyself\b/.test(p) ||
-    /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+me\b/.test(p) ||
-    /\bmy\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p) ||
+    new RegExp(`\\b(${PICTURE_WORDS})\\s+of\\s+me\\b`).test(p) ||
+    /\bmy\s+(self-?portrait|portrait|avatar|likeness|face|appearance|look)\b/.test(p) ||
     /\b(draw|paint|render|sketch)\s+me\b(?!\s+(a|an|the|some|this|that|one)\b)/.test(p) ||
+    // Same frames as the assistant's test — "me as a knight", "me in a suit".
+    new RegExp(`\\bme\\s+(${DEPICTED})\\s+`).test(p) ||
     isPairRequest(p)
   );
 }

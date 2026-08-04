@@ -1182,7 +1182,9 @@ describe("stock_quote tool", () => {
     const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "AAPL" }, { quote: { symbol: "AAPL", close: 204, open: 200 } });
     expect(out).toContain("AAPL: 204");
     expect(out).toMatch(/financial advice/i);
-    expect(formatBuddyToolResult({ tool: "stock_quote", symbol: "ZZ" }, {})).toMatch(/no keyless quote/i);
+    // A failed feed reports the failure; it does NOT hand the model permission to substitute a
+    // number (the old text ended "Use search_web for current prices instead, and proceed").
+    expect(formatBuddyToolResult({ tool: "stock_quote", symbol: "ZZ" }, {})).toMatch(/returned no quote/i);
   });
 
   it("parses + advertises market_analysis and feeds indicators back with watch levels", () => {

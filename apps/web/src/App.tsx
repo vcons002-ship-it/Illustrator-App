@@ -490,6 +490,23 @@ function memoryStoreLabel(about: "reader" | "self" | "user" | undefined): string
  * documents a ~3 MB frame ceiling), so "send photo from phone" would do nothing. Bounded to ≤1280 px
  * on the long edge and re-encoded JPEG — plenty for the vision model that reads it. Best-effort:
  * anything unsupported/failed returns the original bytes unchanged (H4). */
+/** A Soul reference photo, downscaled for the relay. Same ceiling as an attached picture — a
+ * full-res phone photo base64-encodes past the frame limit and would be dropped silently — with the
+ * base64 round-trip the SoulImage shape needs at each end. Best-effort: an unconvertible image is
+ * sent as it came, so a failure to shrink is never a failure to send. */
+async function downscaleSoulPhotoForRelay(im: SoulImage): Promise<SoulImage> {
+  try {
+    const raw = Uint8Array.from(atob(im.dataBase64), (c) => c.charCodeAt(0));
+    const small = await downscaleImageForRelay({ bytes: raw.buffer as ArrayBuffer, mimeType: im.mimeType });
+    let binary = "";
+    const bytes = new Uint8Array(small.bytes);
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { mimeType: small.mimeType, dataBase64: btoa(binary) };
+  } catch {
+    return im;
+  }
+}
+
 async function downscaleImageForRelay(
   image: { bytes: ArrayBuffer; mimeType: string },
   limitPx = 1280,
@@ -1045,7 +1062,10 @@ export function App() {
     [refreshSoul],
   );
   /** PHONE: adopt a soul pushed down by the desktop (which owns the store the assistant reads). */
-  const applySoul = useCallback((kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence) => {
+  const applySoul = useCallback((kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence, photos?: number) => {
+    // The phone holds no photo BYTES (they aren't mirrored), so it keeps a list of placeholders just
+    // long enough to render "N reference photos" and to know when the cap is reached.
+    setSoulImagesState(kind, Array.from({ length: photos ?? 0 }, () => ({ mimeType: "image/*", dataBase64: "" })));
     const fingerprint = soulSourceFingerprint(notes);
     const waiter = soulSaveWaiters.current.get(kind);
     if (waiter && waiter.fingerprint !== fingerprint) return;
@@ -1100,6 +1120,9 @@ export function App() {
       self: {
         name: selfSoulName,
         notes: selfSoulNotes,
+        // The COUNT of reference photos, never the bytes — enough for the phone to show that the
+        // Soul has them (and to add to them) without putting megabytes in every snapshot.
+        ...(selfSoulImages.length ? { photos: selfSoulImages.length } : {}),
         ...(selfSoulEssence
           ? { essence: soulEssenceViewForNotes(selfSoulEssence, selfSoulNotes) }
           : {}),
@@ -1107,6 +1130,7 @@ export function App() {
       user: {
         name: userSoulName,
         notes: userSoulNotes,
+        ...(userSoulImages.length ? { photos: userSoulImages.length } : {}),
         ...(userSoulEssence
           ? { essence: soulEssenceViewForNotes(userSoulEssence, userSoulNotes) }
           : {}),
@@ -1116,6 +1140,8 @@ export function App() {
       selfSoulName,
       selfSoulNotes,
       selfSoulEssence,
+      selfSoulImages,
+      userSoulImages,
       userSoulName,
       userSoulNotes,
       userSoulEssence,
@@ -6713,9 +6739,9 @@ export function App() {
           });
         } else if (e.quote) {
           // The slash path runs the tool with no LLM, so nothing else would say what came back.
-          appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote)}` });
+          appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote, "yahoo")}` });
         } else if (e.indicators) {
-          appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators)}` });
+          appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators, "yahoo")}` });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
         } else if (e.wolfram) {
@@ -6737,13 +6763,11 @@ export function App() {
         } else if (typed.startsWith("/") && e.error) {
           appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
         } else if (e.call.tool === "stock_quote" || e.call.tool === "market_analysis") {
-          // A market tool that returned NOTHING (no proxy on plain web, or an unknown ticker) —
-          // say which, rather than leaving a slash command looking like it did nothing at all.
+          // The causes now name themselves upstream and arrive as `e.error`, handled above. Reaching
+          // HERE means the feed returned nothing AND explained nothing, which is its own report.
           appendBuddy({
             role: "tool",
-            text:
-              `⚠ No market data for “${"symbol" in e.call ? e.call.symbol : ""}”. The keyless feed needs the desktop app ` +
-              "or the extension (it can't run in a plain browser tab), and the ticker has to be one Yahoo knows.",
+            text: `⚠ The market feed returned nothing for “${"symbol" in e.call ? e.call.symbol : ""}” and gave no reason.`,
           });
         } else if (
           typed.startsWith("/") &&
@@ -10304,10 +10328,21 @@ export function App() {
             await saveSoulEssence(libraryStore, kind, next, notes);
             setSoulEssence(kind, next);
           }}
-          // Reference PHOTOS stay on the computer that holds them: they're base64 and mirroring them
-          // would put megabytes into every snapshot. The panel hides the section when it can't save.
+          // Reference PHOTO BYTES stay on the computer that holds them — they're base64 and mirroring
+          // them would put megabytes into every snapshot. But that only rules out sending them DOWN.
+          // The phone can still send one UP, so it gets an append-only handler: it has never held the
+          // existing list (only its count), and a full-list save from there would delete every photo
+          // it couldn't see. Downscaled first, so one picture fits a relay frame.
           {...(isRemoteClient
-            ? {}
+            ? {
+                onAddImages: async (imgs: SoulImage[]) => {
+                  const kind = showSoul;
+                  for (const im of imgs) {
+                    const small = await downscaleSoulPhotoForRelay(im);
+                    sendAppSync({ type: "vrcmd:soulPhotoAdd", kind, image: small });
+                  }
+                },
+              }
             : {
                 onSaveImages: async (imgs: SoulImage[]) => {
                   const kind = showSoul;

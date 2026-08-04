@@ -7,6 +7,9 @@ import {
   saveSkill,
   saveSoul,
   saveSoulName,
+  loadSoulImages,
+  saveSoulImages,
+  MAX_SOUL_IMAGES,
   saveSoulEssence,
   loadSoul,
   type BookSource,
@@ -87,7 +90,7 @@ export interface RemoteMirrorDeps {
   memories: MemoryNote[];
   skills: Skill[];
   /** The two identity souls (notes, name, and derived essence) mirrored to the phone's Soul panels. */
-  souls: Record<SoulKind, { name: string; notes: SoulNote[]; essence?: SoulEssence }>;
+  souls: Record<SoulKind, { name: string; notes: SoulNote[]; essence?: SoulEssence; photos?: number }>;
   /** The desktop's scheduled/periodic tasks (mirrored down; the phone has no scheduler of its own). */
   scheduled: ScheduledTask[];
   book: BookSource | undefined;
@@ -101,7 +104,7 @@ export interface RemoteMirrorDeps {
   setMemories: (notes: MemoryNote[]) => void;
   setSkills: (skills: Skill[]) => void;
   /** PHONE: adopt a desktop soul push. DESKTOP: re-read the saved soul after a phone edit. */
-  applySoul: (kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence) => void;
+  applySoul: (kind: SoulKind, name: string, notes: SoulNote[], essence?: SoulEssence, photos?: number) => void;
   refreshSoul: (kind: SoulKind) => void;
   /** DESKTOP: rebuild an Essence with the model/store that owns the authoritative Soul. */
   generateSoulEssence: (
@@ -318,6 +321,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
         name: souls.self.name,
         notes: souls.self.notes,
         ...(souls.self.essence ? { essence: souls.self.essence } : {}),
+        ...(souls.self.photos ? { photos: souls.self.photos } : {}),
       },
       {
         type: "vrsync:soul",
@@ -325,6 +329,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
         name: souls.user.name,
         notes: souls.user.notes,
         ...(souls.user.essence ? { essence: souls.user.essence } : {}),
+        ...(souls.user.photos ? { photos: souls.user.photos } : {}),
       },
       // ALWAYS sent, even with nothing open: a re-sync must be able to CLEAR a book the phone still
       // shows but the desktop has since closed (the old combined snapshot carried `book: undefined`
@@ -385,7 +390,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             setSkills(msg.skills);
             break;
           case "vrsync:soul":
-            applySoul(msg.kind, msg.name, msg.notes, msg.essence);
+            applySoul(msg.kind, msg.name, msg.notes, msg.essence, msg.photos);
             break;
           case "vrsync:soulEssenceProgress": {
             const pending = soulEssenceRefreshPending.current.get(msg.requestId);
@@ -570,6 +575,19 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             // The phone edited a Soul panel; save it HERE. This store is the one the assistant reads
             // its identity from — a phone-local write would have changed nothing about it.
             void saveSoul(libraryStore, msg.kind, msg.notes).then(() => refreshSoul(msg.kind)).catch(() => {});
+            break;
+          case "vrcmd:soulPhotoAdd":
+            // APPEND. The phone only ever knew the COUNT of the existing photos, so the current list
+            // is read here and the new one added to it — a full-list save from the phone would have
+            // deleted every photo it had no bytes for.
+            void loadSoulImages(libraryStore, msg.kind)
+              .then((current) =>
+                current.length >= MAX_SOUL_IMAGES
+                  ? current
+                  : saveSoulImages(libraryStore, msg.kind, [...current, msg.image]).then(() => [...current, msg.image]),
+              )
+              .then(() => refreshSoul(msg.kind))
+              .catch(() => {});
             break;
           case "vrcmd:soulName":
             void saveSoulName(libraryStore, msg.kind, msg.name).then(() => refreshSoul(msg.kind)).catch(() => {});
@@ -817,6 +835,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
       name: souls.self.name,
       notes: souls.self.notes,
       ...(souls.self.essence ? { essence: souls.self.essence } : {}),
+      ...(souls.self.photos ? { photos: souls.self.photos } : {}),
     });
     sendAppSync({
       type: "vrsync:soul",
@@ -824,6 +843,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
       name: souls.user.name,
       notes: souls.user.notes,
       ...(souls.user.essence ? { essence: souls.user.essence } : {}),
+      ...(souls.user.photos ? { photos: souls.user.photos } : {}),
     });
   }, [isRemoteClient, sendAppSync, souls]);
   useEffect(() => {
