@@ -64,6 +64,10 @@ export type MainToWorker =
   /** The current set of files the assistant has written to the workspace this session, so the worker can
    * inject a terse non-trimmable reminder into the buddy prompt (the model stays aware of what it made). */
   | { type: "fileLedger"; files: CreatedFileRef[] }
+  /** Labels of the reference pictures active in this chat. Labels only — the BYTES stay on the host
+   * and ride with the render call; this is what keeps the model aware one exists after the chat line
+   * announcing it has been trimmed out of history. */
+  | { type: "imageRefLedger"; labels: string[] }
   /** The workspace's AGENTS.md / CONVENTIONS.md text (read by the host each turn), injected into the
    * buddy prompt as durable project conventions. Empty string when there's no such file. */
   | { type: "projectGuide"; text: string }

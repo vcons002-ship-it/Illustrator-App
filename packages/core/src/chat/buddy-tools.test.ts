@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALWAYS_GATED_TOOLS,
+  buildImageReferenceBlock,
   MAX_BUDDY_TOOL_ROUNDS,
   ACTIVE_DOC_MAX_CHARS,
   activeDocBudget,
@@ -2747,5 +2748,25 @@ describe("use_image_reference by URL — adopting the picture actually pointed a
       { referenceAdopted: { ok: false, error: "no picture found" } },
     );
     expect(out).toContain("https://x/a.jpg");
+  });
+});
+
+describe("buildImageReferenceBlock — a reference the model still knows about on turn five", () => {
+  it("lists what's attached and forbids re-describing the subject", () => {
+    // The reference announced itself once, as a chat line that never reached the persisted
+    // transcript. By the next message the model had no idea one existed, wrote a fully descriptive
+    // prompt, and a description plus a reference gives you the description. "Worked once, never
+    // again" is exactly what that looks like from outside.
+    const block = buildImageReferenceBlock(["Terrace, Bath", "dog.png"]);
+    expect(block).toContain("REFERENCE PICTURES active in this chat (2)");
+    expect(block).toContain("- Terrace, Bath");
+    expect(block).toContain("- dog.png");
+    expect(block).toMatch(/prompt for what should CHANGE/i);
+    expect(block).toMatch(/do NOT describe the subject's appearance back into the prompt/i);
+    expect(block).toMatch(/matches your words instead of the reference/);
+  });
+
+  it("says nothing at all when no reference is attached", () => {
+    expect(buildImageReferenceBlock([])).toBe("");
   });
 });

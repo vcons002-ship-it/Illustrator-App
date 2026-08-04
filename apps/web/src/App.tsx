@@ -831,6 +831,7 @@ export function App() {
     chatVideo,
     applyEngineConfig,
     setFileLedger,
+    setImageRefLedger,
     setProjectGuide,
     setActiveDocument,
     chatCancel,
@@ -2357,7 +2358,7 @@ export function App() {
     setBuddyPlan(undefined);
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
-    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    clearImageRefsRef.current(); // per-session — and the model's ledger clears with the bytes
     turnUserTextRef.current = "";
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
@@ -4556,6 +4557,21 @@ export function App() {
    * MAX_CHAT_REFS anyway), and says so in the chat — a reference that acts silently is one the
    * reader can't tell apart from one that was ignored.
    */
+  // Held in refs because the session-clear sites sit ABOVE the callbacks that own them, and the
+  // bytes and the model's ledger must never be cleared independently of each other.
+  const publishImageRefsRef = useRef<() => void>(() => {});
+  const clearImageRefsRef = useRef<() => void>(() => {});
+  /** Tell the worker which reference pictures are active, by label. */
+  const publishImageRefs = useCallback(() => {
+    setImageRefLedger(turnRefImagesRef.current.map((r, i) => r.label ?? `picture ${i + 1}`));
+  }, [setImageRefLedger]);
+  /** Drop every reference — the chat is starting over, so what it was drawing from starts over too. */
+  const clearImageRefs = useCallback(() => {
+    turnRefImagesRef.current = [];
+    publishImageRefs();
+  }, [publishImageRefs]);
+  publishImageRefsRef.current = publishImageRefs;
+  clearImageRefsRef.current = clearImageRefs;
   /**
    * The gallery's "Use as reference": adopt THAT hit, by URL.
    *
@@ -4571,13 +4587,20 @@ export function App() {
     [],
   );
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
-  const useAsChatReference = useCallback((image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
-    const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType }];
-    turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
-    buddyNoteRef.current(
-      `🖼 “${label}” is now a reference for pictures I make in this chat (${turnRefImagesRef.current.length} in use).`,
-    );
-  }, []);
+  const useAsChatReference = useCallback(
+    (image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
+      const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType, label }];
+      turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
+      // The chat line is for the READER and does not survive into the persisted transcript. The
+      // LEDGER is for the model, rides after the cache prefix, and is restated every turn — which is
+      // the whole difference between a reference that works once and one that keeps working.
+      publishImageRefs();
+      buddyNoteRef.current(
+        `🖼 “${label}” is now a reference for pictures I make in this chat (${turnRefImagesRef.current.length} in use).`,
+      );
+    },
+    [publishImageRefs],
+  );
 
 
   const onOpenLocalFile = useCallback(
@@ -7177,7 +7200,9 @@ export function App() {
    * this": the render only ever saw a description. The bytes now survive the turn that carried them,
    * and are cleared at the start of the next one so an old photo can't leak into a later picture.
    */
-  const turnRefImagesRef = useRef<{ bytes: ArrayBuffer; mimeType: string }[]>([]);
+  // Labelled, because the model has to be TOLD what it's drawing from — a bare count says a
+  // reference exists but not which, and "picture 3" can't be reasoned about.
+  const turnRefImagesRef = useRef<{ bytes: ArrayBuffer; mimeType: string; label?: string }[]>([]);
   /** What the reader asked for on the turn in flight. The render's Soul detection reads it beside
    * the model's prompt — see the `userText` note on the chatTool message. */
   const turnUserTextRef = useRef("");
@@ -7233,7 +7258,8 @@ export function App() {
       // Keep the attached pictures for THIS turn's renders (see turnRefImagesRef).
       turnRefImagesRef.current = atts
         .filter((a) => a.kind === "image" && a.image)
-        .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType }));
+        .map((a) => ({ bytes: a.image!.bytes.slice(0), mimeType: a.image!.mimeType, label: a.name }));
+      publishImageRefsRef.current();
       for (const att of atts) {
         if (att.kind === "image" && att.image) {
           // Show the picture the reader attached, inline in the chat (display-only — the full
@@ -7870,7 +7896,7 @@ export function App() {
     buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
-    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    clearImageRefsRef.current(); // per-session — and the model's ledger clears with the bytes
     turnUserTextRef.current = "";
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // else a cleared step's nudge budget leaks into the next chat (H7)
@@ -7909,7 +7935,7 @@ export function App() {
     buddyPlanRef.current = undefined;
     setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
     buddyWorkflowRef.current = undefined;
-    turnRefImagesRef.current = []; // the reader's attached reference photos are per-session too
+    clearImageRefsRef.current(); // per-session — and the model's ledger clears with the bytes
     turnUserTextRef.current = "";
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     appManagedNudgeRef.current = { stepId: "", count: 0 }; // per-session nudge budget — don't leak across a switch (H7)
