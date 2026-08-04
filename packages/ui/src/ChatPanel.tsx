@@ -382,6 +382,11 @@ export interface ChatPanelProps {
   onClearHistory: () => void;
   /** Delete one message by index (must be referentially stable — see MessageBubble). */
   onDeleteMessage?: (index: number) => void;
+  /** Adopt a searched picture as the reference this session's renders draw from. The book chat shows
+   * image results as a gallery exactly like the buddy chat, and was the one panel where a picture in
+   * it couldn't be picked up and drawn from — MessageBubble has always supported this; nothing here
+   * passed it down. */
+  onUseImageAsReference?: (item: { full: string; title?: string }) => void;
   /** Compact the conversation into a summary (frees the model's context window). */
   onCompact?: () => void;
   /** Save a file the assistant wrote in a code block. */
@@ -512,6 +517,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
               {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
               {...(props.fileActions ? { fileActions: props.fileActions } : {})}
+              {...(props.onUseImageAsReference ? { onUseImageAsReference: props.onUseImageAsReference } : {})}
               {...(props.desktop ? { desktop: props.desktop } : {})}
               {...(props.thinkingOpen !== undefined && i === props.messages.length - 1
                 ? { thinkingOpen: props.thinkingOpen }

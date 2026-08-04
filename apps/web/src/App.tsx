@@ -4620,16 +4620,37 @@ export function App() {
    * picture was never used". It relays, and so does every other programmatic send, because the rule
    * now lives at onBuddySend's door rather than here; see the note there for why this one is the
    * reason the rule exists. Nothing to do at this call site but say what the reader asked for.
+   *
+   * WHICH PANEL THE READER CLICKED IN is recorded, because the adoption itself always runs as a
+   * BUDDY turn — that is where `/reference` executes — so a click made in the book chat would land
+   * its confirmation in a panel the reader isn't looking at, and the button would read as broken.
+   * The same "a click that appears to do nothing" failure this whole path was rewritten to avoid.
+   *
+   * It is a ref rather than an argument because the click and its outcome are separated by a whole
+   * round trip: the download happens in the worker, and the result arrives later as a tool event
+   * with nothing on it to say who asked. Consumed on arrival and reset to "buddy" (see the
+   * referenceAdopted handler), so it steers exactly the one adoption it was set for — a reference
+   * the MODEL later adopts on its own, or a photo opened from disk, is not this reader's click.
    */
+  const referenceOriginRef = useRef<"buddy" | "book">("buddy");
   const onUseImageAsReference = useCallback(
     (item: { full: string; title?: string }) => {
+      referenceOriginRef.current = "buddy";
+      onBuddySendTextRef.current(`/reference ${item.full}`);
+    },
+    [],
+  );
+  /** The same button, in the book's own chat panel — see referenceOriginRef. */
+  const onUseImageAsReferenceFromBook = useCallback(
+    (item: { full: string; title?: string }) => {
+      referenceOriginRef.current = "book";
       onBuddySendTextRef.current(`/reference ${item.full}`);
     },
     [],
   );
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback(
-    (image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
+    (image: { bytes: ArrayBuffer; mimeType: string }, label: string, echoToBook = false) => {
       turnRefImagesRef.current = mergeChatReferences(
         turnRefImagesRef.current,
         [{ bytes: image.bytes.slice(0), mimeType: image.mimeType, label }],
@@ -4643,6 +4664,11 @@ export function App() {
       publishImageRefs();
       const note = referenceAdoptedNote(label, turnRefImagesRef.current.length);
       buddyNoteRef.current(note.text, note.turns);
+      // Clicked in the BOOK's chat: say so there too, or the click reads as having done nothing.
+      // Display-only (`turns: []`) — the buddy transcript above already carries the durable record,
+      // and the book chat's model learns about the reference from the block that now rides its every
+      // turn, so a second copy of the fact would be telling it twice.
+      if (echoToBook) appendChat({ role: "tool", text: note.text, turns: [] });
     },
     [publishImageRefs],
   );
@@ -6843,14 +6869,24 @@ export function App() {
         if (e.referenceAdopted) {
           // A picture the assistant deliberately adopted from a web search. Registered exactly like
           // an attachment or an opened file — one set, one code path, one note in the chat.
+          //
+          // CONSUMED HERE, once, and reset: the flag says where the reader CLICKED, and the click it
+          // was set for is this one. Leaving it set would misdirect the next adoption — the model
+          // reaching for a reference on its own, or a photo opened from disk — into a panel nobody
+          // asked from. Read before the branch so a FAILURE is reported where the click was made
+          // too: a click that quietly fails in a panel you can't see is the whole reason this
+          // routing exists, and reporting only the successes would rebuild that hole on one side.
+          const echoToBook = referenceOriginRef.current === "book";
+          referenceOriginRef.current = "buddy";
           const r = e.referenceAdopted;
           if (r.ok && r.base64) {
-            useAsChatReference({ bytes: base64ToBytes(r.base64), mimeType: r.mimeType ?? "image/jpeg" }, r.title ?? "web picture");
+            useAsChatReference({ bytes: base64ToBytes(r.base64), mimeType: r.mimeType ?? "image/jpeg" }, r.title ?? "web picture", echoToBook);
           } else {
             // Durable, like the success beside it: a failure the model can't see is one it will
             // cheerfully answer over ("yes, I used your picture") on the very next message.
             const failed = referenceFailedNote(r.error);
             appendBuddy({ role: "tool", text: failed.text, turns: failed.turns });
+            if (echoToBook) appendChat({ role: "tool", text: failed.text, turns: [] });
           }
         } else if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
@@ -10282,6 +10318,9 @@ export function App() {
           allowSpoilers={isTechnical || allowSpoilers}
           technical={isTechnical}
           onSend={onChatSendText}
+          // The book chat shows image-search results as a gallery like the buddy chat does, and
+          // until now was the only one where a picture in it couldn't be picked up and drawn from.
+          onUseImageAsReference={onUseImageAsReferenceFromBook}
           onApprovePendingTool={onApprovePendingTool}
           onDismissPendingTool={onDismissPendingTool}
           onToggleSpoilers={setAllowSpoilers}
