@@ -6737,13 +6737,11 @@ export function App() {
         } else if (typed.startsWith("/") && e.error) {
           appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
         } else if (e.call.tool === "stock_quote" || e.call.tool === "market_analysis") {
-          // A market tool that returned NOTHING (no proxy on plain web, or an unknown ticker) —
-          // say which, rather than leaving a slash command looking like it did nothing at all.
+          // The causes now name themselves upstream and arrive as `e.error`, handled above. Reaching
+          // HERE means the feed returned nothing AND explained nothing, which is its own report.
           appendBuddy({
             role: "tool",
-            text:
-              `⚠ No market data for “${"symbol" in e.call ? e.call.symbol : ""}”. The keyless feed needs the desktop app ` +
-              "or the extension (it can't run in a plain browser tab), and the ticker has to be one Yahoo knows.",
+            text: `⚠ The market feed returned nothing for “${"symbol" in e.call ? e.call.symbol : ""}” and gave no reason.`,
           });
         } else if (
           typed.startsWith("/") &&

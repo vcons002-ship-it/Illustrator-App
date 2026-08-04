@@ -4421,9 +4421,14 @@ function formatBuddyToolResultBody(
   }
   if (call.tool === "stock_quote") {
     if (!result.quote) {
+      // This used to end "Use search_web for current prices instead, and proceed." — which is the
+      // exact thing the rest of the prompt now forbids, arriving at the one moment the model is
+      // looking for permission. A failed feed is a fact to report, not a licence to guess: if a
+      // search is the only option left, the number has to be labelled for what it is.
       return (
-        `[stock_quote: no keyless quote for "${call.symbol}" right now (the quote feed needs the desktop app or ` +
-        "extension, or the symbol may be unknown). Use search_web for current prices instead, and proceed.]"
+        `[stock_quote returned no quote for "${call.symbol}" and did not say why.] TELL THE READER the live quote ` +
+        "failed — do NOT quietly substitute a number. If they still want a figure, search_web for it and say plainly " +
+        "that it is an unverified figure from a web page, with its date. Never present it as a live price."
       );
     }
     return (
@@ -4492,7 +4497,10 @@ function formatBuddyToolResultBody(
   }
   if (call.tool === "market_analysis") {
     if (!result.indicators) {
-      return `[market_analysis: no keyless bar data for "${call.symbol}" (needs the desktop app or extension). Use search_web instead.]`;
+      return (
+        `[market_analysis returned no bars for "${call.symbol}".] Say so plainly — indicators cannot be estimated ` +
+        "from memory or read off a web page, so do not offer numbers for VWAP, RSI or a moving average you did not compute."
+      );
     }
     return (
       `[market_analysis — ${result.indicators.bars} bars]\n${formatIndicators(result.indicators)}\n` +
