@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, SoulEssence, SoulKind, SoulNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, SoulEssence, SoulImage, SoulKind, SoulNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -232,7 +232,10 @@ export type SyncToPhone =
   | { type: "vrsync:skills"; skills: Skill[] } // the assistant's saved skills/playbooks → phone Skills panel
   // The two identity souls → the phone's Soul panels. The derived essence is compact enough to ride
   // with the notes; reference PHOTOS are base64, so they stay on the computer that owns them.
-  | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[]; essence?: SoulEssence }
+  // `photos` is a COUNT, never the bytes. Reference photos are base64 and mirroring them would put
+  // megabytes into every snapshot — but the phone still needs to know they exist, or its Soul panel
+  // shows an empty photo section on a Soul that has three.
+  | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[]; essence?: SoulEssence; photos?: number }
   // Result of an explicit Essence rebuild requested on the PHONE. The desktop owns both the Soul
   // store and the text model, so the phone cannot correctly run this operation in its own worker.
   | { type: "vrsync:soulEssenceProgress"; requestId: SoulEssenceRelayRequestId; kind: SoulKind; progress: SoulEssenceJobProgress }
@@ -308,6 +311,10 @@ export type CmdToDesktop =
   // so a phone-local write would change nothing and be clobbered by the next vrsync:soul).
   | { type: "vrcmd:soulSave"; kind: SoulKind; notes: SoulNote[] }
   | { type: "vrcmd:soulName"; kind: SoulKind; name: string }
+  // Phone added a reference photo → APPEND it on the desktop. Append, not replace: the phone has
+  // never held the existing photos (only their count), so a full-list save from there would wipe
+  // every photo it couldn't see. Downscaled before sending so one image fits a relay frame.
+  | { type: "vrcmd:soulPhotoAdd"; kind: SoulKind; image: SoulImage }
   // Phone pruned a misfiled line from a generated Essence → save it on the desktop, which owns the
   // store the assistant reads (a phone-local write changes nothing and is clobbered by vrsync:soul).
   | { type: "vrcmd:soulEssenceEdit"; kind: SoulKind; essence: SoulEssence }

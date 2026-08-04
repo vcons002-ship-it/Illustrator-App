@@ -60,6 +60,10 @@ export interface SoulPanelProps {
   /** Persist the WHOLE reference-photo list (capped at MAX_SOUL_IMAGES). ABSENT on a linked phone,
    * where the photos live on the computer that owns them — the section is then hidden entirely. */
   onSaveImages?: (images: SoulImage[]) => Promise<void>;
+  /** APPEND photos without holding the existing ones — the linked phone's path. It never receives the
+   * bytes (they'd be megabytes in every mirror frame), only the count, so it cannot save a whole
+   * list: doing so would delete every photo it couldn't see. Given either handler, the section shows. */
+  onAddImages?: (images: SoulImage[]) => Promise<void>;
   /** Drop one source-exact line from the generated Essence. Absent ⇒ the ✕ buttons don't render
    * (a linked phone, where the desktop owns the store). */
   onRemoveEssenceFact?: (list: SoulEssenceExactList, index: number) => Promise<void>;
@@ -153,6 +157,7 @@ export const SoulPanel = memo(function SoulPanel({
   onSaveName,
   images,
   onSaveImages,
+  onAddImages,
   onRemoveEssenceFact,
   onClose,
   limits,
@@ -353,7 +358,18 @@ export const SoulPanel = memo(function SoulPanel({
             }),
         ),
       );
-      await persistPics([...pics, ...read]);
+      // Append-only host (the phone): send just the NEW pictures and let the owner add them.
+      if (!onSaveImages && onAddImages) {
+        setSavingBusy(true);
+        try {
+          await onAddImages(read);
+          setPics([...pics, ...read]);
+        } finally {
+          setSavingBusy(false);
+        }
+      } else {
+        await persistPics([...pics, ...read]);
+      }
     } catch (err) {
       // Callers fire-and-forget (`void addImageFiles(...)`) — an unreadable file must land in the
       // panel's error line, not as an unhandled rejection.
@@ -735,7 +751,7 @@ export const SoulPanel = memo(function SoulPanel({
 
         {/* Hidden when the host can't save photos — on a linked phone they live on the computer,
             and an upload button that quietly discarded the picture would be worse than no button. */}
-        {onSaveImages ? (
+        {onSaveImages || onAddImages ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10 }}>
           <div style={{ fontSize: 12, opacity: 0.85, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>📷 Reference photos</span>
@@ -747,21 +763,39 @@ export const SoulPanel = memo(function SoulPanel({
             Photos of {variant === "self" ? "the assistant" : "you"}, used when it draws{" "}
             {variant === "self" ? "itself" : "you"}. (Gemini & OpenAI image models and ComfyUI use these; some
             models, like Flux, ignore them.)
+            {!onSaveImages && onAddImages ? " Added here, kept on your computer — remove one from the Soul panel there." : ""}
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {pics.map((im, i) => (
-              <div key={i} style={{ position: "relative" }}>
-                <img
-                  src={`data:${im.mimeType};base64,${im.dataBase64}`}
-                  alt="reference"
-                  decoding="async"
-                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
-                />
-                <button style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
-                  ×
-                </button>
-              </div>
-            ))}
+            {/* On the phone a "photo" is a placeholder with no bytes — show it as a tile that says
+                so rather than a broken <img>, and don't offer a delete the phone can't perform. */}
+            {pics.map((im, i) =>
+              im.dataBase64 ? (
+                <div key={i} style={{ position: "relative" }}>
+                  <img
+                    src={`data:${im.mimeType};base64,${im.dataBase64}`}
+                    alt="reference"
+                    decoding="async"
+                    style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
+                  />
+                  {onSaveImages ? (
+                    <button style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div
+                  key={i}
+                  title="Stored on your computer — add more from here, or open the Soul panel there to remove one"
+                  style={{
+                    width: 64, height: 64, borderRadius: 6, border: "1px dashed rgba(255,255,255,0.25)",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, opacity: 0.6,
+                  }}
+                >
+                  🖼
+                </div>
+              ),
+            )}
             {pics.length < MAX_SOUL_IMAGES ? (
               <button style={addThumb} onClick={() => fileInput.current?.click()} disabled={operationBusy}>
                 + Photo
