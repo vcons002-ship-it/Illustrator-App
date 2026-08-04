@@ -4929,6 +4929,12 @@ function formatBuddyToolResultBody(
     return (
       `[open_image — "${img.name}" is now shown inline in the chat for the reader to see]` +
       (img.observation ? `\nWhat it shows: ${img.observation}` : "") +
+      // Same contract as an attached photo: the BYTES go to the image model, so a prompt that
+      // re-types the description throws the likeness away and renders something that merely matches
+      // the words. The model cannot know that unless it is told.
+      "\nThis picture is ALSO a REFERENCE for anything you generate in this chat, so do NOT describe its " +
+      "appearance back into a generate_image prompt — write only what should CHANGE (the scene, the pose, " +
+      "the style) and let the reference carry the likeness." +
       "\nDon't re-describe the picture unless asked; carry on with the task."
     );
   }

@@ -2670,3 +2670,18 @@ describe("a set of documents is a set of create_document calls", () => {
     expect(p).toContain("starts a second, independent document");
   });
 });
+
+describe("a picture opened into the chat is a reference, not just something to look at", () => {
+  it("tells the model the bytes are going to the image model", () => {
+    // The paperclip path already said this. open_image didn't — so a photo the assistant opened
+    // from the reader's computer got described back into the prompt, and the render matched the
+    // words instead of the picture.
+    const out = formatBuddyToolResult(
+      { tool: "open_image", path: "/home/me/dog.png" },
+      { openedImage: { name: "dog.png", mimeType: "image/png", base64: "", observation: "a brown dog" } },
+    );
+    expect(out).toMatch(/ALSO a REFERENCE/);
+    expect(out).toMatch(/do NOT describe its appearance back into a generate_image prompt/i);
+    expect(out).toMatch(/what should CHANGE/);
+  });
+});
