@@ -4321,6 +4321,13 @@ export function App() {
     try {
       const out = await chatTool(call, {
         onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
+        // THE READER'S CHOSEN PICTURES REACH THIS RENDER TOO. The reference set is per-SESSION, and
+        // this was the one render that never received it — approveGenerateImage passed `refImages`
+        // and this didn't, so a picture the reader had saved conditioned their buddy-chat renders
+        // and silently did nothing to an illustration asked for beside the book. Soul photos already
+        // arrived here (the worker resolves those itself), which is what made the gap so hard to
+        // see: references plainly worked in this panel, just never the reader's own.
+        ...(turnRefImagesRef.current.length ? { refImages: turnRefImagesRef.current } : {}),
       });
       setChatBusy(false);
       setChatActivity("");
