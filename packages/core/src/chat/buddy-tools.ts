@@ -2105,6 +2105,34 @@ export function buildFileLedgerBlock(files: CreatedFileRef[]): string {
   );
 }
 
+/**
+ * THE PICTURES THIS CHAT IS DRAWING FROM, restated every turn.
+ *
+ * A reference used to announce itself once, as a chat line, and that line did not survive into the
+ * persisted transcript — so by the next message the model had no idea a reference existed. It then
+ * did the reasonable thing and wrote a fully descriptive prompt, and a descriptive prompt plus a
+ * reference gives you the description rather than the likeness. From the reader's side that is
+ * indistinguishable from the reference being ignored, which is exactly how it was reported: worked
+ * once, never again.
+ *
+ * So it rides after the cache prefix like the file ledger and the active document — the things that
+ * must stay true after history trimming. The instruction matters as much as the list: a model that
+ * knows a reference is attached still has to be told not to re-describe what it carries. PURE.
+ */
+export function buildImageReferenceBlock(labels: readonly string[]): string {
+  if (!labels.length) return "";
+  const rows = labels.slice(-LEDGER_MAX).map((l) => `- ${l}`).join("\n");
+  return (
+    `REFERENCE PICTURES active in this chat (${labels.length}) — every image you generate draws from ` +
+    "them, and they carry the likeness:\n" +
+    rows +
+    "\nSo prompt for what should CHANGE — the scene, the pose, the framing, the style — and do NOT " +
+    "describe the subject's appearance back into the prompt. Describing what the reference already " +
+    "shows overrides it, and you get a picture that matches your words instead of the reference. " +
+    "If the reader wants something unrelated to these, say so rather than silently drawing from them."
+  );
+}
+
 /** Max chars of the workspace AGENTS.md / CONVENTIONS.md folded into the prompt (a brief, not a manual). */
 export const PROJECT_GUIDE_MAX_CHARS = 6_000;
 

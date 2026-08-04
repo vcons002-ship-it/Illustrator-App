@@ -49,6 +49,7 @@ import {
   placeSchwabOrder,
   buildBuddySystemPrompt,
   buildFileLedgerBlock,
+  buildImageReferenceBlock,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
   buildActiveDraftBlock,
@@ -173,6 +174,7 @@ import {
   hasGoogleSkipMarker,
   runTaskPlanning,
   retrieveFromHits,
+  unsupportedImageFormat,
   normalizeTaskPlan,
   nextOccurrence,
   upsertTaskPlan,
@@ -1087,6 +1089,8 @@ let imageModelFreed = false;
 /** Workspace files the assistant wrote this session (pushed from the host via the `fileLedger` message);
  * injected as a terse non-trimmable reminder into the buddy prompt so the model remembers what it made. */
 let fileLedger: CreatedFileRef[] = [];
+/** Labels of the reference pictures active in the host's chat (bytes stay there). */
+let imageRefLedger: string[] = [];
 /** The workspace's AGENTS.md / CONVENTIONS.md text (pushed from the host); injected as durable project
  * conventions into the buddy prompt. Empty when there's no such file. */
 let projectGuide = "";
@@ -1767,6 +1771,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       }
       break;
     }
+    case "imageRefLedger":
+      imageRefLedger = msg.labels;
+      break;
     case "fileLedger":
       // The host's current set of workspace files the assistant wrote this session — injected into the
       // buddy prompt so the model stays aware of what it made (and can read_file before editing).
@@ -3616,6 +3623,31 @@ async function mirrorPlanToGoogle(planId: string): Promise<void> {
   }
 }
 
+/**
+ * WHY a picture couldn't be adopted, when we can find out cheaply.
+ *
+ * The ladder returns "no bytes" for a refusal and for a format we reject, which are different
+ * problems: one is the host saying no, the other is "pick a different result, this one is AVIF".
+ * A second fetch is worth it because the alternative is a reader retrying a dead end.
+ */
+async function describeAdoptFailure(url: string | undefined): Promise<string | undefined> {
+  if (!url) return undefined;
+  const cf = corsFetch();
+  if (!cf) return undefined;
+  try {
+    const res = await new DirectTransport(cf).send({ url, method: "GET", signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return `that host refused the download (HTTP ${res.status}) — it only allows hotlinking`;
+    const bytes = await res.arrayBuffer();
+    const format = unsupportedImageFormat(bytes);
+    if (format) {
+      return `that picture is ${format}, which the image engine can't open — pick a JPEG or PNG result instead`;
+    }
+    return "that host served something that wasn't an image (usually a block page)";
+  } catch {
+    return undefined;
+  }
+}
+
 async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport, tok: () => Promise<string>): Promise<TaskPlan> {
   const parentId = plan.googleTaskId;
   if (!parentId) return plan;
@@ -4756,7 +4788,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               ? await imageSearch.retrieve(query)
               : undefined;
           if (!found?.bytes) {
-            return { ok: false, error: found ? "that picture could only be hotlinked, not downloaded" : "no picture found" };
+            // "Could not download" covers two situations that need different actions from the
+            // reader, so find out which. A hotlink-blocking host and a modern container the image
+            // engine can't open both end up here, and only one of them is worth retrying.
+            const why = found ? await describeAdoptFailure(url ?? found.sourceUrl) : undefined;
+            return { ok: false, error: why ?? (found ? "that host refused the download (it only allows hotlinking)" : "no picture found") };
           }
           const bytes = new Uint8Array(found.bytes.bytes);
           let binary = "";
@@ -5869,6 +5905,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // Like the story-state block, the file ledger rides AFTER the cached prefix (it changes as files are
     // written) so the model stays aware of what it created even after history trimming.
     const ledgerBlock = buildFileLedgerBlock(fileLedger);
+    // Same reason as the file ledger: it changes mid-session and must outlive history trimming.
+    const imageRefBlock = buildImageReferenceBlock(imageRefLedger);
     const guideBlock = buildProjectGuideBlock(projectGuide);
     // The active document (last create_document / one the reader opened) rides after the cache prefix
     // too, so "tighten the intro / add a section" acts on the real text even after history trimming.
@@ -5878,7 +5916,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // round-trip now.
     const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
     const draftBlock = buildActiveDraftBlock(lastDraft);
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the

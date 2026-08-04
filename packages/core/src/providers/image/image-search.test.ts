@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sniffImageMime,
+import { sniffImageMime, unsupportedImageFormat,
   GoogleImageSearch,
   buildFigureQuery,
   formatGroundingContext,
@@ -210,5 +210,35 @@ describe("sniffImageMime — the bytes decide, not the URL", () => {
     const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
     expect(sniffImageMime(svg.buffer as ArrayBuffer)).toBeUndefined();
     expect(sniffImageMime(new ArrayBuffer(4))).toBeUndefined();
+  });
+});
+
+describe("unsupportedImageFormat — a real picture the engine still can't open", () => {
+  const ftyp = (brand: string) => {
+    const b = new Uint8Array(16);
+    b.set(new TextEncoder().encode("ftyp"), 4);
+    b.set(new TextEncoder().encode(brand), 8);
+    return b.buffer;
+  };
+
+  it("names AVIF and HEIC — ordinary on news and government sites, unopenable by Pillow", () => {
+    // "Couldn't download" sends the reader back to retry a dead end. "That one's AVIF, pick a JPEG"
+    // tells them what to do.
+    expect(unsupportedImageFormat(ftyp("avif"))).toBe("AVIF");
+    expect(unsupportedImageFormat(ftyp("heic"))).toBe("HEIC");
+    expect(unsupportedImageFormat(ftyp("mif1"))).toBe("HEIC");
+  });
+
+  it("names JPEG XL and SVG too", () => {
+    const jxl = new Uint8Array([0xff, 0x0a, ...Array(14).fill(0)]).buffer;
+    expect(unsupportedImageFormat(jxl)).toBe("JPEG XL");
+    expect(unsupportedImageFormat(new TextEncoder().encode('<svg xmlns="x"></svg>').buffer as ArrayBuffer)).toBe("SVG");
+  });
+
+  it("says nothing about a block page — that's a refusal, not a format", () => {
+    const html = new TextEncoder().encode("<!DOCTYPE html><html>403</html>");
+    expect(unsupportedImageFormat(html.buffer as ArrayBuffer)).toBeUndefined();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0]).buffer;
+    expect(unsupportedImageFormat(png)).toBeUndefined();
   });
 });

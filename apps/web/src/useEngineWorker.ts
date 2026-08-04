@@ -300,6 +300,8 @@ export interface EngineWorkerApi {
   /** Update the worker's list of workspace files the assistant wrote this session, so it injects a terse
    * reminder into the buddy prompt (the model stays aware of what it made + can read_file before editing). */
   setFileLedger: (files: CreatedFileRef[]) => void;
+  /** Labels of the reference pictures active in the chat (bytes stay on the host). */
+  setImageRefLedger: (labels: string[]) => void;
   /** Update the worker's workspace project-guide text (AGENTS.md / CONVENTIONS.md) injected each turn. */
   setProjectGuide: (text: string) => void;
   /** Set/clear the document the reader is viewing so the buddy can discuss + revise it (uploaded docs). */
@@ -1659,6 +1661,13 @@ export function useEngineWorker(
     send({ type: "fileLedger", files });
   }, []);
 
+  /** Labels of the reference pictures this chat draws from — bytes stay here and ride with the
+   * render; this is what keeps the model aware one exists after its chat line is trimmed away. */
+  const setImageRefLedger = useCallback((labels: string[]) => {
+    if (remoteRef.current) return;
+    send({ type: "imageRefLedger", labels });
+  }, []);
+
   const setProjectGuide = useCallback((text: string) => {
     if (remoteRef.current) return;
     send({ type: "projectGuide", text });
@@ -2740,6 +2749,7 @@ export function useEngineWorker(
     chatVideo,
     applyEngineConfig,
     setFileLedger,
+    setImageRefLedger,
     setProjectGuide,
     setActiveDocument,
     chatCancel,
