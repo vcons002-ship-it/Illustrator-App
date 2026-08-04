@@ -90,6 +90,8 @@ import {
   scheduledRunPrompt,
   stripPersistedDirectives,
   mergeChatReferences,
+  needsPausedTurnNote,
+  pausedTurnNote,
   referenceAdoptedNote,
   referenceFailedNote,
   openedImageNote,
@@ -6998,6 +7000,28 @@ export function App() {
           break;
       }
       return;
+    }
+    // A PAUSE MUST ALWAYS BE RESUMABLE — this is the only exit that ends a turn with work left and
+    // no machinery scheduled to pick it up, so the reader's way back in cannot be conditional.
+    //
+    // It was. The Continue affordance rode on the settled REPLY, which is exactly the message an
+    // app-managed TOOL step suppresses (a search step's contract is tool_ok, and isToolContract
+    // covers that). And the executor is skipped on a pause by design. So the two together left a run
+    // with no button, no message, and nobody driving it: on a cloud model the budget is ten tool
+    // rounds, searching is the one kind of work that burns rounds without suspending the turn for an
+    // approval — a render stops at the first one — so a research step would search, read, search,
+    // read, hit ten, and silently die. Reported exactly that way: it searches a few times and stops.
+    //
+    // Emitted here, ahead of every branch below, so it does not depend on prose, on a workflow, or
+    // on which kind of step was running.
+    if (needsPausedTurnNote(!!res.paused, !!res.text, suppressProse)) {
+      const paused = pausedTurnNote();
+      appendBuddy({
+        role: "tool",
+        text: paused.text,
+        actions: [{ label: "▶ Continue", send: "continue" }],
+        turns: paused.turns,
+      });
     }
     // An app-managed turn is judged whether or not it produced prose. A tool step's reply is EMPTY by
     // design (the render suspends it, and between-step narration is suppressed), and a planning turn

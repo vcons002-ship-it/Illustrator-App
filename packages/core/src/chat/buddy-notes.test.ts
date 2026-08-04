@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { openedImageNote, referenceAdoptedNote, referenceFailedNote } from "./buddy-notes.js";
+import {
+  needsPausedTurnNote,
+  openedImageNote,
+  pausedTurnNote,
+  referenceAdoptedNote,
+  referenceFailedNote,
+} from "./buddy-notes.js";
 import { stripPersistedDirectives } from "./transcript-hygiene.js";
 
 const NOTES = [
@@ -60,5 +66,35 @@ describe("buddy notes — an app-authored chat line that survives the rebuild", 
     for (const note of NOTES) {
       expect(stripPersistedDirectives(note.turns)).toEqual(note.turns);
     }
+  });
+});
+
+describe("a paused turn is always resumable", () => {
+  it("posts the note standalone whenever the reply won't be shown", () => {
+    // The bug: the Continue affordance rode on the settled reply, which is exactly the message an
+    // app-managed TOOL step suppresses. A search step's contract is tool_ok, so on a cloud model
+    // (ten tool rounds) a research step would search, read, search, read, hit the budget, and die
+    // with no button and no message — searching being the one kind of work that burns rounds
+    // without suspending the turn for an approval.
+    expect(needsPausedTurnNote(true, false, false)).toBe(true); // paused, nothing to show
+    expect(needsPausedTurnNote(true, true, true)).toBe(true); // paused, reply suppressed ← the bug
+    expect(needsPausedTurnNote(true, false, true)).toBe(true);
+  });
+
+  it("leaves it to the reply when the reply IS shown, so there's only ever one Continue", () => {
+    expect(needsPausedTurnNote(true, true, false)).toBe(false);
+  });
+
+  it("says nothing at all when the turn didn't pause", () => {
+    for (const hasText of [true, false])
+      for (const suppress of [true, false]) expect(needsPausedTurnNote(false, hasText, suppress)).toBe(false);
+  });
+
+  it("names the way back in, in words the reader can also just type", () => {
+    // The button sends "continue"; the sentence has to match it, because a reader on a phone
+    // scrolled past the button is going to type what the line told them to.
+    expect(pausedTurnNote().text).toMatch(/continue/i);
+    // Display-only: a budget checkpoint replayed out of history is turn-local machinery.
+    expect(pausedTurnNote().turns).toEqual([]);
   });
 });

@@ -59,6 +59,34 @@ export function referenceFailedNote(error?: string): BuddyNote {
   };
 }
 
+/**
+ * What the reader is told when a turn stops at its tool-round budget with work still to do.
+ *
+ * `turns: []` deliberately — display-only. This is the app's own plumbing, not a record of anything
+ * that happened, and a budget checkpoint replayed out of history is the kind of turn-local machinery
+ * `transcript-hygiene` exists to undo.
+ */
+export const pausedTurnNote = (): BuddyNote => ({
+  text: "⏸ Paused — that's this turn's tool budget. Say “continue” and I'll pick up where I left off.",
+  turns: [],
+});
+
+/**
+ * Does a settled turn need this note posted on its own?
+ *
+ * A pause is the one exit that ends a turn with work left and NOTHING scheduled to pick it up, so
+ * the reader's way back in must not be conditional on anything. It was: the Continue affordance rode
+ * on the settled reply, which is exactly the message an app-managed TOOL step suppresses. A search
+ * step's contract is `tool_ok`, so on a cloud model (ten tool rounds) a research step would search,
+ * read, search, read, hit the budget, and die with no button and no message — searching being the
+ * one kind of work that burns rounds without suspending the turn for an approval.
+ *
+ * So: paused and the reply won't be shown → post it standalone. PURE.
+ */
+export function needsPausedTurnNote(paused: boolean, hasText: boolean, suppressProse: boolean): boolean {
+  return paused && (!hasText || suppressProse);
+}
+
 /** A picture file opened INTO the chat (`open_image`), shown inline where the reader can see it. */
 export function openedImageNote(name: string): BuddyNote {
   return {
