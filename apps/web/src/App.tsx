@@ -4609,34 +4609,16 @@ export function App() {
    * slash commands exist at all: immune to a model deciding not to cooperate. Same code path, same
    * download ladder, same registration — just not asked as a favour.
    *
-   * ON A PHONE IT HAS TO RUN ON THE DESKTOP, and that is the whole bug behind "the button seemed to
-   * work but the picture was never used". `onBuddySend` dispatches the turn LOCALLY — it has no
-   * remote guard, because the composer relays before ever reaching it (see the `vrcmd:chatSend`
-   * branch there). This button skipped the composer and called it directly, so on a linked phone the
-   * entire adoption happened in the PHONE's tab: the phone downloaded the picture, registered it in
-   * the phone's reference set, and wrote the phone its own "now a reference" line.
-   *
-   * Every reported symptom is that one split. The line appeared, because the phone really had
-   * adopted it. The line then VANISHED, because the desktop's chat mirror — which never saw that
-   * turn — overwrites the phone's message list. And the render, which runs on the DESKTOP, was
-   * handed a reference set that was still empty, so it reported nothing at all: not "couldn't use
-   * them", not "used 1 of 1" — no line, the signature of zero references supplied. Attaching a photo
-   * worked throughout precisely because that path goes through the composer, which relays the bytes.
-   *
-   * So it relays, like every other phone action whose effect has to land where the engine and the
-   * state are. The desktop's handler runs this same text through the same path, and the note it
-   * writes is the desktop's own — so it survives the next mirror push instead of being erased by it.
+   * ON A PHONE IT HAS TO RUN ON THE DESKTOP — the bug behind "the button seemed to work but the
+   * picture was never used". It relays, and so does every other programmatic send, because the rule
+   * now lives at onBuddySend's door rather than here; see the note there for why this one is the
+   * reason the rule exists. Nothing to do at this call site but say what the reader asked for.
    */
   const onUseImageAsReference = useCallback(
     (item: { full: string; title?: string }) => {
-      const text = `/reference ${item.full}`;
-      if (isRemoteClient) {
-        sendAppSync({ type: "vrcmd:chatSend", text });
-        return;
-      }
-      onBuddySendTextRef.current(text);
+      onBuddySendTextRef.current(`/reference ${item.full}`);
     },
-    [isRemoteClient, sendAppSync],
+    [],
   );
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback(
@@ -7125,6 +7107,30 @@ export function App() {
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      /**
+       * A SEND FROM A PHONE RUNS ON THE DESKTOP. Every branch below this line does its work HERE —
+       * dispatches a turn, searches the filesystem, opens a book — and on a linked phone "here" is
+       * the wrong machine: the engine, the workspace, the reference pictures and the chat history
+       * all live on the desktop. The composer has always known that (it relays before it ever
+       * reaches this function), which is exactly why this function never needed a guard — and why
+       * the guard was missing when something finally called it without going through the composer.
+       *
+       * That was the gallery's "Use as reference" button, and it cost three rounds of debugging: on
+       * a phone the picture was adopted into the PHONE's reference set, the phone wrote itself a
+       * "now a reference" line that the desktop's next chat-mirror push then erased, and the render
+       * — which runs on the desktop — was handed nothing at all. Every symptom of that bug came
+       * from work landing on the wrong side of the link.
+       *
+       * So the rule lives at the door rather than at each caller: the stocks panel's "Analyse",
+       * the browser's "Read & illustrate" and "Ask about this page", and anything added later get
+       * it for free, instead of each one having to remember. The desktop's own vrcmd:chatSend
+       * handler runs the relayed text straight back through here with isRemoteClient false, so it
+       * executes exactly once, on the machine that can actually do it.
+       */
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatSend", text });
+        return;
+      }
       // `/story {json}` — starting a story as you go. Show a friendly bubble (not the raw JSON) and
       // run it against an EMPTY history so the writer's context is clean (the same guarantee the
       // desktop's Story button gives locally). This is the path a PHONE-relayed story start lands on
@@ -7198,7 +7204,7 @@ export function App() {
       }
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), text, text);
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey, isRemoteClient, sendAppSync],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
   onBuddySendTextRef.current = onBuddySendText; // the gallery button (declared far above) sends through this
