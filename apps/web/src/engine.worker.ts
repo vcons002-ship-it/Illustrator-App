@@ -5675,6 +5675,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(result.memory ? { memory: result.memory } : {}),
         ...(result.quote ? { quote: result.quote } : {}),
         ...(result.indicators ? { indicators: result.indicators } : {}),
+        // The two payloads that carry PICTURE BYTES home. Without them the direct path could run
+        // use_image_reference / open_image, download the picture, and then drop it on the floor —
+        // the tool "succeeded" and nothing was adopted, which is the worst of both outcomes. The
+        // host registers the reference from these (see the tool-result handler in App).
+        ...(result.referenceAdopted ? { referenceAdopted: result.referenceAdopted } : {}),
+        ...(result.openedImage ? { openedImage: result.openedImage } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
       post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [] });
