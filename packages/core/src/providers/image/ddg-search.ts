@@ -109,6 +109,77 @@ const BROWSER_UA =
 export class DdgUnavailableError extends Error {}
 
 /**
+ * DuckDuckGo IMAGE search — web-wide pictures with no key, no engine id and no daily cap.
+ *
+ * Two requests, because the endpoint demands it: a `vqd` token is minted on a normal results
+ * page and must be presented to `i.js`. That token is the fragile part — its format has changed
+ * more than once, and this whole module was written to avoid depending on scraping. It earns its
+ * place anyway because the alternative for keyless image search is Wikimedia Commons alone, which
+ * is an archive and not the web.
+ *
+ * The bargain is that it must FAIL LOUDLY. `DdgImageUnavailableError` carries which half broke —
+ * the token or the results — so a caller can fall back to Commons and still say what happened,
+ * rather than returning an empty list that reads as "no pictures of that".
+ */
+export class DdgImageUnavailableError extends Error {}
+
+const VQD_RE = /vqd=["']?([-0-9a-z]+)["']?/i;
+
+export class DuckDuckGoImageSearch {
+  readonly id = "ddg-image-search";
+  private readonly transport: Transport;
+  constructor(opts: { transport?: Transport } = {}) {
+    this.transport = opts.transport ?? new DirectTransport();
+  }
+
+  /** The per-session token `i.js` refuses to answer without. */
+  private async token(query: string): Promise<string> {
+    const res = await this.transport.send({
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`,
+      method: "GET",
+      headers: { "user-agent": BROWSER_UA, "accept-language": "en-US,en;q=0.9" },
+    });
+    if (!res.ok) throw new DdgImageUnavailableError(`DuckDuckGo refused the token page (status ${res.status})`);
+    const vqd = VQD_RE.exec(await res.text())?.[1];
+    if (!vqd) throw new DdgImageUnavailableError("DuckDuckGo's page carried no vqd token — their markup has changed");
+    return vqd;
+  }
+
+  async search(query: string, count = 5): Promise<ImageSearchHit[]> {
+    const vqd = await this.token(query);
+    const url =
+      `https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,&p=1`;
+    const res = await this.transport.send({
+      url,
+      method: "GET",
+      headers: { "user-agent": BROWSER_UA, "accept-language": "en-US,en;q=0.9", referer: "https://duckduckgo.com/" },
+    });
+    if (!res.ok) throw new DdgImageUnavailableError(`DuckDuckGo image search failed (status ${res.status})`);
+    const body = (await res.json()) as { results?: unknown[] };
+    const rows = Array.isArray(body?.results) ? body.results : undefined;
+    if (!rows) throw new DdgImageUnavailableError("DuckDuckGo's image response wasn't the shape we know");
+    return rows
+      .map((r) => {
+        const row = (r ?? {}) as { image?: unknown; thumbnail?: unknown; title?: unknown; url?: unknown; width?: unknown; height?: unknown };
+        const link = typeof row.image === "string" ? row.image : undefined;
+        if (!link) return undefined;
+        return {
+          link,
+          // The thumbnail is DuckDuckGo-hosted and hotlinks reliably even when the origin
+          // blocks us — the same reason the retrieval ladder tries thumbnails first.
+          ...(typeof row.thumbnail === "string" ? { thumbnailLink: row.thumbnail } : {}),
+          ...(typeof row.url === "string" ? { contextLink: row.url } : {}),
+          ...(typeof row.title === "string" ? { title: row.title } : {}),
+          ...(typeof row.width === "number" ? { width: row.width } : {}),
+          ...(typeof row.height === "number" ? { height: row.height } : {}),
+        } satisfies ImageSearchHit;
+      })
+      .filter((h): h is ImageSearchHit => !!h)
+      .slice(0, Math.min(20, Math.max(1, count)));
+  }
+}
+
+/**
  * Parse the Lite results page: each organic result is an anchor with class
  * `result-link` (title row) followed by a `result-snippet` cell. Regex-based —
  * workers have no DOMParser — and tolerant of attribute order/quoting.
@@ -175,6 +246,9 @@ export interface KeylessSearchState {
   ddgUnavailable: boolean;
   /** Why full-web search was switched off for this session, if it was. */
   ddgReason?: string;
+  /** Web-wide IMAGE search is off for this session (token drift, bot wall, CORS). */
+  ddgImagesUnavailable?: boolean;
+  ddgImagesReason?: string;
 }
 const sharedState: KeylessSearchState = { ddgUnavailable: false };
 
@@ -189,14 +263,16 @@ const sharedState: KeylessSearchState = { ddgUnavailable: false };
  */
 export function keylessSearchNote(state: KeylessSearchState = sharedState): string {
   const web = state.ddgUnavailable
-    ? `Full-web search (DuckDuckGo) is OFF for this session — ${state.ddgReason ?? "it couldn't be reached"}. ` +
+    ? `Full-web TEXT search (DuckDuckGo) is OFF for this session — ${state.ddgReason ?? "it couldn't be reached"}. ` +
       "Text searches are answering from Wikipedia only, so say when a question needs the wider web."
     : "Full-web text search is on (DuckDuckGo).";
-  return (
-    `${web} IMAGE search is Wikimedia Commons only — a licensed archive, not the web — so it is strong on ` +
-    "diagrams, artworks and public-domain photographs and weak on everything else. For broader pictures the reader " +
-    "needs a Google Programmable Search key AND engine id in Settings."
-  );
+  const images = state.ddgImagesUnavailable
+    ? `Web-wide IMAGE search is OFF for this session — ${state.ddgImagesReason ?? "it couldn't be reached"}. ` +
+      "Pictures are coming from Wikimedia Commons only: a licensed archive, strong on diagrams, artworks and " +
+      "public-domain photographs, and weak on products, people and anything recent. SAY SO when a picture " +
+      "search comes back thin — it is the feed, not the query."
+    : "Web-wide image search is on (DuckDuckGo), with Wikimedia Commons underneath it.";
+  return `${web} ${images} For Google's own image index instead, the reader needs BOTH a Programmable Search key AND an engine id in Settings — the key alone does nothing.`;
 }
 
 /**
@@ -209,14 +285,22 @@ export function keylessSearchNote(state: KeylessSearchState = sharedState): stri
 export class KeylessSearch implements FigureSearch {
   readonly id = "keyless-search";
   private readonly ddg: DuckDuckGoSearch;
+  private readonly ddgImages: DuckDuckGoImageSearch;
   private readonly wiki: WikiSearch;
   private readonly state: KeylessSearchState;
 
   constructor(
-    opts: { transport?: Transport; ddg?: DuckDuckGoSearch; wiki?: WikiSearch; state?: KeylessSearchState } = {},
+    opts: {
+      transport?: Transport;
+      ddg?: DuckDuckGoSearch;
+      ddgImages?: DuckDuckGoImageSearch;
+      wiki?: WikiSearch;
+      state?: KeylessSearchState;
+    } = {},
   ) {
     const transport = opts.transport ? { transport: opts.transport } : {};
     this.ddg = opts.ddg ?? new DuckDuckGoSearch(transport);
+    this.ddgImages = opts.ddgImages ?? new DuckDuckGoImageSearch(transport);
     this.wiki = opts.wiki ?? new WikiSearch(transport);
     this.state = opts.state ?? sharedState;
   }
@@ -244,15 +328,30 @@ export class KeylessSearch implements FigureSearch {
   }
 
   /**
-   * Figures come from Wikimedia Commons — licensed, labelled and hotlinkable.
+   * Web-wide pictures from DuckDuckGo, with Wikimedia Commons underneath.
    *
-   * NOT DuckDuckGo: its image endpoint needs a per-session token scraped from a
-   * results page, which is exactly the brittle thing this file is careful not to
-   * depend on. The honest consequence is that keyless IMAGE search is an archive
-   * search, not a web one, and it will feel narrow next to Google's — see
-   * `keylessSearchNote`, which says so where a reader can read it.
+   * Commons alone was the whole of keyless image search, and it is an ARCHIVE: strong on
+   * diagrams, artworks and public-domain photographs, useless for products, people and
+   * anything recent. That reads as broken even though it was working exactly as built.
+   *
+   * DDG's image endpoint needs a scraped token, so it is expected to break eventually —
+   * which is why the failure is REMEMBERED rather than swallowed. Commons still answers,
+   * so the reader always gets something; `keylessSearchNote` is what stops that something
+   * from silently pretending to be a web search.
    */
   async search(query: string, count = 5): Promise<ImageSearchHit[]> {
+    if (!this.state.ddgImagesUnavailable) {
+      try {
+        const hits = await this.ddgImages.search(query, count);
+        if (hits.length > 0) return hits;
+        // Parsed fine, genuinely nothing — Commons may still have a figure for it.
+      } catch (err) {
+        // Token drift, a bot wall, CORS: all of them mean this route is done for the
+        // session. Unlike text search there is no second endpoint to try.
+        this.state.ddgImagesUnavailable = true;
+        this.state.ddgImagesReason = err instanceof Error ? err.message : String(err);
+      }
+    }
     return this.wiki.search(query, count);
   }
 

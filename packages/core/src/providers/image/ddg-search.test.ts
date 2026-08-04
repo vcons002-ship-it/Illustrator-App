@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Transport, TransportRequest } from "../transport/transport.js";
-import { DuckDuckGoSearch, KeylessSearch, keylessSearchNote } from "./ddg-search.js";
+import { DuckDuckGoImageSearch, DuckDuckGoSearch, KeylessSearch, keylessSearchNote, type KeylessSearchState } from "./ddg-search.js";
 import { WikiSearch } from "./free-search.js";
 
 function fakeTransport(
@@ -130,14 +130,17 @@ describe("KeylessSearch", () => {
     expect(state.ddgUnavailable).toBe(false);
   });
 
-  it("keeps figures on Commons", async () => {
+  it("falls back to Commons for figures when the web image feed is down", async () => {
+    // Web-wide images come from DuckDuckGo now; Commons is the floor beneath it, and this is
+    // that floor — the state says the web feed is already off for the session.
     const wikiTransport = fakeTransport(() => ({
       body: { query: { pages: { "1": { title: "File:Cycle.png", index: 1, imageinfo: [{ url: "https://c.test/cycle.png" }] } } } },
     }));
     const search = new KeylessSearch({
       ddg: new DuckDuckGoSearch({ transport: fakeTransport(() => new Error("must not be called")) }),
+      ddgImages: new DuckDuckGoImageSearch({ transport: fakeTransport(() => new Error("must not be called")) }),
       wiki: new WikiSearch({ transport: wikiTransport }),
-      state: { ddgUnavailable: false },
+      state: { ddgUnavailable: false, ddgImagesUnavailable: true },
     });
     const hits = await search.search("cycle diagram");
     expect(hits[0]!.link).toBe("https://c.test/cycle.png");
@@ -189,21 +192,85 @@ describe("DuckDuckGo survives a bot wall", () => {
 });
 
 describe("keylessSearchNote — saying what keyless search actually is", () => {
-  it("says image search is Commons only, and that a key alone isn't enough", () => {
-    // Two facts nothing surfaced: images never touch DuckDuckGo, and a Programmable Search key
-    // does nothing without an engine id — which is the trap that costs an afternoon.
+  it("says both feeds are on, and that a key alone isn't enough", () => {
+    // A Programmable Search key does nothing without an engine id — the trap that costs an
+    // afternoon in a console that never mentions it.
     const note = keylessSearchNote({ ddgUnavailable: false });
-    expect(note).toMatch(/IMAGE search is Wikimedia Commons only/);
-    expect(note).toMatch(/key AND engine id/i);
     expect(note).toMatch(/Full-web text search is on/);
+    expect(note).toMatch(/Web-wide image search is on/);
+    expect(note).toMatch(/key AND an engine id/i);
   });
 
-  it("says when full-web search has been switched off, and why", () => {
+  it("says when full-web TEXT search has been switched off, and why", () => {
     // It latches for the WHOLE session on one CORS failure, after which Wikipedia answers
     // everything and the results look perfectly fine.
     const note = keylessSearchNote({ ddgUnavailable: true, ddgReason: "blocked by CORS" });
-    expect(note).toMatch(/OFF for this session/);
+    expect(note).toMatch(/TEXT search \(DuckDuckGo\) is OFF/);
     expect(note).toMatch(/blocked by CORS/);
     expect(note).toMatch(/Wikipedia only/);
+  });
+
+  it("says when pictures have dropped back to the archive, and that it's the feed not the query", () => {
+    // Commons alone reads as broken even when it's working exactly as built: it has no
+    // products, no people, nothing recent.
+    const note = keylessSearchNote({ ddgUnavailable: false, ddgImagesUnavailable: true, ddgImagesReason: "no vqd token" });
+    expect(note).toMatch(/IMAGE search is OFF/);
+    expect(note).toMatch(/no vqd token/);
+    expect(note).toMatch(/it is the feed, not the query/);
+  });
+});
+
+describe("DuckDuckGo image search", () => {
+  const jsonTransport = (pages: { body: string; ok?: boolean; status?: number }[]) => {
+    const requests: TransportRequest[] = [];
+    return {
+      requests,
+      transport: {
+        async send(req: TransportRequest) {
+          requests.push(req);
+          const page = pages[requests.length - 1] ?? { body: "" };
+          return {
+            ok: page.ok ?? true,
+            status: page.status ?? 200,
+            json: async <T,>(): Promise<T> => JSON.parse(page.body) as T,
+            arrayBuffer: async () => new ArrayBuffer(0),
+            text: async () => page.body,
+          };
+        },
+      } as Transport,
+    };
+  };
+
+  it("mints the vqd token, then maps the results", async () => {
+    const { transport, requests } = jsonTransport([
+      { body: '<script>vqd="4-123abc"</script>' },
+      { body: JSON.stringify({ results: [{ image: "https://e.com/a.jpg", thumbnail: "https://ddg/t.jpg", title: "A", url: "https://e.com/p", width: 800, height: 600 }] }) },
+    ]);
+    const hits = await new DuckDuckGoImageSearch({ transport }).search("otter");
+    expect(hits).toEqual([
+      { link: "https://e.com/a.jpg", thumbnailLink: "https://ddg/t.jpg", contextLink: "https://e.com/p", title: "A", width: 800, height: 600 },
+    ]);
+    expect(requests[1]!.url).toContain("vqd=4-123abc");
+  });
+
+  it("fails LOUDLY when the token is gone, naming which half broke", async () => {
+    // An empty list would read as "no pictures of that". The token vanishing is markup drift,
+    // and it has to be sayable or the archive fallback pretends to be a web search.
+    const { transport } = jsonTransport([{ body: "<html>no token here</html>" }]);
+    await expect(new DuckDuckGoImageSearch({ transport }).search("otter")).rejects.toThrow(/no vqd token/i);
+  });
+
+  it("falls back to Commons and REMEMBERS why", async () => {
+    const { transport } = jsonTransport([{ body: "<html>nope</html>" }]);
+    const state: KeylessSearchState = { ddgUnavailable: false };
+    const wikiBody = JSON.stringify({ query: { pages: {} } });
+    const search = new KeylessSearch({
+      ddgImages: new DuckDuckGoImageSearch({ transport }),
+      wiki: new WikiSearch({ transport: fakeTransport(() => ({ body: wikiBody })) }),
+      state,
+    });
+    await search.search("otter");
+    expect(state.ddgImagesUnavailable).toBe(true);
+    expect(state.ddgImagesReason).toMatch(/vqd/i);
   });
 });
