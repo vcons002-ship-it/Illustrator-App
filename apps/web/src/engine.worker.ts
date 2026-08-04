@@ -3368,6 +3368,23 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
     const skills = skillsIndexBlock(await loadSkills(memoryStore()));
+    // THE SAME REFERENCE PICTURES THE BUDDY CHAT DRAWS FROM. The reference set is per-SESSION, not
+    // per-panel, and the reader's renders were the one surface that knew nothing about it: the block
+    // rode only the buddy turn, and handleChatTool was called from here without `refImages`. So a
+    // picture the reader had chosen worked when they asked for it in the buddy chat and silently did
+    // nothing when they asked for it beside their book.
+    //
+    // Both halves land together, and that is the point. Passing the pictures to the render while
+    // leaving the model unaware of them is worse than neither: not knowing a reference is attached,
+    // it writes a fully descriptive prompt, and a description plus a reference gives you the
+    // description rather than the likeness — the failure this block exists to prevent. It also
+    // carries the "say so rather than silently drawing from these" rule, which a chat about a BOOK
+    // needs more than the buddy does: most illustrations here have nothing to do with the reader's
+    // saved picture, and the model has to be able to say so.
+    //
+    // Rides at the END, after the stable sections that chatSystemCachePrefix is built from, so a set
+    // that changes mid-session can't invalidate the cached prefix.
+    const imageRefBlock = buildImageReferenceBlock(imageRefLedger);
     const system =
       sections
         .map((s) => s.text)
@@ -3376,7 +3393,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       (memory ? `\n\n${memory}` : "") +
       // selfSoul/userSoul are now the FIRST section (above), not appended here.
       (skills ? `\n\n${skills}` : "") +
-      (note ? `\n\n${note}` : "");
+      (note ? `\n\n${note}` : "") +
+      (imageRefBlock ? `\n\n${imageRefBlock}` : "");
     // A bare roleplay line ("I draw my sword") looks like chat addressed to the assistant's
     // character, even though the desired product is a narrated story beat. Wrap ONLY the model-facing
     // current turn in an explicit writing brief: the UI/history still stores the reader's exact text,
