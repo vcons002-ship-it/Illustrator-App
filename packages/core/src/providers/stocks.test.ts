@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatQuote, parseStooqQuote, parseYahooQuote, stooqQuoteUrl, stooqSymbol, yahooFetchError, yahooQuoteUrl } from "./stocks.js";
+import { formatQuote, parseStooqQuote, parseYahooQuote, sourceLabel, sourceNote, stooqQuoteUrl, stooqSymbol, yahooFetchError, yahooQuoteUrl } from "./stocks.js";
 
 describe("stooqSymbol", () => {
   it("lower-cases and adds .us for bare US tickers", () => {
@@ -105,5 +105,30 @@ describe("yahooFetchError", () => {
 
   it("still says something for a status it doesn't recognise", () => {
     expect(yahooFetchError(302)).toContain("302");
+  });
+});
+
+describe("sourceLabel / sourceNote — every number says where it came from", () => {
+  it("distinguishes the four feeds, which are not interchangeable", () => {
+    // Printed bare, "MSFT: 512.30" looks the same whether it's a delayed keyless quote, an entitled
+    // broker one, or the reader's own chart — and a reader can't tell which they're acting on.
+    expect(sourceLabel("yahoo")).toMatch(/delayed/i);
+    expect(sourceLabel("schwab")).toMatch(/entitlements/i);
+    expect(sourceLabel("tradingview")).toMatch(/displaying/i);
+    expect(sourceLabel("web")).toMatch(/UNVERIFIED/);
+  });
+
+  it("names recall as NOT a source, so an unsourced number is refusable", () => {
+    const m = sourceLabel("memory");
+    expect(m).toMatch(/NOT A SOURCE/);
+    expect(m).toMatch(/must not be given as a price/i);
+  });
+
+  it("appends the source to a formatted quote, and omits it when none is claimed", () => {
+    const q = { symbol: "MSFT", close: 512.3, open: 510 };
+    expect(formatQuote(q, "yahoo")).toContain("MSFT: 512.3");
+    expect(formatQuote(q, "yahoo")).toContain("Source: Yahoo");
+    expect(formatQuote(q)).not.toContain("Source:");
+    expect(sourceNote("schwab").startsWith("\n")).toBe(true);
   });
 });

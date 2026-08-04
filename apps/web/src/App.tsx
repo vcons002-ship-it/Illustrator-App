@@ -6713,9 +6713,9 @@ export function App() {
           });
         } else if (e.quote) {
           // The slash path runs the tool with no LLM, so nothing else would say what came back.
-          appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote)}` });
+          appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote, "yahoo")}` });
         } else if (e.indicators) {
-          appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators)}` });
+          appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators, "yahoo")}` });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
         } else if (e.wolfram) {

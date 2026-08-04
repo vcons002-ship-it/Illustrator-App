@@ -643,3 +643,23 @@ describe("a failed price feed is a fact to report, not a licence to guess", () =
     expect(out).toMatch(/VWAP, RSI/);
   });
 });
+
+describe("numbers arrive with their source attached", () => {
+  it("puts a Source line on the quote the model is handed", () => {
+    const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "MSFT" }, { quote: { symbol: "MSFT", close: 512.3 } });
+    expect(out).toContain("Source: Yahoo");
+    expect(out).toMatch(/STATE THE SOURCE/);
+  });
+
+  it("marks a Schwab quote as NOT the keyless feed", () => {
+    const out = formatBuddyToolResult({ tool: "schwab_quote", symbol: "MSFT" }, { schwabQuote: { symbol: "MSFT", last: 512.3 } });
+    expect(out).toContain("Source: your Schwab account");
+    expect(out).toMatch(/NOT the keyless feed/);
+  });
+
+  it("tells the model to repeat the source, and to decline a figure it has no source for", () => {
+    const p = buildBuddySystemPrompt({ persona: "default", library: [], canMarkets: true, loadedToolsets: [] } as never);
+    expect(p).toContain("ALWAYS SAY WHERE A NUMBER CAME FROM");
+    expect(p).toMatch(/If you have no source for a figure, you do not have the figure/);
+  });
+});
