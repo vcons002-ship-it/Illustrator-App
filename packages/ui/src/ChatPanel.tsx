@@ -759,6 +759,7 @@ export const MessageBubble = memo(function MessageBubble({
   onBuildDocument,
   onDownloadData,
   fileActions,
+  onUseImageAsReference,
   desktop,
   thinkingOpen,
   onThinkingOpenChange,
@@ -782,6 +783,8 @@ export const MessageBubble = memo(function MessageBubble({
   onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
   /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). Stable (memo). */
   fileActions?: FileActions;
+  /** Adopt a searched picture as a reference for this chat's renders. Stable (memo). */
+  onUseImageAsReference?: (item: { full: string; title?: string }) => void;
   /** Desktop build — enables the Open-on-PC action. */
   desktop?: boolean;
   /** Whether this message's saved reasoning is expanded. The reader's ONE choice, shared with the
@@ -911,7 +914,7 @@ export const MessageBubble = memo(function MessageBubble({
         <AnalysisBlock analysis={message.analysis} {...(onDownloadData ? { onDownloadData } : {})} />
       ) : null}
       {message.gallery?.length ? (
-        <ImageGallery items={message.gallery} />
+        <ImageGallery items={message.gallery} {...(onUseImageAsReference ? { onUseAsReference: onUseImageAsReference } : {})} />
       ) : null}
       {message.links?.length ? (
         <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11 }}>
@@ -1257,7 +1260,15 @@ export function FileActionBar({
  * shows at once — so "show me 3 images of X" actually shows several — and clicking
  * a thumbnail enlarges it in place (no new tab, which the desktop webview blocks).
  */
-function ImageGallery({ items }: { items: { thumb: string; full: string; title?: string }[] }) {
+function ImageGallery({
+  items,
+  onUseAsReference,
+}: {
+  items: { thumb: string; full: string; title?: string }[];
+  /** Adopt THIS picture as a reference for the chat's renders. Absent ⇒ no button (nothing to run
+   * it), which is the honest state on a host that can't download from arbitrary image hosts. */
+  onUseAsReference?: (item: { full: string; title?: string }) => void;
+}) {
   const [enlarged, setEnlarged] = useState<number | null>(null);
   const open = enlarged != null ? items[enlarged] : undefined;
   // Escape closes the enlarged view (the lightbox has no close chrome of its own).
@@ -1304,6 +1315,27 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
           />
         ))}
       </div>
+      {/* Adopting is offered on the ENLARGED picture, not on every thumbnail: it is a deliberate act
+          about one specific result, and a row of buttons under a twelve-hit grid invites the misclick
+          this whole path is meant to avoid. */}
+      {open && onUseAsReference ? (
+        <button
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            padding: "4px 10px",
+            borderRadius: 6,
+            border: "1px solid rgba(255,255,255,0.25)",
+            background: "rgba(255,255,255,0.08)",
+            color: "inherit",
+            cursor: "pointer",
+          }}
+          onClick={() => onUseAsReference({ full: open.full, ...(open.title ? { title: open.title } : {}) })}
+          title="Draw from this picture — it becomes a reference for images made in this chat"
+        >
+          🖼 Use as reference
+        </button>
+      ) : null}
       {open ? (
         <img
           src={open.full}

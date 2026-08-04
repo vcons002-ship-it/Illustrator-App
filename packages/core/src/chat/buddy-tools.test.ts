@@ -2670,3 +2670,82 @@ describe("a set of documents is a set of create_document calls", () => {
     expect(p).toContain("starts a second, independent document");
   });
 });
+
+describe("a picture opened into the chat is a reference, not just something to look at", () => {
+  it("tells the model the bytes are going to the image model", () => {
+    // The paperclip path already said this. open_image didn't — so a photo the assistant opened
+    // from the reader's computer got described back into the prompt, and the render matched the
+    // words instead of the picture.
+    const out = formatBuddyToolResult(
+      { tool: "open_image", path: "/home/me/dog.png" },
+      { openedImage: { name: "dog.png", mimeType: "image/png", base64: "", observation: "a brown dog" } },
+    );
+    expect(out).toMatch(/ALSO a REFERENCE/);
+    expect(out).toMatch(/do NOT describe its appearance back into a generate_image prompt/i);
+    expect(out).toMatch(/what should CHANGE/);
+  });
+});
+
+describe("use_image_reference — a searched picture, adopted deliberately", () => {
+  it("parses, and needs a query", () => {
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","query":"victorian terrace"}')).toEqual({
+      tool: "use_image_reference",
+      query: "victorian terrace",
+    });
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","query":"  "}')).toBeUndefined();
+  });
+
+  it("says a plain search NEVER becomes a reference, so an illustration can't steer a render", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain('"tool":"use_image_reference"');
+    expect(p).toMatch(/search_images only SHOWS pictures/);
+  });
+
+  it("tells the model to prompt for what CHANGES once one is adopted", () => {
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", query: "victorian terrace" },
+      { referenceAdopted: { ok: true, title: "Terrace, Bath", base64: "x", mimeType: "image/jpeg" } },
+    );
+    expect(out).toContain("Terrace, Bath");
+    expect(out).toMatch(/what should CHANGE/);
+    expect(out).toMatch(/Do not describe the reference back into the prompt/);
+  });
+
+  it("refuses to pretend a failed adoption worked", () => {
+    // A hotlink-only result is not an adoption — the image model needs bytes — and a model that
+    // carries on as if one were in place describes a picture it doesn't have.
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", query: "x" },
+      { referenceAdopted: { ok: false, error: "that picture could only be hotlinked, not downloaded" } },
+    );
+    expect(out).toMatch(/couldn't get a usable picture/i);
+    expect(out).toMatch(/do NOT carry on as if a reference were in place/i);
+  });
+});
+
+describe("use_image_reference by URL — adopting the picture actually pointed at", () => {
+  it("takes a url, a query, or both — but not neither", () => {
+    // A query RE-SEARCHES and can land on a different picture than the one on screen; a url names
+    // the exact hit. "Use the second one" needs the url form.
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","url":"https://x/a.jpg"}')).toEqual({
+      tool: "use_image_reference",
+      url: "https://x/a.jpg",
+    });
+    expect(parseBuddyToolCall('{"tool":"use_image_reference"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","url":"  ","query":"  "}')).toBeUndefined();
+  });
+
+  it("tells the model to prefer the url when the reader points at something on screen", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toMatch(/Prefer the URL form/);
+    expect(p).toMatch(/a re-search can land on a different picture/);
+  });
+
+  it("names the url in the failure, so it's clear WHICH picture couldn't be used", () => {
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", url: "https://x/a.jpg" },
+      { referenceAdopted: { ok: false, error: "no picture found" } },
+    );
+    expect(out).toContain("https://x/a.jpg");
+  });
+});

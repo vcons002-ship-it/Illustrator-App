@@ -461,6 +461,8 @@ export type WorkerToMain =
       indicators?: Indicators;
       /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
+      /** use_image_reference — the downloaded picture, for the host to adopt as a chat reference. */
+      referenceAdopted?: { ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string };
       /** What this tool left behind — something that didn't exist before ("created") or a change to
        * something that did ("changed"). The part of the payload the app-managed collar needs, since
        * the rest doesn't cross this boundary; the two kinds are distinguished because a step asking

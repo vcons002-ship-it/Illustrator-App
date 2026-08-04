@@ -458,6 +458,8 @@ export type BuddyStreamEvent =
       indicators?: Indicators;
       /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
       openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
+      /** use_image_reference — a searched picture the app adopts as a reference for its renders. */
+      referenceAdopted?: { ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string };
       /** What this tool left behind — "created" (a thing that didn't exist) or "changed" (an edit to
        * one that did). The app-managed collar's evidence that work landed, and WHICH work: a step
        * asking for a second document is not finished by appending to the first. */
@@ -1221,6 +1223,7 @@ export function useEngineWorker(
             ...(msg.quote ? { quote: msg.quote } : {}),
             ...(msg.indicators ? { indicators: msg.indicators } : {}),
             ...(msg.openedImage ? { openedImage: msg.openedImage } : {}),
+            ...(msg.referenceAdopted ? { referenceAdopted: msg.referenceAdopted } : {}),
             ...(msg.artifact ? { artifact: msg.artifact } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });

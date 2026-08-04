@@ -494,6 +494,11 @@ function memoryStoreLabel(about: "reader" | "self" | "user" | undefined): string
  * full-res phone photo base64-encodes past the frame limit and would be dropped silently — with the
  * base64 round-trip the SoulImage shape needs at each end. Best-effort: an unconvertible image is
  * sent as it came, so a failure to shrink is never a failure to send. */
+/** How many pictures the chat keeps as references. The render caps again at MAX_CHAT_REFS; this is
+ * the collection bound, so opening a folder of photos can't grow an unbounded array of ArrayBuffers
+ * in memory for a session that never renders. Newest kept — the last thing opened is the subject. */
+const MAX_TURN_REFS = 10;
+
 async function downscaleSoulPhotoForRelay(im: SoulImage): Promise<SoulImage> {
   try {
     const raw = Uint8Array.from(atob(im.dataBase64), (c) => c.charCodeAt(0));
@@ -4536,6 +4541,43 @@ export function App() {
   // bridge, then run it through the SAME importer as an upload. On a linked PHONE there's no
   // filesystem of its own — relay the path so the DESKTOP reads + imports + opens it (the opened
   // book then mirrors back via vrsync:book, so it appears in the phone's reader + library).
+  /**
+   * Register a picture that reached the chat as a REFERENCE for this session's renders.
+   *
+   * The paperclip was the only route in. A photo the assistant opened from the computer, or one the
+   * reader found with /find and opened, arrived in the chat looking exactly like an attached one and
+   * counted for nothing — so "make a picture from this" rendered from a description of it rather
+   * than from the picture. Where it came from was never the point; that it is in front of both of
+   * you is.
+   *
+   * Appends rather than replaces, so opening a second photo builds a set (the render caps at
+   * MAX_CHAT_REFS anyway), and says so in the chat — a reference that acts silently is one the
+   * reader can't tell apart from one that was ignored.
+   */
+  /**
+   * The gallery's "Use as reference": adopt THAT hit, by URL.
+   *
+   * It sends the request rather than downloading here, because a browser tab can't fetch an
+   * arbitrary image host (CORS) and the worker already owns the whole ladder behind
+   * use_image_reference. One code path for both ways in — the reader's click and the assistant's
+   * own call — instead of a second downloader that would drift from the first.
+   */
+  const onUseImageAsReference = useCallback(
+    (item: { full: string; title?: string }) => {
+      onBuddySendTextRef.current(`Use this exact picture as a reference for images in this chat: ${item.full}`);
+    },
+    [],
+  );
+  const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
+  const useAsChatReference = useCallback((image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
+    const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType }];
+    turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
+    buddyNoteRef.current(
+      `🖼 “${label}” is now a reference for pictures I make in this chat (${turnRefImagesRef.current.length} in use).`,
+    );
+  }, []);
+
+
   const onOpenLocalFile = useCallback(
     async (path: string) => {
       if (isRemoteClient) {
@@ -4544,6 +4586,11 @@ export function App() {
       }
       try {
         const file = await readLocalFile(path);
+        // An IMAGE the reader found on their own computer is a picture they chose deliberately —
+        // make it a reference for the chat as well as opening it, rather than only handing it to
+        // the photo tools, where the assistant can't reach it.
+        const imported = await importBookFile(file).catch(() => undefined);
+        if (imported?.kind === "image") useAsChatReference(imported, imported.name);
         await onUpload(file);
       } catch (err) {
         setLocalError(`Couldn't open that file: ${err instanceof Error ? err.message : String(err)}`);
@@ -4563,8 +4610,9 @@ export function App() {
         if (imported.kind === "book") {
           openBook(imported.book);
         } else if (imported.kind === "image") {
-          // An image isn't a book; the desktop's photo (img2img) panel can't be driven from the phone.
-          buddyNoteRef.current(`🖼 “${file.name}” is an image — open it in the desktop's photo tools.`);
+          // Was a dead end: "open it in the desktop's photo tools" is not something a phone reader
+          // can act on. The picture they picked becomes a reference for the chat they're in.
+          useAsChatReference(imported, imported.name);
         } else {
           const created = bookFromText(imported.title, imported.text, imported.mode, "Imported file");
           openBook({
@@ -6694,14 +6742,26 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step" || e.call.tool === "update_task" || e.call.tool === "update_task_doc")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
-        if (e.openedImage) {
+        if (e.referenceAdopted) {
+          // A picture the assistant deliberately adopted from a web search. Registered exactly like
+          // an attachment or an opened file — one set, one code path, one note in the chat.
+          const r = e.referenceAdopted;
+          if (r.ok && r.base64) {
+            useAsChatReference({ bytes: base64ToBytes(r.base64), mimeType: r.mimeType ?? "image/jpeg" }, r.title ?? "web picture");
+          } else {
+            appendBuddy({ role: "tool", text: `⚠ Couldn't use that picture as a reference${r.error ? `: ${r.error}` : "."}` });
+          }
+        } else if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
           const img = e.openedImage;
+          const bytes = base64ToBytes(img.base64);
           appendBuddy({
             role: "tool",
             text: `🖼 ${img.name}`,
-            image: { bytes: base64ToBytes(img.base64), mimeType: img.mimeType },
+            image: { bytes, mimeType: img.mimeType },
           });
+          // Opened INTO the chat — so it is available to draw from, exactly like an attached photo.
+          useAsChatReference({ bytes, mimeType: img.mimeType }, img.name);
         } else if (e.hits?.length) {
           appendBuddy({
             role: "tool",
@@ -6996,6 +7056,7 @@ export function App() {
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+  onBuddySendTextRef.current = onBuddySendText; // the gallery button (declared far above) sends through this
 
   // "Story as you go": start a brand-new illustrated story the user co-writes — the same
   // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
@@ -8941,6 +9002,7 @@ export function App() {
       onOpenLocalFile={onOpenLocalFile}
       onSaveFile={onSaveChatFile}
       fileActions={buddyFileActions}
+      onUseImageAsReference={onUseImageAsReference}
       {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
       onSaveProject={onSaveProject}
       onBuildDocument={onBuildDocument}
