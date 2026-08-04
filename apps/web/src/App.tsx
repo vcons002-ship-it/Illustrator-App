@@ -4608,12 +4608,35 @@ export function App() {
    * `/reference <url>` runs the same tool DIRECTLY in the worker, no LLM round, for the reason the
    * slash commands exist at all: immune to a model deciding not to cooperate. Same code path, same
    * download ladder, same registration — just not asked as a favour.
+   *
+   * ON A PHONE IT HAS TO RUN ON THE DESKTOP, and that is the whole bug behind "the button seemed to
+   * work but the picture was never used". `onBuddySend` dispatches the turn LOCALLY — it has no
+   * remote guard, because the composer relays before ever reaching it (see the `vrcmd:chatSend`
+   * branch there). This button skipped the composer and called it directly, so on a linked phone the
+   * entire adoption happened in the PHONE's tab: the phone downloaded the picture, registered it in
+   * the phone's reference set, and wrote the phone its own "now a reference" line.
+   *
+   * Every reported symptom is that one split. The line appeared, because the phone really had
+   * adopted it. The line then VANISHED, because the desktop's chat mirror — which never saw that
+   * turn — overwrites the phone's message list. And the render, which runs on the DESKTOP, was
+   * handed a reference set that was still empty, so it reported nothing at all: not "couldn't use
+   * them", not "used 1 of 1" — no line, the signature of zero references supplied. Attaching a photo
+   * worked throughout precisely because that path goes through the composer, which relays the bytes.
+   *
+   * So it relays, like every other phone action whose effect has to land where the engine and the
+   * state are. The desktop's handler runs this same text through the same path, and the note it
+   * writes is the desktop's own — so it survives the next mirror push instead of being erased by it.
    */
   const onUseImageAsReference = useCallback(
     (item: { full: string; title?: string }) => {
-      onBuddySendTextRef.current(`/reference ${item.full}`);
+      const text = `/reference ${item.full}`;
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatSend", text });
+        return;
+      }
+      onBuddySendTextRef.current(text);
     },
-    [],
+    [isRemoteClient, sendAppSync],
   );
   const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback(
