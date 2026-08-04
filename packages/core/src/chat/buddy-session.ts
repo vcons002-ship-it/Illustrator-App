@@ -263,6 +263,10 @@ export interface BuddyDeps {
   addTaskSteps?: (args: { planId?: string; steps: { id?: string; title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }) => Promise<{ planTitle: string; count: number; replaced: boolean } | undefined>;
   listTaskPlans?: () => Promise<{ id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[]>;
   getTaskPlan?: (id: string) => Promise<TaskPlan | undefined>;
+  /** Find a picture on the web and hand back its BYTES, for the host to adopt as a chat reference.
+   * Returns `ok:false` with a reason rather than throwing, so a blocked host reads as a failed
+   * adoption and not as a broken tool. */
+  adoptImageReference?: (query: string) => Promise<{ ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string }>;
 }
 
 export type BuddyTurnEvent =
@@ -1120,6 +1124,10 @@ export async function runBuddyTool(
       case "read_file":
         if (!deps.readFile) return { error: "reading local files isn't enabled (turn on file pulling in Settings, on desktop)." };
         return { fileText: await deps.readFile(call.path) };
+      case "use_image_reference": {
+        if (!deps.adoptImageReference) return { error: "picture search isn't set up on this device" };
+        return { referenceAdopted: await deps.adoptImageReference(call.query) };
+      }
       case "open_image":
         if (!deps.openImage) return { error: "opening images isn't enabled (turn on file pulling in Settings, on desktop)." };
         return { openedImage: await deps.openImage(call.path) };

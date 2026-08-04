@@ -2685,3 +2685,40 @@ describe("a picture opened into the chat is a reference, not just something to l
     expect(out).toMatch(/what should CHANGE/);
   });
 });
+
+describe("use_image_reference — a searched picture, adopted deliberately", () => {
+  it("parses, and needs a query", () => {
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","query":"victorian terrace"}')).toEqual({
+      tool: "use_image_reference",
+      query: "victorian terrace",
+    });
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","query":"  "}')).toBeUndefined();
+  });
+
+  it("says a plain search NEVER becomes a reference, so an illustration can't steer a render", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain('"tool":"use_image_reference"');
+    expect(p).toMatch(/search_images only SHOWS pictures/);
+  });
+
+  it("tells the model to prompt for what CHANGES once one is adopted", () => {
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", query: "victorian terrace" },
+      { referenceAdopted: { ok: true, title: "Terrace, Bath", base64: "x", mimeType: "image/jpeg" } },
+    );
+    expect(out).toContain("Terrace, Bath");
+    expect(out).toMatch(/what should CHANGE/);
+    expect(out).toMatch(/Do not describe the reference back into the prompt/);
+  });
+
+  it("refuses to pretend a failed adoption worked", () => {
+    // A hotlink-only result is not an adoption — the image model needs bytes — and a model that
+    // carries on as if one were in place describes a picture it doesn't have.
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", query: "x" },
+      { referenceAdopted: { ok: false, error: "that picture could only be hotlinked, not downloaded" } },
+    );
+    expect(out).toMatch(/couldn't get a usable picture/i);
+    expect(out).toMatch(/do NOT carry on as if a reference were in place/i);
+  });
+});

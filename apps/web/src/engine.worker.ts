@@ -4739,6 +4739,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
+      // ADOPT a searched picture: `retrieve` is the existing bytes → thumbnail → hotlink ladder,
+      // with the guards these hosts need (thumbnail first, since Commons originals are often TIFF or
+      // PDF that an <img> can't decode; a 10s deadline, because search-result hosts are the least
+      // reliable endpoints we talk to). A hotlink-only result is NOT an adoption — the image model
+      // needs bytes — so it's reported as a failure rather than silently doing nothing.
+      adoptImageReference: async (query: string) => {
+        try {
+          const found = await imageSearch.retrieve(query);
+          if (!found?.bytes) {
+            return { ok: false, error: found ? "that picture could only be hotlinked, not downloaded" : "no picture found" };
+          }
+          const bytes = new Uint8Array(found.bytes.bytes);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          return {
+            ok: true,
+            ...(found.title ? { title: found.title } : {}),
+            base64: btoa(binary),
+            mimeType: found.bytes.mimeType || "image/jpeg",
+          };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
       readUrl: readUrlText(ac.signal),
       ...(settings?.keys?.wolfram
         ? {
@@ -5983,6 +6007,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.wolfram ? { wolfram: e.result.wolfram } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.openedImage ? { openedImage: e.result.openedImage } : {}),
+            ...(e.result.referenceAdopted ? { referenceAdopted: e.result.referenceAdopted } : {}),
             // Whether this produced something durable. Only a handful of fields cross this boundary,
             // so the part of the payload that says WHAT a tool made never reached the app-managed
             // collar — which then judged "no file was written" about a document it had just written.

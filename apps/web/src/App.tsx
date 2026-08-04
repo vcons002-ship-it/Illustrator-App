@@ -6726,7 +6726,16 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step" || e.call.tool === "update_task" || e.call.tool === "update_task_doc")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
-        if (e.openedImage) {
+        if (e.referenceAdopted) {
+          // A picture the assistant deliberately adopted from a web search. Registered exactly like
+          // an attachment or an opened file — one set, one code path, one note in the chat.
+          const r = e.referenceAdopted;
+          if (r.ok && r.base64) {
+            useAsChatReference({ bytes: base64ToBytes(r.base64), mimeType: r.mimeType ?? "image/jpeg" }, r.title ?? "web picture");
+          } else {
+            appendBuddy({ role: "tool", text: `⚠ Couldn't use that picture as a reference${r.error ? `: ${r.error}` : "."}` });
+          }
+        } else if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
           const img = e.openedImage;
           const bytes = base64ToBytes(img.base64);
