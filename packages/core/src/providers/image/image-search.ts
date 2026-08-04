@@ -247,6 +247,27 @@ export function sniffImageMime(bytes: ArrayBuffer): string | undefined {
 }
 
 /**
+ * A picture we can PROVE is a picture, in a container the image engine can't open.
+ *
+ * AVIF and HEIC are ordinary on news and government sites now, and both are ISO-BMFF: the brand
+ * sits at offset 8, after the `ftyp` box. Pillow — which is what ComfyUI's LoadImage uses — needs a
+ * plugin for either, and won't have one. Naming them separately is the difference between "that
+ * host refused us" and "that host served a format we can't use, pick a different result": the first
+ * is a dead end, the second tells the reader exactly what to do next. PURE.
+ */
+export function unsupportedImageFormat(bytes: ArrayBuffer): string | undefined {
+  const b = new Uint8Array(bytes);
+  if (b.length < 12) return undefined;
+  const brand = String.fromCharCode(...b.subarray(8, 12));
+  const isFtyp = String.fromCharCode(...b.subarray(4, 8)) === "ftyp";
+  if (isFtyp && (brand === "avif" || brand === "avis")) return "AVIF";
+  if (isFtyp && (brand === "heic" || brand === "heix" || brand === "hevc" || brand === "mif1")) return "HEIC";
+  if (b[0] === 0xff && b[1] === 0x0a) return "JPEG XL";
+  if (String.fromCharCode(...b.subarray(0, 5)).toLowerCase().startsWith("<svg") || String.fromCharCode(...b.subarray(0, 5)) === "<?xml") return "SVG";
+  return undefined;
+}
+
+/**
  * The image-search query for a technical keyEvent's visualization plan: the LLM-chosen
  * subject (the established concept/structure term) plus its visual form. e.g.
  * subject "the Krebs cycle", environment "step-by-step process diagram" →

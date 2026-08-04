@@ -173,6 +173,7 @@ import {
   hasGoogleSkipMarker,
   runTaskPlanning,
   retrieveFromHits,
+  unsupportedImageFormat,
   normalizeTaskPlan,
   nextOccurrence,
   upsertTaskPlan,
@@ -3616,6 +3617,31 @@ async function mirrorPlanToGoogle(planId: string): Promise<void> {
   }
 }
 
+/**
+ * WHY a picture couldn't be adopted, when we can find out cheaply.
+ *
+ * The ladder returns "no bytes" for a refusal and for a format we reject, which are different
+ * problems: one is the host saying no, the other is "pick a different result, this one is AVIF".
+ * A second fetch is worth it because the alternative is a reader retrying a dead end.
+ */
+async function describeAdoptFailure(url: string | undefined): Promise<string | undefined> {
+  if (!url) return undefined;
+  const cf = corsFetch();
+  if (!cf) return undefined;
+  try {
+    const res = await new DirectTransport(cf).send({ url, method: "GET", signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return `that host refused the download (HTTP ${res.status}) — it only allows hotlinking`;
+    const bytes = await res.arrayBuffer();
+    const format = unsupportedImageFormat(bytes);
+    if (format) {
+      return `that picture is ${format}, which the image engine can't open — pick a JPEG or PNG result instead`;
+    }
+    return "that host served something that wasn't an image (usually a block page)";
+  } catch {
+    return undefined;
+  }
+}
+
 async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport, tok: () => Promise<string>): Promise<TaskPlan> {
   const parentId = plan.googleTaskId;
   if (!parentId) return plan;
@@ -4756,7 +4782,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               ? await imageSearch.retrieve(query)
               : undefined;
           if (!found?.bytes) {
-            return { ok: false, error: found ? "that picture could only be hotlinked, not downloaded" : "no picture found" };
+            // "Could not download" covers two situations that need different actions from the
+            // reader, so find out which. A hotlink-blocking host and a modern container the image
+            // engine can't open both end up here, and only one of them is worth retrying.
+            const why = found ? await describeAdoptFailure(url ?? found.sourceUrl) : undefined;
+            return { ok: false, error: why ?? (found ? "that host refused the download (it only allows hotlinking)" : "no picture found") };
           }
           const bytes = new Uint8Array(found.bytes.bytes);
           let binary = "";
