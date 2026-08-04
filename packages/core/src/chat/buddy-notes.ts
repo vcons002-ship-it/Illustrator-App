@@ -87,6 +87,29 @@ export function needsPausedTurnNote(paused: boolean, hasText: boolean, suppressP
   return paused && (!hasText || suppressProse);
 }
 
+/**
+ * Why the checklist stopped advancing on its own, on the legacy model-driven path.
+ *
+ * Two halts, and only one of them used to say anything. Running LONG printed a line; STALLING —
+ * two turns in a row that finished no step — printed nothing, and the run simply stopped moving
+ * with a half-done checklist on screen. That is the more common of the two by far, because it is
+ * what a model that doesn't call `complete_step` reliably produces, which is most local models and
+ * the whole reason app-managed steps exists as a setting.
+ *
+ * Halting is right in both cases. Being quiet about it is not: the reader is left unable to tell a
+ * deliberate stop from a crash, and with no idea that one word would resume it.
+ */
+export function chainHaltNote(reason: "stalled" | "long"): BuddyNote {
+  return {
+    text:
+      reason === "long"
+        ? "⏸ Paused — this has run a long way on its own. Say “continue” to keep working the checklist."
+        : "⏸ Stopped — the last couple of turns didn't finish a checklist step. If I asked you something, " +
+          "answer it and I'll carry on; otherwise say “continue”.",
+    turns: [],
+  };
+}
+
 /** A picture file opened INTO the chat (`open_image`), shown inline where the reader can see it. */
 export function openedImageNote(name: string): BuddyNote {
   return {

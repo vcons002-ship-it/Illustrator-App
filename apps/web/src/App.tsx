@@ -89,6 +89,7 @@ import {
   scheduledRunNote,
   scheduledRunPrompt,
   stripPersistedDirectives,
+  chainHaltNote,
   mergeChatReferences,
   needsPausedTurnNote,
   pausedTurnNote,
@@ -7079,9 +7080,19 @@ export function App() {
           );
           return res.text || undefined;
         }
-        if (adv.count > cap) {
-          appendBuddy({ role: "tool", text: "Paused — say “continue” to keep working the checklist.", turns: [] });
-        }
+        // BOTH halts say so, and both offer the way back. Only the cap did — a STALL (two turns in a
+        // row finishing no step) printed nothing, so the run stopped moving with a half-done
+        // checklist on screen and no sign whether that was deliberate or a crash. The stall is by far
+        // the commoner of the two: it is exactly what a model that doesn't call complete_step
+        // reliably produces, which is most local ones — and is the whole reason app-managed steps
+        // exists as a setting. Halting is right; being quiet about it never was.
+        const halt = chainHaltNote(adv.count > cap ? "long" : "stalled");
+        appendBuddy({
+          role: "tool",
+          text: halt.text,
+          actions: [{ label: "▶ Continue", send: "continue" }],
+          turns: halt.turns,
+        });
       }
     }
     return res.text || undefined;

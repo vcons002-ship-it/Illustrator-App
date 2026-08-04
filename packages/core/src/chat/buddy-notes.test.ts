@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chainHaltNote,
   needsPausedTurnNote,
   openedImageNote,
   pausedTurnNote,
@@ -96,5 +97,25 @@ describe("a paused turn is always resumable", () => {
     expect(pausedTurnNote().text).toMatch(/continue/i);
     // Display-only: a budget checkpoint replayed out of history is turn-local machinery.
     expect(pausedTurnNote().turns).toEqual([]);
+  });
+});
+
+describe("a checklist that stops advancing says so", () => {
+  it("speaks for BOTH halts, not just the long one", () => {
+    // The stall halt printed nothing at all, so the run stopped moving with a half-done checklist on
+    // screen and no way to tell a deliberate stop from a crash. It's the commoner of the two by far:
+    // it's what a model that doesn't call complete_step reliably produces, which is most local ones.
+    for (const reason of ["stalled", "long"] as const) {
+      const note = chainHaltNote(reason);
+      expect(note.text.trim().length).toBeGreaterThan(0);
+      expect(note.text).toMatch(/continue/i);
+      expect(note.turns).toEqual([]); // turn-local machinery — never replayed as history
+    }
+  });
+
+  it("tells the two apart, because they ask different things of the reader", () => {
+    // A stall can mean the model asked a question and is waiting; running long never does.
+    expect(chainHaltNote("stalled").text).not.toBe(chainHaltNote("long").text);
+    expect(chainHaltNote("stalled").text).toMatch(/answer/i);
   });
 });
