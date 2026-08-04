@@ -68,6 +68,25 @@ describe("inferDoneWhen", () => {
     expect(inferDoneWhen("Ask me my favorite color")).toEqual({ kind: "user_reply" });
     expect(inferDoneWhen("List three follow-up ideas")).toEqual({ kind: "text", min: 1 });
   });
+
+  it("reads ADOPTING a reference as the adoption tool, not as a render", () => {
+    // The loop this pins: "save a reference image of X" contains "image of", so it was inferred as a
+    // step needing a RENDER. Adopting produces no image, so the step could never be satisfied by its
+    // own work — and `attemptedStepWork` saw no render attempt either, so the executor re-nudged
+    // without spending an attempt. Told again and again that it still owed an image, the model
+    // eventually made one nobody asked for, which DID satisfy the contract and moved the run on.
+    const adopt = { kind: "tool_ok", tool: "use_image_reference" };
+    expect(inferDoneWhen("Save a reference image of a victorian terrace")).toEqual(adopt);
+    expect(inferDoneWhen("Set the reference photo for this chat")).toEqual(adopt);
+    expect(inferDoneWhen("Use the second search result as a reference")).toEqual(adopt);
+  });
+
+  it("but a render step that merely MENTIONS the reference is still a render", () => {
+    // The verb decides. Losing this would be the same bug pointing the other way: a step that really
+    // does owe a picture, judged by whether a reference was adopted.
+    expect(inferDoneWhen("Generate an image of the house from the reference photo")).toEqual({ kind: "image" });
+    expect(inferDoneWhen("Draw the terrace using the reference picture")).toEqual({ kind: "image" });
+  });
 });
 
 describe("compileWorkflow", () => {
@@ -112,6 +131,22 @@ describe("evaluateStep — the collar (evidence only)", () => {
     expect(evaluateStep(step({ doneWhen: { kind: "command_ok" } }), ev([{ call: { tool: "run_command", command: "ls" }, result: { command: { stdout: "", stderr: "boom", code: 1 } } }])).done).toBe(false);
     expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "search_web" } }), ev([{ call: { tool: "search_web", query: "x" }, result: { hits: [] } }])).done).toBe(true);
     expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "search_web" } }), ev([{ call: { tool: "search_web", query: "x" }, result: { error: "network" } }])).done).toBe(false);
+  });
+
+  it("a GUESSED tool_ok loses to observed work, so a mis-inferred contract can't circle forever", () => {
+    // A regex naming one specific tool is the easiest contract to get wrong, and when it is wrong the
+    // step is unsatisfiable by the work it describes — the run doesn't fail, it circles. Same rule
+    // `text` and `narration` already carry: when a regex and reality disagree, reality wins.
+    const rendered = ev([{ call: { tool: "generate_image", prompt: "a house" }, result: { image: { ok: true } } }]);
+    const guessed = step({ doneWhen: { kind: "tool_ok", tool: "use_image_reference" }, inferred: true });
+    expect(evaluateStep(guessed, rendered).done).toBe(true);
+
+    // A contract the MODEL declared stays strict — it's a promise, not a guess.
+    const declared = step({ doneWhen: { kind: "tool_ok", tool: "use_image_reference" } });
+    expect(evaluateStep(declared, rendered).done).toBe(false);
+
+    // And a guess still isn't satisfied by nothing happening.
+    expect(evaluateStep(guessed, ev([])).done).toBe(false);
   });
 
   it("W1: a tool_ok step is NOT done when the host tool reported a NESTED failure (video/writeFile/image ok:false)", () => {
