@@ -644,9 +644,11 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
     `🔍 No figure found for “${query}”.` +
     (hasSearchKey
       ? ""
-      : " (Free image search uses Wikimedia Commons — strong on diagrams/science/history," +
-        " weak on pop-culture or specific products. Add a Google Programmable Search key in" +
-        " Settings → Scientific sources for whole-web image results.)")
+      : " (Keyless image search is DuckDuckGo, with Wikimedia Commons underneath. If results look like" +
+        " an archive — diagrams and old photographs, nothing recent — the web feed has dropped out for" +
+        " this session and Commons is answering alone. For Google's own index you need BOTH a" +
+        " Programmable Search key and an engine ID (the `cx`) in Settings; the key alone does nothing," +
+        " and Google is retiring whole-web custom search, so an engine covers up to 50 domains you pick.)")
   );
 }
 

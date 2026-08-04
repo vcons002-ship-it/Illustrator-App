@@ -129,7 +129,8 @@ describe("WikiSearch.search", () => {
 
 describe("WikiSearch.retrieve", () => {
   it("downloads the top hit's bytes (shared retrieval ladder)", async () => {
-    const png = new TextEncoder().encode("png-bytes").buffer as ArrayBuffer;
+    // A REAL signature: the ladder sniffs the bytes now, so a refusal page can't pose as a PNG.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]).buffer;
     const t = new FakeTransport((req) =>
       req.url.includes("api.php") ? { json: commonsJson } : { bytes: png },
     );

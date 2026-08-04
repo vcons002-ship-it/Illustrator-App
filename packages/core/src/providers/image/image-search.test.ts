@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
+import { sniffImageMime,
   GoogleImageSearch,
   buildFigureQuery,
   formatGroundingContext,
@@ -69,7 +69,9 @@ describe("GoogleImageSearch.search", () => {
 });
 
 describe("GoogleImageSearch.retrieve", () => {
-  const png = new TextEncoder().encode("PNG").buffer;
+  // A REAL PNG signature: the retriever now sniffs the bytes, because a hotlink-refusal page is a
+  // 200 with a body and calling it a PNG is what put HTML in front of ComfyUI's LoadImage.
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0]).buffer;
 
   it("downloads the top hit's bytes (cacheable like a generated image)", async () => {
     const t = new FakeTransport((req) =>
@@ -78,7 +80,7 @@ describe("GoogleImageSearch.retrieve", () => {
     const s = new GoogleImageSearch({ apiKey: "K", engineId: "CX", transport: t });
     const out = await s.retrieve("krebs cycle diagram");
     expect(out?.bytes?.mimeType).toBe("image/png");
-    expect(new TextDecoder().decode(out!.bytes!.bytes)).toBe("PNG");
+    expect(new Uint8Array(out!.bytes!.bytes)[0]).toBe(0x89); // the real signature, not the URL's word
     expect(out?.contextLink).toBe("https://example.org/article");
   });
 
@@ -181,5 +183,32 @@ describe("buildFigureQuery", () => {
   it("appends 'diagram' when the plan didn't name a figure-like form", () => {
     expect(buildFigureQuery("mitochondrion", "cutaway view")).toBe("mitochondrion cutaway view diagram");
     expect(buildFigureQuery("transformer architecture", undefined)).toBe("transformer architecture diagram");
+  });
+});
+
+describe("sniffImageMime — the bytes decide, not the URL", () => {
+  const buf = (...b: number[]) => new Uint8Array([...b, ...Array(16).fill(0)]).buffer;
+
+  it("recognises the rasters an image model can actually open", () => {
+    expect(sniffImageMime(buf(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe("image/png");
+    expect(sniffImageMime(buf(0xff, 0xd8, 0xff))).toBe("image/jpeg");
+    expect(sniffImageMime(buf(0x47, 0x49, 0x46, 0x38))).toBe("image/gif");
+    expect(sniffImageMime(buf(0x42, 0x4d))).toBe("image/bmp");
+    const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0, 0, 0, 0]);
+    expect(sniffImageMime(webp.buffer)).toBe("image/webp");
+  });
+
+  it("rejects a hotlink-refusal page, which is a 200 with a body", () => {
+    // This is the whole bug: an HTML error page saved as vr-ref-….png, handed to ComfyUI, and
+    // surfaced three layers away as "LoadImage: cannot identify image file".
+    const html = new TextEncoder().encode("<!DOCTYPE html><html><body>403 Forbidden</body></html>");
+    expect(sniffImageMime(html.buffer as ArrayBuffer)).toBeUndefined();
+  });
+
+  it("rejects SVG and anything too short to identify", () => {
+    // SVG is text; an image model can't rasterise it, so it belongs with the HTML.
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    expect(sniffImageMime(svg.buffer as ArrayBuffer)).toBeUndefined();
+    expect(sniffImageMime(new ArrayBuffer(4))).toBeUndefined();
   });
 });
