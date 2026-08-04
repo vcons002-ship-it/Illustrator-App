@@ -172,6 +172,7 @@ import {
   googleNotesUserEdit,
   hasGoogleSkipMarker,
   runTaskPlanning,
+  retrieveFromHits,
   normalizeTaskPlan,
   nextOccurrence,
   upsertTaskPlan,
@@ -4744,9 +4745,16 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // PDF that an <img> can't decode; a 10s deadline, because search-result hosts are the least
       // reliable endpoints we talk to). A hotlink-only result is NOT an adoption — the image model
       // needs bytes — so it's reported as a failure rather than silently doing nothing.
-      adoptImageReference: async (query: string) => {
+      adoptImageReference: async ({ query, url }: { query?: string; url?: string }) => {
         try {
-          const found = await imageSearch.retrieve(query);
+          // A URL is the picture the reader actually pointed at. It goes through the SAME ladder as
+          // a search hit (retrieveFromHits with a one-item list), so a thumbnail-only host and an
+          // undisplayable original are handled identically either way.
+          const found = url
+            ? await retrieveFromHits(new DirectTransport(corsFetch() ?? fetch), [{ link: url, title: url }])
+            : query
+              ? await imageSearch.retrieve(query)
+              : undefined;
           if (!found?.bytes) {
             return { ok: false, error: found ? "that picture could only be hotlinked, not downloaded" : "no picture found" };
           }

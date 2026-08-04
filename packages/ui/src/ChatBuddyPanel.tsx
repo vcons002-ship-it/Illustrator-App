@@ -160,6 +160,9 @@ export interface ChatBuddyPanelProps {
   onBuildDocument?: BuildDocumentFn;
   /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). Stable (memo). */
   fileActions?: FileActions;
+  /** Adopt a searched picture as a reference for this chat's renders (the gallery's "Use as
+   * reference" button). Absent ⇒ the button isn't offered. */
+  onUseImageAsReference?: (item: { full: string; title?: string }) => void;
   /** The session's working folder ("" = default workspace). Present → show the picker. */
   workingDir?: string;
   /** Set the working folder run_command/find_files operate in ("" resets to default). */
@@ -659,6 +662,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
             {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
             {...(props.fileActions ? { fileActions: props.fileActions } : {})}
+            {...(props.onUseImageAsReference ? { onUseImageAsReference: props.onUseImageAsReference } : {})}
             {...(props.desktop ? { desktop: props.desktop } : {})}
             {...(props.thinkingOpen !== undefined && i === props.messages.length - 1
               ? { thinkingOpen: props.thinkingOpen }

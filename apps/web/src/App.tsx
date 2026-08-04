@@ -4554,6 +4554,21 @@ export function App() {
    * MAX_CHAT_REFS anyway), and says so in the chat — a reference that acts silently is one the
    * reader can't tell apart from one that was ignored.
    */
+  /**
+   * The gallery's "Use as reference": adopt THAT hit, by URL.
+   *
+   * It sends the request rather than downloading here, because a browser tab can't fetch an
+   * arbitrary image host (CORS) and the worker already owns the whole ladder behind
+   * use_image_reference. One code path for both ways in — the reader's click and the assistant's
+   * own call — instead of a second downloader that would drift from the first.
+   */
+  const onUseImageAsReference = useCallback(
+    (item: { full: string; title?: string }) => {
+      onBuddySendTextRef.current(`Use this exact picture as a reference for images in this chat: ${item.full}`);
+    },
+    [],
+  );
+  const onBuddySendTextRef = useRef<(text: string) => void>(() => {});
   const useAsChatReference = useCallback((image: { bytes: ArrayBuffer; mimeType: string }, label: string) => {
     const next = [...turnRefImagesRef.current, { bytes: image.bytes.slice(0), mimeType: image.mimeType }];
     turnRefImagesRef.current = next.slice(-MAX_TURN_REFS);
@@ -4561,6 +4576,7 @@ export function App() {
       `🖼 “${label}” is now a reference for pictures I make in this chat (${turnRefImagesRef.current.length} in use).`,
     );
   }, []);
+
 
   const onOpenLocalFile = useCallback(
     async (path: string) => {
@@ -7040,6 +7056,7 @@ export function App() {
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+  onBuddySendTextRef.current = onBuddySendText; // the gallery button (declared far above) sends through this
 
   // "Story as you go": start a brand-new illustrated story the user co-writes — the same
   // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
@@ -8985,6 +9002,7 @@ export function App() {
       onOpenLocalFile={onOpenLocalFile}
       onSaveFile={onSaveChatFile}
       fileActions={buddyFileActions}
+      onUseImageAsReference={onUseImageAsReference}
       {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
       onSaveProject={onSaveProject}
       onBuildDocument={onBuildDocument}

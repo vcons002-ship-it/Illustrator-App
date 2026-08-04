@@ -2722,3 +2722,30 @@ describe("use_image_reference — a searched picture, adopted deliberately", () 
     expect(out).toMatch(/do NOT carry on as if a reference were in place/i);
   });
 });
+
+describe("use_image_reference by URL — adopting the picture actually pointed at", () => {
+  it("takes a url, a query, or both — but not neither", () => {
+    // A query RE-SEARCHES and can land on a different picture than the one on screen; a url names
+    // the exact hit. "Use the second one" needs the url form.
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","url":"https://x/a.jpg"}')).toEqual({
+      tool: "use_image_reference",
+      url: "https://x/a.jpg",
+    });
+    expect(parseBuddyToolCall('{"tool":"use_image_reference"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"use_image_reference","url":"  ","query":"  "}')).toBeUndefined();
+  });
+
+  it("tells the model to prefer the url when the reader points at something on screen", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toMatch(/Prefer the URL form/);
+    expect(p).toMatch(/a re-search can land on a different picture/);
+  });
+
+  it("names the url in the failure, so it's clear WHICH picture couldn't be used", () => {
+    const out = formatBuddyToolResult(
+      { tool: "use_image_reference", url: "https://x/a.jpg" },
+      { referenceAdopted: { ok: false, error: "no picture found" } },
+    );
+    expect(out).toContain("https://x/a.jpg");
+  });
+});

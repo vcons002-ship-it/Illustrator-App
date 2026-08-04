@@ -266,7 +266,7 @@ export interface BuddyDeps {
   /** Find a picture on the web and hand back its BYTES, for the host to adopt as a chat reference.
    * Returns `ok:false` with a reason rather than throwing, so a blocked host reads as a failed
    * adoption and not as a broken tool. */
-  adoptImageReference?: (query: string) => Promise<{ ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string }>;
+  adoptImageReference?: (find: { query?: string; url?: string }) => Promise<{ ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string }>;
 }
 
 export type BuddyTurnEvent =
@@ -1126,7 +1126,7 @@ export async function runBuddyTool(
         return { fileText: await deps.readFile(call.path) };
       case "use_image_reference": {
         if (!deps.adoptImageReference) return { error: "picture search isn't set up on this device" };
-        return { referenceAdopted: await deps.adoptImageReference(call.query) };
+        return { referenceAdopted: await deps.adoptImageReference({ ...(call.url ? { url: call.url } : {}), ...(call.query ? { query: call.query } : {}) }) };
       }
       case "open_image":
         if (!deps.openImage) return { error: "opening images isn't enabled (turn on file pulling in Settings, on desktop)." };
