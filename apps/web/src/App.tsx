@@ -7005,6 +7005,24 @@ export function App() {
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      /**
+       * On a linked PHONE the DESKTOP owns this conversation — so a send from here is RELAYED, never
+       * run locally. This guard is the whole reason the panel's send has always worked on a phone.
+       *
+       * Everything else that starts a chat turn came through this function WITHOUT it: the gallery's
+       * "🖼 Use as reference", a dropped file, a pasted link. Those ran the turn on the PHONE, which
+       * appends the reply, the tool notes and the rendered image to the PHONE'S OWN message list. The
+       * desktop never learned any of it happened — so the next mirror push (the next time anything
+       * touched the desktop's chat, i.e. the reader's next message) replaced the phone's list with the
+       * desktop's, and the entire exchange vanished: the note, the pictures, all of it.
+       *
+       * That is why exactly one workflow lost its messages while every other message survived. It
+       * wasn't the messages being different; it was WHERE the turn ran.
+       */
+      if (isRemoteClient) {
+        if (text.trim()) sendAppSync({ type: "vrcmd:chatSend", text });
+        return;
+      }
       // `/story {json}` — starting a story as you go. Show a friendly bubble (not the raw JSON) and
       // run it against an EMPTY history so the writer's context is clean (the same guarantee the
       // desktop's Story button gives locally). This is the path a PHONE-relayed story start lands on
@@ -7078,7 +7096,7 @@ export function App() {
       }
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), text, text);
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
+    [isRemoteClient, sendAppSync, buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
   onBuddySendTextRef.current = onBuddySendText; // the gallery button (declared far above) sends through this
@@ -7882,6 +7900,11 @@ export function App() {
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
   }, [isRemoteClient, sendAppSync, libraryStore]);
   const onClearBuddy = useCallback(() => {
+    // Drop THIS device's reference pictures first, on either device. On a phone the clear is relayed
+    // and returns immediately, so the local set was never emptied — which is why the "(N in use)"
+    // count kept climbing across cleared chats. Nothing on a phone should be holding these at all
+    // now that every send relays, but a counter that survives a clear is a counter nobody trusts.
+    clearImageRefsRef.current();
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
       return;
@@ -7950,6 +7973,7 @@ export function App() {
     (id: string) => {
       if (id === activeBuddyId) return;
       if (isRemoteClient) {
+        clearImageRefsRef.current(); // per-session on this device too — the relay path skips resetBuddyView
         sendAppSync({ type: "vrcmd:chatSwitch", id }); // switch on the desktop; mirror reflects it
         return;
       }
@@ -7977,6 +8001,7 @@ export function App() {
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
     if (isRemoteClient) {
+      clearImageRefsRef.current(); // per-session on this device too — the relay path skips resetBuddyView
       sendAppSync({ type: "vrcmd:chatNew" }); // create on the desktop; the mirror brings it back
       return;
     }
