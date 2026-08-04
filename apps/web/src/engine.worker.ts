@@ -6295,12 +6295,24 @@ async function handleChatTool(
       refs.push(...own);
       if (own.length) sources.user = own.length;
     }
-    // The reader's own attachment is the strongest statement of intent there is — they picked THIS
-    // picture for THIS turn — so it leads, and at a higher weight than a stored Soul photo.
-    for (const im of refImages ?? []) refs.push({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 });
-    if (refImages?.length) sources.attached = refImages.length;
+    // The reader's own picture is the strongest statement of intent there is — they picked THIS one
+    // for THIS chat — so it leads, and at a higher weight than a stored Soul photo.
+    //
+    // It LEADS. It was appended last and the list then cut with `slice(0, MAX_CHAT_REFS)`, which
+    // keeps the FIRST ten — so on a request that also pulled in Soul photos, enough of them pushed
+    // the reader's own picture off the end and the render never saw it. Silently, and worse than
+    // silently: `sources.attached` was counted before the cut, so the note under the picture said
+    // the reference had been used. A chat reference is the reader choosing, now; a Soul photo is
+    // standing configuration. If anything has to go, it isn't the choice they just made.
+    const chatRefs = (refImages ?? []).map((im) => ({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 }));
+    const ordered = [...chatRefs, ...refs];
     if (portraitSelfName.trim()) sources.selfName = portraitSelfName;
-    const soulRefs = refs.length ? refs.slice(0, MAX_CHAT_REFS) : undefined;
+    const soulRefs = ordered.length ? ordered.slice(0, MAX_CHAT_REFS) : undefined;
+    // Count what SURVIVED the cut, not what was gathered — the note under the picture is read as a
+    // statement about the render, so it has to be one.
+    if (chatRefs.length) sources.attached = Math.min(chatRefs.length, soulRefs?.length ?? 0);
+    if (sources.self) sources.self = Math.min(sources.self, Math.max(0, (soulRefs?.length ?? 0) - chatRefs.length));
+    if (sources.user) sources.user = Math.min(sources.user, Math.max(0, (soulRefs?.length ?? 0) - chatRefs.length - (sources.self ?? 0)));
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),

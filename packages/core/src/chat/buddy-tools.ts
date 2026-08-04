@@ -4415,15 +4415,30 @@ function formatBuddyToolResultBody(
     const lines = hits.map(
       (h, i) => `[${i + 1}] ${h.title ?? "image"} — ${h.link}${h.contextLink ? ` (found on ${h.contextLink})` : ""}`,
     );
-    // The second address only needs explaining when there IS one, and most of these lists are read
-    // by a small model with no room to spare.
+    // SHOWING THEM IS THE JOB — said here because here is where it got contradicted.
+    //
+    // This used to end with "Adopt one with use_image_reference using the url after its title". It
+    // was meant as which-url-is-which, for a reader who goes on to ask for one. It reads as an
+    // instruction to adopt one now — and it sat in the freshest position in the context, right under
+    // the results. So a plain "find me a picture of X" became: adopt a reference nobody asked for,
+    // and then, because that is now two actions rather than one, compile a plan and render an image
+    // nobody asked for either. It overrode the deliberate rule stated in the tool's own description:
+    // a plain search_images only SHOWS pictures, so a search made to illustrate a point can't steer
+    // the next render.
+    //
+    // The url guidance stays, because it is genuinely needed the moment the reader DOES ask — but as
+    // a fact about the notation, with no verb pointed at the model.
     const attributed = hits.some((h) => h.contextLink);
     return (
-      `[tool search_images results for "${call.query}" — already shown to the reader inline]\n` +
+      `[tool search_images results for "${call.query}" — already shown to the reader inline. Showing them is the ` +
+      "whole job: do NOT adopt one as a reference, and do NOT generate an image, unless the reader asks for that]\n" +
       lines.join("\n") +
-      "\nAdopt one with use_image_reference using the url after its title — the picture itself." +
+      // The second address only needs explaining when there IS one, and most of these lists are read
+      // by a small model with no room to spare.
       (attributed
-        ? ' A "found on" address is the PAGE it appears on: cite that, never adopt it (adopting a page downloads a web page, not a picture).'
+        ? "\nEach entry's own url is the picture itself (that is the one use_image_reference takes, if it is ever " +
+          'asked for); a "found on" address is the page it appears on — cite that, never adopt it, since adopting a ' +
+          "page downloads a web page rather than a picture."
         : "")
     );
   }
@@ -5017,10 +5032,16 @@ function formatBuddyToolResultBody(
         "Say so — do NOT carry on as if a reference were in place, and do not describe a picture you don't have."
       );
     }
+    // SAVING A REFERENCE IS THE WHOLE ACTION. This used to end "Write your generate_image prompt
+    // for what should CHANGE…", which is standing advice about how to prompt WHEN a render is asked
+    // for — but read here, in the freshest position in context immediately after adopting, it is an
+    // instruction to write one now. So adopting a picture rendered one, unasked. The advice belongs
+    // in buildImageReferenceBlock, where it rides every turn and is about the next render whenever
+    // that comes; what belongs here is what just happened, and that it is finished.
     return (
-      `[use_image_reference — "${r.title ?? call.query ?? "that picture"}" is now a REFERENCE for pictures you make in this chat]` +
-      "\nWrite your generate_image prompt for what should CHANGE — the scene, the pose, the style — and let the " +
-      "reference carry the likeness. Do not describe the reference back into the prompt."
+      `[use_image_reference — "${r.title ?? call.query ?? "that picture"}" is now a REFERENCE for pictures you make ` +
+      "in this chat. That is the whole action and it is done: confirm it briefly, and do NOT generate an image " +
+      "unless the reader asks for one]"
     );
   }
   if (call.tool === "open_image") {
