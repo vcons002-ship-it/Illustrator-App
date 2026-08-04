@@ -501,6 +501,42 @@ describe("formatBuddyToolResult", () => {
     expect(text).toContain("open_web_text");
   });
 
+  it("gives image hits the PICTURE's url, not the page it was found on", () => {
+    // The bug this pins: it listed `contextLink ?? link`, and every backend sets contextLink
+    // (Google's image.contextLink, Commons' descriptionurl, DDG's url) — so the model was always
+    // shown the PAGE. Told to adopt a result by "that hit's link", it handed use_image_reference an
+    // HTML document, fetchImageBytes sniffed no image, and the adoption failed every time. The
+    // reader saw an assistant that couldn't use a picture they had just picked out.
+    const text = formatBuddyToolResult(
+      { tool: "search_images", query: "victorian terrace" },
+      {
+        imageHits: [
+          {
+            link: "https://cdn.example.com/terrace.jpg",
+            contextLink: "https://example.com/article-about-terraces",
+            title: "A terrace",
+          },
+        ],
+      },
+    );
+    expect(text).toContain("https://cdn.example.com/terrace.jpg");
+    // The picture leads; the page is attribution and is labelled as such.
+    expect(text.indexOf("https://cdn.example.com/terrace.jpg")).toBeLessThan(
+      text.indexOf("https://example.com/article-about-terraces"),
+    );
+    expect(text).toContain("found on https://example.com/article-about-terraces");
+    expect(text).toMatch(/use_image_reference/);
+  });
+
+  it("still lists a hit with no context page", () => {
+    const text = formatBuddyToolResult(
+      { tool: "search_images", query: "carnot cycle" },
+      { imageHits: [{ link: "https://cdn.example.com/carnot.png", title: "Carnot" }] },
+    );
+    expect(text).toContain("[1] Carnot — https://cdn.example.com/carnot.png");
+    expect(text).not.toContain("found on");
+  });
+
   it("shows To/Cc in email results so the assistant can answer 'who was this sent to'", () => {
     const search = formatBuddyToolResult(
       { tool: "gmail_search", query: "party" },

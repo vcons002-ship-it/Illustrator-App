@@ -178,3 +178,34 @@ describe("/quote and /ta — the deterministic path to a real number", () => {
     expect(r.error).toContain("/quote <ticker>");
   });
 });
+
+describe("/reference — adopting a picture without asking the model to agree", () => {
+  it("takes a URL as THE picture, not as something to search for", () => {
+    // What the gallery's "Use as reference" button sends. A re-search can land on a different
+    // picture than the one the reader pointed at, which is the whole reason the url form exists.
+    expect(parseBuddySlashCommand("/reference https://example.com/terrace.jpg", [])).toEqual({
+      call: { tool: "use_image_reference", url: "https://example.com/terrace.jpg" },
+    });
+    expect(parseBuddySlashCommand("/reference HTTPS://Example.com/a.png", [])).toEqual({
+      call: { tool: "use_image_reference", url: "HTTPS://Example.com/a.png" },
+    });
+  });
+
+  it("takes anything else as a search for one", () => {
+    expect(parseBuddySlashCommand("/reference victorian terrace house facade", [])).toEqual({
+      call: { tool: "use_image_reference", query: "victorian terrace house facade" },
+    });
+  });
+
+  it("is not a URL just because it mentions one", () => {
+    // Trailing words mean the reader described something; only a bare address is the picture.
+    expect(parseBuddySlashCommand("/reference https://example.com/a.jpg but bluer", [])).toEqual({
+      call: { tool: "use_image_reference", query: "https://example.com/a.jpg but bluer" },
+    });
+  });
+
+  it("shows usage rather than adopting nothing", () => {
+    const r = parseBuddySlashCommand("/reference", []) as { error: string };
+    expect(r.error).toContain("/reference");
+  });
+});

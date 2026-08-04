@@ -4386,10 +4386,32 @@ function formatBuddyToolResultBody(
   if (call.tool === "search_images") {
     const hits = (result.imageHits ?? []).slice(0, 5);
     if (hits.length === 0) return `[tool search_images returned no results for "${call.query}"]`;
-    const lines = hits.map((h, i) => `[${i + 1}] ${h.title ?? "image"} (${h.contextLink ?? h.link})`);
+    // THE PICTURE'S OWN URL, not the page it was found on.
+    //
+    // This listed `contextLink ?? link`, and every backend sets contextLink — Google's `image
+    // .contextLink`, Commons' `descriptionurl`, DDG's `url` — so in practice the model was shown the
+    // PAGE, always. Told (correctly, by use_image_reference's own documentation) to adopt a result by
+    // "that hit's link", the only address it had was an HTML document. Handing that to
+    // use_image_reference downloads a web page; `fetchImageBytes` sniffs the bytes, finds no image,
+    // and the adoption fails. From the reader's side: they pick a picture out of the results, and
+    // the assistant either can't take it or quietly doesn't — which is exactly how it was reported.
+    //
+    // So `link` leads, labelled as the one to adopt, and the page follows as attribution — which is
+    // what it was for. Both are shown because the model needs the page to cite a source and the
+    // picture to use one, and it can't get them from the same string.
+    const lines = hits.map(
+      (h, i) => `[${i + 1}] ${h.title ?? "image"} — ${h.link}${h.contextLink ? ` (found on ${h.contextLink})` : ""}`,
+    );
+    // The second address only needs explaining when there IS one, and most of these lists are read
+    // by a small model with no room to spare.
+    const attributed = hits.some((h) => h.contextLink);
     return (
       `[tool search_images results for "${call.query}" — already shown to the reader inline]\n` +
-      lines.join("\n")
+      lines.join("\n") +
+      "\nAdopt one with use_image_reference using the url after its title — the picture itself." +
+      (attributed
+        ? ' A "found on" address is the PAGE it appears on: cite that, never adopt it (adopting a page downloads a web page, not a picture).'
+        : "")
     );
   }
   if (call.tool === "search_books" || call.tool === "random_books") {

@@ -41,6 +41,11 @@ export const BUDDY_SLASH_COMMANDS: SlashCommandInfo[] = [
   { name: "story", args: "<opening scene>", description: "Start an illustrated story you co-write as you go" },
   { name: "remove", args: "<title>", description: "Remove a book from the library" },
   { name: "images", args: "<query>", description: "Find a real figure/diagram/photo" },
+  // The DETERMINISTIC way to adopt a reference, and what the gallery's "Use as reference" button
+  // sends. The button used to ask the model in English ("use this exact picture as a reference: …"),
+  // which made a reader's explicit click depend on the model recognising the request, choosing
+  // use_image_reference, and picking the url form over a re-search. A click is not a request.
+  { name: "reference", args: "<image url | description>", description: "Use a picture as the reference for images in this chat" },
   { name: "draw", args: "<prompt>", description: "Generate a new image (one-click confirm)" },
   { name: "calc", args: "<expression>", description: "Exact arithmetic (sqrt, sin, ^, !, pi…)" },
   // The DETERMINISTIC way to a real number. Everything else about the market tools is persuasion —
@@ -132,6 +137,17 @@ export function parseBuddySlashCommand(
     }
     case "books": {
       const call = viaParser(parseBuddyToolCall, { tool: "search_books", query: s.args });
+      return call ? { call } : usage(info);
+    }
+    case "reference": {
+      // A URL names the EXACT picture (what the gallery button sends); anything else is a search
+      // for one. Same distinction the tool itself draws, made here so the button never re-searches
+      // and lands on a different picture than the one the reader pointed at.
+      const isUrl = /^https?:\/\/\S+$/i.test(s.args);
+      const call = viaParser(parseBuddyToolCall, {
+        tool: "use_image_reference",
+        ...(isUrl ? { url: s.args } : { query: s.args }),
+      });
       return call ? { call } : usage(info);
     }
     case "random":

@@ -4584,14 +4584,21 @@ export function App() {
   /**
    * The gallery's "Use as reference": adopt THAT hit, by URL.
    *
-   * It sends the request rather than downloading here, because a browser tab can't fetch an
-   * arbitrary image host (CORS) and the worker already owns the whole ladder behind
-   * use_image_reference. One code path for both ways in — the reader's click and the assistant's
-   * own call — instead of a second downloader that would drift from the first.
+   * The download still happens in the WORKER — a browser tab can't fetch an arbitrary image host
+   * (CORS), and the worker already owns the whole ladder behind use_image_reference. What changed is
+   * how it gets asked. This used to send the model a sentence ("Use this exact picture as a
+   * reference for images in this chat: <url>") and hope: the model had to recognise the request,
+   * reach for use_image_reference rather than answering in prose, and choose the `url` form over a
+   * re-search that lands on a different picture. Three chances to lose a click the reader had
+   * already made, and losing any one of them looks identical from outside — the button does nothing.
+   *
+   * `/reference <url>` runs the same tool DIRECTLY in the worker, no LLM round, for the reason the
+   * slash commands exist at all: immune to a model deciding not to cooperate. Same code path, same
+   * download ladder, same registration — just not asked as a favour.
    */
   const onUseImageAsReference = useCallback(
     (item: { full: string; title?: string }) => {
-      onBuddySendTextRef.current(`Use this exact picture as a reference for images in this chat: ${item.full}`);
+      onBuddySendTextRef.current(`/reference ${item.full}`);
     },
     [],
   );
@@ -6777,6 +6784,18 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step" || e.call.tool === "update_task" || e.call.tool === "update_task_doc")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
+        // A SLASH command runs its tool with no model round at all: `res.transcript` comes back
+        // empty and no reply ever settles, so these lines are the entire record of what happened.
+        // Left bare they're the reader's alone — /images finds six pictures, and by the next message
+        // the model has never heard of them, which makes "use the second one" unanswerable.
+        //
+        // So on the direct path each result carries the SAME feedback the tool loop would have fed
+        // back, built by the same formatter — not a second description of a search that would drift
+        // from the first. On the LLM path the transcript already carries it and baking it here would
+        // say everything twice.
+        const direct = typed.startsWith("/");
+        const asTurns = (payload: BuddyToolResultPayload) =>
+          direct ? { turns: [{ role: "user" as const, content: formatBuddyToolResult(e.call, payload) }] } : {};
         if (e.referenceAdopted) {
           // A picture the assistant deliberately adopted from a web search. Registered exactly like
           // an attachment or an opened file — one set, one code path, one note in the chat.
@@ -6810,6 +6829,7 @@ export function App() {
             role: "tool",
             text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
             links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+            ...asTurns({ hits: e.hits }),
           });
         } else if (e.books?.length) {
           appendBuddy({
@@ -6822,6 +6842,7 @@ export function App() {
               url: b.pageUrl ?? b.textUrl,
               title: b.author ? `${b.title} — ${b.author}` : b.title,
             })),
+            ...asTurns({ books: e.books }),
           });
         } else if (e.imageHits?.length) {
           // All hits as a thumbnail gallery (tap to enlarge); keep lastRefs so
@@ -6839,6 +6860,10 @@ export function App() {
               full: h.link,
               ...(h.title ? { title: h.title } : {}),
             })),
+            // What makes "use the second one" answerable after a bare /images. The formatter numbers
+            // the hits and gives each picture's own url, so the model can hand one straight to
+            // use_image_reference — the same list, and the same numbering, the reader is looking at.
+            ...asTurns({ imageHits: e.imageHits }),
           });
         } else if (e.quote) {
           // The slash path runs the tool with no LLM, so nothing else would say what came back.
