@@ -29,6 +29,11 @@ export interface ScheduledTasksPanelProps {
   /** Fire an action now, as WELL as on its schedule — the cadence is computed from the rule, so a
    * Monday action run by hand on a Saturday still comes back round to Monday. Absent → no button. */
   onRunNow?: (id: string) => void;
+  /** Open this action's OWN workspace — the chat it lives and works in. Kept out of the chat
+   * switcher deliberately (it belongs to the action, not to the reader's conversations), so this
+   * button is how it is reached: to read what past runs did, or to work in it by hand. Absent → no
+   * button, which is what a linked phone gets while the desktop owns the sessions. */
+  onOpenWorkspace?: (id: string) => void;
   /** Tasks that an action can be bound to (id + title), for the picker. */
   taskOptions?: { id: string; title: string }[];
   onClose: () => void;
@@ -71,6 +76,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   onBindTask,
   onReschedule,
   onRunNow,
+  onOpenWorkspace,
   taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
@@ -151,6 +157,15 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                       <span
                         style={{ marginLeft: "auto", display: "flex", gap: 6 }}
                       >
+                        {onOpenWorkspace ? (
+                          <button
+                            style={btn}
+                            onClick={() => onOpenWorkspace(t.id)}
+                            title="Open this task's own workspace — see what its runs did, or work in it yourself"
+                          >
+                            ⌸ Open
+                          </button>
+                        ) : null}
                         {onRunNow && t.enabled ? (
                           <button
                             style={btn}
