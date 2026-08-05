@@ -50,6 +50,7 @@ import {
   buildBuddySystemPrompt,
   buildFileLedgerBlock,
   buildImageReferenceBlock,
+  recentThinkingBlock,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
   buildActiveDraftBlock,
@@ -5961,6 +5962,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const imageRefBlock = buildImageReferenceBlock(imageRefLedger);
     // The task this workspace belongs to, when the reader is inside one. Rides after the cache prefix
     // with the other blocks that change mid-session — a task edited in here reads correctly next turn.
+    // What it was thinking on the previous step. Volatile like the rest of these — rebuilt each turn
+    // from what the host hands over, never stored — which is what keeps it a note rather than a
+    // permanent fixture of the conversation.
+    const thinkingBlock = recentThinkingBlock(msg.lastThinking);
     const scheduledBlock = msg.scheduledTaskId
       ? scheduledTaskBlock((await loadScheduledTasks(store)).find((t) => t.id === msg.scheduledTaskId))
       : "";
@@ -5973,7 +5978,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // round-trip now.
     const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
     const draftBlock = buildActiveDraftBlock(lastDraft);
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the

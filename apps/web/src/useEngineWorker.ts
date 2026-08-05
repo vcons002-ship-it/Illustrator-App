@@ -355,6 +355,8 @@ export interface EngineWorkerApi {
     /** This session IS a scheduled task's own workspace → that task's id, so the prompt carries which
      * task the reader is inside and the model can revise it from there. */
     scheduledTaskId?: string,
+    /** The previous step's reasoning, carried only while a checklist is in flight. */
+    lastThinking?: string,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -2193,6 +2195,7 @@ export function useEngineWorker(
       /** This session IS a scheduled task's own workspace → that task's id, so the prompt can carry
        * which task the reader is inside and the model can revise it. */
       scheduledTaskId?: string,
+      lastThinking?: string,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -2223,7 +2226,7 @@ export function useEngineWorker(
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}), ...(scheduledTaskId ? { scheduledTaskId } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}), ...(scheduledTaskId ? { scheduledTaskId } : {}), ...(lastThinking ? { lastThinking } : {}) });
       }),
     [],
   );

@@ -24,6 +24,8 @@ import {
   planHasPendingStep,
   planQueueResumeFeedback,
   progressNudge,
+  recentThinkingBlock,
+  RECENT_THINKING_MAX_CHARS,
   stripToolCallJson,
   toolCallFromShellCommand,
   toolFailureDirective,
@@ -3049,5 +3051,49 @@ describe("date_math — the sum the model was doing in its head", () => {
     expect(out).toMatch(/is 8 days/);
     const bad = formatBuddyToolResult({ tool: "date_math", op: "diff", from: "x" }, { dateMath: { ok: false, error: "couldn't read it" } });
     expect(bad).toMatch(/couldn't read it/);
+  });
+});
+
+describe("recentThinkingBlock — what it was just thinking, carried forward", () => {
+  // Reasoning is stripped from every reply before it reaches the transcript and kept only for
+  // display, so the model never sees its own prior thinking. Mid-conversation that's right — the
+  // reply is the record. Mid-CHECKLIST there is no reply (a tool step's prose is suppressed), so
+  // between one step and the next nothing survives of what it had worked out.
+  it("carries the reasoning and says whose it is", () => {
+    const block = recentThinkingBlock("The file is probably under documents/. I'll read it first, then build the event.");
+    expect(block).toContain("I'll read it first");
+    expect(block).toMatch(/your scratchpad/i);
+    // Labelled as NOT an instruction: a note replayed out of context is how a one-off directive
+    // became a standing order once already here.
+    expect(block).toMatch(/not an instruction/i);
+    expect(block).toMatch(/not something the reader said/i);
+    // And explicitly disposable, so a wrong turn doesn't entrench.
+    expect(block).toMatch(/ignore it/i);
+  });
+
+  it("keeps the END, because that is where the decision is", () => {
+    const long = `${"orientation waffle. ".repeat(200)}So I will read the reference document first.`;
+    const block = recentThinkingBlock(long);
+    expect(block).toContain("So I will read the reference document first.");
+    expect(block.length).toBeLessThan(long.length);
+  });
+
+  it("is bounded, so a long think can't crowd out the work", () => {
+    const block = recentThinkingBlock("x".repeat(50_000));
+    // The cap applies to the carried reasoning; the framing around it is fixed and small.
+    expect(block.length).toBeLessThan(RECENT_THINKING_MAX_CHARS + 500);
+  });
+
+  it("doesn't open mid-word — a truncated tail reads as corruption", () => {
+    const long = `${"a".repeat(400)}. Second sentence here. Third sentence is the decision.`;
+    const block = recentThinkingBlock(long, 60);
+    expect(block).toMatch(/…/);
+    expect(block).toContain("Third sentence is the decision.");
+    expect(block).not.toMatch(/…a{3}/); // not a run of mid-word letters
+  });
+
+  it("says nothing when there was no thinking, so a non-reasoning model costs no prompt", () => {
+    expect(recentThinkingBlock(undefined)).toBe("");
+    expect(recentThinkingBlock("   ")).toBe("");
   });
 });
