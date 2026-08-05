@@ -2624,9 +2624,14 @@ export function App() {
         | { action: "bind"; id: string; planId?: string }
         | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }
         | { action: "runNow"; id: string }
-        | { action: "edit"; id: string; title: string; prompt: string; stepText: string },
+        | { action: "edit"; id: string; title: string; prompt: string; stepText: string }
+        | { action: "openWorkspace"; id: string },
     ) => {
       void (async () => {
+        if (command.action === "openWorkspace") {
+          await onOpenScheduledWorkspaceRef.current(command.id);
+          return;
+        }
         if (command.action === "runNow") {
           runScheduledNowRef.current(command.id);
           return;
@@ -8494,6 +8499,16 @@ export function App() {
   /** Open the workspace AND switch to it — the ⏰ Scheduled panel's "Open" button. */
   const onOpenScheduledWorkspace = useCallback(
     async (taskId: string) => {
+      // ON A PHONE, ASK THE DESKTOP. This was gated to desktop-only on the reasoning that a phone has
+      // no sessions to open — which is the same mistake #508 exists to prevent, and made from the
+      // other side: the phone doesn't OWN the session, it asks for it, exactly as every other chat
+      // switch does (vrcmd:chatSwitch). Gated, the button simply wasn't there on the one surface the
+      // reader was actually using, which reads as the feature not having shipped.
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "openWorkspace", id: taskId } });
+        setShowScheduled(false);
+        return;
+      }
       const sessionId = await openScheduledWorkspace(taskId);
       if (!sessionId || sessionId === activeBuddyIdRef.current) return;
       setShowScheduled(false);
@@ -8503,7 +8518,7 @@ export function App() {
       setActiveBuddyId(sessionId);
       void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
     },
-    [openScheduledWorkspace, resetBuddyView, libraryStore],
+    [openScheduledWorkspace, resetBuddyView, libraryStore, isRemoteClient, sendAppSync],
   );
   const openScheduledWorkspaceRef = useRef(openScheduledWorkspace);
   openScheduledWorkspaceRef.current = openScheduledWorkspace;
@@ -11170,7 +11185,7 @@ export function App() {
           onEdit={(id, patch) => void editScheduled(id, patch)}
           // Desktop-only: the desktop owns the chat sessions, so a phone has nothing to open here.
           // Passing it there would offer a button that mints a workspace the desktop never sees.
-          {...(isRemoteClient ? {} : { onOpenWorkspace: (id: string) => void onOpenScheduledWorkspace(id) })}
+          onOpenWorkspace={(id) => void onOpenScheduledWorkspace(id)}
           onClose={() => setShowScheduled(false)}
         />
       )}

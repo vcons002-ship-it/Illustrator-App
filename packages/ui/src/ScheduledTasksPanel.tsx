@@ -19,8 +19,10 @@ export interface ScheduledTasksPanelProps {
   onDelete: (id: string) => void;
   /** Move an action onto a task (or off one, with `undefined`). Where an action is bound decides
    * WHERE it runs — on its task, it resumes in that task's chat with its history; loose, it starts
-   * cold in the shared Scheduled chat. Actions made before binding existed are all loose, and there's
-   * no safe way to guess which task they belong to, so this is how they get attached. */
+   * in its OWN workspace, which is the default now that every action has one. Neither is cold any
+   * more — the choice is whose history it resumes with: the task's, or the action's own. Actions made
+   * before binding existed are all loose, and there's no safe way to guess which task they belong to,
+   * so this is how they get attached. */
   onBindTask?: (id: string, planId: string | undefined) => void;
   /** Change WHEN an action runs. Editing beats delete-and-recreate: a recurring action's last-run
    * time is the window each run is given ("only what's new since then"), so recreating one throws
@@ -283,8 +285,8 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     ) : null}
                     {/* WHERE this action runs, on every action, always. Never hidden behind "are there
                         tasks to pick from" — where an action runs is the single thing that decides
-                        whether it resumes with a task's history or starts cold, and an invisible
-                        control reads as a missing feature. Falls back to plain text when there's
+                        whether it resumes with the TASK's history or its own workspace's, and an
+                        invisible control reads as a missing feature. Falls back to plain text when there's
                         nothing to pick, so the detail still shows. */}
                     <label
                       style={{
@@ -315,7 +317,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           }}
                         >
                           <option value="">
-                            Nothing — the shared ⏰ Scheduled chat
+                            Nothing — its own workspace
                           </option>
                           {taskOptions!.map((o) => (
                             <option key={o.id} value={o.id}>
@@ -339,7 +341,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           {t.planId
                             ? (taskTitles[t.planId] ??
                               "a task that no longer exists")
-                            : "the shared ⏰ Scheduled chat"}
+                            : "its own workspace"}
                         </span>
                       )}
                     </label>
