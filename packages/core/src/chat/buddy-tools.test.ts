@@ -3012,3 +3012,42 @@ describe("update_scheduled_task — a task that can be corrected", () => {
     expect(hit).toMatch(/don't re-run it unless they ask/);
   });
 });
+
+describe("date_math — the sum the model was doing in its head", () => {
+  it("is always-on and documented, because a deferred one is a set it must think to load", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], now: "Monday, June 15, 2026, 4:58:03 PM (UTC-04:00)" } as never);
+    expect(p).toContain('"tool":"date_math"');
+    // The behavioural half: knowing the tool exists is not the same as being told not to do it unaided.
+    expect(p).toMatch(/Never count days in your head/i);
+  });
+
+  it("parses the ops, and defaults sensibly", () => {
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "diff", from: "2026-07-28" }))).toEqual({
+      tool: "date_math",
+      op: "diff",
+      from: "2026-07-28",
+    });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "add", date: "today", days: 1 }))).toEqual({
+      tool: "date_math",
+      op: "add",
+      date: "today",
+      days: 1,
+    });
+    // An unknown op falls back to the common one rather than dropping the call.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "nonsense", from: "2026-07-28" }))).toMatchObject({ op: "diff" });
+    // "how many days since…" with no starting date is not a question.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "diff" }))).toBeUndefined();
+  });
+
+  it("hands back the worded answer, not a bare number", () => {
+    // The model asked because it could not do this in its head; "8" invites it to re-derive what 8
+    // was of.
+    const out = formatBuddyToolResult(
+      { tool: "date_math", op: "diff", from: "2026-07-28" },
+      { dateMath: { ok: true, days: 8, text: "2026-07-28 → 2026-08-05 is 8 days." } },
+    );
+    expect(out).toMatch(/is 8 days/);
+    const bad = formatBuddyToolResult({ tool: "date_math", op: "diff", from: "x" }, { dateMath: { ok: false, error: "couldn't read it" } });
+    expect(bad).toMatch(/couldn't read it/);
+  });
+});

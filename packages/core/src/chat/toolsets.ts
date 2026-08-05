@@ -76,6 +76,9 @@ export const ALWAYS_ON_TOOLS = [
   "search_web",
   "search_images",
   "calculate",
+  // Calendar arithmetic, always-on for the same reason `calculate` is: dates come up everywhere,
+  // and a deferred one is a set the model must think to load before it knows it has a sum to do.
+  "date_math",
   "load_toolset",
   // The assistant's memory of its OWN unattended work. It failed the always-on test in the most
   // literal way: asked "what have you done today?", a model does not think "I should fetch the
