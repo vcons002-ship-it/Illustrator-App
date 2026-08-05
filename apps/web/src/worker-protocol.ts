@@ -320,6 +320,10 @@ export type MainToWorker =
       /** When this session is executing a task plan: its id, so the prompt loads the
        * plan context + enables the step tools. */
       taskPlanId?: string;
+      /** The tail of the reasoning from the PREVIOUS step, carried only while a checklist is in
+       * flight. Ephemeral by construction: it rides this one turn's volatile blocks and is never
+       * persisted into stored turns — a thought that persisted would replay for ever. */
+      lastThinking?: string;
       /** When this session IS a scheduled task's own workspace: that task's id. The prompt then
        * carries which task the reader is inside — without it the model cannot revise a task it does
        * not know it is in, which is the whole of "a scheduled task can't iterate on itself". */

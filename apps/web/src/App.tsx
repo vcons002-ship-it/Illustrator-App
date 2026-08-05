@@ -6620,6 +6620,23 @@ export function App() {
    * the time the turn errors the transcript that would have carried them no longer exists.
    */
   const turnToolRecordRef = useRef<string[]>([]);
+  /**
+   * THE PREVIOUS STEP'S REASONING, carried forward while a checklist is in flight.
+   *
+   * `stripThink` removes reasoning from every reply before it reaches the transcript, and it is kept
+   * only as a display field — so the model never sees what it was just thinking. In conversation
+   * that is right: the reply is the record. Mid-CHECKLIST there is no reply (a tool step's prose is
+   * suppressed by design), so between one step and the next nothing at all survives of the plan it
+   * had worked out, and it re-derives it every time.
+   *
+   * Held in a ref and passed per turn, never written into a stored message: a thought that persisted
+   * would replay for ever, which is the failure `stripPersistedDirectives` exists to undo.
+   */
+  const lastThinkingRef = useRef<string>("");
+  /** Is there unfinished checklist work? Only then is the previous step's reasoning worth carrying —
+   * in ordinary conversation the reply is the record and old reasoning is noise. */
+  const checklistInFlight = (): boolean =>
+    !!activeStep(buddyWorkflowRef.current) || planHasPendingStep(buddyPlanRef.current);
   const dispatchBuddyTurn = async (
     history: ChatTurn[],
     userText: string,
@@ -6716,13 +6733,26 @@ export function App() {
     // and it is never persisted — so it carries no more imitation risk than the reader's own
     // messages, which have been stamped in front all along.
     turnToolRecordRef.current = []; // per TURN, like the transcript it stands in for
+    // READ BEFORE CLEARING. The argument list below is evaluated when the call is made — after this
+    // point — so reading the ref there would have handed over the value this line had just wiped, and
+    // the whole thing would have been a silent no-op that still typechecked and still passed tests.
+    const carriedThinking = checklistInFlight() ? lastThinkingRef.current : undefined;
+    lastThinkingRef.current = ""; // a step that thinks nothing must not inherit the last one's
     const stampedUserText = stampTurnContent(userText, Date.now());
     const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
         setBuddyStreaming(stripTurnStamp(buddyStreamingRef.current));
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
-      } else if (e.kind === "thinking") setBuddyThinking(stripIdentityRecital(e.text, identityRef.current));
+      } else if (e.kind === "thinking") {
+        // Captured as it streams, not at settle: a tool step's turn is SUSPENDED by the tool (a
+        // render, an approval) and never reaches the settle path at all, which is exactly the step
+        // whose thinking is worth keeping. Stripped the same way the displayed copy is, so a page of
+        // restated identity isn't what gets carried into the next step.
+        const reasoning = stripIdentityRecital(e.text, identityRef.current);
+        lastThinkingRef.current = reasoning;
+        setBuddyThinking(reasoning);
+      }
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
@@ -7102,7 +7132,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId());
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");

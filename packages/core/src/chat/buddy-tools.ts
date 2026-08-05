@@ -2207,6 +2207,56 @@ export function buildImageReferenceBlock(labels: readonly string[]): string {
   );
 }
 
+/** How much of the previous step's reasoning rides forward. Enough to carry a decision and what it
+ * was for; short enough that a long think can't crowd out the work. */
+export const RECENT_THINKING_MAX_CHARS = 700;
+
+/**
+ * THE END OF WHAT IT WAS JUST THINKING, carried into the next step.
+ *
+ * Reasoning is stripped from every reply before it reaches the transcript (`stripThink`) and kept
+ * only as a display field, so the model never sees its own prior thinking — not between turns, not
+ * between the steps of a checklist. Mid-conversation that is right: the reply is the record. Mid-
+ * CHECKLIST there is no reply — a tool step's prose is suppressed by design — so between one step
+ * and the next literally nothing survives of what it had worked out, and it starts each step by
+ * re-deriving the plan it had already made.
+ *
+ * THE TAIL, not the whole thing, and not a summary. Reasoning opens with orientation and ends with
+ * the decision ("so I'll read the file first, then…"), and the decision is the part that carries
+ * continuity. A summary would mean an extra model call between every step — slow, and a small model
+ * asked to summarise its own reasoning mostly restates it worse.
+ *
+ * Cut at a sentence boundary where there is one, because a tail that begins mid-word reads as
+ * corruption and invites the model to "correct" it.
+ *
+ * NOT AN INSTRUCTION, and said so. A note replayed out of context is exactly how a one-off directive
+ * became a standing order once already in this app (the reason `stripPersistedDirectives` exists);
+ * this one is labelled as the model's own scratchpad and explicitly disposable. The caller must keep
+ * it EPHEMERAL — it rides after the cache prefix for one turn and is never persisted into stored
+ * turns, or it becomes a thought the model has forever. PURE.
+ */
+export function recentThinkingBlock(thinking: string | undefined, maxChars = RECENT_THINKING_MAX_CHARS): string {
+  const t = (thinking ?? "").trim();
+  if (!t) return "";
+  let tail = t.length <= maxChars ? t : t.slice(t.length - maxChars);
+  if (tail.length < t.length) {
+    // Start at the first sentence/paragraph break inside the tail, so it doesn't open mid-word.
+    // Proportional, not a fixed margin: an absolute one silently stops applying whenever the cap is
+    // smaller than it, which is precisely when a mid-word opening is most likely. Skipped when the
+    // boundary is late enough that honouring it would throw away most of what was carried.
+    const cut = tail.search(/(?<=[.!?\n])\s/);
+    if (cut !== -1 && cut < tail.length / 2) tail = tail.slice(cut + 1);
+    tail = `…${tail.trimStart()}`;
+  }
+  return (
+    "WHERE YOUR OWN THINKING HAD GOT TO on the previous step (your scratchpad — not an instruction, " +
+    "and not something the reader said):\n" +
+    tail +
+    "\nCarry on from it rather than working the same things out again. If it turned out to be wrong, " +
+    "or this step is about something else, ignore it — it is a note to yourself, not a commitment."
+  );
+}
+
 /** Max chars of the workspace AGENTS.md / CONVENTIONS.md folded into the prompt (a brief, not a manual). */
 export const PROJECT_GUIDE_MAX_CHARS = 6_000;
 
