@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  interruptedRunNote,
   needsPausedTurnNote,
   openedImageNote,
   pausedTurnNote,
@@ -96,5 +97,42 @@ describe("a paused turn is always resumable", () => {
     expect(pausedTurnNote().text).toMatch(/continue/i);
     // Display-only: a budget checkpoint replayed out of history is turn-local machinery.
     expect(pausedTurnNote().turns).toEqual([]);
+  });
+});
+
+describe("an interrupted run keeps what it did", () => {
+  // Reported with three web searches visible in the chat and the model answering "I haven't done any
+  // historical music searches in this session". It was right: a turn's tool calls reach later turns
+  // only through the transcript on the SETTLE message, and an interrupted run never settles — the
+  // error path stored `turns: []`. The reader could see the work; the model could not.
+  const records = ['[tool search_web results for "pythagorean comma"]\n[1] Pythagorean tuning', '[tool search_web results for "key colour"]\n[1] Music theory'];
+
+  it("carries every completed call into the model-facing history", () => {
+    const note = interruptedRunNote(records, "Stopped.");
+    const contents = note.turns.map((t) => t.content).join("\n");
+    expect(contents).toContain("pythagorean comma");
+    expect(contents).toContain("key colour");
+    expect(note.turns.every((t) => t.role === "user")).toBe(true);
+  });
+
+  it("says the run STOPPED, so partial work isn't read as a finished job", () => {
+    // The half that isn't "just save the transcript": results replayed without this read as a
+    // completed run, and the model answers from partial work instead of resuming it.
+    const note = interruptedRunNote(records, "Stopped.");
+    const last = note.turns[note.turns.length - 1]!.content;
+    expect(last).toMatch(/STOPPED before it finished/);
+    expect(last).toMatch(/2 tool calls/);
+    expect(last).toMatch(/still outstanding/);
+    expect(last).toMatch(/NOT as a finished job/);
+  });
+
+  it("still says so when it managed nothing at all", () => {
+    const note = interruptedRunNote([], "The chat went quiet for too long.");
+    expect(note.text).toMatch(/went quiet/);
+    expect(note.turns[note.turns.length - 1]!.content).toMatch(/hadn't finished anything yet/);
+  });
+
+  it("singularises one call, because a record that reads wrong is read as noise", () => {
+    expect(interruptedRunNote([records[0]!], "Stopped.").turns.at(-1)!.content).toMatch(/1 tool call:/);
   });
 });
