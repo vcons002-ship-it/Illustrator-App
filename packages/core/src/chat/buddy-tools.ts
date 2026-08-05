@@ -488,6 +488,10 @@ export type BuddyToolCall =
       prompt?: string;
       steps?: { do: string; needs?: string }[];
     }
+  /** Calendar arithmetic — days between two dates, moving a date, which weekday one falls on. The
+   * date the prompt carries is prose; this is how it becomes a number without the model doing the
+   * carrying itself. */
+  | { tool: "date_math"; op: "diff" | "add" | "weekday"; from?: string; to?: string; date?: string; days?: number }
   | { tool: "list_scheduled" }
   /** Read back what the assistant itself did unattended, and when (see action-history.ts). */
   | { tool: "recent_actions"; kind?: string; limit?: number }
@@ -608,7 +612,7 @@ export function producedArtifactFrom(result: BuddyToolResultPayload): ArtifactKi
 }
 
 export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolName>([
-  "search_web", "search_books", "search_images", "read", "read_url", "random_books", "calculate", "wolfram",
+  "search_web", "search_books", "search_images", "read", "read_url", "random_books", "calculate", "date_math", "wolfram",
   "stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "schwab_quote",
   "schwab_options", "schwab_positions", "schwab_watchlists", "prep_order", "tv_chart", "trading_script",
   "open_content", "open_library_book", "open_web_text", "open_pasted_text", "open_code", "create_spreadsheet",
@@ -1311,16 +1315,21 @@ export function buildBuddySystemPrompt(raw: {
     : "";
   const nowBlock = opts.now
     ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates. ` +
-      "WHEN each message was sent: the reader's are prefixed [YYYY-MM-DD HH:MM:SS.mmm], and YOUR OWN end with a line " +
+      // NEVER COUNT DAYS IN YOUR HEAD. The line above is prose, so "how many days since July 28"
+      // means parsing English and then carrying across months of different lengths — unaided and
+      // unverifiable. Reported wrong: a step that did exactly this was ticked ✓ done on a number
+      // nothing downstream could check, and the rest of the job used it.
+      "Never count days in your head; use date_math.\n" +
+      "WHEN each message was sent: the reader's are prefixed [YYYY-MM-DD HH:MM:SS.mmm], and YOUR OWN end with " +
       "[sent YYYY-MM-DD HH:MM:SS.mmm] — so you can tell when you last said or did something even where the reader " +
-      "wasn't involved, and in what ORDER things happened when several land together (a scheduled run, its tool " +
-      "results and its reply are milliseconds apart). Read them at whatever precision you need — the date alone " +
-      "answers most questions. Older messages carry shorter forms; read them the same way. THESE STAMPS ARE THE " +
-      "ANSWER to any question about this conversation — when something was said, how long ago, in what order — and " +
-      "no tool is needed to read them (recent_actions records unattended work, not this chat). " +
-      "The app writes both; NEVER write either yourself. A timestamp is not part of " +
-      "an answer, and a reply that is one is a reply that said nothing. Compare them against the time above rather " +
-      "than assuming the conversation is recent, and don't raise something settled weeks ago as if it were new.\n\n"
+      "wasn't involved, and in what ORDER things landed when several arrive together. " +
+      "Read them at whatever precision you need; the date alone answers most questions, and " +
+      "older messages carry shorter forms. THESE STAMPS ARE THE ANSWER to anything asked about this conversation " +
+      "— what was said when, how long ago, in what order — and no tool is needed to read them (recent_actions " +
+      "records unattended work, not this chat). " +
+      "The app writes both; NEVER write either yourself: a reply that is a timestamp said nothing. " +
+      "Compare them against the time above; don't " +
+      "raise something settled weeks ago as if it were new.\n\n"
     : "";
   // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
   // didn't take — the likeliest explanation is that they're on an older build than you, and this is
@@ -1522,9 +1531,14 @@ export function buildBuddySystemPrompt(raw: {
         `instructions in front of you yet.\n`) +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
     "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
-    "linear algebra (det, inv, [[1,2],[3,4]]*[[5],[6]]); CALCULUS + algebra (derivative('x^2','x'), " +
+    "linear algebra (det, inv); CALCULUS + algebra (derivative('x^2','x'), " +
     "simplify('2x+3x')); and statistics (mean/median/std/variance of a list). Use it for ANY non-trivial " +
     "computation instead of working it out in your head — it never guesses.\n" +
+    // Its calendar counterpart, and always-on for the same reason: dates come up everywhere, and a
+    // deferred one is a set the model must think to load before it knows it has a sum to do.
+    '- {"tool":"date_math","op":"diff","from":"2026-07-28"} — calendar arithmetic on YYYY-MM-DD or today/' +
+    'tomorrow/yesterday: "diff" counts days from→to (to=today), "add" moves a date ("date","days"), "weekday" ' +
+    "names it.\n" +
     // Gutenberg search — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canBooks
       ? '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
@@ -3656,6 +3670,24 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(steps !== undefined ? { steps } : {}),
     };
   }
+  if (tool === "date_math") {
+    const op = obj.op === "add" || obj.op === "weekday" ? obj.op : "diff";
+    const days = typeof obj.days === "number" && Number.isFinite(obj.days) ? Math.round(obj.days) : undefined;
+    const from = strArg(obj.from ?? obj.start, MAX_NAME_CHARS);
+    const to = strArg(obj.to ?? obj.end, MAX_NAME_CHARS);
+    const date = strArg(obj.date ?? obj.on, MAX_NAME_CHARS);
+    // `diff` without a starting date is not a question. The other two default to today, which is
+    // what "what day is it" and "what's tomorrow" mean.
+    if (op === "diff" && !from) return undefined;
+    return {
+      tool,
+      op,
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+      ...(date ? { date } : {}),
+      ...(days !== undefined ? { days } : {}),
+    };
+  }
   if (tool === "list_scheduled") return { tool };
   if (tool === "recent_actions") {
     const kind = strArg(obj.kind, MAX_NAME_CHARS);
@@ -4397,6 +4429,8 @@ export interface BuddyToolResultPayload {
   openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
   /** use_image_reference outcome — the host downloaded and registered it (or said why it couldn't). */
   referenceAdopted?: { ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string };
+  /** date_math: the answer, already worded. */
+  dateMath?: { ok: boolean; error?: string; days?: number; date?: string; weekday?: string; text?: string };
   /** update_scheduled_task: what became of the change. */
   scheduledUpdated?: { found: boolean; title?: string; stepCount?: number };
   /** Fetched page text from read_url (title + readable text). */
@@ -5024,6 +5058,14 @@ function formatBuddyToolResultBody(
       ? `[added "${result.taskGroup.title}" with ${result.taskGroup.count} sub-task${result.taskGroup.count === 1 ? "" : "s"} — ` +
           "nested in Google Tasks and shown in the 📋 Tasks panel as one task with its steps] Confirm it to the reader."
       : "[add_task_group did nothing]";
+  }
+  if (call.tool === "date_math") {
+    const d = result.dateMath;
+    if (!d) return "[date_math did not run]";
+    if (!d.ok) return `[date_math: ${d.error ?? "couldn't work that out"}]`;
+    // The worded answer, not the raw number: the model asked because it could not do this in its
+    // head, so handing back "8" invites it to re-derive what 8 was of.
+    return `[date_math — ${d.text}]`;
   }
   if (call.tool === "update_scheduled_task") {
     const u = result.scheduledUpdated;

@@ -1,4 +1,5 @@
 import { rememberRouteFor } from "./souls.js";
+import { dateMath } from "./date-math.js";
 import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
@@ -1256,6 +1257,11 @@ export async function runBuddyTool(
       case "schedule_task":
         if (!deps.scheduleTask) return { error: "scheduled tasks aren't available right now" };
         return { scheduled: await deps.scheduleTask(call) };
+      case "date_math":
+        // Computed in-process: pure arithmetic with no I/O, so it needs no dep and can't be
+        // unavailable — which matters, because the whole point is that it is always there when a
+        // date has to become a number.
+        return { dateMath: dateMath(call, new Date()) };
       case "update_scheduled_task":
         if (!deps.updateScheduledTask) return { error: "scheduled tasks aren't available right now" };
         return { scheduledUpdated: await deps.updateScheduledTask(call) };
