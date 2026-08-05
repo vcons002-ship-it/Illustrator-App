@@ -2929,3 +2929,50 @@ describe("run_command that is really one of our own tools", () => {
     expect(toolCallFromShellCommand("use_image_reference --dry-run")).toBeUndefined();
   });
 });
+
+describe("schedule_task carries the job's PARTS", () => {
+  // Reported as: a scheduled job does the research and never files the result. One instruction,
+  // judged a success if anything at all came back, so the half that produces something to read
+  // passed and the half that WRITES it somewhere was dropped — with nothing recording that the job
+  // had two parts, nothing could notice.
+  it("parses steps in the same shapes set_plan accepts", () => {
+    const call = parseBuddyToolCall(
+      JSON.stringify({
+        tool: "schedule_task",
+        title: "Venue hunt",
+        prompt: "Find venue options and put the shortlist on my calendar",
+        rule: "weekly",
+        weekday: 1,
+        steps: [
+          { do: "Research the venue options", needs: "text" },
+          { step: "Add the shortlist to my calendar", tool: "create_event" },
+          "Tell me what changed",
+        ],
+      }),
+    );
+    // A model that gets set_plan right must not get this wrong for want of a synonym: `do`/`step`
+    // and `needs`/`tool` are the same spread of keys, and a bare string is still a step.
+    expect(call).toMatchObject({
+      tool: "schedule_task",
+      steps: [
+        { do: "Research the venue options", needs: "text" },
+        { do: "Add the shortlist to my calendar", needs: "create_event" },
+        { do: "Tell me what changed" },
+      ],
+    });
+  });
+
+  it("stays a valid schedule with no steps at all", () => {
+    // Most stored tasks have none, and a task that omits them must keep scheduling exactly as before.
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "schedule_task", title: "T", prompt: "P", rule: "daily" }));
+    expect(call).toEqual({ tool: "schedule_task", title: "T", prompt: "P", rule: "daily" });
+  });
+
+  it("tells the model to write down the step that RECORDS the result", () => {
+    // schedule_task lives in the deferred "tasks" toolset, gated on canTaskTools — its docs only
+    // appear once that set is loaded, so build the prompt the way a run that reached for it would.
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true, loadedToolsets: ["tasks"] } as never);
+    expect(p).toMatch(/THE PARTS OF THE JOB/);
+    expect(p).toMatch(/including the one that RECORDS the result/);
+  });
+});

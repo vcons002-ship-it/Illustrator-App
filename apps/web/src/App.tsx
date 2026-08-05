@@ -85,6 +85,7 @@ import {
   countChangedFiles,
   hasConflictMarkers,
   loadScheduledTasks,
+  scheduledPlan,
   rescheduleTask,
   scheduledRunNote,
   scheduledRunPrompt,
@@ -195,6 +196,7 @@ import {
   type BuddyToolResultPayload,
   stepDirective,
   type Workflow,
+  compileWorkflow,
   recompileWorkflow,
   evaluateStep,
   advanceWorkflow,
@@ -7807,6 +7809,39 @@ export function App() {
         // that worked, which is what leaves a reader hunting for output that was never written.
         const startedAt = Date.now();
         const ranIn = activeBuddyIdRef.current; // the chat the evidence has to come FROM
+        /**
+         * THE JOB'S PARTS, INSTALLED AS THIS RUN'S CHECKLIST.
+         *
+         * A scheduled task used to be one instruction fired as one message, and judged a success if
+         * ANYTHING came back — so "research the venue options and put the shortlist on my calendar"
+         * did the research, said something about it, and passed. The calendar was never touched, and
+         * nothing was in a position to notice, because nothing recorded that the job had two parts.
+         *
+         * The parts are authored when the task is scheduled and stored on it, so every run works the
+         * SAME checklist rather than re-deriving the job — differently — from a prompt string each
+         * time it fires. That is the consistency half of the complaint; the completeness half is the
+         * checklist simply having the filing step written in it.
+         *
+         * Installed by whichever route this chat already uses, rather than a third one: compiled to
+         * a workflow the app drives step-by-step when app-managed steps is on, and dropped in as the
+         * model-driven checklist when it isn't. Both re-inject it into the prompt every turn, so the
+         * run can see what it still owes; only the first ENFORCES it. That is the deliberate limit of
+         * respecting the setting — with it off these are a complete list the model is asked to work,
+         * not a contract, and a model that skips one is not caught.
+         */
+        const runPlan = scheduledPlan(task);
+        if (runPlan) {
+          if (appManagedActive) {
+            applyWorkflow(compileWorkflow(runPlan, { hasChatReferences: turnRefImagesRef.current.length > 0 }));
+          } else {
+            // Synchronously, like the set_plan handler: the turn dispatches before React commits, and
+            // a checklist that isn't in the ref yet is one this run never sees.
+            buddyPlanRef.current = runPlan;
+            setBuddyPlan(runPlan);
+            if (!isRemoteClient && !settings.incognitoRemote)
+              void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(runPlan)).catch(() => {});
+          }
+        }
         await onBuddySend(scheduledRunPrompt(task));
         // Switching sessions CLEARS buddyMessages, so reading it after a switch would report an empty
         // run for one that worked — and a task-bound action runs in its own chat, the one most likely
@@ -7824,7 +7859,18 @@ export function App() {
         if (outcome === "nothing") pushToast(`⏰ “${task.title}” ran but produced nothing in ${where}.`, "error");
       })();
     },
-    [libraryStore, onBuddySend, refreshScheduled, isRemoteClient, openScheduledSession, pushToast, markBackgroundSweep],
+    [
+      libraryStore,
+      onBuddySend,
+      refreshScheduled,
+      isRemoteClient,
+      openScheduledSession,
+      pushToast,
+      markBackgroundSweep,
+      appManagedActive,
+      applyWorkflow,
+      settings.incognitoRemote,
+    ],
   );
   const sweepScheduledRef = useRef(sweepScheduled);
   sweepScheduledRef.current = sweepScheduled;
