@@ -2976,3 +2976,39 @@ describe("schedule_task carries the job's PARTS", () => {
     expect(p).toMatch(/including the one that RECORDS the result/);
   });
 });
+
+describe("update_scheduled_task — a task that can be corrected", () => {
+  it("parses a patch, and refuses one that changes nothing", () => {
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "update_scheduled_task", id: "sch-1", steps: [{ do: "Book it", tool: "create_event" }] })),
+    ).toEqual({ tool: "update_scheduled_task", id: "sch-1", steps: [{ do: "Book it", needs: "create_event" }] });
+    // A call that names a task and says nothing is not a change. Accepted, it would come back a
+    // success — and the model would believe it had fixed something.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_scheduled_task", id: "sch-1" }))).toBeUndefined();
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_scheduled_task", title: "x" }))).toBeUndefined();
+  });
+
+  it("keeps an explicitly empty checklist, which is how one is cleared", () => {
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_scheduled_task", id: "sch-1", steps: [] }))).toEqual({
+      tool: "update_scheduled_task",
+      id: "sch-1",
+      steps: [],
+    });
+  });
+
+  it("reports a guessed id as a failure, not a quiet success", () => {
+    // Reported as success it ends the matter: the model says the checklist is fixed, and the next
+    // run repeats the same mistake.
+    const miss = formatBuddyToolResult({ tool: "update_scheduled_task", id: "sch-nope" }, { scheduledUpdated: { found: false } });
+    expect(miss).toMatch(/there is no scheduled task with id/i);
+    expect(miss).toMatch(/list_scheduled/);
+    const hit = formatBuddyToolResult(
+      { tool: "update_scheduled_task", id: "sch-1" },
+      { scheduledUpdated: { found: true, title: "Venue hunt", stepCount: 2 } },
+    );
+    expect(hit).toMatch(/saved “Venue hunt”/);
+    expect(hit).toMatch(/2 steps/);
+    // Saving is not running: without this the model "fixes" a weekly task and immediately fires it.
+    expect(hit).toMatch(/don't re-run it unless they ask/);
+  });
+});

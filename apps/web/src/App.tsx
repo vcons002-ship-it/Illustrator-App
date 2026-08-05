@@ -86,6 +86,8 @@ import {
   hasConflictMarkers,
   loadScheduledTasks,
   scheduledPlan,
+  parseStepLines,
+  updateScheduledTaskContent,
   scheduledSessionLabel,
   withScheduledWorkspace,
   rescheduleTask,
@@ -1864,6 +1866,9 @@ export function App() {
   const onReopenChatRef = useRef<((id: string) => void) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
+  /** The scheduled task whose OWN WORKSPACE this chat is — undefined in any ordinary chat. Read from
+   * the live list rather than a stored flag so a task deleted mid-session stops claiming its window. */
+  const activeScheduledTaskId = () => scheduledRef.current.find((t) => t.sessionId === activeBuddyIdRef.current)?.id;
   const persistSessions = useCallback(
     (sessions: BuddySession[]) => void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(sessions)).catch(() => {}),
     [libraryStore],
@@ -2402,6 +2407,11 @@ export function App() {
   // (a phone-local write would be invisible to the runner, then clobbered by the next mirror push).
   const [showScheduled, setShowScheduled] = useState(false);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  // Read at DISPATCH time by activeScheduledTaskId (declared above, called later): a turn needs to
+  // know whether it is running inside a scheduled task's own workspace, and the state in a callback's
+  // closure can be a render behind the run that just minted one.
+  const scheduledRef = useRef<ScheduledTask[]>([]);
+  scheduledRef.current = scheduledTasks;
   const refreshScheduled = useCallback(() => {
     // The phone shows the desktop's MIRRORED schedule; loading its own (empty) store would clobber it.
     if (isRemoteClient) return;
@@ -2479,6 +2489,35 @@ export function App() {
     },
     [libraryStore, refreshScheduled, isRemoteClient, sendAppSync, persistSessions],
   );
+  /**
+   * Change WHAT a scheduled action does — the panel's ✎ Edit.
+   *
+   * Editing rather than delete-and-recreate, which was the only way to fix a wrong instruction
+   * before: `lastRunIso` is the window every run is given ("cover only what is NEW since then"), so
+   * recreating an action silently throws away everything it already handled and the next run
+   * re-reports the lot. Its cadence, its id, its own workspace and its run history all survive; only
+   * the instructions change.
+   */
+  const editScheduled = useCallback(
+    async (id: string, patch: { title: string; prompt: string; stepText: string }) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "edit", id, ...patch } });
+        return;
+      }
+      const stored = (await loadScheduledTasks(libraryStore)).find((t) => t.id === id);
+      if (!stored) return;
+      await upsertScheduledTask(
+        libraryStore,
+        updateScheduledTaskContent(stored, { title: patch.title, prompt: patch.prompt, steps: parseStepLines(patch.stepText) }),
+      ).catch(() => {});
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+  );
+  // The phone's relayed delete runs the desktop's own handler (see applyScheduledCommand), which is
+  // declared above this — so it reaches it the same way the run-now relay does.
+  const removeScheduledRef = useRef(removeScheduled);
+  removeScheduledRef.current = removeScheduled;
   /** Move a scheduled action onto a task (or off one). This is the only way to fix an action created
    * before binding existed: nothing in the action reliably says which task it belongs to, so guessing
    * would be worse than asking. Binding changes WHERE it runs from the next fire onwards. */
@@ -2584,20 +2623,31 @@ export function App() {
         | { action: "delete"; id: string }
         | { action: "bind"; id: string; planId?: string }
         | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }
-        | { action: "runNow"; id: string },
+        | { action: "runNow"; id: string }
+        | { action: "edit"; id: string; title: string; prompt: string; stepText: string },
     ) => {
       void (async () => {
         if (command.action === "runNow") {
           runScheduledNowRef.current(command.id);
           return;
         }
-        if (command.action === "delete") await deleteScheduledTask(libraryStore, command.id).catch(() => {});
+        // Deleting from the phone goes through the SAME handler the desktop's own button uses, so a
+        // relayed delete un-hides the action's workspace too. Routed here rather than reimplemented,
+        // because the half that gets forgotten in a second implementation is exactly that one.
+        if (command.action === "delete") await removeScheduledRef.current(command.id);
         else {
           const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === command.id);
           if (!t) {
             /* gone already — nothing to change */
           } else if (command.action === "toggle") {
             await upsertScheduledTask(libraryStore, { ...t, enabled: command.enabled }).catch(() => {});
+          } else if (command.action === "edit") {
+            // The phone relays the checklist as the TEXT that was typed and the desktop parses it —
+            // one implementation of the format, on the side that owns the store.
+            await upsertScheduledTask(
+              libraryStore,
+              updateScheduledTaskContent(t, { title: command.title, prompt: command.prompt, steps: parseStepLines(command.stepText) }),
+            ).catch(() => {});
           } else if (command.action === "reschedule") {
             const { action: _a, id: _i, ...when } = command;
             await upsertScheduledTask(libraryStore, rescheduleTask(t, when)).catch(() => {});
@@ -7018,7 +7068,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId());
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -11117,6 +11167,7 @@ export function App() {
           taskOptions={scheduledTaskOptions}
           onReschedule={onRescheduleScheduled}
           onRunNow={runScheduledNow}
+          onEdit={(id, patch) => void editScheduled(id, patch)}
           // Desktop-only: the desktop owns the chat sessions, so a phone has nothing to open here.
           // Passing it there would offer a button that mints a workspace the desktop never sees.
           {...(isRemoteClient ? {} : { onOpenWorkspace: (id: string) => void onOpenScheduledWorkspace(id) })}

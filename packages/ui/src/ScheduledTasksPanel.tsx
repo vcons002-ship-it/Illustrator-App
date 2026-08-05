@@ -1,5 +1,5 @@
-import { memo, useMemo } from "react";
-import { weekdayOf, type ScheduledTask } from "@visual-reader/core";
+import { memo, useMemo, useState } from "react";
+import { formatStepLines, weekdayOf, type ScheduledTask } from "@visual-reader/core";
 
 /**
  * Manage scheduled / periodic tasks — recurring actions the assistant runs on a cadence
@@ -29,6 +29,11 @@ export interface ScheduledTasksPanelProps {
   /** Fire an action now, as WELL as on its schedule — the cadence is computed from the rule, so a
    * Monday action run by hand on a Saturday still comes back round to Monday. Absent → no button. */
   onRunNow?: (id: string) => void;
+  /** Change WHAT the action does — its title, the job, and its checklist. The panel could pause,
+   * delete, rebind, reschedule and run an action, but never change what it actually did: the only
+   * way to fix a wrong instruction was to delete it and describe a new one, which throws away the
+   * last-run time every run depends on for "what's new since". Editing keeps all of that. */
+  onEdit?: (id: string, patch: { title: string; prompt: string; stepText: string }) => void;
   /** Open this action's OWN workspace — the chat it lives and works in. Kept out of the chat
    * switcher deliberately (it belongs to the action, not to the reader's conversations), so this
    * button is how it is reached: to read what past runs did, or to work in it by hand. Absent → no
@@ -77,6 +82,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   onReschedule,
   onRunNow,
   onOpenWorkspace,
+  onEdit,
   taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
@@ -87,6 +93,11 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   // Headings only earn their space once something IS tied to a task — with none, this is the same
   // flat list it always was.
   const showHeadings = groups.some((g) => g.key !== "");
+  // Which action's editor is open, and its draft. Held per-open rather than per-task so the form is
+  // seeded from the task each time it opens: a draft kept across a run would quietly overwrite a
+  // change the task made to ITSELF (update_scheduled_task) with whatever was on screen beforehand.
+  const [editing, setEditing] = useState<string | undefined>();
+  const [draft, setDraft] = useState<{ title: string; prompt: string; stepText: string }>({ title: "", prompt: "", stepText: "" });
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
@@ -157,6 +168,25 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                       <span
                         style={{ marginLeft: "auto", display: "flex", gap: 6 }}
                       >
+                        {onEdit ? (
+                          <button
+                            style={btn}
+                            onClick={() => {
+                              if (editing === t.id) {
+                                setEditing(undefined);
+                                return;
+                              }
+                              // Seed from the task AS STORED, every time it opens — see the note on
+                              // `draft`. `formatStepLines` is the exact inverse of the parser the
+                              // host uses on save, so what is shown round-trips unchanged.
+                              setDraft({ title: t.title, prompt: t.prompt, stepText: formatStepLines(t.steps) });
+                              setEditing(t.id);
+                            }}
+                            title="Change what this task does — its job and its checklist"
+                          >
+                            {editing === t.id ? "Cancel" : "✎ Edit"}
+                          </button>
+                        ) : null}
                         {onOpenWorkspace ? (
                           <button
                             style={btn}
@@ -192,6 +222,65 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
                       {t.prompt}
                     </div>
+                    {/* The CHECKLIST, shown always — not just while editing. An action that quietly
+                        does four things looked identical to one that does one, which is how a job
+                        could go on missing a step without anyone being able to see that the step was
+                        never there. A stepless action shows nothing, because it genuinely has none. */}
+                    {t.steps?.length && editing !== t.id ? (
+                      <ol style={{ fontSize: 11, opacity: 0.7, margin: "4px 0 0", paddingLeft: 20 }}>
+                        {t.steps.map((st, i) => (
+                          <li key={i}>
+                            {st.do}
+                            {st.needs ? <span style={{ opacity: 0.6 }}> · {st.needs}</span> : null}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
+                    {onEdit && editing === t.id ? (
+                      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                        <input
+                          style={inputStyle}
+                          value={draft.title}
+                          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                          placeholder="Title"
+                          aria-label="Task title"
+                        />
+                        <textarea
+                          style={{ ...inputStyle, minHeight: 48, resize: "vertical" }}
+                          value={draft.prompt}
+                          onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
+                          placeholder="What the job is, as a whole"
+                          aria-label="What the job is"
+                        />
+                        <textarea
+                          style={{ ...inputStyle, minHeight: 72, resize: "vertical", fontFamily: "ui-monospace, monospace" }}
+                          value={draft.stepText}
+                          onChange={(e) => setDraft((d) => ({ ...d, stepText: e.target.value }))}
+                          placeholder={"One step per line, e.g.\nResearch the venue options\nAdd the shortlist to my calendar | create_event"}
+                          aria-label="Checklist, one step per line"
+                        />
+                        <span style={{ fontSize: 10, opacity: 0.55 }}>
+                          One step per line, in order. Add <code>| needs</code> after a step to say what proves it done
+                          (<code>text</code>, <code>file</code>, <code>image</code>, or a tool name). Include the step that
+                          RECORDS the result — the calendar event, the saved note — it's the one that gets left out.
+                          Leave this empty to run the job as a single instruction.
+                        </span>
+                        <span style={{ display: "flex", gap: 6 }}>
+                          <button
+                            style={btn}
+                            onClick={() => {
+                              onEdit(t.id, draft);
+                              setEditing(undefined);
+                            }}
+                          >
+                            Save
+                          </button>
+                          <span style={{ fontSize: 10, opacity: 0.55, alignSelf: "center" }}>
+                            Its schedule, workspace and run history are kept.
+                          </span>
+                        </span>
+                      </div>
+                    ) : null}
                     {/* WHERE this action runs, on every action, always. Never hidden behind "are there
                         tasks to pick from" — where an action runs is the single thing that decides
                         whether it resumes with a task's history or starts cold, and an invisible
@@ -365,6 +454,18 @@ const card: React.CSSProperties = {
   borderRadius: 8,
   padding: "8px 10px",
 };
+/** The edit form's fields — same surface as the buttons beside them, sized to be typed into. */
+const inputStyle: React.CSSProperties = {
+  background: "rgba(0,0,0,0.25)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  width: "100%",
+  boxSizing: "border-box",
+};
+
 const btn: React.CSSProperties = {
   background: "rgba(255,255,255,0.08)",
   color: "inherit",
