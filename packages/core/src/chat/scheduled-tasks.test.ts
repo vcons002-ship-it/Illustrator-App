@@ -10,6 +10,10 @@ import {
   normalizeScheduledSteps,
   scheduledPlan,
   scheduledSessionLabel,
+  scheduledTaskBlock,
+  updateScheduledTaskContent,
+  parseStepLines,
+  formatStepLines,
   withScheduledWorkspace,
   type ScheduledTask,
   scheduledRunNote,
@@ -493,5 +497,98 @@ describe("a scheduled task's own workspace", () => {
     const long = scheduledSessionLabel({ title: "x".repeat(200) });
     expect(long.length).toBeLessThanOrEqual(60);
     expect(long.endsWith("…")).toBe(true);
+  });
+});
+
+describe("changing what a scheduled task does", () => {
+  const task = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+    normalizeScheduledTask({
+      title: "Venue hunt",
+      prompt: "Find venues",
+      rule: "weekly",
+      weekday: 1,
+      lastRunIso: "2026-08-01T09:00:00.000Z",
+      steps: [{ do: "Research", needs: "text" }],
+      ...over,
+    });
+
+  it("keeps the cadence, the workspace and the run history — that is the point of editing", () => {
+    // Before this, fixing a wrong instruction meant delete-and-recreate. lastRunIso is the window
+    // every run is given ("only what's NEW since then"), so recreating silently threw away
+    // everything already handled and the next run re-reported the lot.
+    const before = task({ sessionId: "ws-1" });
+    const after = updateScheduledTaskContent(before, { prompt: "Find venues AND book one" });
+    expect(after.prompt).toBe("Find venues AND book one");
+    expect(after).toMatchObject({
+      id: before.id,
+      rule: "weekly",
+      weekday: 1,
+      time: before.time,
+      nextDueIso: before.nextDueIso,
+      lastRunIso: "2026-08-01T09:00:00.000Z",
+      sessionId: "ws-1",
+    });
+  });
+
+  it("is a PATCH — an omitted field is left alone, not blanked", () => {
+    // A caller fixing one step must not be able to wipe the prompt by not mentioning it.
+    const after = updateScheduledTaskContent(task(), { title: "Venues" });
+    expect(after.title).toBe("Venues");
+    expect(after.prompt).toBe("Find venues");
+    expect(after.steps).toEqual([{ do: "Research", needs: "text" }]);
+    // Blank strings are treated as "not supplied" rather than "make it empty", since a required
+    // field cleared to nothing leaves a task that can't say what it does.
+    expect(updateScheduledTaskContent(task(), { title: "   ", prompt: "  " })).toMatchObject({ title: "Venue hunt", prompt: "Find venues" });
+  });
+
+  it("but an explicit empty checklist clears it, back to a single instruction", () => {
+    const after = updateScheduledTaskContent(task(), { steps: [] });
+    expect(after).not.toHaveProperty("steps");
+    expect(scheduledPlan(after)).toBeUndefined();
+  });
+
+  it("round-trips the checklist through the text the editor shows", () => {
+    const steps = [{ do: "Research the venues", needs: "text" }, { do: "Add it to my calendar" }];
+    const text = formatStepLines(steps);
+    expect(text).toBe("Research the venues | text\nAdd it to my calendar");
+    expect(parseStepLines(text)).toEqual(steps);
+  });
+
+  it("reads a checklist someone typed, not just one it wrote", () => {
+    expect(parseStepLines("  Research  \n\n  Book it | create_event  \n")).toEqual([
+      { do: "Research" },
+      { do: "Book it", needs: "create_event" },
+    ]);
+    // A `|` inside the wording is not a contract: only the LAST one separates, and only when what
+    // follows is a single token. Prose after it belongs to the step.
+    expect(parseStepLines("Compare A | B | text")).toEqual([{ do: "Compare A | B", needs: "text" }]);
+    expect(parseStepLines("Weigh this | and that")).toEqual([{ do: "Weigh this | and that" }]);
+    // Mid-edit trailing pipe — not a request for a blank contract.
+    expect(parseStepLines("Research |")).toEqual([{ do: "Research |" }]);
+    expect(parseStepLines("")).toEqual([]);
+  });
+});
+
+describe("the workspace knows which task it is", () => {
+  const task = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+    normalizeScheduledTask({ title: "Venue hunt", prompt: "Find venues", steps: [{ do: "Research", needs: "text" }], ...over });
+
+  it("carries the id, the cadence and the numbered steps, and says it can be changed", () => {
+    // A task could not iterate on itself: a run that found its checklist wrong worked around it and
+    // had no way to say so, so the next run made the same mistake. The model cannot revise a task it
+    // does not know it is inside — this block is that half.
+    const block = scheduledTaskBlock(task({ id: "sch-1" }));
+    expect(block).toContain("sch-1"); // update_scheduled_task needs an id, and a model that must look it up won't
+    expect(block).toMatch(/Venue hunt/);
+    expect(block).toMatch(/Daily at/); // the cadence, because half of what a reader changes in here is timing
+    expect(block).toMatch(/1\. Research \[needs: text\]/);
+    expect(block).toMatch(/update_scheduled_task/);
+    expect(block).toMatch(/stops the next run repeating the mistake/);
+  });
+
+  it("says a stepless task has none rather than showing an empty list, and is silent with no task", () => {
+    expect(scheduledTaskBlock(task({ steps: [] }))).toMatch(/single instruction/);
+    expect(scheduledTaskBlock(task({ enabled: false }))).toMatch(/PAUSED/);
+    expect(scheduledTaskBlock(undefined)).toBe("");
   });
 });

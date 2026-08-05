@@ -288,7 +288,11 @@ export type CmdToDesktop =
         | { action: "reschedule"; id: string; rule?: "daily" | "weekly" | "monthly" | "once"; time?: string; weekday?: number; dayOfMonth?: number }
         // Fire it on demand. The desktop owns the runner and the chats an action runs in, so a phone
         // can only ask.
-        | { action: "runNow"; id: string };
+        | { action: "runNow"; id: string }
+        /** Change WHAT the action does. `stepText` is the checklist as edited text (one step per
+         * line) rather than parsed steps, so the phone relays exactly what was typed and the desktop
+         * — which owns the store — does the parsing, one implementation instead of two. */
+        | { action: "edit"; id: string; title: string; prompt: string; stepText: string };
     }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs

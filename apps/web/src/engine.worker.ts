@@ -180,6 +180,8 @@ import {
   upsertTaskPlan,
   loadTaskPlans,
   normalizeScheduledTask,
+  updateScheduledTaskContent,
+  scheduledTaskBlock,
   type VisualReaderStore,
   upsertScheduledTask,
   loadScheduledTasks,
@@ -5119,6 +5121,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           rule: call.rule,
           ...(call.time ? { time: call.time } : {}),
           ...(call.date ? { date: call.date } : {}), // one-time run day
+          // The PARTS of the job. Parsed by the tool and normalised by the store; dropping them here
+          // would have left every task stepless no matter what the model authored — the checklist
+          // would have existed only in the tool call and never in anything that runs.
+          ...(call.steps?.length ? { steps: call.steps } : {}),
           ...(planId ? { planId } : {}), // bound task: runs in that task's chat
           ...(call.weekday !== undefined ? { weekday: call.weekday } : {}),
           ...(call.dayOfMonth !== undefined ? { dayOfMonth: call.dayOfMonth } : {}),
@@ -5134,6 +5140,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           // binding it didn't get.
           ...(wantedPlanId && !boundPlan ? { planUnavailable: true } : {}),
         };
+      },
+      updateScheduledTask: async (call) => {
+        const stored = (await loadScheduledTasks(store)).find((t) => t.id === call.id);
+        // A guessed id must come back as a miss, not a quiet success — see the result formatter.
+        if (!stored) return { found: false };
+        const next = updateScheduledTaskContent(stored, {
+          ...(call.title ? { title: call.title } : {}),
+          ...(call.prompt ? { prompt: call.prompt } : {}),
+          ...(call.steps !== undefined ? { steps: call.steps } : {}),
+        });
+        await upsertScheduledTask(store, next);
+        post({ type: "buddyScheduledChanged", requestId: msg.requestId });
+        return { found: true, title: next.title, stepCount: next.steps?.length ?? 0 };
       },
       listScheduled: async () =>
         (await loadScheduledTasks(store)).map((t) => ({
@@ -5931,6 +5950,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const ledgerBlock = buildFileLedgerBlock(fileLedger);
     // Same reason as the file ledger: it changes mid-session and must outlive history trimming.
     const imageRefBlock = buildImageReferenceBlock(imageRefLedger);
+    // The task this workspace belongs to, when the reader is inside one. Rides after the cache prefix
+    // with the other blocks that change mid-session — a task edited in here reads correctly next turn.
+    const scheduledBlock = msg.scheduledTaskId
+      ? scheduledTaskBlock((await loadScheduledTasks(store)).find((t) => t.id === msg.scheduledTaskId))
+      : "";
     const guideBlock = buildProjectGuideBlock(projectGuide);
     // The active document (last create_document / one the reader opened) rides after the cache prefix
     // too, so "tighten the intro / add a section" acts on the real text even after history trimming.
@@ -5940,7 +5964,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // round-trip now.
     const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
     const draftBlock = buildActiveDraftBlock(lastDraft);
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the

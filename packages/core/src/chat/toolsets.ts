@@ -150,7 +150,7 @@ export const TOOLSETS: readonly Toolset[] = [
     trigger: "plan, schedule and track multi-step work across sessions; the reader's to-dos and scheduled actions",
     flags: ["canTaskTools"],
     tools: [
-      "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "mark_step_done",
+      "plan_task", "schedule_task", "update_scheduled_task", "list_scheduled", "cancel_scheduled", "mark_step_done",
       "complete_task", "save_task_context", "update_task_step", "update_task", "update_task_doc",
       "add_task_steps", "list_task_plans",
       "get_task_plan",

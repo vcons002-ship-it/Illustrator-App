@@ -206,6 +206,11 @@ export interface BuddyDeps {
   addTaskGroup?: (group: { title: string; due?: string; subtasks: { title: string; due?: string }[] }) => Promise<{ title: string; count: number }>;
   /** Scheduled/periodic tasks — created/listed/cancelled over the shared store. */
   scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string; planTitle?: string; planUnavailable?: boolean }>;
+  /** Change WHAT a scheduled task does. `found: false` when the id names nothing — a model that
+   * guessed an id must be told so rather than believing it fixed something. */
+  updateScheduledTask?: (
+    call: Extract<BuddyToolCall, { tool: "update_scheduled_task" }>,
+  ) => Promise<{ found: boolean; title?: string; stepCount?: number }>;
   listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean; lastRunIso?: string; lastRunNote?: string }[]>;
   /** The assistant's own record of what it did unattended — see action-history.ts. */
   recentActions?: (kind: string | undefined, limit: number) => Promise<string>;
@@ -1251,6 +1256,9 @@ export async function runBuddyTool(
       case "schedule_task":
         if (!deps.scheduleTask) return { error: "scheduled tasks aren't available right now" };
         return { scheduled: await deps.scheduleTask(call) };
+      case "update_scheduled_task":
+        if (!deps.updateScheduledTask) return { error: "scheduled tasks aren't available right now" };
+        return { scheduledUpdated: await deps.updateScheduledTask(call) };
       case "list_scheduled":
         if (!deps.listScheduled) return { error: "scheduled tasks aren't available right now" };
         return { scheduledList: await deps.listScheduled() };

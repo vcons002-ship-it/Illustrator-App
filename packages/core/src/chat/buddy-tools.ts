@@ -478,6 +478,16 @@ export type BuddyToolCall =
       weekday?: number;
       dayOfMonth?: number;
     }
+  /** Change WHAT an existing scheduled task does — its checklist, the job, the title. The counterpart
+   * to schedule_task and to cancel_scheduled: how a task is CORRECTED rather than recreated, keeping
+   * its cadence, its workspace and the run history that tells each run which window it covers. */
+  | {
+      tool: "update_scheduled_task";
+      id: string;
+      title?: string;
+      prompt?: string;
+      steps?: { do: string; needs?: string }[];
+    }
   | { tool: "list_scheduled" }
   /** Read back what the assistant itself did unattended, and when (see action-history.ts). */
   | { tool: "recent_actions"; kind?: string; limit?: number }
@@ -609,7 +619,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
-  "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled", "recent_actions",
+  "create_task", "add_task_group", "plan_task", "schedule_task", "update_scheduled_task", "list_scheduled", "cancel_scheduled", "recent_actions",
   "mark_step_done", "complete_task", "save_task_context", "update_task_step", "update_task", "update_task_doc",
   "add_task_steps", "list_task_plans",
   "get_task_plan", "use_image_reference", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
@@ -1954,6 +1964,14 @@ export function buildBuddySystemPrompt(raw: {
         '  · ONE-TIME — "rule":"once" with "date":"YYYY-MM-DD" for the day it should fire (omit "date" and it runs the next ' +
         'time "time" comes around — today if still ahead, else tomorrow). Use for "remind me on Friday at 5", "tomorrow ' +
         'morning…", "on July 4th…". Resolve the reader\'s words to a REAL date from today\'s date, and say back when it will run.\n' +
+        '- {"tool":"update_scheduled_task","id":"sch-…","steps":[{"do":"…","needs":"…"}]} — CHANGE an existing ' +
+        "scheduled task: its checklist, its \"prompt\" (the job), its title. Only what you pass changes; its " +
+        "cadence, its own workspace and its run history are untouched, which is why this beats cancelling and " +
+        "re-creating one (re-creating throws away the last-run time, so the next run re-reports everything it " +
+        "already handled). Use it when the reader asks you to add or drop a step, AND on your own when a run " +
+        "shows the checklist is wrong: a step that was missing, one that ran in the wrong order, an instruction " +
+        "that no longer matches what is actually there. Fixing it is what stops the next run repeating the " +
+        "mistake — working around it silently does not.\n" +
         '  · KEEPING A TASK UP TO DATE IN THE BACKGROUND — add "planId" to bind the action to a task ' +
       "(get the id from plan_task / list_task_plans). A bound action runs inside THAT task's own chat, so it " +
       "sees the task's history and checklist instead of starting cold, and it records what it finds back onto " +
@@ -3121,6 +3139,31 @@ function pairsArg<A extends string, B extends string>(
   });
 }
 
+/**
+ * The PARTS of a job, as a model writes them — shared by schedule_task and update_scheduled_task.
+ *
+ * Read exactly as tolerantly as set_plan reads its own steps (bare string or object, `do`/`step`/
+ * `text`, `needs`/`tool`), because this is the same act of writing a checklist and a model that gets
+ * set_plan right must not be able to get this wrong for want of a synonym. One reader for both tools
+ * so the two can't drift into accepting different shapes for the same thing.
+ */
+function readAuthoredSteps(raw: readonly unknown[]): { do: string; needs?: string }[] {
+  const steps: { do: string; needs?: string }[] = [];
+  for (const item of raw.slice(0, 12)) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const o = item as Record<string, unknown>;
+      const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
+      if (!text) continue;
+      const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
+      steps.push({ do: text, ...(needs ? { needs } : {}) });
+      continue;
+    }
+    const text = strArg(item, MAX_QUERY_CHARS);
+    if (text) steps.push({ do: text });
+  }
+  return steps;
+}
+
 function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefined {
   const obj = normalizeToolShape(input);
   const tool = obj.tool;
@@ -3580,20 +3623,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     // of writing a checklist and a model that gets set_plan right should not be able to get this
     // wrong for want of a synonym. Stored on the task and re-used verbatim by every run, which is
     // what makes a recurring job consistent rather than re-derived differently each time it fires.
-    const rawSteps = Array.isArray(obj.steps) ? obj.steps.slice(0, 12) : [];
-    const steps: { do: string; needs?: string }[] = [];
-    for (const item of rawSteps) {
-      if (item && typeof item === "object" && !Array.isArray(item)) {
-        const o = item as Record<string, unknown>;
-        const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
-        if (!text) continue;
-        const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
-        steps.push({ do: text, ...(needs ? { needs } : {}) });
-        continue;
-      }
-      const text = strArg(item, MAX_QUERY_CHARS);
-      if (text) steps.push({ do: text });
-    }
+    const steps = Array.isArray(obj.steps) ? readAuthoredSteps(obj.steps) : [];
     return {
       tool,
       title,
@@ -3605,6 +3635,25 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(strArg(obj.planId, MAX_ID_CHARS) ? { planId: strArg(obj.planId, MAX_ID_CHARS)! } : {}),
       ...(weekday !== undefined ? { weekday } : {}),
       ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
+    };
+  }
+  if (tool === "update_scheduled_task") {
+    const id = strArg(obj.id, MAX_ID_CHARS);
+    if (!id) return undefined;
+    const title = strArg(obj.title, MAX_QUERY_CHARS);
+    const prompt = strArg(obj.prompt, MAX_PASTE_CHARS);
+    // `steps` PRESENT-BUT-EMPTY is meaningful — it clears the checklist, which is how a task goes
+    // back to firing as one instruction — so the array's presence is what decides, not its length.
+    const steps = Array.isArray(obj.steps) ? readAuthoredSteps(obj.steps) : undefined;
+    // A patch that changes nothing is not a call. Without this the model can "update" a task by
+    // naming it and saying nothing, get a success back, and believe it has fixed something.
+    if (!title && !prompt && steps === undefined) return undefined;
+    return {
+      tool,
+      id,
+      ...(title ? { title } : {}),
+      ...(prompt ? { prompt } : {}),
+      ...(steps !== undefined ? { steps } : {}),
     };
   }
   if (tool === "list_scheduled") return { tool };
@@ -4348,6 +4397,8 @@ export interface BuddyToolResultPayload {
   openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
   /** use_image_reference outcome — the host downloaded and registered it (or said why it couldn't). */
   referenceAdopted?: { ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string };
+  /** update_scheduled_task: what became of the change. */
+  scheduledUpdated?: { found: boolean; title?: string; stepCount?: number };
   /** Fetched page text from read_url (title + readable text). */
   page?: { title?: string; text: string };
   /** Output of an approved run_command (fed back so the model can react/fix). */
@@ -4973,6 +5024,18 @@ function formatBuddyToolResultBody(
       ? `[added "${result.taskGroup.title}" with ${result.taskGroup.count} sub-task${result.taskGroup.count === 1 ? "" : "s"} — ` +
           "nested in Google Tasks and shown in the 📋 Tasks panel as one task with its steps] Confirm it to the reader."
       : "[add_task_group did nothing]";
+  }
+  if (call.tool === "update_scheduled_task") {
+    const u = result.scheduledUpdated;
+    if (!u) return "[update_scheduled_task did nothing]";
+    // A guessed id has to come back as a failure. Reported as success it would end the matter: the
+    // model believes the checklist is fixed, says so, and the next run repeats the same mistake.
+    if (!u.found) return `[update_scheduled_task: there is no scheduled task with id "${call.id}". Check list_scheduled and try again.]`;
+    const parts = u.stepCount === undefined ? "" : ` It now has ${u.stepCount} step${u.stepCount === 1 ? "" : "s"}.`;
+    return (
+      `[update_scheduled_task saved “${u.title ?? call.id}”.${parts} Its schedule, its workspace and its run ` +
+      "history are unchanged — only what it does. Tell the reader what you changed; don't re-run it unless they ask.]"
+    );
   }
   if (call.tool === "schedule_task") {
     const s = result.scheduled;

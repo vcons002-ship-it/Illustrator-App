@@ -352,6 +352,9 @@ export interface EngineWorkerApi {
     creativeSession?: boolean,
     /** Trusted Story-setup mapping, carried outside the user-authored slash-command JSON. */
     storySoulCast?: { self: string; user: string },
+    /** This session IS a scheduled task's own workspace → that task's id, so the prompt carries which
+     * task the reader is inside and the model can revise it from there. */
+    scheduledTaskId?: string,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -2187,6 +2190,9 @@ export function useEngineWorker(
       creativeIdle?: boolean,
       creativeSession?: boolean,
       storySoulCast?: { self: string; user: string },
+      /** This session IS a scheduled task's own workspace → that task's id, so the prompt can carry
+       * which task the reader is inside and the model can revise it. */
+      scheduledTaskId?: string,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -2217,7 +2223,7 @@ export function useEngineWorker(
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}), ...(scheduledTaskId ? { scheduledTaskId } : {}) });
       }),
     [],
   );

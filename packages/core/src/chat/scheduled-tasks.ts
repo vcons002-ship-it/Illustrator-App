@@ -430,6 +430,69 @@ export function describeSchedule(task: ScheduledTask): string {
 }
 
 /**
+ * Change WHAT a task does, keeping everything about WHEN it does it.
+ *
+ * The counterpart to {@link rescheduleTask}, and editing rather than delete-and-recreate for the
+ * same reason: `lastRunIso` is the window each run is given ("cover only what is NEW since then"),
+ * so recreating a task silently throws away everything it already handled and the next run
+ * re-reports all of it. The cadence, the id, the workspace and the run history are the parts worth
+ * keeping; only the instructions were wrong.
+ *
+ * Every field is optional and an omitted one is LEFT ALONE — this is a patch, not a replacement, so
+ * a caller fixing one step cannot blank the prompt by not mentioning it. Passing an empty `steps`
+ * array is the one way to clear the checklist deliberately, which is how a task goes back to firing
+ * as a single instruction. PURE.
+ */
+export function updateScheduledTaskContent(
+  task: ScheduledTask,
+  patch: { title?: string; prompt?: string; steps?: readonly Partial<ScheduledStep>[] },
+): ScheduledTask {
+  const title = patch.title?.trim().slice(0, MAX_TITLE);
+  const prompt = patch.prompt?.trim().slice(0, MAX_PROMPT);
+  const { steps: _drop, ...bare } = task;
+  const steps = patch.steps === undefined ? task.steps : normalizeScheduledSteps(patch.steps);
+  return {
+    ...bare,
+    ...(title ? { title } : {}),
+    ...(prompt !== undefined && prompt ? { prompt } : {}),
+    ...(steps?.length ? { steps } : {}),
+  };
+}
+
+/**
+ * A checklist as editable text, one step per line, with an optional contract after a `|`:
+ *
+ *     Research the venue options | text
+ *     Add the shortlist to my calendar | create_event
+ *
+ * A textarea rather than a row of widgets because a checklist is a list of sentences and that is
+ * what people edit fluently — reordering is moving a line, deleting is deleting one, and there is no
+ * state to get out of step with the stored task. PURE, and the inverse of {@link formatStepLines}.
+ */
+export function parseStepLines(text: string): ScheduledStep[] {
+  return normalizeScheduledSteps(
+    text
+      .split("\n")
+      .map((line) => {
+        // Only the LAST `|` separates the contract, so a step whose wording contains one keeps it.
+        const at = line.lastIndexOf("|");
+        if (at === -1) return { do: line };
+        const needs = line.slice(at + 1).trim();
+        // A trailing `|` with nothing after it is someone mid-edit, not a request for a blank
+        // contract — and a "needs" with a space in it is prose, not a token, so it belongs to the step.
+        if (!needs || /\s/.test(needs)) return { do: line };
+        return { do: line.slice(0, at), needs };
+      })
+      .filter((s) => s.do.trim().length > 0),
+  );
+}
+
+/** The checklist as the text {@link parseStepLines} reads back. PURE. */
+export function formatStepLines(steps: readonly ScheduledStep[] | undefined): string {
+  return (steps ?? []).map((s) => (s.needs ? `${s.do} | ${s.needs}` : s.do)).join("\n");
+}
+
+/**
  * What a scheduled task's own workspace is called, in the reader's terms.
  *
  * Mirrors `sessionLabelForPlan` — the ⏰ marks it as a scheduled action's window rather than a chat
@@ -456,6 +519,41 @@ export function scheduledSessionLabel(task: Pick<ScheduledTask, "title">): strin
  */
 export function withScheduledWorkspace(task: ScheduledTask, mint: () => string): ScheduledTask {
   return task.sessionId?.trim() ? task : { ...task, sessionId: mint() };
+}
+
+/**
+ * THE TASK THIS WORKSPACE BELONGS TO, restated every turn while the reader is in it.
+ *
+ * A scheduled task had no way to iterate on itself: a run that discovered its own checklist was
+ * wrong — a step in the wrong order, a missing one, an instruction that stopped matching reality —
+ * could work around it for that run and had no way to say so, so the next run made the same mistake
+ * and so did the one after. The fix has two halves and this is the first: the model cannot revise a
+ * task it doesn't know it is inside.
+ *
+ * Carries the ID because `update_scheduled_task` needs one, and a model that has to go and look it
+ * up with list_scheduled usually doesn't. Carries the CADENCE because half of what a reader changes
+ * in here is timing, and a model that can't see it will guess. Carries the steps AS THEY ARE STORED,
+ * numbered, so "drop step 2" is a thing that can be said.
+ *
+ * Rides after the cache prefix, like every other block that changes mid-session. PURE.
+ */
+export function scheduledTaskBlock(task: ScheduledTask | undefined): string {
+  if (!task) return "";
+  const steps = normalizeScheduledSteps(task.steps);
+  const list = steps.length
+    ? steps.map((s, i) => `  ${i + 1}. ${s.do}${s.needs ? ` [needs: ${s.needs}]` : ""}`).join("\n")
+    : "  (none — it runs as a single instruction)";
+  return (
+    `⏰ THIS IS A SCHEDULED TASK'S OWN WORKSPACE. Everything here belongs to that task; the reader ` +
+    "opened it to see what its runs did, to work on it by hand, or to change it.\n" +
+    `- id: ${task.id}\n- title: ${task.title}\n- runs: ${describeSchedule(task)}${task.enabled ? "" : " (PAUSED)"}\n` +
+    `- the job: ${task.prompt}\n- its checklist:\n${list}\n` +
+    "You can CHANGE this task from here with update_scheduled_task (its steps, the job, the title) — " +
+    "that is what the reader means when they ask you to add a step, drop one, or fix what it does. " +
+    "Do it when a run shows the checklist is wrong or incomplete too: a step that was missing, one " +
+    "that fired in the wrong order, an instruction that no longer matches what is there. Fixing it " +
+    "here is what stops the next run repeating the mistake — working around it silently does not."
+  );
 }
 
 // ---- Store (bounded JSON array under one key, mirroring tasks.ts) -----------
