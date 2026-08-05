@@ -292,7 +292,11 @@ export type CmdToDesktop =
         /** Change WHAT the action does. `stepText` is the checklist as edited text (one step per
          * line) rather than parsed steps, so the phone relays exactly what was typed and the desktop
          * — which owns the store — does the parsing, one implementation instead of two. */
-        | { action: "edit"; id: string; title: string; prompt: string; stepText: string };
+        | { action: "edit"; id: string; title: string; prompt: string; stepText: string }
+        /** Open the action's own workspace ON THE DESKTOP and switch to it. The phone can't mint the
+         * session — the desktop owns them — but it can ask, exactly as it does for every other chat
+         * switch (vrcmd:chatSwitch); the mirror then shows the phone the same window. */
+        | { action: "openWorkspace"; id: string };
     }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
