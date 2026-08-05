@@ -296,7 +296,9 @@ export type CmdToDesktop =
         /** Open the action's own workspace ON THE DESKTOP and switch to it. The phone can't mint the
          * session — the desktop owns them — but it can ask, exactly as it does for every other chat
          * switch (vrcmd:chatSwitch); the mirror then shows the phone the same window. */
-        | { action: "openWorkspace"; id: string };
+        | { action: "openWorkspace"; id: string }
+        /** Ask the assistant to author this action's checklist, in its own workspace. */
+        | { action: "planSteps"; id: string };
     }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs

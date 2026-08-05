@@ -219,6 +219,42 @@ export function toolsetForTool(tool: string): Toolset | undefined {
   return TOOLSETS.find((t) => t.tools.includes(tool));
 }
 
+/**
+ * The toolsets a CHECKLIST needs, resolved from its steps' `needs` tokens.
+ *
+ * Reported as: a scheduled run behaving as though the app's tools didn't exist — asked to read a
+ * document, it searched the WEB for "how to read a local file in Visual Reader assistant". Its own
+ * reasoning said why: "I don't know the exact tool name for reading a file within the `files` set. I
+ * should load the toolset first." It was right, and then it guessed instead, because deferral had
+ * left it with a job to do and no idea what the tool for it was called.
+ *
+ * The app does not have to make it guess. A step that declares `needs` has already said which tool
+ * proves it done, and the toolset that tool lives in is a lookup — so the docs can be in front of
+ * the model on the turn it needs them, rather than a round trip and a coin flip away. This is the
+ * same principle as the rest of the checklist machinery: the app knows what the work requires, so it
+ * should not be discovered by the model at run time.
+ *
+ * `needs` is the set_plan vocabulary, so the three ALIASES resolve to the tool they stand for; any
+ * other token is read as a tool name. Unknown tokens and always-on tools yield nothing, which is
+ * correct — there is no set to load for them. PURE.
+ */
+const NEEDS_TOOL_ALIASES: Record<string, string> = {
+  image: "generate_image",
+  file: "write_file",
+  command: "run_command",
+};
+
+export function toolsetsForNeeds(needs: readonly (string | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const raw of needs) {
+    const n = (raw ?? "").trim().toLowerCase();
+    if (!n) continue;
+    const set = toolsetForTool(NEEDS_TOOL_ALIASES[n] ?? n);
+    if (set && !out.includes(set.id)) out.push(set.id);
+  }
+  return out;
+}
+
 /** Whether a tool may be called right now: always-on, or its toolset is loaded. */
 export function isToolAvailable(tool: string, loaded: readonly string[]): boolean {
   const set = toolsetForTool(tool);
@@ -238,12 +274,20 @@ export function toolsetIndexBlock(available: readonly string[], loaded: readonly
   const lines = rows.map((t) => `- ${t.id}${loaded.includes(t.id) ? " (loaded)" : ""} — ${t.trigger}`);
   return (
     "YOU CAN DO MORE THAN THE TOOLS BELOW. These groups are things you CAN do; their instructions " +
-    "are not in front of you yet, which is what keeps room for the actual conversation. NEVER tell " +
+    "are not in front of you yet. NEVER tell " +
     "the reader you are unable to do something in this list — load it and do it:\n" +
     lines.join("\n") +
-    '\n\nTo load one: {"tool":"load_toolset","name":"<group>"}. The full instructions come straight ' +
-    "back and stay for the rest of the conversation; then make the real call. If you call one of " +
+    '\n\nTo load one: {"tool":"load_toolset","name":"<group>"}. The instructions come back and stay; ' +
+    "then make the real call. If you call one of " +
     "their tools without loading it first you get the instructions back rather than an error, so a " +
-    "guess costs nothing — but loading first is quicker."
+    "guess costs nothing — but loading first is quicker.\n" +
+    // THE ESCAPE HATCH IT ACTUALLY TOOK. Reported with the model's own reasoning on screen: "I don't
+    // know the exact tool name for reading a file within the `files` set. I should load the toolset
+    // first" — and then it searched the WEB for "how to read a local file in Visual Reader
+    // assistant", three times, instead. Everything above tells it loading is free; nothing told it
+    // that looking the answer up outside is not an alternative. It is the one place a wrong turn
+    // costs a whole unattended run, because the web will always return SOMETHING and none of it is
+    // about this app.
+    "Never search the WEB for your own tools; it doesn't document them. load_toolset is the source."
   );
 }

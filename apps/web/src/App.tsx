@@ -87,6 +87,7 @@ import {
   loadScheduledTasks,
   scheduledPlan,
   parseStepLines,
+  planStepsPrompt,
   updateScheduledTaskContent,
   scheduledSessionLabel,
   withScheduledWorkspace,
@@ -2625,11 +2626,16 @@ export function App() {
         | { action: "reschedule"; id: string; rule?: ScheduledTask["rule"]; time?: string; weekday?: number; dayOfMonth?: number }
         | { action: "runNow"; id: string }
         | { action: "edit"; id: string; title: string; prompt: string; stepText: string }
-        | { action: "openWorkspace"; id: string },
+        | { action: "openWorkspace"; id: string }
+        | { action: "planSteps"; id: string },
     ) => {
       void (async () => {
         if (command.action === "openWorkspace") {
           await onOpenScheduledWorkspaceRef.current(command.id);
+          return;
+        }
+        if (command.action === "planSteps") {
+          await planScheduledStepsRef.current(command.id);
           return;
         }
         if (command.action === "runNow") {
@@ -8520,6 +8526,32 @@ export function App() {
     },
     [openScheduledWorkspace, resetBuddyView, libraryStore, isRemoteClient, sendAppSync],
   );
+  /**
+   * Have the assistant write an old task's checklist — the retrofit for every action made before
+   * checklists existed, and the ones that still fail the reported way: one instruction, doing
+   * whichever half of the job it reaches.
+   *
+   * Runs in the task's OWN workspace, so the plan is written where its history is and saved onto the
+   * task (update_scheduled_task) rather than living in a passing reply. Opening and sending are two
+   * ticks for the same reason the runner splits them — loading a session's history is async, and
+   * sending early hands the model the previous conversation as context.
+   */
+  const planScheduledSteps = useCallback(
+    async (taskId: string) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "planSteps", id: taskId } });
+        setShowScheduled(false);
+        return;
+      }
+      const task = (await loadScheduledTasks(libraryStore)).find((t) => t.id === taskId);
+      if (!task) return;
+      await onOpenScheduledWorkspace(taskId);
+      onBuddySendTextRef.current(planStepsPrompt(task));
+    },
+    [libraryStore, isRemoteClient, sendAppSync, onOpenScheduledWorkspace],
+  );
+  const planScheduledStepsRef = useRef(planScheduledSteps);
+  planScheduledStepsRef.current = planScheduledSteps;
   const openScheduledWorkspaceRef = useRef(openScheduledWorkspace);
   openScheduledWorkspaceRef.current = openScheduledWorkspace;
   // The scheduled runner is declared ABOVE these, so it reaches them through refs (same pattern as
@@ -11183,6 +11215,7 @@ export function App() {
           onReschedule={onRescheduleScheduled}
           onRunNow={runScheduledNow}
           onEdit={(id, patch) => void editScheduled(id, patch)}
+          onPlanSteps={(id) => void planScheduledSteps(id)}
           // Desktop-only: the desktop owns the chat sessions, so a phone has nothing to open here.
           // Passing it there would offer a button that mints a workspace the desktop never sees.
           onOpenWorkspace={(id) => void onOpenScheduledWorkspace(id)}
