@@ -86,6 +86,8 @@ import {
   hasConflictMarkers,
   loadScheduledTasks,
   scheduledPlan,
+  scheduledSessionLabel,
+  withScheduledWorkspace,
   rescheduleTask,
   scheduledRunNote,
   scheduledRunPrompt,
@@ -479,6 +481,16 @@ interface BuddySession {
    * "Closed" group, or automatically when its task is opened again. Deleting (🗑) is the destructive
    * one and remains separate. */
   closed?: boolean;
+  /**
+   * A SCHEDULED TASK'S OWN WORKSPACE — never listed in the chat switcher, opened from ⏰ Scheduled.
+   *
+   * Distinct from `closed`, which means "hidden for now, and offered back under Closed". These are
+   * not chats the reader started and would go looking for; they belong to a scheduled action, and
+   * putting them in the switcher (or in Closed) would bury the real conversations under one entry
+   * per recurring job. Everything else about them is an ordinary session: own history, own plan, own
+   * file ledger, and the reader can work in one by hand.
+   */
+  hidden?: boolean;
 }
 
 /**
@@ -2444,10 +2456,28 @@ export function App() {
         sendAppSync({ type: "vrcmd:scheduled", command: { action: "delete", id } });
         return;
       }
+      // ITS WORKSPACE OUTLIVES IT, AS AN ORDINARY CHAT. A scheduled action's window is hidden from
+      // the switcher and reached only from ⏰ Scheduled — so deleting the action without this leaves
+      // a session with real history in it that nothing can ever open again, and one per deleted task
+      // accumulating out of sight. Un-hiding is the answer rather than deleting: the runs in there
+      // may be the record of work worth keeping, and now that the action is gone the reader is the
+      // only one who can judge that. It becomes a normal chat they can read, rename, or delete.
+      // Read from the STORE, not from React state: this is a destructive path and the state in this
+      // closure is a render old, which is exactly long enough to miss a workspace minted by a run
+      // that fired moments ago — and to miss it is to orphan it.
+      const sessionId = (await loadScheduledTasks(libraryStore)).find((t) => t.id === id)?.sessionId;
+      if (sessionId) {
+        setBuddySessions((prev) => {
+          if (!prev.some((s) => s.id === sessionId && s.hidden)) return prev;
+          const next = prev.map((s) => (s.id === sessionId ? { ...s, hidden: false } : s));
+          persistSessions(next);
+          return next;
+        });
+      }
       await deleteScheduledTask(libraryStore, id);
       refreshScheduled();
     },
-    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync, persistSessions],
   );
   /** Move a scheduled action onto a task (or off one). This is the only way to fix an action created
    * before binding existed: nothing in the action reliably says which task it belongs to, so guessing
@@ -3480,6 +3510,7 @@ export function App() {
         workingDir: s.workingDir,
         ...(s.label ? { label: s.label } : {}),
         ...(s.closed ? { closed: true as const } : {}),
+        ...(s.hidden ? { hidden: true as const } : {}),
       })),
       activeId: activeBuddyId,
       messages: boundChatHistoryForMirror(buddyMessages),
@@ -3504,6 +3535,7 @@ export function App() {
         workingDir: s.workingDir,
         ...(s.label ? { label: s.label } : {}),
         ...(s.closed ? { closed: true as const } : {}),
+        ...(s.hidden ? { hidden: true as const } : {}),
       })),
     );
     // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
@@ -7776,11 +7808,16 @@ export function App() {
         const task = runnable[0]!;
         // WHERE this runs. A task-BOUND action runs in that task's own chat, so a recurring job that
         // accumulates over days (chasing RSVPs, watching for replies) resumes with the task's history
-        // and checklist instead of re-deriving everything from its prompt each time. Everything else
-        // runs in the generic ⏰ Scheduled chat. A bound task that's since been deleted falls back
-        // there rather than being silently dropped.
+        // and checklist instead of re-deriving everything from its prompt each time.
         const boundPlan = task.planId ? plans.find((p) => p.id === task.planId) : undefined;
-        const targetId = boundPlan?.sessionId ?? (task.planId && boundPlan ? undefined : SCHEDULED_CHAT_ID);
+        // WHERE IT RUNS, in order of specificity. A BOUND action maintains a task plan, so it belongs
+        // in that plan's chat — the reader asked for it to live there. Otherwise it runs in its OWN
+        // workspace, minted here on first use, which is how every task stored before workspaces
+        // existed adopts one. The shared ⏰ Scheduled chat is no longer a destination: it is where all
+        // of these used to pile up together, and the mixed history already in it stays readable, but
+        // nothing new is added to it.
+        const ownWorkspace = boundPlan ? undefined : await openScheduledWorkspaceRef.current(task.id);
+        const targetId = boundPlan?.sessionId ?? ownWorkspace;
         // Not in the target chat yet → open it and let the NEXT tick fire. Loading a session's history
         // is async, and sending before it lands would hand the model the previous conversation as
         // context — exactly the bleed this separation exists to prevent.
@@ -7788,8 +7825,10 @@ export function App() {
           // Claim the screen for the whole open-then-send, so idle creative work can't switch away in
           // the gap between the two ticks (see backgroundSweepAt).
           markBackgroundSweep();
-          if (boundPlan) await openTaskRef.current?.(boundPlan.id); // creates + names the task's chat if needed
-          else openScheduledSession();
+          // The workspace itself is already minted above; this switches INTO it. A bound action opens
+          // its plan's chat instead, which creates + names that chat if it doesn't exist yet.
+          if (boundPlan) await openTaskRef.current?.(boundPlan.id);
+          else await onOpenScheduledWorkspaceRef.current(task.id);
           return;
         }
         // Advance first (so a slow turn can't double-fire), then run it. `task` is the PRE-advance
@@ -8360,6 +8399,68 @@ export function App() {
     ],
   );
   openTaskRef.current = openTaskInChat; // so the scheduled runner (declared above) can open a bound task
+
+  /**
+   * Open a scheduled task's OWN WORKSPACE — minting it on first use.
+   *
+   * Every scheduled action used to share one ⏰ Scheduled chat, so each run was a message in a thread
+   * of unrelated jobs: nowhere for a task's history to accumulate, nothing for the reader to open and
+   * work in, and every run starting cold from a prompt string because there was nowhere else for its
+   * state to live. A task plan already had exactly this (see openTaskInChat) and a scheduled action
+   * did not; this is the same shape, and the two re-attach paths below are the same ones for the same
+   * reasons — a session id whose entry has gone must be re-used, never re-minted, because the history
+   * is on disk under it.
+   *
+   * `hidden` keeps it out of the chat switcher: it is the action's window, reached from ⏰ Scheduled,
+   * not another conversation to scroll past.
+   *
+   * Returns the session id (the runner needs it to know where it is about to run), or undefined if
+   * the task is gone. Persists the id back onto the task on first mint — that is how every task
+   * stored before workspaces existed adopts one, lazily, the first time it runs or is opened.
+   */
+  const openScheduledWorkspace = useCallback(
+    async (taskId: string): Promise<string | undefined> => {
+      const stored = (await loadScheduledTasks(libraryStore)).find((t) => t.id === taskId);
+      if (!stored) return undefined;
+      const task = withScheduledWorkspace(stored, () => `${BUDDY_CHAT_ID}-sch-${Date.now().toString(36)}`);
+      const sessionId = task.sessionId!;
+      const label = scheduledSessionLabel(task);
+      if (!stored.sessionId) await upsertScheduledTask(libraryStore, task).catch(() => {});
+      setBuddySessions((prev) => {
+        const existing = prev.find((s) => s.id === sessionId);
+        // Already there and correctly named — don't churn the persisted list on every open.
+        if (existing && existing.label === label && existing.hidden && !existing.closed) return prev;
+        const next = existing
+          ? prev.map((s) => (s.id === sessionId ? { ...s, label, hidden: true, closed: false } : s))
+          : [...prev, { id: sessionId, workingDir: "", label, hidden: true }];
+        persistSessions(next);
+        return next;
+      });
+      refreshScheduled();
+      return sessionId;
+    },
+    [libraryStore, persistSessions, refreshScheduled],
+  );
+  /** Open the workspace AND switch to it — the ⏰ Scheduled panel's "Open" button. */
+  const onOpenScheduledWorkspace = useCallback(
+    async (taskId: string) => {
+      const sessionId = await openScheduledWorkspace(taskId);
+      if (!sessionId || sessionId === activeBuddyIdRef.current) return;
+      setShowScheduled(false);
+      // Clears the live view FIRST, so the outgoing session's messages can't be written into this one
+      // while its history loads — the same ordering openTaskInChat depends on.
+      resetBuddyView();
+      setActiveBuddyId(sessionId);
+      void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
+    },
+    [openScheduledWorkspace, resetBuddyView, libraryStore],
+  );
+  const openScheduledWorkspaceRef = useRef(openScheduledWorkspace);
+  openScheduledWorkspaceRef.current = openScheduledWorkspace;
+  // The scheduled runner is declared ABOVE these, so it reaches them through refs (same pattern as
+  // openTaskRef): it mints the workspace on one tick and switches into it on the next.
+  const onOpenScheduledWorkspaceRef = useRef(onOpenScheduledWorkspace);
+  onOpenScheduledWorkspaceRef.current = onOpenScheduledWorkspace;
 
   // DESKTOP side: run a Tasks/Calendar action the phone relayed (vrcmd:planner). Each maps to the
   // SAME handler the desktop UI uses, so the result persists + re-mirrors to the phone via
@@ -9209,11 +9310,17 @@ export function App() {
       persona={buddyPersona}
       onPersonaChange={onBuddyPersonaChange}
       modelMenu={modelMenu}
-      sessions={buddySessions.map((s, i) => ({
-        id: s.id,
-        label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
-        ...(s.closed ? { closed: true } : {}),
-      }))}
+      // A scheduled task's workspace is NOT a chat in the switcher — it belongs to that action and is
+      // opened from ⏰ Scheduled. Listing them here would bury the reader's actual conversations under
+      // one entry per recurring job. The ACTIVE one is kept in the list regardless, so that working in
+      // it doesn't leave the picker showing some other chat's name.
+      sessions={buddySessions
+        .filter((s) => !s.hidden || s.id === activeBuddyId)
+        .map((s, i) => ({
+          id: s.id,
+          label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
+          ...(s.closed ? { closed: true } : {}),
+        }))}
       activeSessionId={activeBuddyId}
       onSwitchSession={onSwitchBuddySession}
       onNewSession={onNewBuddySession}
@@ -11010,6 +11117,9 @@ export function App() {
           taskOptions={scheduledTaskOptions}
           onReschedule={onRescheduleScheduled}
           onRunNow={runScheduledNow}
+          // Desktop-only: the desktop owns the chat sessions, so a phone has nothing to open here.
+          // Passing it there would offer a button that mints a workspace the desktop never sees.
+          {...(isRemoteClient ? {} : { onOpenWorkspace: (id: string) => void onOpenScheduledWorkspace(id) })}
           onClose={() => setShowScheduled(false)}
         />
       )}

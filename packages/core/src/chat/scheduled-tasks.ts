@@ -57,6 +57,20 @@ export interface ScheduledTask {
    * Omitted ⇒ the next time `time` comes around (today if it's still ahead, else tomorrow), which is
    * what "remind me at 5pm" means. Ignored by the recurring rules. */
   date?: string;
+  /**
+   * ITS OWN WORKSPACE — the chat session this task lives and works in.
+   *
+   * Every scheduled action used to share one ⏰ Scheduled chat, which made each run a message in a
+   * thread of unrelated jobs: no place for a task's own history to accumulate, nothing for the
+   * reader to open and work in, and every run starting from a prompt string because there was
+   * nowhere else for its state to be.
+   *
+   * The session is HIDDEN from the chat switcher and reached from ⏰ Scheduled instead — it is the
+   * task's window, not another conversation to scroll past. Minted on first use, so tasks stored
+   * before this adopt one the first time they run or are opened; the id is then theirs for good, and
+   * their history survives being closed exactly like a task plan's chat does.
+   */
+  sessionId?: string;
   /** BOUND TASK: the task plan this action maintains. A bound run happens inside that task's own
    * chat — with its conversation, checklist and files already loaded — instead of the generic
    * Scheduled chat, so a recurring "keep this up to date" job picks up where it left off rather than
@@ -246,6 +260,7 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
       const steps = normalizeScheduledSteps(input.steps);
       return steps.length ? { steps } : {};
     })(),
+    ...(input.sessionId?.trim() ? { sessionId: input.sessionId.trim() } : {}),
     ...(input.planId?.trim() ? { planId: input.planId.trim() } : {}),
     ...(input.weekday !== undefined ? { weekday: Math.min(6, Math.max(0, Math.round(input.weekday))) } : {}),
     ...(input.dayOfMonth !== undefined ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(input.dayOfMonth))) } : {}),
@@ -412,6 +427,35 @@ export function describeSchedule(task: ScheduledTask): string {
   if (task.rule === "monthly") return `Monthly on day ${task.dayOfMonth ?? 1} ${at}`;
   // One-shot: show the actual moment it runs (never "Invalid Date" — see validIso).
   return validIso(task.nextDueIso) ? `Once — ${new Date(task.nextDueIso).toLocaleString()}` : `Once ${at}`;
+}
+
+/**
+ * What a scheduled task's own workspace is called, in the reader's terms.
+ *
+ * Mirrors `sessionLabelForPlan` — the ⏰ marks it as a scheduled action's window rather than a chat
+ * someone started, which matters because these are deliberately kept out of the chat switcher and a
+ * reader meeting one has to be able to tell what they are looking at. PURE.
+ */
+export function scheduledSessionLabel(task: Pick<ScheduledTask, "title">): string {
+  const t = (task.title ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return "⏰ Scheduled task";
+  return `⏰ ${t.length > 58 ? `${t.slice(0, 55).trimEnd()}…` : t}`;
+}
+
+/**
+ * Give a task its own workspace id if it hasn't got one — the migration, for every task stored
+ * before workspaces existed.
+ *
+ * Deliberately lazy rather than a sweep over the store: a task adopts its window the first time it
+ * is opened or actually runs, so nothing has to walk (and rewrite) every stored task on boot, and a
+ * task that never fires again never grows an empty chat. `mint` is injected because the id has to be
+ * unique per session and this file is pure — the host passes the same generator its chats use.
+ *
+ * Returns the task UNCHANGED when it already has one, so callers can run it unconditionally and
+ * persist only on a real change. PURE.
+ */
+export function withScheduledWorkspace(task: ScheduledTask, mint: () => string): ScheduledTask {
+  return task.sessionId?.trim() ? task : { ...task, sessionId: mint() };
 }
 
 // ---- Store (bounded JSON array under one key, mirroring tasks.ts) -----------

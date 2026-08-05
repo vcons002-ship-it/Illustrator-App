@@ -130,6 +130,10 @@ export interface ChatSessionInfo {
   label?: string;
   /** Closed (hidden from the switcher) but kept — mirrored so the phone hides/reopens the same ones. */
   closed?: boolean;
+  /** A scheduled task's own workspace. Mirrored for the same reason `closed` is: without it the
+   * phone rebuilds its session list from a flag it never received and lists them as ordinary chats,
+   * so the one place these are deliberately kept out of would show every one of them. */
+  hidden?: boolean;
 }
 
 /**

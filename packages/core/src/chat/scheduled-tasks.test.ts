@@ -9,6 +9,8 @@ import {
   normalizeScheduledTask,
   normalizeScheduledSteps,
   scheduledPlan,
+  scheduledSessionLabel,
+  withScheduledWorkspace,
   type ScheduledTask,
   scheduledRunNote,
   weekdayOf,
@@ -456,5 +458,40 @@ describe("a scheduled job's PARTS — so a recurring task does all of itself", (
     expect(scheduledRunPrompt(task({ steps: [{ do: "x" }], lastRunIso: "2026-08-01T09:00:00.000Z" }))).toMatch(/last ran this at 2026-08-01/);
     // No steps → unchanged wording, because that is still how most stored tasks fire.
     expect(scheduledRunPrompt(task())).toMatch(/Do this now:/);
+  });
+});
+
+describe("a scheduled task's own workspace", () => {
+  const task = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+    normalizeScheduledTask({ title: "Venue hunt", prompt: "Find venues", ...over });
+
+  it("adopts one on first use, and keeps it for good", () => {
+    // Every action used to share one ⏰ Scheduled chat, so each run was a message in a thread of
+    // unrelated jobs — nowhere for a task's history to accumulate and nothing for the reader to open.
+    // Tasks stored before workspaces existed adopt one lazily, the first time they run or are opened.
+    let n = 0;
+    const mint = () => `s${++n}`;
+    const adopted = withScheduledWorkspace(task(), mint);
+    expect(adopted.sessionId).toBe("s1");
+    // Idempotent: re-running it must NOT mint a second window. The history is on disk under the
+    // first id, so a task that re-minted would come back to an empty chat every time.
+    expect(withScheduledWorkspace(adopted, mint)).toBe(adopted);
+    expect(n).toBe(1);
+  });
+
+  it("survives the round trip through the store's normaliser", () => {
+    expect(task({ sessionId: " __buddy__-sch-abc " }).sessionId).toBe("__buddy__-sch-abc");
+    expect(task()).not.toHaveProperty("sessionId");
+  });
+
+  it("names the window after the task, marked as a scheduled one", () => {
+    // These are deliberately kept out of the chat switcher, so a reader meeting one has to be able
+    // to tell at a glance what they are looking at.
+    expect(scheduledSessionLabel({ title: "Venue hunt" })).toBe("⏰ Venue hunt");
+    expect(scheduledSessionLabel({ title: "  spaced   out  " })).toBe("⏰ spaced out");
+    expect(scheduledSessionLabel({ title: "" })).toBe("⏰ Scheduled task");
+    const long = scheduledSessionLabel({ title: "x".repeat(200) });
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
