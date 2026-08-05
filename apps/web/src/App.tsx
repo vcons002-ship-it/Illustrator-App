@@ -99,6 +99,7 @@ import {
   needsPausedTurnNote,
   pausedTurnNote,
   referenceAdoptedNote,
+  interruptedRunNote,
   referenceFailedNote,
   openedImageNote,
   upsertScheduledTask,
@@ -6610,6 +6611,15 @@ export function App() {
 
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
+  /**
+   * WHAT THIS TURN'S TOOLS ACTUALLY DID — kept so an INTERRUPTED run doesn't take its work with it.
+   *
+   * A turn's tool calls reach later turns only through the transcript stored on the settle message,
+   * and an interrupted run never settles: it stored `turns: []`, so three visible searches were
+   * invisible to the model on the next message. Accumulated here as the results arrive, because by
+   * the time the turn errors the transcript that would have carried them no longer exists.
+   */
+  const turnToolRecordRef = useRef<string[]>([]);
   const dispatchBuddyTurn = async (
     history: ChatTurn[],
     userText: string,
@@ -6705,6 +6715,7 @@ export function App() {
     // those are stamped at the end instead. A directive is delivered as a USER turn like any other,
     // and it is never persisted — so it carries no more imitation risk than the reader's own
     // messages, which have been stamped in front all along.
+    turnToolRecordRef.current = []; // per TURN, like the transcript it stands in for
     const stampedUserText = stampTurnContent(userText, Date.now());
     const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
@@ -6949,6 +6960,18 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step" || e.call.tool === "update_task" || e.call.tool === "update_task_doc")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
+        // Recorded as it happens — see turnToolRecordRef. Formatted with the SAME formatter the
+        // transcript uses, so an interrupted run's surviving record reads exactly like a completed
+        // one's rather than being a second, differently-worded account of the same call.
+        if (e.kind === "toolResult") {
+          const line = formatBuddyToolResult(e.call, {
+            ...(e.hits ? { hits: e.hits } : {}),
+            ...(e.imageHits ? { imageHits: e.imageHits } : {}),
+            ...(e.books ? { books: e.books } : {}),
+            ...(e.error ? { error: e.error } : {}),
+          });
+          if (line) turnToolRecordRef.current.push(line);
+        }
         // A SLASH command runs its tool with no model round at all: `res.transcript` comes back
         // empty and no reply ever settles, so these lines are the entire record of what happened.
         // Left bare they're the reader's alone — /images finds six pictures, and by the next message
@@ -7090,7 +7113,13 @@ export function App() {
     // shows it the moment the turn settles, not the next time a task tool happens to run.
     if (activeTaskPlanId()) refreshTaskPlans();
     if (res.error) {
-      appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+      // KEEP WHAT IT DID. This stored `turns: []`, so an interrupted run discarded every tool call it
+      // had made while leaving the bubbles on screen — the reader could see three searches the model
+      // then denied having done. The note carries the results AND the fact that the run stopped
+      // early, because replaying results without that reads as a finished job.
+      const note = interruptedRunNote(turnToolRecordRef.current, res.error);
+      appendBuddy({ role: "tool", text: note.text, turns: note.turns });
+      turnToolRecordRef.current = [];
       return;
     }
     // App-managed + the active step is a TOOL step → the model's between-step prose is the confused

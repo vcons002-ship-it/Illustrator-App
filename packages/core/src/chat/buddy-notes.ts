@@ -87,6 +87,43 @@ export function needsPausedTurnNote(paused: boolean, hasText: boolean, suppressP
   return paused && (!hasText || suppressProse);
 }
 
+/**
+ * WHAT AN INTERRUPTED RUN DID, kept so the work isn't lost with the turn.
+ *
+ * Reported as: three web searches sitting visibly in the chat, and the model answering "I haven't
+ * done any historical music searches in this session". It was right. A turn's tool calls reach later
+ * turns only through the transcript stored on the SETTLE message, and a run that is interrupted
+ * never settles — it took the error path, which stored `turns: []`. So the bubbles stayed on screen
+ * and the record behind them was discarded: the reader can see the work and the model cannot, which
+ * is the worst of both.
+ *
+ * Two halves, and the second is why this isn't just "save the transcript". A half-finished run whose
+ * results are replayed without comment reads as a FINISHED one — the model sees three searches and
+ * no reason to think anything is outstanding, so it answers from partial work instead of resuming
+ * it. The note says plainly that the run stopped early, so what survives is evidence rather than a
+ * conclusion.
+ *
+ * `records` are the calls that actually completed, already formatted by the caller (the host owns
+ * `formatBuddyToolResult`). PURE.
+ */
+export function interruptedRunNote(records: readonly string[], reason: string): BuddyNote {
+  const n = records.length;
+  const did = n === 0 ? "It hadn't finished anything yet." : `It got as far as ${n} tool call${n === 1 ? "" : "s"}:`;
+  return {
+    text: `⚠ ${reason}`,
+    turns: [
+      ...records.map((content) => ({ role: "user" as const, content })),
+      {
+        role: "user" as const,
+        content:
+          `[That run STOPPED before it finished — ${reason}. ${did} Treat the results above as ` +
+          "evidence of what was done, NOT as a finished job: anything it was part-way through is " +
+          "still outstanding. Say what you have and what's left rather than answering as if it completed.]",
+      },
+    ],
+  };
+}
+
 /** A picture file opened INTO the chat (`open_image`), shown inline where the reader can see it. */
 export function openedImageNote(name: string): BuddyNote {
   return {
