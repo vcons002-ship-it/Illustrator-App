@@ -7,6 +7,8 @@ import {
   nextDue,
   scheduledRunPrompt,
   normalizeScheduledTask,
+  normalizeScheduledSteps,
+  scheduledPlan,
   type ScheduledTask,
   scheduledRunNote,
   weekdayOf,
@@ -394,5 +396,65 @@ describe("running an action on demand doesn't steal its next run", () => {
     expect(dueScheduledTasks([mon], SAT)).toEqual([]); // not due on a Saturday
     const asked = { ...mon, nextDueIso: SAT.toISOString() };
     expect(dueScheduledTasks([asked], SAT)).toEqual([asked]);
+  });
+});
+
+describe("a scheduled job's PARTS — so a recurring task does all of itself", () => {
+  const task = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+    normalizeScheduledTask({
+      title: "Venue hunt",
+      prompt: "Find venue options for the offsite and put the shortlist on my calendar",
+      ...over,
+    });
+
+  it("keeps the parts in order, as a plan the chat's own checklist machinery already speaks", () => {
+    // The reported failure: one instruction, fired as one message, judged a success if ANYTHING came
+    // back — so the research half passed and the calendar half was quietly dropped, with nothing in
+    // a position to notice because nothing recorded that the job had two parts.
+    const plan = scheduledPlan(
+      task({ steps: [{ do: "Research the venue options", needs: "text" }, { do: "Add the shortlist to my calendar", needs: "create_event" }] }),
+    );
+    expect(plan?.steps.map((s) => s.text)).toEqual(["Research the venue options", "Add the shortlist to my calendar"]);
+    expect(plan?.steps[1]!.needs).toBe("create_event");
+    // The GOAL carries the job, because the executor hands each step over WITHOUT the others in
+    // front of it — "add the shortlist to my calendar" has to be able to say which shortlist.
+    expect(plan?.goal).toMatch(/offsite/);
+  });
+
+  it("is undefined with no steps, so every task stored before this keeps firing the old way", () => {
+    expect(scheduledPlan(task())).toBeUndefined();
+    expect(scheduledPlan(task({ steps: [] }))).toBeUndefined();
+    // ...and a task whose steps are all blank is the same as having none, not a checklist of nothing.
+    expect(scheduledPlan(task({ steps: [{ do: "   " }] }))).toBeUndefined();
+  });
+
+  it("bounds and cleans what it stores", () => {
+    expect(normalizeScheduledSteps([{ do: "  padded  " }])).toEqual([{ do: "padded" }]);
+    expect(normalizeScheduledSteps([{ do: "x", needs: " IMAGE " }])).toEqual([{ do: "x", needs: "image" }]);
+    expect(normalizeScheduledSteps(Array.from({ length: 30 }, () => ({ do: "step" })))).toHaveLength(12);
+    expect(normalizeScheduledSteps([{ do: "a".repeat(500) }])[0]!.do).toHaveLength(200);
+    expect(normalizeScheduledSteps(undefined)).toEqual([]);
+    // Survives a stored value that isn't the shape we expect, rather than throwing mid-run.
+    expect(normalizeScheduledSteps([{} as never, null as never])).toEqual([]);
+  });
+
+  it("normalizing a task carries the steps through, and drops them when there are none", () => {
+    expect(task({ steps: [{ do: "Research" }] }).steps).toEqual([{ do: "Research" }]);
+    expect(task()).not.toHaveProperty("steps");
+  });
+
+  it("the fired message stops restating the checklist, and says to work ALL of it", () => {
+    // With a checklist the parts reach the run by their own route — compiled and handed over one at
+    // a time, or injected as the current checklist — so writing them out again would be the same
+    // list in two voices, one of which the executor isn't reading.
+    const withSteps = scheduledRunPrompt(task({ steps: [{ do: "Research the venue options" }] }));
+    expect(withSteps).toMatch(/EVERY step, in order/);
+    expect(withSteps).not.toMatch(/Research the venue options/);
+    // The things the checklist can't say still have to be said: that this is a scheduled firing, and
+    // what window it covers.
+    expect(withSteps).toMatch(/Scheduled task/);
+    expect(scheduledRunPrompt(task({ steps: [{ do: "x" }], lastRunIso: "2026-08-01T09:00:00.000Z" }))).toMatch(/last ran this at 2026-08-01/);
+    // No steps → unchanged wording, because that is still how most stored tasks fire.
+    expect(scheduledRunPrompt(task())).toMatch(/Do this now:/);
   });
 });

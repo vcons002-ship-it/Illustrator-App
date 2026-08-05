@@ -464,6 +464,10 @@ export type BuddyToolCall =
       tool: "schedule_task";
       title: string;
       prompt: string;
+      /** The PARTS of the job, in order — the same `{do, needs}` shape set_plan takes. Stored on the
+       * task and re-used by every run, so a recurring job does all of itself every time instead of
+       * whichever half the model finds interesting on the day. */
+      steps?: { do: string; needs?: string }[];
       rule: "daily" | "weekly" | "monthly" | "once";
       time?: string;
       /** One-time only: the calendar day "YYYY-MM-DD" to run on (omit ⇒ the next time `time` comes around). */
@@ -1930,7 +1934,19 @@ export function buildBuddySystemPrompt(raw: {
         "get_task_plan, and NEVER start a second document because you couldn't find the first.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
-        '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
+        '"prompt" is the job as a whole (a self-contained instruction); "time" is 24h "HH:MM".\n' +
+        // WRITE DOWN EVERY PART. Reported as: a scheduled job does the research and never files the
+        // result. One instruction, fired as one message, and judged a success if anything at all came
+        // back — so the half that produces something to read passes and the half that WRITES it
+        // somewhere is quietly dropped. Nothing was in a position to notice, because nothing said the
+        // job had two parts. Steps are how the job says so, once, at the point it is created.
+        '  · "steps" — THE PARTS OF THE JOB, in order, same shape as set_plan: ' +
+        '"steps":[{"do":"Research the venue options","needs":"text"},{"do":"Add the shortlist to my calendar",' +
+        '"needs":"create_event"}]. Write down EVERY part, including the one that RECORDS the result — the ' +
+        "calendar event to create or update, the note to save, the file to write. A job that gathers something " +
+        "and never files it anywhere is the single most common way these go wrong, and the filing step is the " +
+        "one that gets left out. The reader can edit these afterwards, and each run works the checklist, so a " +
+        "recurring job does all of itself every time instead of whichever part it happens to reach.\n" +
         '  · RECURRING — "rule":"daily" | "weekly" | "monthly". Use for "every morning/day/week/Friday…", "each month…". ' +
         '"weekly" REQUIRES "weekday" (0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat) and "monthly" REQUIRES ' +
         '"dayOfMonth" (1–31) — leave one out and the action is anchored to whatever day you happen to create it on, ' +
@@ -3559,6 +3575,25 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const date = rawDate && /^\d{4}-\d{1,2}-\d{1,2}$/.test(rawDate) ? rawDate : undefined;
     const weekday = typeof obj.weekday === "number" && Number.isFinite(obj.weekday) ? Math.min(6, Math.max(0, Math.round(obj.weekday))) : undefined;
     const dayOfMonth = typeof obj.dayOfMonth === "number" && Number.isFinite(obj.dayOfMonth) ? Math.min(31, Math.max(1, Math.round(obj.dayOfMonth))) : undefined;
+    // THE PARTS OF THE JOB. Read exactly as tolerantly as set_plan reads its own steps — bare string
+    // or object, and the same spread of key names a model reaches for — because this is the same act
+    // of writing a checklist and a model that gets set_plan right should not be able to get this
+    // wrong for want of a synonym. Stored on the task and re-used verbatim by every run, which is
+    // what makes a recurring job consistent rather than re-derived differently each time it fires.
+    const rawSteps = Array.isArray(obj.steps) ? obj.steps.slice(0, 12) : [];
+    const steps: { do: string; needs?: string }[] = [];
+    for (const item of rawSteps) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const o = item as Record<string, unknown>;
+        const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
+        if (!text) continue;
+        const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
+        steps.push({ do: text, ...(needs ? { needs } : {}) });
+        continue;
+      }
+      const text = strArg(item, MAX_QUERY_CHARS);
+      if (text) steps.push({ do: text });
+    }
     return {
       tool,
       title,
@@ -3566,6 +3601,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       rule,
       ...(time ? { time } : {}),
       ...(date && rule === "once" ? { date } : {}),
+      ...(steps.length ? { steps } : {}),
       ...(strArg(obj.planId, MAX_ID_CHARS) ? { planId: strArg(obj.planId, MAX_ID_CHARS)! } : {}),
       ...(weekday !== undefined ? { weekday } : {}),
       ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),

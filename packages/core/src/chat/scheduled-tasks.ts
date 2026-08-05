@@ -1,4 +1,5 @@
 import type { VisualReaderStore } from "../storage/store.js";
+import type { BuddyPlan } from "./buddy-tools.js";
 
 /**
  * Scheduled / periodic tasks — recurring agentic actions the assistant runs on a
@@ -13,11 +14,42 @@ import type { VisualReaderStore } from "../storage/store.js";
 
 export type ScheduleRule = "once" | "daily" | "weekly" | "monthly";
 
+/**
+ * ONE PART OF A SCHEDULED JOB — the unit that stops a recurring task doing half of itself.
+ *
+ * A scheduled task used to be a single instruction, fired as one chat message, and judged a success
+ * if ANYTHING at all came back. So "research the venue options and put the shortlist on my calendar"
+ * did the research — the salient, interesting half — said something about it, and passed. The
+ * calendar was never touched, and nothing in the app was in a position to notice: there was no
+ * record of the job having parts, so there was nothing to check the second one against.
+ *
+ * Written down, the parts become checkable. `needs` is the same token `set_plan` takes ("image",
+ * "file", "command", "text", "reply", or a tool name) and means the same thing — what would PROVE
+ * this part done — so a stored checklist compiles through exactly the machinery the chat's own
+ * checklists already run on, rather than a second engine that would drift from it.
+ */
+export interface ScheduledStep {
+  /** The action, phrased as one self-contained instruction ("Add the shortlist to my calendar"). */
+  do: string;
+  /** What proves it done — a `set_plan` needs token. Omitted ⇒ inferred from the wording. */
+  needs?: string;
+}
+
 export interface ScheduledTask {
   id: string;
   title: string;
-  /** The natural-language instruction sent to the assistant when it fires. */
+  /** The natural-language instruction sent to the assistant when it fires. With `steps`, this is the
+   * job's GOAL — the context every step is done in service of — rather than the whole instruction. */
   prompt: string;
+  /**
+   * The parts of the job, in order. Authored when the task is scheduled, editable afterwards, and
+   * re-used verbatim on every run — which is what makes a recurring task consistent instead of
+   * re-derived (and re-derived differently) each time it fires.
+   *
+   * Absent or empty ⇒ the task runs the old way, as a single prompt. Every task created before this
+   * existed is in that state, so the fallback is not a nicety; it is most of the stored ones.
+   */
+  steps?: ScheduledStep[];
   rule: ScheduleRule;
   /** Local time-of-day "HH:MM" (24h) it should run. Default "09:00". */
   time: string;
@@ -54,6 +86,46 @@ const KEY = "scheduled-tasks";
 const MAX_TASKS = 40;
 const MAX_TITLE = 120;
 const MAX_PROMPT = 1000;
+/** Bounded like everything else stored here. A recurring job with more than a dozen parts is a task
+ * plan, not a scheduled action, and the checklist executor hands these over one turn at a time. */
+const MAX_STEPS = 12;
+const MAX_STEP = 200;
+
+/** Normalise authored steps: trim, drop the empty ones, cap the count and each one's length. PURE. */
+export function normalizeScheduledSteps(steps: readonly Partial<ScheduledStep>[] | undefined): ScheduledStep[] {
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .map((s) => ({
+      do: (typeof s?.do === "string" ? s.do : "").trim().slice(0, MAX_STEP),
+      ...(typeof s?.needs === "string" && s.needs.trim() ? { needs: s.needs.trim().toLowerCase() } : {}),
+    }))
+    .filter((s) => s.do.length > 0)
+    .slice(0, MAX_STEPS);
+}
+
+/**
+ * A scheduled task's checklist as a {@link BuddyPlan} — the shape the chat's own checklist machinery
+ * already speaks, so a stored job compiles through `compileWorkflow` (app-managed) or drops straight
+ * into the model-driven plan, with no second executor to keep in step with the first.
+ *
+ * The task's `prompt` becomes the GOAL. That is what makes each step readable on its own when the
+ * executor hands it over without the others in front of it: "add the shortlist to my calendar" needs
+ * to know which shortlist, and the goal is where that lives.
+ *
+ * `undefined` when there are no steps — the caller then fires the task the old way. PURE.
+ */
+export function scheduledPlan(task: Pick<ScheduledTask, "title" | "prompt" | "steps">): BuddyPlan | undefined {
+  const steps = normalizeScheduledSteps(task.steps);
+  if (steps.length === 0) return undefined;
+  return {
+    goal: task.prompt.trim() || task.title.trim(),
+    steps: steps.map((s) => ({
+      text: s.do,
+      status: "pending" as const,
+      ...(s.needs ? { needs: s.needs } : {}),
+    })),
+  };
+}
 
 /** A stable id for a new scheduled task. */
 export function scheduledId(): string {
@@ -170,6 +242,10 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
     // A calendar day only means anything for a one-shot; drop it on the recurring rules so it can't
     // linger and confuse a later edit.
     ...(rule === "once" && input.date ? { date: input.date.trim() } : {}),
+    ...((): { steps?: ScheduledStep[] } => {
+      const steps = normalizeScheduledSteps(input.steps);
+      return steps.length ? { steps } : {};
+    })(),
     ...(input.planId?.trim() ? { planId: input.planId.trim() } : {}),
     ...(input.weekday !== undefined ? { weekday: Math.min(6, Math.max(0, Math.round(input.weekday))) } : {}),
     ...(input.dayOfMonth !== undefined ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(input.dayOfMonth))) } : {}),
@@ -250,6 +326,21 @@ export function scheduledRunPrompt(task: ScheduledTask): string {
     ? " Record what you find on this task (save_task_context) so the next run and the reader both pick it up, " +
       "and update the task's steps if what you found changes them."
     : "";
+  // WITH A CHECKLIST, the parts are not restated here. The plan rides the prompt by its own route —
+  // compiled and handed over one step at a time when the app manages steps, injected as the current
+  // checklist when the model drives — and writing them out a second time would be the same list in
+  // two voices, one of which the executor isn't reading. What this line owes the run is the things
+  // the checklist can't say: that it is a scheduled firing, and what window it covers.
+  //
+  // "Every step" is worth saying out loud. Half-finishing is the whole reported failure: a job that
+  // researched something and never wrote the result anywhere, reported as done because a research
+  // step is the interesting one and something did come back.
+  if (scheduledPlan(task)) {
+    return (
+      `⏰ Scheduled task “${task.title}”. ${since}${record} Work its checklist now — EVERY step, in order, ` +
+      `not just the first or the interesting one. The job as a whole: ${task.prompt}`
+    );
+  }
   return `⏰ Scheduled task “${task.title}”. ${since}${record} Do this now: ${task.prompt}`;
 }
 
