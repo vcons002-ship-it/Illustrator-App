@@ -493,6 +493,32 @@ export function formatStepLines(steps: readonly ScheduledStep[] | undefined): st
 }
 
 /**
+ * Ask the assistant to write a task's checklist — the retrofit for every action made before
+ * checklists existed.
+ *
+ * Those tasks are the ones that go wrong in the reported way: one instruction, fired as one message,
+ * doing whichever half of the job it reaches. They can't be fixed by the runner, because nothing in
+ * a prompt string says where its parts divide — only a model reading it can say that, and it needs
+ * to be asked.
+ *
+ * Sent INTO the task's own workspace, so the plan is written where the task's history is and lands
+ * on the task itself rather than in a passing reply. It says do not run it: the reader asked for a
+ * checklist, not for a weekly job to fire now, and a model handed a job description will otherwise
+ * start doing it. PURE.
+ */
+export function planStepsPrompt(task: ScheduledTask): string {
+  return (
+    `Write the checklist for this scheduled task, then save it with update_scheduled_task (id "${task.id}").\n` +
+    `- title: ${task.title}\n- the job: ${task.prompt}\n- it runs: ${describeSchedule(task)}\n\n` +
+    "One step per action, in the order they have to happen, each phrased so it stands alone. Tag each " +
+    'with what proves it done ("needs": "text", "file", "image", or the tool name). Include EVERY ' +
+    "part — especially the one that RECORDS the result (the calendar event, the saved note, the " +
+    "written file), because that is the part these jobs drop. Do NOT run the task now; just write " +
+    "its checklist and save it, then tell me in one line what the steps are."
+  );
+}
+
+/**
  * What a scheduled task's own workspace is called, in the reader's terms.
  *
  * Mirrors `sessionLabelForPlan` — the ⏰ marks it as a scheduled action's window rather than a chat

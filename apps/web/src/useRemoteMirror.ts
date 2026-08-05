@@ -136,7 +136,8 @@ export interface RemoteMirrorDeps {
       | { action: "reschedule"; id: string; rule?: "daily" | "weekly" | "monthly" | "once"; time?: string; weekday?: number; dayOfMonth?: number }
       | { action: "runNow"; id: string }
       | { action: "edit"; id: string; title: string; prompt: string; stepText: string }
-      | { action: "openWorkspace"; id: string },
+      | { action: "openWorkspace"; id: string }
+      | { action: "planSteps"; id: string },
   ) => void;
 
   // Host-owned refs the handler reads (declared in App.tsx, passed in so the single registration

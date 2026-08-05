@@ -64,6 +64,7 @@ import {
   type CreatedFileRef,
   ollamaToolSchemas,
   toolsetDoc,
+  toolsetsForNeeds,
   shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
@@ -5787,7 +5788,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // the loaded set twice per task, in the middle of one continuous chat, for no reason the reader
     // could see.
     const sessionKey = "buddy";
-    const loadedToolsets = loadedToolsetsBySession.get(sessionKey) ?? [];
+    // THE CHECKLIST'S OWN TOOLSETS, IN FRONT OF IT BEFORE IT ASKS. A run whose step says
+    // needs:"read_file" is a run that will want the `files` docs, and making it discover that costs
+    // a round trip it may not spend: reported as a scheduled run searching the WEB for "how to read
+    // a local file in Visual Reader assistant", having reasoned — correctly — that it didn't know
+    // the tool's name and should load the set first. The app already knows; see toolsetsForNeeds.
+    // Unioned with what the conversation has loaded rather than replacing it, so a set the reader's
+    // earlier turns pulled in doesn't vanish for the length of a checklist.
+    const planNeeds = toolsetsForNeeds((msg.plan?.steps ?? []).map((st) => st.needs));
+    const loadedToolsets = [...new Set([...(loadedToolsetsBySession.get(sessionKey) ?? []), ...planNeeds])];
     const promptOpts = {
         persona: msg.persona,
         library: msg.library,

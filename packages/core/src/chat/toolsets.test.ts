@@ -5,6 +5,7 @@ import {
   TOOLSET_IDS,
   isToolAvailable,
   toolsetForTool,
+  toolsetsForNeeds,
   toolsetIndexBlock,
 } from "./toolsets.js";
 import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, formatBuddyToolResult, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
@@ -661,5 +662,44 @@ describe("numbers arrive with their source attached", () => {
     const p = buildBuddySystemPrompt({ persona: "default", library: [], canMarkets: true, loadedToolsets: [] } as never);
     expect(p).toContain("ALWAYS SAY WHERE A NUMBER CAME FROM");
     expect(p).toMatch(/If you have no source for a figure, you do not have the figure/);
+  });
+});
+
+describe("toolsetsForNeeds — a checklist's tools, in front of it before it asks", () => {
+  // Reported as: a scheduled run behaving as though the app's tools didn't exist. Asked to read a
+  // document it searched the WEB for "how to read a local file in Visual Reader assistant", having
+  // reasoned — correctly — that it didn't know the tool's name and should load the set first.
+  it("resolves a tool name to the set it lives in", () => {
+    expect(toolsetsForNeeds(["read_file"])).toEqual(["files"]);
+    expect(toolsetsForNeeds(["create_event"])).toContain("google");
+  });
+
+  it("understands the set_plan aliases, which is what steps are usually tagged with", () => {
+    // "file" means a file was PRODUCED — write_file — which lives in `coding`, the workspace-write
+    // set. Reading one is `files`. The two halves of "a file" are deliberately different sets.
+    expect(toolsetsForNeeds(["file"])).toEqual(["coding"]);
+    expect(toolsetsForNeeds(["command"])).toEqual(["coding"]);
+    expect(toolsetsForNeeds(["read_file"])).toEqual(["files"]);
+  });
+
+  it("yields nothing for always-on tools and for tokens that name no tool", () => {
+    // There is no set to load for these, and returning one would load a whole toolset per step for
+    // work that never needed it.
+    expect(toolsetsForNeeds(["text", "reply", "image", "search_web", "", undefined])).toEqual([]);
+    expect(toolsetsForNeeds([])).toEqual([]);
+  });
+
+  it("de-duplicates, so a five-step checklist doesn't ask for one set five times", () => {
+    // write_file and the "file" alias both land on `coding`; it appears once.
+    expect(toolsetsForNeeds(["read_file", "write_file", "file", "extract_from_document"])).toEqual(["files", "coding"]);
+  });
+});
+
+describe("the index forbids the escape hatch the model actually took", () => {
+  it("says the web does not document its own tools", () => {
+    // Everything else in the block says loading is free; nothing said that looking the answer up
+    // OUTSIDE is not an alternative — and the web always returns something, none of it about this app.
+    expect(toolsetIndexBlock(["files"], [])).toMatch(/Never search the WEB for your own tools/i);
+    expect(toolsetIndexBlock(["files"], [])).toMatch(/load_toolset is the source/i);
   });
 });

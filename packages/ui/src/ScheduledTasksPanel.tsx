@@ -36,6 +36,11 @@ export interface ScheduledTasksPanelProps {
    * way to fix a wrong instruction was to delete it and describe a new one, which throws away the
    * last-run time every run depends on for "what's new since". Editing keeps all of that. */
   onEdit?: (id: string, patch: { title: string; prompt: string; stepText: string }) => void;
+  /** Ask the assistant to write this action's checklist for it, in its own workspace — how a task
+   * made before checklists existed adopts one without the reader having to author the steps by hand.
+   * Offered only where there is nothing to lose: a task that already HAS steps would have them
+   * rewritten, and that is a decision, not a convenience. */
+  onPlanSteps?: (id: string) => void;
   /** Open this action's OWN workspace — the chat it lives and works in. Kept out of the chat
    * switcher deliberately (it belongs to the action, not to the reader's conversations), so this
    * button is how it is reached: to read what past runs did, or to work in it by hand. Absent → no
@@ -85,6 +90,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   onRunNow,
   onOpenWorkspace,
   onEdit,
+  onPlanSteps,
   taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
@@ -170,6 +176,15 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                       <span
                         style={{ marginLeft: "auto", display: "flex", gap: 6 }}
                       >
+                        {onPlanSteps && !t.steps?.length ? (
+                          <button
+                            style={btn}
+                            onClick={() => onPlanSteps(t.id)}
+                            title="Have the assistant write this task's checklist, so every run does all of the job"
+                          >
+                            ✦ Plan steps
+                          </button>
+                        ) : null}
                         {onEdit ? (
                           <button
                             style={btn}
