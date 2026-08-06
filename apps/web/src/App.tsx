@@ -9865,7 +9865,7 @@ export function App() {
             </select>
           )}
           <button
-            style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : styles.button}
+            style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: t.accent.text } : styles.button}
             onClick={() => setToolbarOpen((v) => !v)}
             title="Show or hide the toolbar — collapse it to reclaim screen space, especially on a phone"
             aria-expanded={toolbarOpen}
@@ -12942,11 +12942,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: t.accent.text,
     animation: "vr-pulse 2s ease-in-out infinite",
   },
-  stageChipDone: { opacity: 0.85, border: "1px solid rgba(125,216,127,0.5)", color: "#9fdfa1" },
+  stageChipDone: { opacity: 0.85, border: "1px solid rgba(125,216,127,0.5)", color: t.state.good },
   stageChipPaused: { opacity: 0.9, border: "1px solid rgba(255,212,121,0.6)", color: t.state.warn },
   stageArrow: { opacity: 0.35 },
   workflowNow: { marginLeft: 8, opacity: 0.9 },
-  actionNote: { marginLeft: "auto", color: "#9fdfa1", fontSize: 12 },
+  actionNote: { marginLeft: "auto", color: t.state.good, fontSize: 12 },
   workflowDetail: { fontSize: 11, opacity: 0.6 },
   // --- the "Redo…" / "Export…" dropdowns ---
   // Position and size come from `AnchoredMenu`, which measures the viewport — these are only the
@@ -12966,7 +12966,7 @@ const styles: Record<string, React.CSSProperties> = {
   menuList: {
     display: "flex",
     flexDirection: "column",
-    background: "#1b1e2a",
+    background: t.surface.sunken,
     color: t.text.base,
     border: `1px solid ${t.border.input}`,
     borderRadius: 8,
@@ -13050,7 +13050,7 @@ const styles: Record<string, React.CSSProperties> = {
   badgeOk: {
     background: "rgba(64,160,96,0.16)",
     borderColor: "rgba(96,200,128,0.4)",
-    color: "#9be2b4",
+    color: t.state.good,
   },
   badgeWarn: {
     background: "rgba(200,140,40,0.16)",
@@ -13127,7 +13127,7 @@ const styles: Record<string, React.CSSProperties> = {
   lockLookLabel: { fontSize: 11, opacity: 0.6 },
   lockLookRow: { display: "flex", flexWrap: "wrap", gap: 6 },
   lockLookButton: {
-    background: "#23262d",
+    background: t.surface.card,
     color: t.text.base,
     border: `1px solid ${t.border.button}`,
     borderRadius: 999,
@@ -13304,7 +13304,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     fontSize: 12.5,
     lineHeight: 1.55,
-    color: "#d7dbe6",
+    color: t.text.base,
     background: "rgba(0,0,0,0.4)",
     border: `1px solid ${t.border.faint}`,
     borderRadius: 8,

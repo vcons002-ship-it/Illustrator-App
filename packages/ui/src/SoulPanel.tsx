@@ -533,7 +533,7 @@ export const SoulPanel = memo(function SoulPanel({
                       aria-label="Soul integration progress"
                       value={Math.min(progressPass ?? 0, progressTotal)}
                       max={progressTotal}
-                      style={{ width: "100%", height: 5, accentColor: "#8aa8ff" }}
+                      style={{ width: "100%", height: 5, accentColor: t.accent.text }}
                     />
                   ) : null}
                 </>

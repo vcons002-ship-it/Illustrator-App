@@ -57,15 +57,15 @@ const toastStyle = {
   fontFamily: "system-ui, sans-serif",
   fontSize: 13,
   color: t.text.base,
-  background: "#1c1f2a",
+  background: t.surface.sunken,
   border: `1px solid ${t.border.button}`,
   boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
   pointerEvents: "auto",
 } as const;
 
 const toneStyles = {
-  error: { borderColor: t.state.danger, background: "#2a1c1e" },
-  success: { borderColor: "rgba(120,220,150,0.5)", background: "#1c2a20" },
+  error: { borderColor: t.state.danger, background: t.state.dangerWash },
+  success: { borderColor: "rgba(120,220,150,0.5)", background: t.state.goodWash },
   info: {},
 } as const;
 

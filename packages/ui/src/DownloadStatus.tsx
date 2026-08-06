@@ -26,7 +26,7 @@ export function DownloadStatus(props: DownloadStatusInput): JSX.Element | null {
         border: `1px solid ${t.border.subtle}`,
         borderRadius: 10,
         boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
-        color: "#e8eaf0",
+        color: t.text.base,
         fontSize: 12,
         overflow: "hidden",
       }}
@@ -70,7 +70,7 @@ export function DownloadStatus(props: DownloadStatusInput): JSX.Element | null {
                 <span style={{ opacity: 0.7, flexShrink: 0 }}>{Math.round(it.percent)}%</span>
               </div>
               <div style={{ height: 5, borderRadius: 3, background: t.fill.strong, marginTop: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${Math.round(it.percent)}%`, background: "#6ea8fe", transition: "width 0.2s" }} />
+                <div style={{ height: "100%", width: `${Math.round(it.percent)}%`, background: t.accent.text, transition: "width 0.2s" }} />
               </div>
               {it.stage || it.detail ? (
                 <div

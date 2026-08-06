@@ -442,7 +442,7 @@ const orderBadgeStyle = {
   height: 20,
   borderRadius: 999,
   background: t.accent.edge,
-  color: "#0b1220",
+  color: t.surface.base,
   fontSize: 12,
   fontWeight: 700,
   display: "flex",
@@ -481,5 +481,5 @@ const mediaStyle = {
   maxHeight: "72vh",
   objectFit: "contain",
   borderRadius: 8,
-  background: "#000",
+  background: "#000", // RAW-COLOUR-OK: letterbox behind artwork, deliberately neutral
 } as const;

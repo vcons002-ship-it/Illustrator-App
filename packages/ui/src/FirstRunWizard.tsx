@@ -163,7 +163,7 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
 
 const card: React.CSSProperties = {
   width: "min(460px, 100%)",
-  background: "#1a1d27",
+  background: t.surface.sunken,
   color: t.text.base,
   borderRadius: 14,
   padding: 24,

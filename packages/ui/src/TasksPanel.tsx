@@ -160,7 +160,7 @@ function PlanCard({
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
         {plan.deadlineIso ? <span style={{ fontSize: 11, color: t.state.warn }}>due {plan.deadlineIso}</span> : null}
         {plan.recurrence ? (
-          <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: t.accent.fill, color: "#bcd4ff" }}>
+          <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: t.accent.fill, color: t.accent.text }}>
             🔁 {describeRecurrence(plan.recurrence)}
           </span>
         ) : null}
@@ -494,7 +494,7 @@ export const TasksPanel = memo(function TasksPanel({
           </div>
         )}
         {planMessage && (
-          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8, color: planMessage.startsWith("⚠") ? t.state.danger : planMessage.startsWith("✓") ? t.state.good : "#cdd6f4" }}>
+          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8, color: planMessage.startsWith("⚠") ? t.state.danger : planMessage.startsWith("✓") ? t.state.good : t.text.base }}>
             {planMessage}
           </div>
         )}
@@ -647,11 +647,13 @@ const card: React.CSSProperties = {
 
 /** A small colour-coded chip for a task's source (Gmail / Calendar / VR / Google Tasks). */
 function sourceTagStyle(tag: "Gmail" | "Calendar" | "VR" | "Google Tasks"): React.CSSProperties {
+  // RAW-COLOUR-OK: source BRAND colours (Gmail red, Calendar blue), which are data about the
+  // service rather than design tokens — the same reason the chart palettes are exempt.
   const palette: Record<string, [string, string]> = {
-    Gmail: ["rgba(234,67,53,0.18)", "#ff9d92"],
+    Gmail: ["rgba(234,67,53,0.18)", t.state.danger],
     Calendar: ["rgba(66,133,244,0.2)", t.accent.text],
-    VR: ["rgba(160,120,255,0.22)", "#cdbcff"],
-    "Google Tasks": ["rgba(52,168,83,0.18)", "#8fe3a8"],
+    VR: ["rgba(160,120,255,0.22)", "#cdbcff"], // RAW-COLOUR-OK: brand colour, see above
+    "Google Tasks": ["rgba(52,168,83,0.18)", t.state.good],
   };
   const [background, color] = palette[tag] ?? palette.VR!;
   return {

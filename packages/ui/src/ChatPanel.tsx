@@ -1001,7 +1001,7 @@ const fileMenuStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
-  background: "#1b1d26",
+  background: t.surface.sunken,
   border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: 4,

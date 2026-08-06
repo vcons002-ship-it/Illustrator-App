@@ -263,7 +263,7 @@ export const DocumentPolishPanel = memo(function DocumentPolishPanel(props: Docu
           </>
         )}
 
-        {error && <div style={{ ...hint, color: "#ff9d9d" }}>⚠ {error}</div>}
+        {error && <div style={{ ...hint, color: t.state.danger }}>⚠ {error}</div>}
       </div>
     </div>
   );

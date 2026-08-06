@@ -65,6 +65,12 @@ export const t = {
     good: "var(--vr-good)",
     warn: "var(--vr-warn)",
     danger: "var(--vr-danger)",
+    // Tinted status SURFACES, on the accent's own wash/fill/edge steps. Toasts and armed
+    // destructive buttons used hand-mixed hexes for these, blended against the old ground.
+    goodWash: "var(--vr-good-wash)",
+    dangerWash: "var(--vr-danger-wash)",
+    dangerFill: "var(--vr-danger-fill)",
+    dangerEdge: "var(--vr-danger-edge)",
   },
 
   radius: {
