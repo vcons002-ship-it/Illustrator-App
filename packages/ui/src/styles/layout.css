@@ -1,0 +1,161 @@
+/**
+ * LAYOUT — the reader grid and the adaptive chat dock.
+ *
+ * These classes are defined here and wired up in App.tsx. Keeping the geometry in CSS is what
+ * lets the reader respond to width with a media query instead of a JS breakpoint hook: today
+ * `useNarrow` seeds from window.innerWidth and re-checks in an effect, so the grid can flash
+ * on first paint. A media query cannot flash.
+ */
+
+/**
+ * A BARE CUSTOM PROPERTY IS NOT INTERPOLABLE, and this registration is the whole reason the
+ * dock animation works.
+ *
+ * Transitioning `grid-template-rows: auto 1fr var(--dock-h)` while changing --dock-h does not
+ * animate — the browser has no type for the variable. Worse, with an overshooting spring the
+ * track can resolve to an invalid value mid-flight, which invalidates the whole
+ * grid-template-rows declaration and collapses every row. This was found in a prototype,
+ * where it looked like the chat AND the book vanishing on one state change.
+ */
+@property --vr-dock-h {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 56px;
+}
+
+/* ---- Shell -------------------------------------------------------------------------
+ * A grid rather than a flex column, so the dock's height is a track that can be animated. */
+.vr-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr var(--vr-dock-h);
+  transition: --vr-dock-h var(--vr-dur-3) var(--vr-spring);
+}
+
+/* No book open — no dock row at all. */
+.vr-shell--nodock {
+  grid-template-rows: auto 1fr;
+}
+
+/* ---- Dock ---------------------------------------------------------------------------
+ * Three states replacing the old boolean, whose single open height was a hard
+ * min(62vh, 560px) that defaulted to OPEN — so on a 1440px-tall window the chat took 560px
+ * and the book got ~440px. `peek` is the new default. */
+.vr-dock--bar {
+  --vr-dock-h: var(--vr-dock-bar);
+}
+.vr-dock--peek {
+  --vr-dock-h: var(--vr-dock-peek);
+}
+.vr-dock--full {
+  --vr-dock-h: var(--vr-dock-full);
+}
+
+/* The message list fades rather than being torn out of the DOM, so nothing reflows and the
+ * scroll position survives a trip down to `bar` and back. */
+.vr-dock-msgs {
+  transition: opacity var(--vr-dur-2) var(--vr-ease);
+}
+.vr-dock--bar .vr-dock-msgs {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The book yields while you are in conversation — dimmed, never moved, never unmounted. */
+.vr-reader-yield {
+  transition:
+    opacity var(--vr-dur-3) var(--vr-ease),
+    filter var(--vr-dur-3) var(--vr-ease);
+}
+.vr-shell--chatting .vr-reader-yield {
+  opacity: 0.42;
+  filter: saturate(0.7);
+}
+
+/* ---- Reader ------------------------------------------------------------------------
+ * Named tracks: rail | prose | art | trailing gutter. The prose track is --vr-measure and
+ * does NOT change between modes — 640px is the right measure for reading and widening it
+ * would make the app worse. The reclaimed width on a wide screen goes to the art and the
+ * rail, which is what the ~1,100px of `margin: 0 auto` was doing instead. */
+.vr-reader {
+  display: grid;
+  grid-template-columns:
+    [rail-start] minmax(0, var(--vr-rail-w))
+    [text-start] minmax(0, var(--vr-measure))
+    [text-end art-start] minmax(var(--vr-art-min), var(--vr-art-max))
+    [art-end pad-start] minmax(0, var(--vr-rail-w)) [pad-end];
+  column-gap: 40px;
+  justify-content: center;
+  max-width: var(--vr-reader-max);
+  margin-inline: auto;
+  padding: 32px 20px 50vh;
+  transition: grid-template-columns var(--vr-dur-3) var(--vr-spring);
+}
+
+/* Per-book layout modes. Each overrides only the track WIDTHS, not the grid itself, which is
+ * what lets three modes replace four near-duplicate style objects. */
+.vr-reader--inline {
+  --vr-art-min: 0px;
+  --vr-art-max: 0px;
+}
+.vr-reader--rail {
+  --vr-art-max: 900px;
+  --vr-reader-max: 1720px;
+}
+.vr-reader--wide {
+  --vr-art-min: 440px;
+  --vr-art-max: 900px;
+  --vr-reader-max: 1700px;
+}
+.vr-reader--data {
+  --vr-art-min: 0px;
+  --vr-art-max: 0px;
+  --vr-reader-max: 1200px;
+}
+
+/* The rail only exists where there is genuinely spare width; below this it is a 0px track and
+ * its contents are hidden, so the reader is never squeezed to make room for it. */
+.vr-rail {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--vr-dur-2) var(--vr-ease);
+}
+
+@media (min-width: 1440px) {
+  .vr-reader--rail {
+    --vr-rail-w: 220px;
+  }
+  .vr-reader--rail .vr-rail {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Single column on a phone. This is the one breakpoint the app has; NARROW_PX in
+ * design/breakpoints.ts must match it, and a test asserts that it does. */
+@media (max-width: 760px) {
+  .vr-reader {
+    display: block;
+    max-width: 680px;
+    padding: 24px 16px 40vh;
+  }
+  .vr-reader .vr-rail {
+    display: none;
+  }
+}
+
+/* ---- Sticky illustration pane -------------------------------------------------------
+ * --vr-view-h is published by a ResizeObserver in App.tsx from the REAL content box, because
+ * every viewport-relative guess (top: 80, calc(100vh - 96px)) was wrong by however tall the
+ * wrapping header happened to be that day. The transition makes it glide with the dock
+ * instead of stepping frame by frame while the dock animates. */
+.vr-art-pane {
+  position: sticky;
+  top: 0;
+  max-height: var(--vr-view-h, calc(100dvh - 96px));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  transition: max-height var(--vr-dur-3) var(--vr-spring);
+}

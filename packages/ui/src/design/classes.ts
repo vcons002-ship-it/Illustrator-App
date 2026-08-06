@@ -1,0 +1,76 @@
+/**
+ * Class-name constants for the semantic classes in styles/*.css.
+ *
+ * Typo-proofing, and — more usefully — a list a test can iterate to assert every class named
+ * here actually exists as a selector in the sheets. A `className` that matches nothing fails
+ * silently and looks exactly like "the animation didn't work".
+ */
+
+export const cx = {
+  /** The app shell. Everything global in base.css hangs off this rather than <body>, because
+   * the extension mounts these components into arbitrary websites with no shadow DOM. */
+  app: "vr-app",
+  /** Portalled surfaces that land on a bare <body> and inherit nothing. */
+  portalRoot: "vr-portal-root",
+
+  btn: "vr-btn",
+  input: "vr-input",
+  card: "vr-card",
+
+  modalOverlay: "vr-modal-overlay",
+  modalCard: "vr-modal-card",
+
+  /** Children get a computed delay from `--vr-i`; capped past the twelfth. */
+  stagger: "vr-stagger",
+
+  shell: "vr-shell",
+  shellNoDock: "vr-shell--nodock",
+  shellChatting: "vr-shell--chatting",
+
+  dockBar: "vr-dock--bar",
+  dockPeek: "vr-dock--peek",
+  dockFull: "vr-dock--full",
+  dockMsgs: "vr-dock-msgs",
+  readerYield: "vr-reader-yield",
+
+  reader: "vr-reader",
+  readerInline: "vr-reader--inline",
+  readerRail: "vr-reader--rail",
+  readerWide: "vr-reader--wide",
+  readerData: "vr-reader--data",
+  rail: "vr-rail",
+  artPane: "vr-art-pane",
+
+  progressFill: "vr-progress-fill",
+  breathing: "vr-breathing",
+  settle: "vr-settle",
+  arrive: "vr-arrive",
+  arriveSheen: "vr-arrive-sheen",
+
+  /** Applied by the pointer handlers, not by a component's own render. */
+  isPress: "is-press",
+  isTap: "is-tap",
+
+  /** Sanitized article HTML rendered with dangerouslySetInnerHTML. */
+  articleHtml: "vr-article-html",
+} as const;
+
+/** The dock's three heights. Replaces a boolean whose single open state was a hard
+ * `min(62vh, 560px)` that defaulted to OPEN — the reason the chat out-measured the book. */
+export type DockMode = "bar" | "peek" | "full";
+
+export const DOCK_CLASS: Record<DockMode, string> = {
+  bar: cx.dockBar,
+  peek: cx.dockPeek,
+  full: cx.dockFull,
+};
+
+/** How the reader spends width. Chosen per book and remembered; the prose measure is the same
+ * in every one of them. */
+export type ReaderLayout = "side" | "inline" | "rail";
+
+export const READER_CLASS: Record<ReaderLayout, string> = {
+  side: cx.reader,
+  inline: cx.readerInline,
+  rail: cx.readerRail,
+};

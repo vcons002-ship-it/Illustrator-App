@@ -330,6 +330,10 @@ import {
   InlineFigure,
   SupportRow,
   type DisplayResult,
+  // Design tokens + class names. App.tsx could not reach these before: the old tokens file
+  // was internal to packages/ui and never exported from its index, which is why this file
+  // hard-codes 101 style literals.
+  cx,
   type FileActions,
   type FileRef,
   type InstalledModel,
@@ -2059,16 +2063,30 @@ export function App() {
   useEffect(() => {
     const el = contentScrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const apply = (): void => el.style.setProperty("--vr-view-h", `${el.clientHeight}px`);
-    apply();
+    // COALESCED BEHIND rAF. The dock animates its height over ~340ms, which resizes this
+    // container on every intermediate frame; writing the custom property synchronously from
+    // inside the observer callback is how a ResizeObserver ends up fighting its own layout.
+    let queued = 0;
+    const apply = (): void => {
+      if (queued) return;
+      queued = requestAnimationFrame(() => {
+        queued = 0;
+        el.style.setProperty("--vr-view-h", `${el.clientHeight}px`);
+      });
+    };
+    el.style.setProperty("--vr-view-h", `${el.clientHeight}px`); // first paint, not deferred
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     window.addEventListener("resize", apply);
     return () => {
+      if (queued) cancelAnimationFrame(queued);
       ro.disconnect();
       window.removeEventListener("resize", apply);
     };
-  });
+    // EMPTY DEPS, DELIBERATELY — and this was a live bug: with no array at all, every render
+    // of a 13k-line component tore down the observer and built a new one. It only observes a
+    // ref that never changes identity, so it needs to be created exactly once.
+  }, []);
   const persistWarnedRef = useRef(false);
   const persistWarn = useCallback((err: unknown): void => {
     if (persistWarnedRef.current) return;
@@ -9766,7 +9784,9 @@ export function App() {
   );
 
   return (
-    <div style={styles.shell}>
+    // `vr-app` is the root every global rule hangs off — never <body>, because the browser
+    // extension mounts these same components into arbitrary websites with no shadow DOM.
+    <div className={cx.app} style={styles.shell}>
       <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on

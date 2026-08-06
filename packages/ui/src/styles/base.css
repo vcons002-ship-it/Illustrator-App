@@ -1,0 +1,49 @@
+/**
+ * BASE — the small amount of global styling the app needs, scoped so it can never escape.
+ *
+ * THE SCOPING INVARIANT, and why it is absolute: `apps/extension` mounts these same
+ * components into an ARBITRARY WEBSITE's <body> with no shadow DOM
+ * (apps/extension/src/content.tsx). A bare `body {}` or `button {}` rule here would restyle
+ * whatever page the reader happens to be on.
+ *
+ * So: tokens may live on :root (declaring --vr-* on someone else's page is inert — nothing
+ * there reads those names), and EVERY other selector in every sheet must begin with `.vr-`.
+ * A test enforces this rather than trusting the convention.
+ */
+
+/* Applied to the app shell in App.tsx. Everything global hangs off this, not off <body>. */
+.vr-app {
+  color-scheme: dark;
+  font-family: var(--vr-font-ui);
+  color: var(--vr-text);
+  background: var(--vr-bg);
+}
+
+.vr-app *,
+.vr-app *::before,
+.vr-app *::after {
+  box-sizing: border-box;
+}
+
+/**
+ * A visible focus ring, everywhere, for free.
+ *
+ * The app had no focus styling at all — inline styles cannot express :focus-visible — so
+ * keyboard navigation was invisible. :focus-visible (not :focus) means a mouse click never
+ * paints a ring, only keyboard traversal does.
+ */
+.vr-app :focus-visible,
+.vr-modal :focus-visible,
+.vr-panel :focus-visible {
+  outline: 2px solid var(--vr-accent);
+  outline-offset: 2px;
+  border-radius: var(--vr-radius-sm);
+}
+
+/* Portalled surfaces (SettingsPanel, ModalShell, AnchoredMenu) land on a bare <body> and
+ * inherit nothing, so they restate their own basics rather than relying on .vr-app. */
+.vr-portal-root {
+  color-scheme: dark;
+  font-family: var(--vr-font-ui);
+  color: var(--vr-text);
+}

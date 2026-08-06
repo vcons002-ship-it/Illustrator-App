@@ -1,0 +1,128 @@
+/**
+ * DESIGN TOKENS — the single source of truth for every colour, radius, spacing step and
+ * motion curve in the app.
+ *
+ * WHY THIS FILE EXISTS. Every style in this codebase is an inline JS object, and inline
+ * styles cannot express `:hover`, `:focus-visible`, `@media` or `@keyframes`. That is why
+ * the app had zero hover states — not neglect, the ceiling of the approach. A `var()`
+ * reference IS a legal inline style value, so tokenising costs no structural change:
+ *
+ *     background: "#16181d"   →   background: "var(--vr-surface-2)"
+ *
+ * DECLARED ON `:root`, DELIBERATELY. `SettingsPanel`, `ModalShell` and `AnchoredMenu` all
+ * portal to `<body>`, outside the app tree — anything scoped to the app div would leave them
+ * with no styling at all.
+ *
+ * THE VALUES HERE ARE TODAY'S VALUES. This file is written so the app is pixel-identical
+ * after tokenising; the redesign then happens by changing values in THIS FILE ONLY, which is
+ * what keeps a sweep across ~48 components separable from the change of look.
+ */
+
+:root {
+  /* ---- Channel triples ------------------------------------------------------------
+   * Stored as bare channels so one token can serve every alpha. The accent appeared as six
+   * separate rgba() variants (.06 .22 .25 .4 .5 .6) plus #7aa2ff / #8ab4ff / #4663d6;
+   * this collapses all of them, and makes changing the app's accent a one-line edit. */
+  --vr-fg-rgb: 255 255 255;
+  --vr-accent-rgb: 122 162 255;
+
+  /* ---- Surfaces -------------------------------------------------------------------
+   * Five near-duplicate greys (#11131a #0e0f13 #0d1017 #13161e #16181d #171922) collapse to
+   * four steps, darkest ground → most-raised. */
+  --vr-bg: #11131a;         /* app shell */
+  --vr-surface-0: #0e0f13;  /* dock, deepest chrome */
+  --vr-surface-1: #13161e;  /* sunken panels */
+  --vr-surface-2: #16181d;  /* cards, modals — the most-used surface (17 sites) */
+  --vr-surface-3: #1c2029;  /* raised / hover — new; nothing had a hover surface before */
+
+  /* ---- Ink ------------------------------------------------------------------------ */
+  --vr-text: #e6e6e6;       /* absorbs #e7e7ee (7 sites) and #e9ecf2 (5) */
+  --vr-text-dim: rgb(var(--vr-fg-rgb) / 0.65);
+  --vr-text-faint: rgb(var(--vr-fg-rgb) / 0.45);
+
+  /* ---- Fills and hairlines --------------------------------------------------------
+   * Two ladders, kept separate on purpose: rgba(255,255,255,.08) is used 38 times as a FILL
+   * and .12 is used 37 times as a BORDER. Collapsing them by value would lose the meaning. */
+  --vr-fill-subtle: rgb(var(--vr-fg-rgb) / 0.06);
+  --vr-fill: rgb(var(--vr-fg-rgb) / 0.08);
+  --vr-fill-strong: rgb(var(--vr-fg-rgb) / 0.14);
+  --vr-border-faint: rgb(var(--vr-fg-rgb) / 0.1);
+  --vr-border-subtle: rgb(var(--vr-fg-rgb) / 0.12);
+  --vr-border-input: rgb(var(--vr-fg-rgb) / 0.15);
+  --vr-border-button: rgb(var(--vr-fg-rgb) / 0.2);
+
+  /* ---- Accent --------------------------------------------------------------------- */
+  --vr-accent: rgb(var(--vr-accent-rgb));
+  --vr-accent-text: #9db8ff;
+  --vr-accent-wash: rgb(var(--vr-accent-rgb) / 0.08);
+  --vr-accent-fill: rgb(var(--vr-accent-rgb) / 0.22);
+  --vr-accent-edge: rgb(var(--vr-accent-rgb) / 0.5);
+
+  /* ---- Semantic state — separate from the accent, never used as decoration --------- */
+  --vr-good: #7dd87f;
+  --vr-warn: #ffcf8b;
+  --vr-danger: #ff9b9b;
+
+  /* ---- Overlay -------------------------------------------------------------------- */
+  --vr-overlay: rgb(8 9 13 / 0.7);
+
+  /* ---- Radii, spacing ------------------------------------------------------------- */
+  --vr-radius-sm: 6px;
+  --vr-radius-md: 10px;
+  --vr-radius-lg: 16px;
+  --vr-space-1: 4px;
+  --vr-space-2: 8px;
+  --vr-space-3: 12px;
+  --vr-space-4: 18px;
+  --vr-space-5: 26px;
+
+  /* ---- Elevation ------------------------------------------------------------------ */
+  --vr-elev-1: 0 2px 8px -4px rgb(0 0 0 / 0.5);
+  --vr-elev-2: 0 8px 22px -10px rgb(0 0 0 / 0.6);
+  --vr-elev-3: 0 24px 60px -30px rgb(0 0 0 / 0.7);
+
+  /* ---- Type ----------------------------------------------------------------------- */
+  --vr-font-ui: system-ui, sans-serif;
+  --vr-font-read: Georgia, "Iowan Old Style", serif;
+  --vr-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ---- Motion ---------------------------------------------------------------------
+   * Springs as `linear()`: a real spring curve baked into a static easing function. This is
+   * what buys "physics feel with slight overshoot" for zero bytes and no animation library —
+   * the alternative (Framer Motion) needs <motion.div> wrappers, i.e. structural edits at
+   * every animated site, and would reintroduce the per-frame re-render BloomTransition exists
+   * to avoid. */
+  --vr-dur-1: 150ms;
+  --vr-dur-2: 240ms;
+  --vr-dur-3: 340ms;
+  --vr-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --vr-spring: linear(
+    0, 0.009 1.4%, 0.036 2.9%, 0.081 4.4%, 0.144 6%, 0.317 9.4%, 0.557 13.2%, 0.868 17.6%,
+    1.019 20.4%, 1.104 23%, 1.13 24.6%, 1.13 26.5%, 1.106 28.6%, 1.024 33.3%, 0.995 36.5%,
+    0.988 40%, 0.996 46%, 1.002 55%, 1
+  );
+  --vr-spring-snap: linear(
+    0, 0.043 2.7%, 0.17 5.6%, 0.534 11.4%, 0.818 16.2%, 0.93 19%, 1.01 22.4%, 1.043 25.5%,
+    1.045 29%, 1.017 35.6%, 0.999 43%, 1
+  );
+
+  /* ---- Layout ---------------------------------------------------------------------
+   * The app carried five height constants that each measured against a DIFFERENT reference:
+   * calc(100vh - 188px), - 72px, - 96px, - 120px, calc(100dvh - 120px). Naming them is the
+   * first step to collapsing them onto the one measured value, --vr-view-h, which the
+   * ResizeObserver in App.tsx publishes from the real content box. */
+  --vr-measure: 640px;          /* the prose column — correct for reading, never widened */
+  --vr-reader-max: 1400px;
+  --vr-art-min: 320px;
+  --vr-art-max: 520px;
+  --vr-rail-w: 0px;             /* widened by a media query on large screens only */
+  --vr-dock-bar: 56px;
+  --vr-dock-peek: min(38vh, 320px);
+  --vr-dock-full: min(72vh, 720px);
+
+  /* ---- Stacking -------------------------------------------------------------------- */
+  --vr-z-sticky: 5;
+  --vr-z-overlay: 60;
+  --vr-z-modal: 100;
+  --vr-z-toast: 120;
+}

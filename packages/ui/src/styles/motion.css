@@ -1,0 +1,114 @@
+/**
+ * MOTION — keyframes and the global reduced-motion contract.
+ *
+ * All easing/duration values live in tokens.css; this file holds the animations themselves.
+ * No animation library: springs are `linear()` easings (see tokens.css) applied with plain
+ * CSS transitions, which is why this whole system costs zero bytes of dependency.
+ */
+
+/* The one animation the app already had, moved here from App.tsx's injected KEYFRAMES string.
+ * It is DEFINED in App.tsx today but CONSUMED in packages/ui (ImagePanel), with a third copy
+ * in the extension — a cross-package implicit dependency that this file finally resolves. */
+@keyframes vr-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Panel / list entrance. Paired with the spring easing so it settles rather than stopping. */
+@keyframes vr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* An illustration ARRIVING — the payoff moment of the whole app, so it gets the theatrical
+ * treatment. Deliberately NOT part of BloomTransition: that component's `target` is a
+ * continuous scroll-proximity value and it keeps doing that separate job untouched. */
+@keyframes vr-arrive {
+  from {
+    opacity: 0;
+    filter: blur(20px);
+    transform: scale(1.045);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: scale(1);
+  }
+}
+
+@keyframes vr-sheen {
+  from {
+    transform: translateX(-120%);
+    opacity: 0.9;
+  }
+  to {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+}
+
+/* Touch's answer to the cursor glow. A finger cannot hover, and TRACKING one means competing
+ * with the browser for the scroll gesture — which you lose. So touch gets its own gesture:
+ * tap, and the light blooms from the touch point and plays itself out. */
+@keyframes vr-tap-glow {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+
+@keyframes vr-tap-lift {
+  0% {
+    transform: none;
+  }
+  28% {
+    transform: translateY(-4px);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+/**
+ * REDUCED MOTION — belt and braces.
+ *
+ * The token override handles well-behaved CSS; the sweep catches anything that set its own
+ * duration inline. 1ms rather than 0 so `transitionend` / `animationend` listeners still fire
+ * (several components rely on them to clean up a class).
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --vr-dur-1: 1ms;
+    --vr-dur-2: 1ms;
+    --vr-dur-3: 1ms;
+    --vr-spring: linear(0, 1);
+    --vr-spring-snap: linear(0, 1);
+  }
+
+  .vr-app *,
+  .vr-app *::before,
+  .vr-app *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
