@@ -113,6 +113,10 @@ export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute 
       return "order-review";
     case "tv_chart":
       return "tv-chart";
+    // Same gate as run_command: driving a page is as much a reach into the reader's machine as a
+    // shell command is, and it is reached from the same place — a browser THIS tool chain started.
+    case "browser_eval":
+      return f.allowCommands && f.autonomousWorkspace ? "host" : "ask";
     case "delegate":
       return "delegate";
     case "write_file":

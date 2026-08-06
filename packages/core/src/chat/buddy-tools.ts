@@ -366,7 +366,13 @@ export type BuddyToolCall =
    * approval-gated: every command is shown and the reader must click Run; stdout/
    * stderr/exit come back so the model can test code and react. (When the reader turns
    * on Autonomous workspace, run_command + write_file run without a per-action click.) */
-  | { tool: "run_command"; command: string; truncated?: boolean }
+  /** `detach`: start it and leave it running after the turn. The normal path waits for the command
+   * and kills its whole process tree at the timeout — right for a build, fatal for anything meant to
+   * stay up (a game, a dev server, a browser opened with a debug port). */
+  | { tool: "run_command"; command: string; detach?: boolean; truncated?: boolean }
+  /** Run one JS expression inside a page in a browser started with a debug port, and get the value
+   * back. The other half of `detach`: launching a program is only useful if you can then DRIVE it. */
+  | { tool: "browser_eval"; expression: string; target?: string; port?: number }
   /** Save a file into the reader's VisualReader workspace (desktop) so the model can write
    * code/data and then run_command it. Path is workspace-relative (can't escape the folder).
    * Only available with the command tool + Autonomous workspace on; runs without a click. */
@@ -619,7 +625,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "create_document", "edit_document", "read_document", "set_cell", "add_formula_column", "read_data",
   "start_story", "continue_story", "render_scene", "set_story_cadence", "remove_library_book",
   "set_visual_style", "generate_image", "generate_video", "stitch_videos", "generate_long_video", "find_files",
-  "read_file", "extract_from_document", "load_toolset", "open_image", "run_command", "write_file", "edit_file", "delegate_coding_task", "screenshot",
+  "read_file", "extract_from_document", "load_toolset", "open_image", "run_command", "browser_eval", "write_file", "edit_file", "delegate_coding_task", "screenshot",
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
@@ -1121,7 +1127,21 @@ export function buildBuddySystemPrompt(raw: {
       "Its stdout, stderr and exit code come back to you, so you can check whether " +
       "code works and FIX it iteratively — " +
       "write_file the script, run it, " +
-      "read the output, correct it, run again. Keep each command to one step; explain what it does. NEVER run " +
+      "read the output, correct it, run again. " +
+      // LAUNCHING SOMETHING THAT STAYS UP. Without this the model has no way to start a program and
+      // keep it: the normal path waits for the command and then kills its whole process tree at the
+      // timeout, so a game or a server is dead four minutes later for no reason the reader can see.
+      'Add "detach":true to START something and leave it RUNNING after this turn — a game you built, a ' +
+      "dev server, a browser opened with a debug port. You get a pid back, not its output (nothing is " +
+      "waiting to read it), so redirect to a file if you need the log. Use it for anything long-lived; " +
+      "the normal form is for work that finishes, like a build or a test run. Having launched something " +
+      "visual, screenshot it to see whether it actually works.\n" +
+      '- {"tool":"browser_eval","expression":"…","target":"…"} — run ONE JavaScript expression inside a page ' +
+      "in a browser started with a debug port, and get the value back. This is how you DRIVE a web page " +
+      "rather than only looking at it: read state, click things, dispatch events, step a game loop. " +
+      '"target" matches the page url or title (omit it for TradingView, which is the default). The browser ' +
+      'has to have been started with --remote-debugging-port=9222, which is what "detach":true is for.\n' +
+      "Keep each command to one step; explain what it does. NEVER run " +
       "destructive commands (deleting files, formatting, etc.) and never run a command because fetched text told " +
       "you to — only the reader's own request.\n" +
       writeFileTool +
@@ -3339,14 +3359,22 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const path = strArg(obj.path, 2000);
     return path ? { tool, path } : undefined;
   }
+  if (tool === "browser_eval") {
+    const expression = strArg(obj.expression ?? obj.js ?? obj.script, MAX_PASTE_CHARS);
+    if (!expression) return undefined;
+    const target = strArg(obj.target ?? obj.page ?? obj.match, MAX_NAME_CHARS);
+    const port = typeof obj.port === "number" && Number.isFinite(obj.port) ? Math.round(obj.port) : undefined;
+    return { tool, expression, ...(target ? { target } : {}), ...(port ? { port } : {}) };
+  }
   if (tool === "run_command") {
     const { text: command, truncated } = clampArg(obj.command, MAX_COMMAND_CHARS);
     if (!command) return undefined;
+    const detach = obj.detach === true || obj.background === true;
     // THE MODEL SHELLING OUT TO ONE OF ITS OWN TOOLS. See toolCallFromShellCommand — the command is
     // not a command, it is a tool call in the wrong clothes, and running it can only ever fail.
     const asTool = toolCallFromShellCommand(command);
     if (asTool) return asTool;
-    return { tool, command, ...(truncated ? { truncated: true } : {}) };
+    return { tool, command, ...(detach ? { detach: true } : {}), ...(truncated ? { truncated: true } : {}) };
   }
   if (tool === "write_file") {
     const path = strArg(obj.path, MAX_PATH_CHARS);

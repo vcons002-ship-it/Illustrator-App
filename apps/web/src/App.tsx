@@ -4120,6 +4120,31 @@ export function App() {
       ],
     });
   };
+  /**
+   * Run one JS expression inside a page on the debug port — the general form of the TradingView
+   * bridge, which was only ever TradingView-specific in which target it picked.
+   *
+   * This is the half that makes a launched program controllable rather than merely visible:
+   * screenshot lets the model LOOK at a running page, and this lets it read state, click things and
+   * dispatch events. Paired with run_command's `detach`, which is what gets a browser up on the
+   * debug port in the first place and keeps it there.
+   */
+  const runBrowserEval = async (call: Extract<BuddyToolCall, { tool: "browser_eval" }>, modelTurns: ChatTurn[]): Promise<void> => {
+    const r = await tvBridgeEval(call.expression, call.port, call.target ?? "");
+    appendBuddy({
+      role: "tool",
+      text: r.ok ? `🌐 ${r.value ?? "done"}` : `⚠ Browser bridge: ${r.error ?? "failed"}`,
+      turns: [
+        ...modelTurns,
+        {
+          role: "user",
+          content: r.ok
+            ? `[browser_eval ok: ${r.value ?? "done"}]`
+            : `[browser_eval failed: ${r.error}] The page must be open in a browser started with --remote-debugging-port — run_command with "detach":true is how to start one. Don't retry the same expression without fixing that.`,
+        },
+      ],
+    });
+  };
   const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const clientId = settings.keys?.schwabClientId;
     if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
@@ -5186,6 +5211,9 @@ export function App() {
         settings.keys?.github || undefined,
         buddyWorkingDir || undefined,
         settings.commandShell,
+        // Start it and leave it running — for anything meant to stay up, which the waiting path
+        // would hold the turn for and then kill at the deadline.
+        call.detach,
       );
     } catch (err) {
       // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
@@ -5943,6 +5971,7 @@ export function App() {
     else if (call.tool === "edit_file") void runEditFile(call);
     else if (call.tool === "delegate_coding_task") void runDelegateCodingTask(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
+    else if (call.tool === "browser_eval") void runBrowserEval(call, pendingBuddyTranscript.current);
     else if (call.tool === "set_cell" || call.tool === "add_formula_column" || call.tool === "read_data") {
       void runBuddyDataTool(call);
     }

@@ -854,6 +854,42 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {/* Driving a page is as much a reach into the reader's machine as a shell command, and it
+            shares run_command's gate — so it needs its own approval card. Without one the pending
+            tool would sit there with nothing rendered and no way to approve it: a silent hang. */}
+        {props.pendingTool?.tool === "browser_eval" && (
+          <div style={{ ...approvalStyle, borderColor: "rgba(120,180,255,0.6)", background: "rgba(120,180,255,0.08)" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              🌐 Run this in the open page{props.pendingTool.target ? ` (${props.pendingTool.target})` : ""}?
+              <code
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.3)",
+                  fontFamily: "ui-monospace, Menlo, monospace",
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {props.pendingTool.expression}
+              </code>
+              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                Runs JavaScript inside a page in a browser you started with a debug port. Read it before approving.
+              </span>
+            </div>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button style={smallButtonStyle} onClick={props.onApprovePendingTool}>
+                Run it
+              </button>
+              <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                No
+              </button>
+            </span>
+          </div>
+        )}
         {props.pendingTool?.tool === "run_command" && (
           <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>

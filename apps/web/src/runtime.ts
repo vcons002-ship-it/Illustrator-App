@@ -417,6 +417,10 @@ export function runCommand(
   githubToken?: string,
   cwd?: string,
   shell?: "cmd" | "powershell",
+  /** Start it and return immediately, leaving it running after the turn — see the Rust side. For
+   * anything meant to STAY UP (a game, a dev server, a browser with a debug port), which the normal
+   * path would hold the turn for and then kill at the deadline. */
+  detach?: boolean,
 ): Promise<CommandResult> {
   return invoke<CommandResult>("run_command", {
     command,
@@ -424,6 +428,7 @@ export function runCommand(
     ...(cwd ? { cwd } : {}),
     // Windows only: "powershell" runs the command via PowerShell instead of cmd /C.
     ...(shell ? { shell } : {}),
+    ...(detach ? { detach: true } : {}),
   });
 }
 
@@ -753,10 +758,22 @@ export function googleOauthLoopback(args: {
  * TradingView Desktop chart via its Chrome DevTools port and return the JSON value.
  * Inert (reports unavailable) on the web and on older desktop builds. See MARKETS-BRIDGE.md.
  */
-export async function tvBridgeEval(expression: string, port?: number): Promise<{ ok: boolean; value?: string; error?: string }> {
-  if (!isDesktop) return { ok: false, error: "The TradingView bridge needs the desktop app." };
+export async function tvBridgeEval(
+  expression: string,
+  port?: number,
+  /** Which page to drive (url/title substring). Omitted ⇒ TradingView, so the markets bridge is
+   * unchanged; pass one to drive any other page on the debug port. */
+  target?: string,
+): Promise<{ ok: boolean; value?: string; error?: string }> {
+  if (!isDesktop) return { ok: false, error: "The browser bridge needs the desktop app." };
   try {
-    return await invoke<{ ok: boolean; value?: string; error?: string }>("tv_cdp_eval", { request: { expression, ...(port ? { port } : {}) } });
+    return await invoke<{ ok: boolean; value?: string; error?: string }>("tv_cdp_eval", {
+      // `target !== undefined`, NOT truthiness: an EMPTY target means "the first page on the port",
+      // which is what driving a browser you just opened means. Dropped as falsy it would be absent
+      // instead, and absent means TradingView — so browser_eval with no target would have quietly
+      // driven a chart rather than the page in front of the reader.
+      request: { expression, ...(port ? { port } : {}), ...(target !== undefined ? { target } : {}) },
+    });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "TradingView bridge backend unavailable (rebuild the desktop app)." };
   }

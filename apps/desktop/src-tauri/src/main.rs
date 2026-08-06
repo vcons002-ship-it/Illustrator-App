@@ -1110,6 +1110,14 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
 struct TvCdpRequest {
     port: Option<u16>,
     expression: String,
+    /// Which page to drive, matched case-insensitively against the target's url or title. Absent ⇒
+    /// "tradingview", so the markets bridge keeps working unchanged.
+    ///
+    /// This was the ONLY TradingView-specific thing about this bridge. The discovery, the websocket
+    /// and the `Runtime.evaluate` underneath are plain CDP and drive any page equally well — so a
+    /// browser started with a debug port (run_command with detach:true) can be driven the same way,
+    /// which is real control over a web page rather than only being able to look at it.
+    target: Option<String>,
 }
 #[derive(serde::Serialize)]
 struct TvCdpResult {
@@ -1265,7 +1273,8 @@ async fn tv_launch(request: TvLaunchRequest) -> Result<TvLaunchResult, String> {
 
 fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
     let port = req.port.unwrap_or(9222);
-    // Discover the TradingView page target (HTTP), then evaluate over its websocket.
+    let want = req.target.unwrap_or_else(|| "tradingview".to_string()).to_lowercase();
+    // Discover the page target (HTTP), then evaluate over its websocket.
     let list_url = format!("http://127.0.0.1:{port}/json/list");
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -1274,7 +1283,7 @@ fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
     let targets: serde_json::Value = client
         .get(&list_url)
         .send()
-        .map_err(|_| "TradingView Desktop isn't reachable on the debug port. Launch it with --remote-debugging-port=9222 (see MARKETS-BRIDGE.md).".to_string())?
+        .map_err(|_| format!("Nothing is answering the debug port ({port}). Start the browser (or TradingView Desktop) with --remote-debugging-port={port} first — run_command with \"detach\":true is how, since it has to stay running. For TradingView see MARKETS-BRIDGE.md."))?
         .json()
         .map_err(|e| e.to_string())?;
     let ws_url = targets
@@ -1282,12 +1291,15 @@ fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
         .and_then(|arr| {
             arr.iter().find(|t| {
                 t["type"] == "page"
-                    && (t["url"].as_str().unwrap_or("").to_lowercase().contains("tradingview")
-                        || t["title"].as_str().unwrap_or("").to_lowercase().contains("tradingview"))
+                    // An empty match takes the first page, which is what "drive whatever I just
+                    // opened" means when there is only one.
+                    && (want.is_empty()
+                        || t["url"].as_str().unwrap_or("").to_lowercase().contains(&want)
+                        || t["title"].as_str().unwrap_or("").to_lowercase().contains(&want))
             })
         })
         .and_then(|t| t["webSocketDebuggerUrl"].as_str())
-        .ok_or_else(|| "Couldn't find a TradingView page on the debug port (is a chart open?).".to_string())?
+        .ok_or_else(|| format!("No open page on port {port} matches “{want}”. Check that page is open, or widen the match."))?
         .to_string();
     let (mut socket, _) = tungstenite::connect(&ws_url).map_err(|e| e.to_string())?;
     let msg = serde_json::json!({
@@ -2646,6 +2658,7 @@ async fn run_command(
     github_token: Option<String>,
     cwd: Option<String>,
     shell: Option<String>,
+    detach: Option<bool>,
 ) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // The session's chosen working folder when it's a real, APPROVED directory (see
@@ -2689,6 +2702,34 @@ async fn run_command(
         if let Some(token) = github_token.filter(|t| !t.is_empty()) {
             cmd.env("GH_TOKEN", &token);
             cmd.env("GITHUB_TOKEN", &token);
+        }
+        // DETACHED: start it and walk away.
+        //
+        // Everything below WAITS for the child and then kills its whole tree at the deadline, which
+        // is right for a build or a test run and exactly wrong for anything meant to STAY UP — a
+        // game, a dev server, a browser opened with a debug port. Launched normally those hold the
+        // turn for four minutes and are then reaped by kill_tree, so the reader watches the program
+        // they asked for die for no reason they can see.
+        //
+        // stdio is NULL rather than piped: nothing will drain those pipes once this returns, and a
+        // child that fills its stdout buffer blocks for ever. Losing the output is the point — a
+        // detached process is one whose output nobody is waiting for. Anything worth reading later
+        // should be redirected to a file by the command itself.
+        if detach.unwrap_or(false) {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+            let child = cmd.spawn().map_err(|e| format!("Couldn't start the command: {e}"))?;
+            let pid = child.id();
+            // Deliberately NOT tracked for kill_tree: outliving the turn is the whole feature. It is
+            // the reader's process now, exactly as if they had started it from their own terminal.
+            return Ok(CommandResult {
+                stdout: format!(
+                    "Started in the background (pid {pid}). It keeps running after this turn, and its output is not captured."
+                ),
+                stderr: String::new(),
+                code: 0,
+                timed_out: false,
+                cwd: dir.to_string_lossy().into_owned(),
+            });
         }
         let mut child = cmd.spawn().map_err(|e| format!("Couldn't start the command: {e}"))?;
 

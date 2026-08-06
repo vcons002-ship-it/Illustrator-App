@@ -3125,3 +3125,45 @@ describe("roundThinkingRecap — reasoning carried between rounds of ONE turn", 
     expect(roundThinkingRecap("   ")).toBe("");
   });
 });
+
+describe("launching something that stays up, and driving it", () => {
+  it("run_command takes detach, and defaults to the waiting form", () => {
+    // Without this there is no way to start a program and KEEP it: the normal path waits for the
+    // child and then kills its whole process tree at the deadline, so a game or a dev server is dead
+    // four minutes later for no reason the reader can see.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "npm run dev", detach: true }))).toEqual({
+      tool: "run_command",
+      command: "npm run dev",
+      detach: true,
+    });
+    // `background` is the other word a model reaches for.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "x", background: true }))).toMatchObject({ detach: true });
+    // A build or a test run is the common case and must stay the default — its output is the point.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "pytest -q" }))).toEqual({
+      tool: "run_command",
+      command: "pytest -q",
+    });
+  });
+
+  it("browser_eval drives a page, with the target optional", () => {
+    // The half that makes a launched program controllable rather than merely visible: screenshot
+    // lets the model LOOK at a page, this lets it read state and dispatch events.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "browser_eval", expression: "document.title", target: "game" }))).toEqual({
+      tool: "browser_eval",
+      expression: "document.title",
+      target: "game",
+    });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "browser_eval", js: "1+1" }))).toEqual({ tool: "browser_eval", expression: "1+1" });
+    // No expression is not a call.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "browser_eval" }))).toBeUndefined();
+  });
+
+  it("gates driving a page exactly like running a command", () => {
+    // Reaching into a page on the reader's machine is the same class of act as a shell command, and
+    // is reached from a browser this tool chain started — so it must not be cheaper to reach for.
+    const flags = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: true, autonomousWorkspace: false };
+    expect(routePendingTool("browser_eval", flags)).toBe("ask");
+    expect(routePendingTool("browser_eval", { ...flags, autonomousWorkspace: true })).toBe("host");
+    expect(routePendingTool("browser_eval", { ...flags, allowCommands: false, autonomousWorkspace: true })).toBe("ask");
+  });
+});
