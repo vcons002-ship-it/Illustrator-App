@@ -12863,7 +12863,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     background: t.surface.base,
     color: t.text.base,
-    fontFamily: "Georgia, 'Iowan Old Style', serif",
+    // THE UI FONT, not the reading font. This line used to say Georgia serif, and because it sits on
+    // the shell every button, pill, menu and message inherited it — the whole app rendered in a book
+    // face. It also made base.css's `.vr-app { font-family: … }` dead, since an inline style always
+    // beats a class rule. The reading serif now lives on the prose itself (paragraph, chapterHeading,
+    // readerDocInner, .vr-article-html), which is the only place it was ever meant to be.
+    fontFamily: t.font.ui,
   },
   // The middle region between header and bottom dock — this is what scrolls. `minHeight: 0` is
   // required so the flex child can shrink below its content height and actually scroll.
@@ -13107,7 +13112,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "center",
   },
-  readerDocInner: { width: "100%", maxWidth: 760 },
+  // Document and article views are prose too; the plain-text <pre> below overrides back to mono.
+  readerDocInner: { width: "100%", maxWidth: 760, fontFamily: t.font.read },
   readerPlainText: {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
@@ -13192,7 +13198,10 @@ const styles: Record<string, React.CSSProperties> = {
     paddingLeft: 16,
     marginLeft: -18,
   },
+  // The four styles below carry the reading serif explicitly. They used to inherit it from the shell;
+  // now that the shell is the UI font, prose has to ask for the book face by name or it turns sans.
   chapterHeading: {
+    fontFamily: t.font.read,
     fontSize: 26,
     fontWeight: 700,
     margin: "44px 0 20px",
@@ -13216,7 +13225,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: t.fill.strong,
     fontFamily: "system-ui, sans-serif",
   },
-  paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
+  paragraph: { fontFamily: t.font.read, fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
   codeBlock: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     fontSize: 14,
