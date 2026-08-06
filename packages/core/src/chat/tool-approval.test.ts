@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedInCreativeIdle, routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
+import { allowedInCreativeIdle, isLiveControlTool, routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
 
 const OFF: ToolAutoFlags = {
   fileAccessGranted: false,
@@ -7,7 +7,7 @@ const OFF: ToolAutoFlags = {
   autonomousFileSearch: false,
   fullAutonomy: false,
   allowCommands: false,
-  autonomousWorkspace: false,
+  autonomousWorkspace: false, liveControl: false,
 };
 
 describe("routePendingTool", () => {
@@ -33,13 +33,13 @@ describe("routePendingTool", () => {
     expect(routePendingTool("generate_image", { ...OFF, fullAutonomy: true })).toBe("image");
     expect(routePendingTool("generate_video", { ...OFF, fullAutonomy: true })).toBe("video");
     expect(routePendingTool("generate_long_video", { ...OFF, fullAutonomy: true })).toBe("long-video");
-    expect(routePendingTool("generate_image", { ...OFF, autonomousWorkspace: true, allowCommands: true })).toBe("ask");
+    expect(routePendingTool("generate_image", { ...OFF, autonomousWorkspace: true, liveControl: false, allowCommands: true })).toBe("ask");
   });
 
   it("run_command needs commands enabled AND the autonomous workspace — full autonomy alone never reaches it", () => {
-    expect(routePendingTool("run_command", { ...OFF, allowCommands: true, autonomousWorkspace: true })).toBe("host");
+    expect(routePendingTool("run_command", { ...OFF, allowCommands: true, autonomousWorkspace: true, liveControl: false })).toBe("host");
     expect(routePendingTool("run_command", { ...OFF, allowCommands: true })).toBe("ask");
-    expect(routePendingTool("run_command", { ...OFF, autonomousWorkspace: true })).toBe("ask");
+    expect(routePendingTool("run_command", { ...OFF, autonomousWorkspace: true, liveControl: false })).toBe("ask");
     // The hard danger floor: fullAutonomy must NOT unlock shell commands.
     expect(routePendingTool("run_command", { ...OFF, fullAutonomy: true })).toBe("ask");
   });
@@ -64,7 +64,7 @@ describe("routePendingTool", () => {
         autonomousFileSearch: true,
         fullAutonomy: true,
         allowCommands: true,
-        autonomousWorkspace: true,
+        autonomousWorkspace: true, liveControl: false,
       }),
     ).toBe("order-review");
   });
@@ -137,5 +137,40 @@ describe("creative idle: the memory tools are judged per CALL, not per name", ()
     // Noting what it explored (reader-memory, additive) stays fine.
     expect(allowedInCreativeIdle({ tool: "remember" })).toBe(true);
     expect(allowedInCreativeIdle({ tool: "remember", about: "reader" })).toBe(true);
+  });
+});
+
+describe("live control", () => {
+  const LIVE: ToolAutoFlags = { ...OFF, liveControl: true };
+
+  it("runs the loop's own tools without a click — an approval card per look makes a loop impossible", () => {
+    expect(routePendingTool("control_ui", LIVE)).toBe("host");
+    expect(routePendingTool("screenshot", LIVE)).toBe("host");
+  });
+
+  it("does NOT open the shell — clicking buttons is not consent to run commands", () => {
+    // The whole reason control_ui is safe to auto-run is that the app writes the script; run_command
+    // is the model writing it, and it keeps its own gate.
+    expect(routePendingTool("run_command", LIVE)).toBe("ask");
+    expect(routePendingTool("browser_eval", LIVE)).toBe("ask");
+    expect(routePendingTool("send_email", LIVE)).toBe("ask");
+    expect(routePendingTool("generate_image", LIVE)).toBe("ask");
+  });
+
+  it("control_ui still asks when live control is off, even under full autonomy", () => {
+    expect(routePendingTool("control_ui", OFF)).toBe("ask");
+    expect(routePendingTool("control_ui", { ...OFF, fullAutonomy: true })).toBe("ask");
+    // ...but the shell's own gate reaches it, since that is the same reach into the machine.
+    expect(routePendingTool("control_ui", { ...OFF, allowCommands: true, autonomousWorkspace: true })).toBe("host");
+  });
+});
+
+describe("isLiveControlTool", () => {
+  it("counts the loop's tools and nothing else", () => {
+    expect(isLiveControlTool({ tool: "control_ui" })).toBe(true);
+    expect(isLiveControlTool({ tool: "screenshot" })).toBe(true);
+    // A run that happened to search the web once must not look closer to its limit than it is.
+    expect(isLiveControlTool({ tool: "search_web" })).toBe(false);
+    expect(isLiveControlTool({ tool: "run_command" })).toBe(false);
   });
 });

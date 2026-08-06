@@ -143,7 +143,10 @@ export type MainToWorker =
     }
   /** Ask the chat's vision model to describe a captured screenshot (answered by
    * `imageAssessed`). Bytes travel zero-copy. */
-  | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string }
+  // `locate` asks the vision pass WHERE something is (pixel coordinates) instead of what it sees —
+  // the bottom rung of the targeting ladder. It replaces the whole prompt, so it can't just be a
+  // differently-worded `question`: the describe wrapper would bury the "reply with only JSON" rule.
+  | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string; locate?: string }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   // `refImages` — pictures the reader ATTACHED to this turn, carried so a generate_image in the same
   // turn can be conditioned on them ("here's a photo, now draw X from it"). Until this existed an

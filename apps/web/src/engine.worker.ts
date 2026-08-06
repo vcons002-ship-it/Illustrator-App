@@ -81,6 +81,8 @@ import {
   loadMemory,
   loadSkills,
   withBuiltinSkills,
+  locatePrompt,
+  pngSize,
   loadSoul,
   loadSoulName,
   loadSoulImages,
@@ -614,6 +616,7 @@ async function handleAssessImage(
   requestId: number,
   image: { bytes: ArrayBuffer; mimeType: string },
   question?: string,
+  locate?: string,
 ): Promise<void> {
   try {
     const { llm } = chatProviders();
@@ -623,12 +626,17 @@ async function handleAssessImage(
           "model (Ollama llama3.2-vision / llava, or LM Studio) — set the chat text provider in Settings.",
       );
     }
-    const prompt =
-      "You are looking at a screenshot of the reader's computer screen. " +
-      (question
-        ? `Answer this specifically and concisely: ${question}`
-        : "Describe what's on screen and whether anything looks broken or like an error.") +
-      " Be concrete about what you can and cannot see.";
+    // LOCATING REPLACES THE PROMPT rather than extending it. The describe wrapper ends with "be
+    // concrete about what you can and cannot see" — the opposite of what a coordinate answer needs,
+    // which must be JSON and nothing else or there is nothing to click with. The frame those pixels
+    // are measured in comes from the PNG's own header, since the capture never carried its size.
+    const prompt = locate
+      ? locatePrompt(locate, pngSize(image.bytes))
+      : "You are looking at a screenshot of the reader's computer screen. " +
+        (question
+          ? `Answer this specifically and concisely: ${question}`
+          : "Describe what's on screen and whether anything looks broken or like an error.") +
+        " Be concrete about what you can and cannot see.";
     const text = await withChatPriority(llm.id, () =>
       llm.describeImage({ bytes: image.bytes, mimeType: image.mimeType, prompt }),
     );
@@ -2022,7 +2030,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage, msg.keepResident);
       break;
     case "assessImage":
-      void handleAssessImage(msg.requestId, msg.image, msg.question);
+      void handleAssessImage(msg.requestId, msg.image, msg.question, msg.locate);
       break;
     case "buddySendEmail":
       void handleSendEmail(msg.requestId, msg.call);
@@ -5649,6 +5657,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "write_file" ||
         slash.call.tool === "edit_file" ||
         slash.call.tool === "screenshot" ||
+        slash.call.tool === "control_ui" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
         slash.call.tool === "tv_chart" ||
@@ -5838,6 +5847,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && settings?.allowCommands && settings?.autonomousWorkspace
           ? { canAutonomousWorkspace: true }
           : {}),
+        // LIVE CONTROL: the observe/act/verify block + the targeting ladder. Same gate as the shell
+        // (desktop + allowCommands) because control_ui reaches the machine the same way, plus its own
+        // toggle — this changes how the assistant works, so it is never on by inference.
+        ...(corsProxyAvailable && settings?.allowCommands && settings?.liveControl ? { liveControl: true } : {}),
         // External coding agent (Aider) delegation: opt-in + commands. The host's runtime PATH check
         // surfaces a clear "install Aider" message if the tool is used when it isn't installed.
         ...(corsProxyAvailable && settings?.allowCommands && settings?.delegateCoding
@@ -6014,6 +6027,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
       // many API calls unattended; local/free models run to the backstop (no pauseEvery).
+      // Live control overrides the cloud "keep going?" checkpoint inside runBuddyTurn: a pause every
+      // few rounds is exactly the interruption the mode exists to remove.
+      ...(settings?.allowCommands && settings?.liveControl ? { liveControl: true } : {}),
       ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
       // NATIVE TOOL CALLING for a local server (Ollama): hand a tool-capable model the schemas so it
       // emits structured tool_calls instead of having to follow the text protocol — the reliable path

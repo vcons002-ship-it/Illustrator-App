@@ -22,6 +22,16 @@ export interface ToolAutoFlags {
   allowCommands: boolean;
   /** Settings: autonomous workspace — approved-folder commands run without a click. */
   autonomousWorkspace: boolean;
+  /**
+   * LIVE CONTROL is on: the assistant is driving the reader's machine continuously, so the tools it
+   * drives WITH run without a click.
+   *
+   * Deliberately narrow. It reaches control_ui and screenshot — looking at the screen and working a
+   * window's controls, which are the loop — and nothing else. It does NOT open run_command: a mode
+   * for clicking buttons is not consent to run arbitrary shell commands, and run_command keeps its
+   * own gate (`autonomousWorkspace`) exactly as before. A reader who wants both turns on both.
+   */
+  liveControl: boolean;
 }
 
 /** Where an incoming tool call routes. `ask` = suspend the turn and show the approval card. */
@@ -95,12 +105,30 @@ export function allowedInCreativeIdle(call: { tool: string; about?: string }): b
   return CREATIVE_IDLE_TOOLS.has(call.tool);
 }
 
+/**
+ * The tools a LIVE CONTROL run is made of — the ones its budget and repeat detector count. PURE.
+ *
+ * Deliberately just these two. The live loop is look → act → look, and counting anything else would
+ * make a run that happened to search the web once look closer to its limit than it is.
+ */
+export function isLiveControlTool(call: { tool: string }): boolean {
+  return call.tool === "control_ui" || call.tool === "screenshot";
+}
+
 export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute {
   switch (tool) {
     case "find_files":
       return f.fileAccessGranted || f.autonomousFileSearch || f.fullAutonomy ? "host" : "ask";
     case "screenshot":
-      return f.screenCaptureGranted || f.fullAutonomy ? "host" : "ask";
+      // Live control is a LOOK → act → look loop; an approval card on every look would make the
+      // loop impossible, and the reader who turned the mode on has already agreed to be watched.
+      return f.screenCaptureGranted || f.fullAutonomy || f.liveControl ? "host" : "ask";
+    case "control_ui":
+      // The mode's own tool. It runs through PowerShell like a command does, but what it can do is
+      // fixed by the app (list controls, click one, type into one) rather than chosen by the model —
+      // so it is gated on live control OR the shell's own gate, not on `fullAutonomy`, which never
+      // reaches anything that touches the machine.
+      return f.liveControl || (f.allowCommands && f.autonomousWorkspace) ? "host" : "ask";
     case "generate_image":
       return f.fullAutonomy ? "image" : "ask";
     case "generate_video":

@@ -39,74 +39,93 @@ it if they aren't in front of you. This is desktop only; on a phone there is no 
 
 const APP_CONTROL = `# Driving a program that is already running
 
-You can focus another application's window and send it real keystrokes and clicks. Nothing extra is
-installed — this is the operating system's own automation, reached through \`run_command\`.
+Work DOWN this ladder. Each rung is more reliable than the one below it, so never start lower than
+you have to.
 
-${PS_HOWTO}
+## 1. A real interface, if the program has one
 
-## Windows
+Word and Excel have a full API — see the \`office-documents\` skill, which beats everything below for
+those. Many programs have a command line, or read a file format you can simply write. A browser is
+driven with \`browser_eval\`, not with clicks. Ask "is there a real way in?" before reaching for the
+mouse. Usually there is.
 
-**Focus the window first.** Input goes wherever focus is, so this step is never optional:
+## 2. control_ui — the accessibility tree
 
-\`\`\`powershell
-$p = Get-Process | Where-Object { $_.MainWindowTitle -like "*Notepad*" } | Select-Object -First 1
-if (-not $p) { Write-Output "not running"; exit 1 }
-(New-Object -ComObject WScript.Shell).AppActivate($p.Id)
-Start-Sleep -Milliseconds 300
+Windows publishes every control in a window: its name, its type, whether it is enabled, and where it
+is. That is a real handle on the UI, not a picture of one.
+
+\`\`\`json
+{"tool":"control_ui","action":"windows"}
+{"tool":"control_ui","action":"controls","window":"Notepad"}
+{"tool":"control_ui","action":"click","window":"Notepad","target":"Save"}
+{"tool":"control_ui","action":"type","window":"Notepad","target":"Text Editor","text":"hello"}
+{"tool":"control_ui","action":"focus","window":"Calculator"}
 \`\`\`
 
-**Type text and press keys** with SendKeys. \`{ENTER}\` \`{TAB}\` \`{ESC}\` \`{F5}\` \`{UP}\` \`{DOWN}\`,
-\`^c\` is Ctrl+C, \`%{F4}\` is Alt+F4, \`+\` is Shift. A literal \`+ ^ % ~ ( ) { }\` must be braced
-(\`{+}\`):
+**Always list the controls before clicking.** The names it returns are the exact strings to pass back
+as \`target\`, and seeing them tells you what state the window is in — a dialog that opened shows up
+as new controls.
+
+**Click by name, never by coordinate.** A named click activates the control directly: it works on a
+window that isn't focused, it cannot miss, and it cannot hit whatever happens to be on top instead.
+
+Works for almost anything with a normal interface — Win32, WinForms, WPF, UWP, Electron, browsers.
+
+## 3. Vision, only when a window publishes nothing
+
+Some windows draw their own interface and have no tree to read: games, canvas apps, some custom
+software. \`controls\` comes back empty for those. Then, and only then:
+
+\`\`\`json
+{"tool":"screenshot","window":"My Game","locate":"the Start button"}
+{"tool":"control_ui","action":"click_point","x":640,"y":380}
+\`\`\`
+
+A coordinate read off a picture is a GUESS. Screenshot again afterwards to see whether it landed, and
+if the vision pass says it cannot find the thing, believe it — never click a made-up point.
+
+For a keyboard-driven program this rung is often unnecessary: focus the window and send keys.
 
 \`\`\`powershell
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait("Hello there{ENTER}")
+[System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
 \`\`\`
 
-**Move and click the mouse** through user32:
+\`{ENTER}\` \`{TAB}\` \`{ESC}\` \`{F5}\` \`{UP}\`; \`^c\` is Ctrl+C, \`%{F4}\` is Alt+F4, \`+\` is Shift; a
+literal \`+ ^ % ~ ( ) { }\` must be braced. Games reading raw input (most real ones) ignore SendKeys
+entirely — if nothing happens that is why, and say so rather than trying harder.
 
-\`\`\`powershell
-Add-Type -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-[DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, int i);
-'@ -Name U -Namespace W
-[W.U]::SetCursorPos(500, 400)
-[W.U]::mouse_event(0x02, 0, 0, 0, 0)   # left button down
-[W.U]::mouse_event(0x04, 0, 0, 0, 0)   # left button up
-\`\`\`
+${PS_HOWTO}
 
-**List what is open**, to find a window title or check something launched:
-\`Get-Process | Where-Object MainWindowTitle | Select-Object Id, ProcessName, MainWindowTitle\`
+## Starting a program
 
-**Start something and leave it up** with \`{"tool":"run_command","command":"…","detach":true}\` — the
-normal form is killed when it finishes or times out, which would take a game or a server down with it.
+\`{"tool":"run_command","command":"…","detach":true}\` starts something and LEAVES it running. The
+normal form is killed when it finishes or times out, which would take a game or a server down with
+it. You get a pid back, not output.
 
 ## macOS
 
-\`osascript\` does the same job and is usually cleaner:
+\`osascript\` covers rungs 2 and 3 together:
 
 \`\`\`bash
-osascript -e 'tell application "Preview" to activate' \\
-          -e 'tell application "System Events" to keystroke "s" using command down'
-osascript -e 'tell application "System Events" to key code 36'   # Return
+osascript -e 'tell application "Preview" to activate'
+osascript -e 'tell application "System Events" to keystroke "s" using command down'
 osascript -e 'tell application "System Events" to click at {500, 400}'
 \`\`\`
 
-Keystroke control needs Accessibility permission for the app sending them; if it silently does
+Keystroke control needs Accessibility permission for the app sending them. If it silently does
 nothing, that is why — tell the reader to grant it in System Settings → Privacy & Security.
 
 ## Rules that matter
 
-- **Look after you act.** These are blind: nothing tells you the click landed. Take a
-  \`screenshot\` (pass the \`window\` name) and check before sending more input.
-- **Small steps.** A long keystroke string that drifts out of the intended field keeps typing into
-  whatever is focused instead. Send a little, verify, continue.
-- **Say what you are about to drive, first.** You are moving the reader's real mouse and keyboard;
-  if they are using the machine, you will fight them for it.
-- **Prefer a real interface where one exists.** A CLI, a file format, or an API beats keystrokes
-  every time. For Word and Excel use the \`office-documents\` skill — far more reliable than typing
-  into the window.`;
+- **Look after you act.** \`control_ui\` reports that a click was DELIVERED, never that it did what
+  you wanted. Re-list the controls, or screenshot, before the next action.
+- **One action, then look.** Two actions off one observation is how a run ends up typing into a
+  dialog it never saw.
+- **Say what you are driving before you start.** This is the reader's real machine, and if they are
+  using it you will fight them for the keyboard.
+- **Stop and ask** when you cannot tell what state you are in, or when the next step looks
+  destructive. Stopping is cheap; a wrong click on someone's live document is not.`;
 
 const OFFICE_DOCUMENTS = `# Reading and editing Word / Excel — including the file open right now
 
@@ -256,7 +275,7 @@ export const BUILTIN_SKILLS: readonly Skill[] = [
   {
     name: "control-open-programs",
     description:
-      "Drive a program that's already running on the reader's machine — focus its window, send real keystrokes/clicks, then screenshot to check",
+      "Drive a program that's already running on the reader's machine — find its real controls by name and click or type into them, then check",
     body: APP_CONTROL,
     at: 0,
   },

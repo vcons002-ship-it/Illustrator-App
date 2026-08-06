@@ -18,6 +18,11 @@ import { formatQuote, sourceNote, type StockQuote } from "../providers/stocks.js
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
 import { formatMcpTools, type McpTool } from "./mcp.js";
+import {
+  formatUiAutomationResult,
+  type UiAction,
+  type UiAutomationResult,
+} from "./ui-automation.js";
 import { taskDossier, type TaskPlan } from "./tasks.js";
 import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
 import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
@@ -386,8 +391,16 @@ export type BuddyToolCall =
    * tool + an installed external agent + Ollama. */
   | { tool: "delegate_coding_task"; task: string; files?: string[]; verify?: string; truncated?: boolean }
   /** Capture the reader's SCREEN (or one window by title) and look at it with a
-   * vision model (desktop). The reader approves; the model gets a text observation. */
-  | { tool: "screenshot"; question?: string; window?: string }
+   * vision model (desktop). The reader approves; the model gets a text observation.
+   * `locate` asks the vision pass for the PIXEL COORDINATES of one thing instead of a
+   * description — the bottom rung of the targeting ladder, for windows that publish no
+   * accessibility tree (see ui-automation.ts). */
+  | { tool: "screenshot"; question?: string; window?: string; locate?: string }
+  /** Drive another program's UI through the Windows accessibility tree: list open windows,
+   * list a window's controls, click/type into one BY NAME, focus a window, or click a raw
+   * point. Deterministic where a screenshot is a guess — see ui-automation.ts. Desktop +
+   * commands enabled. */
+  | { tool: "control_ui"; action: UiAction; window?: string; target?: string; text?: string; x?: number; y?: number }
   /** Long-term reader memory (shared with the book chat — see reader-memory.ts), or one of
    * the two identity souls (see souls.ts): about:"self" = your own identity, about:"user" =
    * the reader's own character. Omitted/`"reader"` → reader memory. */
@@ -625,7 +638,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "create_document", "edit_document", "read_document", "set_cell", "add_formula_column", "read_data",
   "start_story", "continue_story", "render_scene", "set_story_cadence", "remove_library_book",
   "set_visual_style", "generate_image", "generate_video", "stitch_videos", "generate_long_video", "find_files",
-  "read_file", "extract_from_document", "load_toolset", "open_image", "run_command", "browser_eval", "write_file", "edit_file", "delegate_coding_task", "screenshot",
+  "read_file", "extract_from_document", "load_toolset", "open_image", "run_command", "browser_eval", "write_file", "edit_file", "delegate_coding_task", "screenshot", "control_ui",
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
   "read_email", "read_attachment", "draft_email", "list_drafts", "edit_draft", "send_email", "list_events",
   "create_event", "update_event", "list_tasks",
@@ -662,6 +675,51 @@ export const ALWAYS_GATED_TOOLS: ReadonlySet<BuddyToolCall["tool"]> = new Set([
  * never cuts a genuine task short, while still stopping a model that loops forever. On hitting it the
  * buddy posts a resumable progress summary (say "continue" to pick up), never a silent drop. */
 export const MAX_BUDDY_TOOL_ROUNDS = 50;
+
+/**
+ * The backstop for a LIVE CONTROL run — driving another program, where the whole point is to keep
+ * going until the job is done or the reader says stop.
+ *
+ * Much higher than the ordinary cap because the unit of work is tiny: focus a window, list its
+ * controls, click one, look, click the next. Fifty rounds is a couple of dialogs. It is still a
+ * BACKSTOP and not a budget — a run that reaches it has almost certainly lost the plot, and saying so
+ * is better than continuing to click.
+ */
+export const MAX_LIVE_CONTROL_ROUNDS = 300;
+
+/** How many IDENTICAL rounds in a row mean the run is stuck rather than being patient. */
+export const LIVE_REPEAT_LIMIT = 5;
+
+/**
+ * A stable fingerprint of what a round asked for — same tools, same arguments, same string. PURE.
+ *
+ * Used only to notice repetition. Key order is normalised because a model re-emitting the same call
+ * does not re-emit the keys in the same order, and a fingerprint that changed when it did would never
+ * match twice.
+ */
+export function roundSignature(calls: readonly BuddyToolCall[]): string {
+  return calls
+    .map((c) =>
+      JSON.stringify(
+        Object.fromEntries(Object.entries(c as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))),
+      ),
+    )
+    .join("|");
+}
+
+/**
+ * Has this run stopped making progress? PURE.
+ *
+ * A live run has no human watching each step, so the failure that matters is not a crash — it is a
+ * model clicking a control that is not there, reading the same error, and trying it again forever.
+ * Rounds that merely LOOK similar are fine (screenshot, screenshot, screenshot is how you wait for a
+ * dialog); it takes {@link LIVE_REPEAT_LIMIT} byte-identical rounds in a row to count as stuck.
+ */
+export function stuckOnRepeat(signatures: readonly string[], limit = LIVE_REPEAT_LIMIT): boolean {
+  if (signatures.length < limit) return false;
+  const tail = signatures.slice(-limit);
+  return tail[0] !== "" && tail.every((s) => s === tail[0]);
+}
 
 /** How often, mid-run, to remind the model to surface a progress chunk (see `progressNudge`). */
 export const TOOL_PROGRESS_EVERY = 6;
@@ -735,6 +793,24 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Opening ${host(call.url)}…`;
     case "calculate":
       return "Calculating…";
+    // NAME THE PROGRAM AND THE ACTION. This is the reader's only live view of something reaching out
+    // and touching their machine, and in live control mode it may be the only thing between them and
+    // a run they want to stop — "Working…" would be worse than useless there.
+    case "control_ui":
+      switch (call.action) {
+        case "windows":
+          return "Looking at what's open…";
+        case "controls":
+          return `Reading ${clip(call.window ?? "the window", 30)}'s controls…`;
+        case "focus":
+          return `Bringing ${clip(call.window ?? "a window", 30)} to the front…`;
+        case "type":
+          return `Typing into ${clip(call.target ?? "a field", 30)}…`;
+        case "click_point":
+          return `Clicking at ${call.x ?? 0},${call.y ?? 0}…`;
+        default:
+          return `Clicking “${clip(call.target ?? "", 30)}”…`;
+      }
     case "wolfram":
       return "Asking Wolfram|Alpha…";
     case "gmail_search":
@@ -826,6 +902,16 @@ export function isRetryableError(message: string): boolean {
 const MAX_QUERY_CHARS = 200;
 const MAX_URL_CHARS = 600;
 const MAX_TITLE_CHARS = 120;
+/** The control_ui verbs. A closed set, checked at parse time, because each one compiles to a DIFFERENT
+ * fixed script — an unknown verb has no script and must be rejected rather than silently doing a click. */
+const UI_ACTIONS: ReadonlySet<string> = new Set<UiAction>([
+  "windows",
+  "controls",
+  "click",
+  "type",
+  "focus",
+  "click_point",
+]);
 const MAX_ID_CHARS = 120;
 /** Image-generation prompts: natural-language models (Flux.2, Gemini, GPT-image) reward long,
  * detailed prompts, so give them real room — a 600-char cap visibly truncated both the render
@@ -948,6 +1034,10 @@ export function buildBuddySystemPrompt(raw: {
   /** Idle exploring is switched on: tell the model it HAS that freedom and where the results live, so
    * it can talk about them instead of being surprised by documents it doesn't remember writing. */
   hasCreativeChat?: boolean;
+  /** LIVE CONTROL is on for this turn: the assistant is driving the reader's machine continuously,
+   * so the prompt carries the observe/act/verify rhythm and the targeting ladder. Set by the host
+   * from the same toggle that arms the loop (see buddy-session's `liveControl`). */
+  liveControl?: boolean;
   /** Google is connected: advertise the Gmail/Calendar/Tasks tools. */
   canGoogle?: boolean;
   /** Schwab is connected: advertise the real quote / option-chain / positions tools. */
@@ -1155,7 +1245,23 @@ export function buildBuddySystemPrompt(raw: {
       "from the target window's title (e.g. the game/app name) to capture JUST that window even when it isn't focused — " +
       "best for a running game; omit it to capture the whole screen. If the window name is wrong the result lists the " +
       "open windows, so retry with one of those. The reader approves the first capture (and can allow the rest for the " +
-      "session).\n" +
+      'session). Add "locate":"the Save button" instead of "question" to get PIXEL COORDINATES back rather than a ' +
+      "description — only when control_ui found no controls, because a coordinate read off a picture is a guess and a " +
+      "control name is not.\n" +
+      // THE MIDDLE RUNG. Documented immediately after the screenshot so the ladder reads in order —
+      // and phrased as "instead of guessing from a picture", because the model's instinct is to
+      // screenshot and click, and the accessibility tree is strictly better wherever it exists.
+      '- {"tool":"control_ui","action":"controls","window":"Notepad"} — DRIVE a program that is already open, through ' +
+      "Windows' accessibility tree: real control names and exact positions, instead of guessing from a picture. " +
+      'Actions: "windows" (list what is open, no other field needed) → "controls" (list one window\'s buttons/fields/' +
+      'menus, each with a name and a position) → "click" (activate one: {"action":"click","window":"Notepad","target":' +
+      '"Save"}) or "type" ({"action":"type","window":"Notepad","target":"Text Editor","text":"hello"}); "focus" brings a ' +
+      'window to the front; "click_point" with "x"/"y" clicks raw coordinates — the LAST resort, for a window that ' +
+      "publishes no controls (a game, a canvas app). WORK BY NAME, not by coordinates: a named click activates the " +
+      "control directly, cannot miss, and works even when the window isn't focused. ALWAYS list the controls before " +
+      "clicking, and look (screenshot, or list again) after — a click that was DELIVERED is not a click that did what " +
+      "you wanted. If a program has a real API instead (Word/Excel over COM, a CLI), use that: it beats this. " +
+      "Windows only.\n" +
       "DATA ANALYSIS WITH CODE (pandas/numpy/matplotlib): for anything past simple aggregates — regressions, " +
       "correlations, joins, cleaning, time series, custom/statistical plots — write_file a .py script (read the data " +
       "with pandas, print the RESULTS, save any chart to a .png in the workspace) and run_command `python <script>.py` " +
@@ -1373,6 +1479,29 @@ export function buildBuddySystemPrompt(raw: {
       "reader talks to you, it's an ordinary conversation — ask them things, dig in, change your mind. " +
       "The limits that apply while you're exploring alone do NOT apply when they're there with you.\n\n"
     : "";
+  // LIVE CONTROL. Rides high in the prompt, not with the tool docs, because it changes HOW to work
+  // rather than adding something to work with — and because in this mode nobody is clicking approve
+  // on each step, so the ordinary "do a bit, hand back" rhythm is the wrong one and has to be said.
+  const liveBlock = opts.liveControl
+    ? "LIVE CONTROL IS ON — you are working the reader's machine directly, and you keep going until the " +
+      "job is done. Nothing pauses between your actions: no approval clicks, no handing back after each " +
+      "step. Only the reader stops you (a new message, or Stop).\n" +
+      "WORK IN A LOOP: look → act → LOOK AGAIN. Never fire two actions off the back of one observation; " +
+      "a click that was delivered is not a click that did what you wanted, and every dialog you don't " +
+      "notice puts the next action somewhere you didn't intend.\n" +
+      "GO DOWN THE LADDER, always in this order. (1) A real interface: Word/Excel over COM, a CLI, a " +
+      "file format. (2) control_ui — list the window's controls and click them BY NAME. (3) Only if a " +
+      "window publishes no controls, a screenshot with \"locate\" and a click_point, and treat that as a " +
+      "guess to be checked. Read the `control-open-programs` skill before you start.\n" +
+      "WORK OUT WHERE YOU ARE before assuming. List the open windows, read the controls, and let what " +
+      "you find tell you what kind of program this is and how it wants to be driven — a text editor, a " +
+      "spreadsheet, a form, a game are all different jobs. If it isn't what you expected, say so and " +
+      "adapt; don't force the plan you arrived with.\n" +
+      "SAY WHAT YOU ARE DOING as you go, in short lines — the reader is watching this happen to their " +
+      "own screen and it is the only way they know whether to stop you. If you get stuck, or something " +
+      "looks destructive or irreversible, or you genuinely cannot tell what state you are in: STOP and " +
+      "ask, in plain text. Stopping to ask is not failure here; guessing with the mouse is.\n\n"
+    : "";
   const buildBlock = opts.buildStamp
     ? `APP BUILD: ${opts.buildStamp}. If the reader asks which build/version you're running, or wonders ` +
       "why something they expect isn't here, tell them this exactly — it's how they tell a stale build " +
@@ -1537,7 +1666,7 @@ export function buildBuddySystemPrompt(raw: {
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
-    `${nowBlock}${generationRateNote(opts.lastGeneration)}${buildBlock}${creativeBlock}` +
+    `${nowBlock}${generationRateNote(opts.lastGeneration)}${buildBlock}${liveBlock}${creativeBlock}` +
     `${planBlock}` +
     (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
@@ -3136,6 +3265,28 @@ export function ollamaToolSchemas(opts: {
     t.push(toolFn("run_command", "Run ONE approved shell command in the workspace.", { command: strParam("The exact command.") }, ["command"]));
     t.push(
       toolFn(
+        "control_ui",
+        "Drive a program that is already open (Windows): list windows, list a window's controls, click or type into one by NAME, focus it, or click a raw point.",
+        {
+          // An ENUM, not a free string: the verbs are a closed set the parser checks, so a native
+          // tool-calling model should be constrained to them rather than left to invent one and get
+          // the call rejected.
+          action: {
+            type: "string",
+            description: "What to do to the program's UI.",
+            enum: ["windows", "controls", "click", "type", "focus", "click_point"],
+          },
+          window: strParam("Part of the target window's title (all actions except windows/click_point)."),
+          target: strParam("The control's name, for click/type."),
+          text: strParam("Text to type, for type."),
+          x: { type: "number", description: "Screen X, for click_point only." },
+          y: { type: "number", description: "Screen Y, for click_point only." },
+        },
+        ["action"],
+      ),
+    );
+    t.push(
+      toolFn(
         "delegate_coding_task",
         "Hand a hard multi-file coding job to an external coding agent (Aider) that edits the workspace itself.",
         {
@@ -3411,7 +3562,32 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   if (tool === "screenshot") {
     const question = strArg(obj.question, MAX_QUERY_CHARS);
     const window = strArg(obj.window, MAX_TITLE_CHARS);
-    return { tool, ...(question ? { question } : {}), ...(window ? { window } : {}) };
+    const locate = strArg(obj.locate, MAX_QUERY_CHARS);
+    return { tool, ...(question ? { question } : {}), ...(window ? { window } : {}), ...(locate ? { locate } : {}) };
+  }
+  if (tool === "control_ui") {
+    const action = (strArg(obj.action, 20) ?? "").toLowerCase() as UiAction;
+    if (!UI_ACTIONS.has(action)) return undefined;
+    const window = strArg(obj.window, MAX_TITLE_CHARS);
+    const target = strArg(obj.target, MAX_TITLE_CHARS);
+    const text = strArg(obj.text, MAX_QUERY_CHARS);
+    const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const x = num(obj.x);
+    const y = num(obj.y);
+    // Every action but `windows` and `click_point` needs to know WHICH program. Rejecting here (so
+    // the model gets the tool's own docs back and re-issues) beats a script that searches for "".
+    if (action !== "windows" && action !== "click_point" && !window) return undefined;
+    if (action === "click_point" && (x === undefined || y === undefined)) return undefined;
+    if ((action === "click" || action === "type") && !target) return undefined;
+    return {
+      tool,
+      action,
+      ...(window ? { window } : {}),
+      ...(target ? { target } : {}),
+      ...(text ? { text } : {}),
+      ...(x !== undefined ? { x } : {}),
+      ...(y !== undefined ? { y } : {}),
+    };
   }
   if (tool === "random_books") return { tool };
   if (tool === "calculate") {
@@ -4563,6 +4739,11 @@ export interface BuddyToolResultPayload {
   delegateCoding?: { ok: boolean; installed: boolean; summary: string };
   /** A vision model's observation of an approved screenshot (fed back as text). */
   observation?: string;
+  /** The screenshot's pixel size, so a `locate` coordinate means something. Read out of the PNG
+   * itself (see pngSize) rather than reported by the capture, which never carried it. */
+  screen?: { width: number; height: number };
+  /** control_ui outcome: what the accessibility tree said or did (see ui-automation.ts). */
+  ui?: UiAutomationResult;
   /** The updated working checklist after set_plan / complete_step (rendered back so the model sees
    * progress mid-turn, and surfaced to the host to render + persist). */
   plan?: BuddyPlan;
@@ -4828,10 +5009,26 @@ function formatBuddyToolResultBody(
       "path), then re-run; if it worked, say so and continue."
     );
   }
+  if (call.tool === "control_ui") {
+    if (!result.ui) return `[control_ui ${call.action} did not run — desktop only, and commands must be enabled]`;
+    return formatUiAutomationResult(call, result.ui);
+  }
   if (call.tool === "screenshot") {
     if (!result.observation) return "[screenshot couldn't be captured or read]";
+    // WITH `locate`, the picture's size is the coordinate frame — a bare "x=740" means nothing
+    // without it, and the model has no other way to learn it.
+    const size = result.screen ? ` — ${result.screen.width}×${result.screen.height} px` : "";
+    if (call.locate) {
+      return (
+        `[screenshot${size} — asked where "${call.locate}" is]\n` +
+        result.observation +
+        '\nIf that gave you a point, click it with {"tool":"control_ui","action":"click_point","x":…,"y":…} — and it is a ' +
+        "GUESS, so screenshot again afterwards to see whether it landed. If the window publishes controls, " +
+        'prefer {"tool":"control_ui","action":"controls","window":"…"}: those coordinates are exact.'
+      );
+    }
     return (
-      `[screenshot — what a vision model sees on the reader's screen${call.question ? ` (asked: "${call.question}")` : ""}]\n` +
+      `[screenshot${size} — what a vision model sees on the reader's screen${call.question ? ` (asked: "${call.question}")` : ""}]\n` +
       result.observation +
       "\nUse this observation: confirm it's working, or if something looks wrong, explain and propose the fix."
     );

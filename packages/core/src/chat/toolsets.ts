@@ -106,9 +106,13 @@ export const TOOLSETS: readonly Toolset[] = [
     // was never even in front of it. Reported as: it has never once used the command line. It was
     // not declining to; it did not know it had one. Everything after "code" is the same set, said in
     // the words a non-coding job would use.
-    trigger: "write, edit and RUN code; ANY command-line tool (convert, query, batch files); screenshots; GitHub; coding agents",
+    // "drive a program that is already open" earns its place in the trigger for the same reason the
+    // command-line clause did: it is a whole class of request (edit the open spreadsheet, click
+    // through that app for me) that matched none of the previous words, so the set never loaded and
+    // the ability was invisible. The trigger is the ONLY text read when deciding to load.
+    trigger: "write, edit and RUN code; ANY command-line tool (convert, query, batch files); DRIVE a program that's already open; screenshots; GitHub; coding agents",
     flags: ["canRunCommands", "canAutonomousWorkspace", "canDelegateCoding", "canGithub"],
-    tools: ["run_command", "browser_eval", "write_file", "edit_file", "screenshot", "delegate_coding_task", "spawn_coding_agents"],
+    tools: ["run_command", "browser_eval", "write_file", "edit_file", "screenshot", "control_ui", "delegate_coding_task", "spawn_coding_agents"],
   },
   {
     id: "documents",

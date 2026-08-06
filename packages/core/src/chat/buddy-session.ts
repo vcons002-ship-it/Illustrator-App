@@ -5,6 +5,10 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
+  MAX_LIVE_CONTROL_ROUNDS,
+  LIVE_REPEAT_LIMIT,
+  roundSignature,
+  stuckOnRepeat,
   describeBuddyToolActivity,
   formatBuddyToolResult,
   readFileWindow,
@@ -328,6 +332,7 @@ type HostToolName =
   | "write_file"
   | "edit_file"
   | "screenshot"
+  | "control_ui"
   | "plan_task"
   | "prep_order"
   | "tv_chart"
@@ -350,6 +355,9 @@ const HOST_TOOLS = new Set<HostToolName>([
   "write_file",
   "edit_file",
   "screenshot",
+  // Reaches out of the app and onto the desktop (a PowerShell command against another program's
+  // accessibility tree), so it runs where run_command does — never inside the worker.
+  "control_ui",
   "plan_task",
   "prep_order",
   "tv_chart",
@@ -481,6 +489,20 @@ export async function runBuddyTurn(opts: {
    * watching. The refusal is fed back as a tool result so the model adapts rather than stalling.
    */
   creativeIdle?: boolean;
+  /**
+   * LIVE CONTROL: this turn is driving the reader's machine and should keep working until the job is
+   * done, rather than answering and stopping.
+   *
+   * A mode, not a nudge — like {@link creativeIdle}, it changes what the LOOP does, because a rule
+   * that only lives in the prompt is a rule a small model drops three rounds in. It raises the round
+   * backstop, ignores the cloud "keep going?" pause, and arms the stuck-on-repeat detector. What
+   * stops a live run is the reader (a new message or Stop, both of which abort the signal), the job
+   * finishing (a plain-text reply, as always), the repeat detector, or the backstop.
+   *
+   * The host must also supply {@link runHostTool}, or every command would still suspend for an
+   * approval click and "continuous" would be a fiction.
+   */
+  liveControl?: boolean;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -489,8 +511,25 @@ export async function runBuddyTurn(opts: {
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
   let lastTruncated = false; // did the last reply get CUT OFF at the token budget? (→ auto-continue)
   // Per-turn tool-round budget: a small "keep going?" interval for cloud models, else the big backstop.
-  const effectiveMax =
-    opts.pauseEvery && opts.pauseEvery > 0 ? Math.min(opts.pauseEvery, MAX_BUDDY_TOOL_ROUNDS) : MAX_BUDDY_TOOL_ROUNDS;
+  //
+  // LIVE CONTROL overrides both, deliberately. The mode exists to work continuously until the job is
+  // done, and a "keep going?" checkpoint every few rounds is precisely the interruption the reader
+  // turned it on to avoid — so `pauseEvery` is ignored here and the backstop is the much larger
+  // MAX_LIVE_CONTROL_ROUNDS. On a paid model that means a long run costs real money without asking:
+  // the toggle IS the consent, which is why it is a toggle rather than a default.
+  //
+  // WHAT THIS BOUND ACTUALLY COVERS, since it is easy to read it as more than it is: a HOST tool
+  // (control_ui, screenshot, run_command) ENDS its turn — the host runs it and dispatches a fresh
+  // one with the result. So the live loop is a chain of short turns, and the count below only ever
+  // sees the tools that run in-worker (a search, a calculation). The budget for the live loop itself
+  // is kept by the host, across that chain, in `liveRun`.
+  const effectiveMax = opts.liveControl
+    ? MAX_LIVE_CONTROL_ROUNDS
+    : opts.pauseEvery && opts.pauseEvery > 0
+      ? Math.min(opts.pauseEvery, MAX_BUDDY_TOOL_ROUNDS)
+      : MAX_BUDDY_TOOL_ROUNDS;
+  /** Fingerprints of each round's calls — the stuck-on-repeat detector's only state. */
+  const roundSignatures: string[] = [];
   let pausedForBudget = false; // hit the budget with tools still pending → a resumable checkpoint, not a finish
   // Anti-skip guard (turn-scoped): true right after a complete_step, cleared by any real work (a tool /
   // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
@@ -663,6 +702,32 @@ export async function runBuddyTurn(opts: {
     }
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
+
+    // STUCK ON REPEAT, in-turn half. Nobody is watching a live run step by step, so the failure that
+    // matters isn't a crash — it's the model repeating an action that changes nothing until the
+    // backstop. Rounds that merely look alike are fine; it takes LIVE_REPEAT_LIMIT byte-identical ones.
+    //
+    // This catches the IN-WORKER tools only (see the note on effectiveMax: a host tool ends its turn,
+    // so the clicking loop is never visible from in here). The host runs the same two pure helpers
+    // over its own chain, which is where a repeated CLICK is caught. Both, because the failure is the
+    // same shape on either side of the boundary and neither one sees the other's calls.
+    //
+    // It ends the turn with an ANSWER rather than an error, because the reader's question is "what
+    // happened?" and "I repeated the same thing five times and it didn't change anything" answers it.
+    if (opts.liveControl) {
+      roundSignatures.push(roundSignature(calls));
+      if (stuckOnRepeat(roundSignatures)) {
+        const last = calls[0];
+        return withThinking({
+          text:
+            `I stopped — I've repeated the same action ${LIVE_REPEAT_LIMIT} times without anything changing` +
+            `${last ? ` (${describeBuddyToolActivity(last).replace(/…$/, "")})` : ""}. ` +
+            "Something isn't responding the way I expect. Tell me what you see and I'll try a different way.",
+          transcript,
+          toolResults,
+        });
+      }
+    }
 
     // Run every tool the model batched this round, in order. A host/UI tool (needs approval or a
     // main-thread run) stops the batch: if it's first, hand it up as a pendingTool (as before);
@@ -879,7 +944,9 @@ async function runDocumentExtraction(
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "browser_eval" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
+  // control_ui belongs with the HOST tools it sits beside: it reaches out of the app and onto the
+  // reader's desktop (it runs a PowerShell command), so it can no more run in here than run_command can.
+  call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "control_ui" | "plan_task" | "prep_order" | "tv_chart" | "browser_eval" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

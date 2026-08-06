@@ -43,11 +43,22 @@ describe("BUILTIN_SKILLS", () => {
       expect(body).toContain("write_file");
       expect(body).toContain("-ExecutionPolicy Bypass -File");
     }
-    expect(control).toContain("SendKeys");
-    expect(control).toContain("AppActivate");
     expect(control).toContain("screenshot"); // acting is blind without looking after
     expect(office).toContain("GetActiveObject"); // the live document, not a second instance
     expect(office).toContain("READ BEFORE YOU WRITE");
+  });
+
+  it("teaches the targeting LADDER, in order, not just the bottom of it", () => {
+    const control = BUILTIN_SKILLS[0]!.body;
+    const api = control.indexOf("A real interface");
+    const tree = control.indexOf("control_ui — the accessibility tree");
+    const vision = control.indexOf("Vision, only when a window publishes nothing");
+    expect(api).toBeGreaterThan(-1);
+    expect(tree).toBeGreaterThan(api);
+    expect(vision).toBeGreaterThan(tree);
+    // The rule the whole ladder exists to enforce: a name is exact, a coordinate off a picture is not.
+    expect(control).toMatch(/Click by name, never by coordinate/);
+    expect(control).toMatch(/is a GUESS/);
   });
 });
 

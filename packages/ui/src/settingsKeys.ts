@@ -39,6 +39,8 @@ export const TUNING_FIELDS = [
   // Read when building the buddy prompt; toggling it must not rebuild the engine.
   "allowCommands",
   "autonomousWorkspace",
+  // Read per chat turn (arms the live-control loop + its prompt block); toggling must not rebuild.
+  "liveControl",
   "delegateCoding",
   "codingAgentBackend",
   "commandShell",

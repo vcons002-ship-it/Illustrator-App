@@ -306,10 +306,12 @@ export interface EngineWorkerApi {
   setProjectGuide: (text: string) => void;
   /** Set/clear the document the reader is viewing so the buddy can discuss + revise it (uploaded docs). */
   setActiveDocument: (doc?: { title: string; content: string }) => void;
-  /** Have the chat's vision model describe a captured screenshot. */
+  /** Have the chat's vision model describe a captured screenshot — or, with `locate`, say WHERE one
+   * thing is in it, as pixel coordinates (the targeting ladder's bottom rung). */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
     question?: string,
+    locate?: string,
   ) => Promise<{ text?: string; error?: string }>;
   /** Send a user-approved email from the connected Google account. */
   sendBuddyEmail: (
@@ -2098,7 +2100,7 @@ export function useEngineWorker(
     [],
   );
   const assessImage = useCallback(
-    (image: { bytes: ArrayBuffer; mimeType: string }, question?: string): Promise<{ text?: string; error?: string }> =>
+    (image: { bytes: ArrayBuffer; mimeType: string }, question?: string, locate?: string): Promise<{ text?: string; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         const timeout = setTimeout(() => {
@@ -2108,7 +2110,7 @@ export function useEngineWorker(
           clearTimeout(timeout);
           resolve(r);
         });
-        send({ type: "assessImage", requestId, image, ...(question ? { question } : {}) }, [image.bytes]);
+        send({ type: "assessImage", requestId, image, ...(question ? { question } : {}), ...(locate ? { locate } : {}) }, [image.bytes]);
       }),
     [],
   );
