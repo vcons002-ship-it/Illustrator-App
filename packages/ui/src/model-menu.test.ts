@@ -282,3 +282,43 @@ describe("the AUTOMATIC1111 / ComfyUI split", () => {
     expect(plain[0]!.note).toContain("ComfyUI");
   });
 });
+
+describe("the image tab survives an empty by-backend inventory", () => {
+  const withMap = (imageModelsByBackend: Parameters<typeof buildModelMenu>[1]["imageModelsByBackend"]) =>
+    buildModelMenu(
+      { ...DEFAULT_SETTINGS, imageProvider: "local" },
+      { textModels: [model("llama")], imageModels: [model("sdxl.safetensors")], ...(imageModelsByBackend ? { imageModelsByBackend } : {}) },
+      { isDesktop: true },
+    );
+
+  it("keeps the Image tab when the map is still EMPTY — the host's initial state", () => {
+    // `{}` is truthy, so this used to take the provider-first path, find no backends, skip the flat
+    // fallback that lives in the else, and drop the tab entirely. Reported as: only chat and video
+    // show up. It bit purely-local setups, since a cloud image key would have kept the tab alive.
+    const groups = withMap({});
+    expect(groups.map((g) => g.key)).toEqual(["llm", "image", "video"]);
+    const image = groups.find((g) => g.key === "image")!;
+    expect(image.options.map((o) => o.label)).toContain("sdxl.safetensors");
+    // Flat mode, so no backend picker to render.
+    expect(image.localBackends).toBeUndefined();
+  });
+
+  it("still goes provider-first the moment a backend IS known", () => {
+    const image = withMap({ comfyui: [model("sdxl.safetensors")] }).find((g) => g.key === "image")!;
+    expect(image.localBackends?.map((b) => b.id)).toEqual(["comfyui"]);
+    expect(image.localModelsByBackend?.comfyui?.map((o) => o.label)).toEqual(["sdxl.safetensors"]);
+    // Provider-first keeps checkpoints OUT of the flat list, so they can't appear twice.
+    expect(image.options.map((o) => o.label)).not.toContain("sdxl.safetensors");
+  });
+
+  it("shows a backend that reports NO checkpoints, rather than falling back to a mixed list", () => {
+    // A known-but-empty backend is real information ("you have A1111, it has nothing installed").
+    const image = withMap({ a1111: [] }).find((g) => g.key === "image")!;
+    expect(image.localBackends?.map((b) => b.id)).toEqual(["a1111"]);
+    expect(image.options).toEqual([]);
+  });
+
+  it("behaves the same whether the map is absent or empty", () => {
+    expect(withMap(undefined).map((g) => g.key)).toEqual(withMap({}).map((g) => g.key));
+  });
+});
