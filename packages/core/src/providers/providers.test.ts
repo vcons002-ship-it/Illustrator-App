@@ -2202,7 +2202,8 @@ describe("comfyExecutionError — a weight file the engine cannot read", () => {
     const msg = comfyExecutionError(status("HostBuffer.read_file_slice failed"))!;
     expect(msg).toMatch(/could not finish reading a model file/i);
     expect(msg).toMatch(/not the graph/i);
-    expect(msg).toMatch(/stopped early/i);
+    // Explains WHY the sampler is named, since that is what misdirects the reader.
+    expect(msg).toMatch(/lazily|loader that named/i);
     expect(msg).toContain("KSampler");
     expect(msg).toContain("HostBuffer.read_file_slice failed"); // raw kept, as elsewhere
   });
@@ -2211,7 +2212,20 @@ describe("comfyExecutionError — a weight file the engine cannot read", () => {
     const files = ["UNETLoader: flux2-dev-fp8.safetensors", "VAELoader: flux-2-vae.safetensors"];
     const msg = comfyExecutionError(status("HostBuffer.read_file_slice failed"), undefined, undefined, files)!;
     for (const f of files) expect(msg).toContain(f);
-    expect(msg).toMatch(/One of these is the file to replace/);
+  });
+
+  /**
+   * The first version of this message named only the truncated-download cause. That is the wrong
+   * lead: the failure that prompted it cleared up on its own, in the same session, with the same
+   * files — which a short file cannot do. It sent the reader hunting for a corrupt file that did
+   * not exist. Both causes have to be present, along with the question that tells them apart.
+   */
+  it("offers the reader the test that distinguishes the two causes", () => {
+    const msg = comfyExecutionError(status("HostBuffer.read_file_slice failed"))!;
+    expect(msg, "intermittent case").toMatch(/rendered before/i);
+    expect(msg, "names the resource, since HostBuffer is host RAM not VRAM").toMatch(/system RAM/i);
+    expect(msg, "deterministic case").toMatch(/fails every time/i);
+    expect(msg).toMatch(/truncated|stopped early/i);
   });
 
   it("covers the other ways a short or corrupt safetensors reports itself", () => {

@@ -2285,14 +2285,22 @@ export function comfyExecutionError(
    * is present, named correctly, and short.
    */
   if (/read_file_slice|HostBuffer|MetadataIncompleteBuffer|while deserializing|failed to read|unexpected end of file/i.test(raw)) {
-    const files = modelFiles?.length
-      ? ` The graph loads: ${listOrNone(modelFiles)}. One of these is the file to replace.`
-      : "";
+    const files = modelFiles?.length ? ` The graph was loading: ${listOrNone(modelFiles)}.` : "";
+    // WHETHER IT EVER WORKED IS THE WHOLE DIAGNOSIS, so the message asks that instead of guessing.
+    // A short file fails identically every time; memory pressure fails one render and not the next.
+    // Naming only the truncated-download cause sent a reader hunting for a corrupt file that did
+    // not exist, after a failure that cleared up on its own — "HostBuffer" is host RAM, where the
+    // engine stages weights read from disk, so the same files can read fine once something else
+    // releases memory. Both causes, and the question that separates them, are stated.
     return (
       `ComfyUI could not finish reading a model file${at} — the weights are unreadable, not the graph. ` +
-      "That is almost always a download that stopped early (the file is there and the right name, just " +
-      `short), or a model on a drive that went away mid-render.${files} ` +
-      `Re-download the suspect file and try again. Engine said: ${raw.trim().slice(0, 200)}`
+      "(Weights load lazily as sampling consumes them, which is why this surfaces at the sampler " +
+      `rather than at the loader that named the file.)${files} ` +
+      "If these files have rendered before, this is memory pressure, not a bad file — HostBuffer is " +
+      "system RAM, so a local LLM or another render holding memory can starve it, and retrying once " +
+      "that releases usually works. If it fails every time, one of the files above is truncated: a " +
+      "download that stopped early is invisible in a folder listing — right name, right place, short. " +
+      `Engine said: ${raw.trim().slice(0, 200)}`
     );
   }
   if (/shapes cannot be multiplied/i.test(raw)) {
