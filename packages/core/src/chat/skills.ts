@@ -1,4 +1,5 @@
 import type { VisualReaderStore } from "../storage/store.js";
+import { withBuiltinSkills } from "./builtin-skills.js";
 
 /**
  * SKILLS — the assistant's durable "intelligence docs": named markdown playbooks it
@@ -180,9 +181,13 @@ export async function saveSkill(
 /** Record that a skill was USED (read_skill matched it): bump its use count + recency so reuse
  * keeps it from being evicted. No-op when nothing matches. Returns the matched skill, if any. */
 export async function touchSkill(store: VisualReaderStore, query: string): Promise<Skill | undefined> {
-  const skills = await loadSkills(store);
-  const hit = findSkill(skills, query);
+  const stored = await loadSkills(store);
+  // A built-in is readable but not writable: it can be MATCHED here, and then the use-count update
+  // below runs over the stored list only, so touching one can never persist a copy of it into the
+  // reader's store (where `forget` could then delete it, or a rename could shadow it).
+  const hit = findSkill(withBuiltinSkills(stored), query);
   if (!hit) return undefined;
+  const skills = stored;
   const updated = skills.map((s) =>
     s === hit ? { ...s, lastUsedAt: Date.now(), useCount: (s.useCount ?? 0) + 1 } : s,
   );

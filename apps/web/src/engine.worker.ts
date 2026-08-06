@@ -80,6 +80,7 @@ import {
   getImageStyle,
   loadMemory,
   loadSkills,
+  withBuiltinSkills,
   loadSoul,
   loadSoulName,
   loadSoulImages,
@@ -3371,7 +3372,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
-    const skills = skillsIndexBlock(await loadSkills(memoryStore()));
+    const skills = skillsIndexBlock(withBuiltinSkills(await loadSkills(memoryStore())));
     // THE SAME REFERENCE PICTURES THE BUDDY CHAT DRAWS FROM. The reference set is per-SESSION, not
     // per-panel, and the reader's renders were the one surface that knew nothing about it: the block
     // rode only the buddy turn, and handleChatTool was called from here without `refImages`. So a
@@ -5762,7 +5763,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
                 }),
           ]);
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
-    const skills = skillsIndexBlock(await loadSkills(store));
+    // Plus the playbooks the APP ships (driving an open program, editing a live Word/Excel doc):
+    // merged at read time rather than seeded, so installs that already have skills get them too.
+    const skills = skillsIndexBlock(withBuiltinSkills(await loadSkills(store)));
     // When this session is executing a task plan, load its context for the prompt.
     let activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
     // CONTEXT CAPTURE: anything the reader HANDS a task chat (pasted links, attached files — both
@@ -6149,7 +6152,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             () => runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal }),
             { signal: ac.signal },
           );
-          if (candidate && !isDuplicateSkill(candidate, await loadSkills(store))) {
+          // Built-ins count as duplicates: proposing "how to drive Word over COM" back to the reader
+          // after they just used the shipped playbook to do it is noise, and saving it would shadow
+          // the real one with a worse copy.
+          if (candidate && !isDuplicateSkill(candidate, withBuiltinSkills(await loadSkills(store)))) {
             post({ type: "buddySkillProposed", requestId: msg.requestId, skill: candidate });
           }
         }
