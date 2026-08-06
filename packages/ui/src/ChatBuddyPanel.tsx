@@ -92,7 +92,14 @@ export interface ChatBuddyPanelProps {
   onPersonaChange: (p: BuddyPersona) => void;
   /** Quick model switcher popped from the input row: the current LLM / image / video options + the
    * change to apply when one is picked. Absent → the button/popover don't render. */
-  modelMenu?: { groups: ModelMenuGroup[]; onSelect: (patch: Partial<ReaderSettings>) => void };
+  modelMenu?: {
+    groups: ModelMenuGroup[];
+    onSelect: (patch: Partial<ReaderSettings>) => void;
+    /** Apply an option's `connect` — switching the active local image backend needs a real connect
+     * (probe, auto-start, engineBaseUrl), not just a stored preference. Absent → picks that would
+     * change backend still apply their patch, they just don't re-point the engine. */
+    onConnectBackend?: (backend: LocalBackendId, url: string) => void;
+  };
   /**
    * LIVE CONTROL's on/off switch, beside the model button.
    *
@@ -1050,6 +1057,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             props.modelMenu!.onSelect(patch);
             setModelsOpen(false);
           }}
+          {...(props.modelMenu.onConnectBackend ? { onConnectBackend: props.modelMenu.onConnectBackend } : {})}
         />
       )}
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
@@ -1407,10 +1415,13 @@ const MODEL_TAB_LABEL: Record<ModelMenuGroup["key"], string> = {
 function ModelMenuPopover({
   groups,
   onSelect,
+  onConnectBackend,
   menuRef,
 }: {
   groups: ModelMenuGroup[];
   onSelect: (patch: Partial<ReaderSettings>) => void;
+  /** Run an option's `connect` after its patch — see ModelMenuOption.connect. */
+  onConnectBackend?: (backend: LocalBackendId, url: string) => void;
   /** The outer panel's outside-click ref — attached here so clicks inside don't close the popover. */
   menuRef: Ref<HTMLDivElement>;
 }) {
@@ -1436,6 +1447,15 @@ function ModelMenuPopover({
     .map((s) => ({ section: s, options: filterOptions(s.options, query) }))
     .filter(({ section, options }) => options.length > 0 || section.backendPicker);
 
+  // PATCH FIRST, THEN CONNECT. The patch carries the model + its encoder/VAE; the connect probes the
+  // server and sets the transient engineBaseUrl/engineBackend the provider actually renders through.
+  // In this order the connect's own functional settings updates land last and can't be clobbered by
+  // the patch's spread of a possibly-stale settings object.
+  const pick = (o: ModelMenuOption) => {
+    onSelect(o.patch);
+    if (o.connect) onConnectBackend?.(o.connect.backend, o.connect.url);
+  };
+
   const item = (o: ModelMenuOption) => (
     <button
       key={o.id}
@@ -1445,12 +1465,12 @@ function ModelMenuPopover({
       // (a Tab-focused item) can't double-fire with a mouse pick.
       onMouseDown={(e) => {
         e.preventDefault();
-        onSelect(o.patch);
+        pick(o);
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect(o.patch);
+          pick(o);
         }
       }}
     >

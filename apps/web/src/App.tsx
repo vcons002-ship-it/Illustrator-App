@@ -9616,8 +9616,13 @@ export function App() {
     () => ({
       groups: buildModelMenu(settings, { textModels, imageModels: installedModels, imageModelsByBackend: installedModelsByBackend }, { isDesktop }),
       onSelect: (patch: Partial<ReaderSettings>) => onSettingsChange({ ...settings, ...patch }),
+      // Switching the active image backend from the quick menu takes the SAME route the Settings
+      // panel's "Use for images" button takes — probe the server, auto-start A1111, set the transient
+      // engineBaseUrl/engineBackend the provider renders through. Storing `localBackend` alone left
+      // the engine on the old server.
+      onConnectBackend: (backend: LocalBackendId, url: string) => void onConnectLocalServer(backend, url),
     }),
-    [settings, textModels, installedModels, installedModelsByBackend, onSettingsChange],
+    [settings, textModels, installedModels, installedModelsByBackend, onSettingsChange, onConnectLocalServer],
   );
 
   // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero

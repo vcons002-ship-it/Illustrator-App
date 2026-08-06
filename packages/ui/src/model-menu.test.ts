@@ -42,7 +42,14 @@ describe("buildModelMenu", () => {
     const image = groups.find((g) => g.key === "image")!;
     const a = image.options.find((o) => o.id === "image:local:a.safetensors")!;
     expect(a.active).toBe(true);
-    expect(a.patch).toEqual({ imageProvider: "local", localModel: "a.safetensors" });
+    // The encoder/VAE ride along: they're remembered per model, and writing localModel alone left
+    // the previous model's encoder selected (a text-encoder failure at render time).
+    expect(a.patch).toEqual({
+      imageProvider: "local",
+      localModel: "a.safetensors",
+      localTextEncoder: "",
+      localVae: "",
+    });
     expect(image.options.find((o) => o.id === "image:local:b.safetensors")!.active).toBe(false);
   });
 
@@ -84,11 +91,29 @@ describe("buildModelMenu", () => {
     const comfy = image.localModelsByBackend!.comfyui!;
     expect(comfy).toHaveLength(1);
     expect(comfy[0]!.active).toBe(true);
-    expect(comfy[0]!.patch).toEqual({ imageProvider: "local", localBackend: "comfyui", localModel: "sdxl.safetensors" });
+    expect(comfy[0]!.patch).toEqual({
+      imageProvider: "local",
+      localBackend: "comfyui",
+      localServerUrl: "http://127.0.0.1:8188",
+      localModel: "sdxl.safetensors",
+      localTextEncoder: "",
+      localVae: "",
+    });
+    // Already the active backend — nothing to reconnect.
+    expect(comfy[0]!.connect).toBeUndefined();
     const a1111 = image.localModelsByBackend!.a1111!;
     expect(a1111).toHaveLength(1);
     expect(a1111[0]!.active).toBe(false);
-    expect(a1111[0]!.patch).toEqual({ imageProvider: "local", localBackend: "a1111", localModel: "juggernaut.safetensors" });
+    expect(a1111[0]!.patch).toEqual({
+      imageProvider: "local",
+      localBackend: "a1111",
+      localServerUrl: "http://127.0.0.1:7860",
+      localModel: "juggernaut.safetensors",
+      localTextEncoder: "",
+      localVae: "",
+    });
+    // Switching backend needs a real connect, not just a stored preference.
+    expect(a1111[0]!.connect).toEqual({ backend: "a1111", url: "http://127.0.0.1:7860" });
   });
 });
 
@@ -320,5 +345,65 @@ describe("the image tab survives an empty by-backend inventory", () => {
 
   it("behaves the same whether the map is absent or empty", () => {
     expect(withMap(undefined).map((g) => g.key)).toEqual(withMap({}).map((g) => g.key));
+  });
+});
+
+describe("a model pick carries the settings that must move with it", () => {
+  const byBackend = { comfyui: [model("sdxl.safetensors")], a1111: [model("jugg.safetensors")] };
+  const build = (s: Partial<ReaderSettings>) =>
+    buildModelMenu({ ...DEFAULT_SETTINGS, ...s }, { textModels: [], imageModels: [], imageModelsByBackend: byBackend }, { isDesktop: true });
+
+  it("restores the encoder/VAE remembered for the model it selects", () => {
+    // Reported as a text-encoder error on the first switch: the menu wrote localModel alone, so the
+    // PREVIOUS model's encoder stayed selected and the render failed at the engine.
+    const g = build({
+      imageProvider: "local",
+      localBackend: "comfyui",
+      localTextEncoder: "old_encoder.safetensors",
+      localVae: "old.vae",
+      localComponentsByModel: { "sdxl.safetensors": { textEncoder: "clip_l.safetensors", vae: "sdxl.vae" } },
+    });
+    const pick = g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!;
+    expect(pick.patch.localTextEncoder).toBe("clip_l.safetensors");
+    expect(pick.patch.localVae).toBe("sdxl.vae");
+  });
+
+  it("CLEARS them to auto for a model with nothing remembered, rather than leaving them out", () => {
+    // Omitting the fields would merge as "keep what's there" — the exact bug, one step removed.
+    const g = build({ imageProvider: "local", localBackend: "comfyui", localTextEncoder: "old_encoder.safetensors" });
+    const pick = g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!;
+    expect(pick.patch.localTextEncoder).toBe("");
+    expect(pick.patch.localVae).toBe("");
+  });
+
+  it("asks for a RECONNECT when the pick changes backend, with that backend's own URL", () => {
+    const g = build({
+      imageProvider: "local",
+      localBackend: "comfyui",
+      localServerUrl: "http://127.0.0.1:8188",
+      localServerUrlByBackend: { comfyui: "http://127.0.0.1:8188", a1111: "http://127.0.0.1:7860" },
+    });
+    const image = g.find((x) => x.key === "image")!;
+    const other = image.localModelsByBackend!.a1111![0]!;
+    expect(other.connect).toEqual({ backend: "a1111", url: "http://127.0.0.1:7860" });
+    // ...and the patch carries that URL too, so the stored state is consistent even if the host
+    // can't connect (a linked phone, say).
+    expect(other.patch.localServerUrl).toBe("http://127.0.0.1:7860");
+  });
+
+  it("does NOT reconnect for a pick within the backend already in use", () => {
+    const g = build({ imageProvider: "local", localBackend: "comfyui" });
+    expect(g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!.connect).toBeUndefined();
+  });
+
+  it("reconnects when coming from a CLOUD provider, where no local engine is up at all", () => {
+    const g = build({ imageProvider: "flux", localBackend: "comfyui" });
+    expect(g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!.connect).toBeDefined();
+  });
+
+  it("falls back to the backend's default URL when none is remembered", () => {
+    const g = build({ imageProvider: "local", localBackend: "comfyui" });
+    const other = g.find((x) => x.key === "image")!.localModelsByBackend!.a1111![0]!;
+    expect(other.connect!.url).toMatch(/7860/);
   });
 });

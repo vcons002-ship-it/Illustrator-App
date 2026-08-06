@@ -1,5 +1,12 @@
 import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS, comfyUrlForVideo } from "@visual-reader/core";
-import { LOCAL_BACKEND_LABEL, type InstalledModel, type LocalBackendId, type ReaderSettings } from "./SettingsPanel.js";
+import {
+  LOCAL_BACKEND_LABEL,
+  LOCAL_ENGINE_DEFAULT_URL,
+  applyLocalModelComponents,
+  type InstalledModel,
+  type LocalBackendId,
+  type ReaderSettings,
+} from "./SettingsPanel.js";
 
 /**
  * The quick model-switcher menu that pops up from the chat input. This PURE builder turns the current
@@ -19,6 +26,17 @@ export interface ModelMenuOption {
   active: boolean;
   /** The settings change to apply when this option is picked. */
   patch: Partial<ReaderSettings>;
+  /**
+   * This pick changes the ACTIVE local image backend, so the host must reconnect — not merely store
+   * a preference.
+   *
+   * A settings patch cannot do this job. Connecting probes the server and sets the transient
+   * `engineBaseUrl`/`engineBackend` that the provider actually renders through, auto-starts
+   * AUTOMATIC1111 from its install folder, brings the managed ComfyUI up for video, and falls back
+   * with a readable message when the server isn't there. Flipping `localBackend` on its own left
+   * every one of those undone and the engine pointed at the previous backend's URL.
+   */
+  connect?: { backend: LocalBackendId; url: string };
 }
 
 export interface ModelMenuGroup {
@@ -140,6 +158,26 @@ export function buildModelMenu(
   const keys = s.keys ?? {};
   const hasKey = (id: string): boolean => Boolean(keys[id]?.trim());
 
+  /**
+   * THE OTHER SETTINGS A MODEL PICK DRAGS WITH IT.
+   *
+   * Choosing a local checkpoint is not one field. The text encoder and VAE are remembered PER MODEL
+   * (`localComponentsByModel`), and the Settings picker restores them through
+   * `applyLocalModelComponents` on every select — precisely so switching models never leaves the
+   * previous model's encoder selected. This menu wrote `localModel` alone, so it did exactly that:
+   * pick a new checkpoint and the old model's text encoder stayed, which the engine reports as a
+   * text-encoder failure at render time. Reported as a text-encoder error on the first switch.
+   *
+   * Derived by CALLING that same function rather than restating its rule, so the two can't drift.
+   */
+  const withComponents = (model: string): Partial<ReaderSettings> => {
+    const next = applyLocalModelComponents(s, model);
+    // "" is meaningful here — it is the AUTO setting, and the value that clears the previous model's
+    // encoder. Coerced explicitly so an unremembered model resets rather than leaving the field out
+    // of the patch, which would merge as "keep what's there" and reintroduce the bug.
+    return { localModel: model, localTextEncoder: next.localTextEncoder ?? "", localVae: next.localVae ?? "" };
+  };
+
   // ---------- Chat (LLM) ----------
   const llm: ModelMenuOption[] = [];
   // Cloud providers you have a key for (switch provider).
@@ -217,12 +255,17 @@ export function buildModelMenu(
     localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend }));
     localModelsByBackend = {};
     for (const id of backendIds) {
+      // Switching backend needs a CONNECT, not a stored preference — and the URL comes from this
+      // backend's own memory, because the live `localServerUrl` still points at the outgoing one.
+      const url = s.localServerUrlByBackend?.[id]?.trim() || LOCAL_ENGINE_DEFAULT_URL[id];
+      const switchesBackend = id !== activeBackend || s.imageProvider !== "local";
       localModelsByBackend[id] = (lists.imageModelsByBackend?.[id] ?? []).map((m) => ({
         id: `image:local:${id}:${m.id}`,
         label: m.label,
         sublabel: "local checkpoint",
         active: s.imageProvider === "local" && activeBackend === id && s.localModel === m.id,
-        patch: { imageProvider: "local", localBackend: id, localModel: m.id },
+        patch: { imageProvider: "local", localBackend: id, localServerUrl: url, ...withComponents(m.id) },
+        ...(switchesBackend ? { connect: { backend: id, url } } : {}),
       }));
     }
   } else {
@@ -235,7 +278,9 @@ export function buildModelMenu(
         label: m.label,
         sublabel: "local checkpoint",
         active: s.imageProvider === "local" && s.localModel === m.id,
-        patch: { imageProvider: "local", localModel: m.id },
+        // No backend is known here, so there's nothing to reconnect — but the encoder/VAE still have
+        // to follow the model, exactly as in the provider-first branch above.
+        patch: { imageProvider: "local", ...withComponents(m.id) },
       });
     }
   }
