@@ -1614,7 +1614,7 @@ describe("spreadsheet cell edits from the assistant's own chat", () => {
   });
 
   it("runs without an approval click — a sheet it just built must not need one edit per cell", () => {
-    const off = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: false, autonomousWorkspace: false };
+    const off = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: false, autonomousWorkspace: false, liveControl: false };
     expect(routePendingTool("set_cell", off)).toBe("host");
     expect(routePendingTool("add_formula_column", off)).toBe("host");
     expect(routePendingTool("read_data", off)).toBe("host");
@@ -3161,9 +3161,9 @@ describe("launching something that stays up, and driving it", () => {
   it("gates driving a page exactly like running a command", () => {
     // Reaching into a page on the reader's machine is the same class of act as a shell command, and
     // is reached from a browser this tool chain started — so it must not be cheaper to reach for.
-    const flags = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: true, autonomousWorkspace: false };
+    const flags = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: true, autonomousWorkspace: false, liveControl: false };
     expect(routePendingTool("browser_eval", flags)).toBe("ask");
-    expect(routePendingTool("browser_eval", { ...flags, autonomousWorkspace: true })).toBe("host");
-    expect(routePendingTool("browser_eval", { ...flags, allowCommands: false, autonomousWorkspace: true })).toBe("ask");
+    expect(routePendingTool("browser_eval", { ...flags, autonomousWorkspace: true, liveControl: false })).toBe("host");
+    expect(routePendingTool("browser_eval", { ...flags, allowCommands: false, autonomousWorkspace: true, liveControl: false })).toBe("ask");
   });
 });

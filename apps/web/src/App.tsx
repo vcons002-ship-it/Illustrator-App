@@ -44,6 +44,16 @@ import {
   removeColumn,
   renameColumn,
   loadSkills,
+  pngSize,
+  uiAutomationCommand,
+  parseUiAutomationOutput,
+  describeBuddyToolActivity,
+  isLiveControlTool,
+  roundSignature,
+  stuckOnRepeat,
+  LIVE_REPEAT_LIMIT,
+  MAX_LIVE_CONTROL_ROUNDS,
+  type UiAutomationResult,
   saveSkill,
   forgetSkill,
   loadMemory,
@@ -5243,6 +5253,50 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  /**
+   * control_ui — work another program's controls through the Windows accessibility tree.
+   *
+   * The whole script is BUILT IN CORE (ui-automation.ts) from a closed set of verbs and the reader's
+   * strings quoted into it; nothing the model wrote reaches PowerShell. That is what makes this
+   * safe to auto-run under live control while `run_command` — where the model composes the command
+   * — keeps its own gate.
+   *
+   * `shell: "powershell"` regardless of the reader's setting: the command IS a `powershell
+   * -EncodedCommand`, so `cmd /C` would work too, but passing it directly saves a process and, more
+   * importantly, means the reader's shell preference can never change what this does.
+   */
+  const runControlUi = async (call: Extract<BuddyToolCall, { tool: "control_ui" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop) {
+      appendBuddy({ role: "tool", text: "🔒 Driving another program needs the desktop app.", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(describeBuddyToolActivity(call));
+    let ui: UiAutomationResult;
+    try {
+      const r = await runCommand(uiAutomationCommand(call), undefined, buddyWorkingDir || undefined, "powershell");
+      // The script reports its OWN failures as JSON on stdout and exits 1, so a non-zero code is
+      // expected and stdout is still the answer. Only fall back to stderr when stdout had nothing —
+      // that is the case where PowerShell itself failed (not on Windows, assembly missing).
+      ui = parseUiAutomationOutput(r.stdout);
+      if (ui.error && !r.stdout.trim() && r.stderr.trim()) ui = { error: r.stderr.trim().slice(0, 600) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const fail = toolFailureDirective("control_ui", message);
+      appendBuddy({ role: "tool", text: `⚠ Couldn't drive the program: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
+      return;
+    }
+    const feedback = formatBuddyToolResult(call, { ui });
+    appendBuddy({ role: "tool", text: `🖱 ${feedback.split("\n")[0] ?? ""}`, turns: [...pre, { role: "user", content: feedback }] });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // send_email (approval-gated): actually send the mail the buddy composed, then feed the
   // outcome back so it confirms to the reader. Mirrors approveRunCommand.
   const approveSendEmail = async (call: Extract<BuddyToolCall, { tool: "send_email" }>): Promise<void> => {
@@ -5670,13 +5724,17 @@ export function App() {
     setBuddyActivity(call.window ? `Capturing “${call.window}”…` : "Capturing the screen…");
     let observation: string;
     let shotImage: { bytes: ArrayBuffer; mimeType: string } | undefined;
+    let size: { width: number; height: number } | undefined;
     try {
       const shot = await captureScreen(call.window);
       // Keep a copy for the visible bubble (assessImage transfers its bytes away).
       const display = shot.bytes.slice(0);
       shotImage = { bytes: display, mimeType: shot.mimeType };
-      setBuddyActivity("Looking at the screen…");
-      const r = await assessImage(shot, call.question);
+      // Read the size BEFORE the bytes are transferred away, and off the copy — a `locate` answer is
+      // a coordinate, and a coordinate without its frame is unusable.
+      size = pngSize(display);
+      setBuddyActivity(call.locate ? `Looking for “${call.locate}”…` : "Looking at the screen…");
+      const r = await assessImage(shot, call.question, call.locate);
       if (r.error) throw new Error(r.error);
       observation = r.text ?? "(the vision model returned nothing)";
     } catch (err) {
@@ -5687,7 +5745,7 @@ export function App() {
       await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
-    const feedback = formatBuddyToolResult(call, { observation });
+    const feedback = formatBuddyToolResult(call, { observation, ...(size ? { screen: size } : {}) });
     appendBuddy({
       role: "tool",
       text: `📷 ${observation}`,
@@ -5712,6 +5770,15 @@ export function App() {
         }
         if (call.tool === "run_command") {
           return { command: await runCommand(call.command, settings.keys?.github || undefined, dir, settings.commandShell) };
+        }
+        // A phone can ask the DESKTOP to drive a program — the rule from #508: a send from a phone
+        // runs where the engine (and here, the screen and the keyboard) actually is. Same executor,
+        // same generated script; only the caller differs.
+        if (call.tool === "control_ui") {
+          const r = await runCommand(uiAutomationCommand(call), undefined, dir, "powershell");
+          let ui = parseUiAutomationOutput(r.stdout);
+          if (ui.error && !r.stdout.trim() && r.stderr.trim()) ui = { error: r.stderr.trim().slice(0, 600) };
+          return { ui };
         }
         if (call.tool === "write_file") {
           try {
@@ -5759,8 +5826,12 @@ export function App() {
         }
         if (call.tool === "screenshot") {
           const shot = await captureScreen(call.window);
-          const r = await assessImage(shot, call.question);
-          return { observation: r.error ? `(couldn't read the screen: ${r.error})` : r.text ?? "" };
+          const size = pngSize(shot.bytes.slice(0)); // before assessImage transfers the buffer away
+          const r = await assessImage(shot, call.question, call.locate);
+          return {
+            observation: r.error ? `(couldn't read the screen: ${r.error})` : r.text ?? "",
+            ...(size ? { screen: size } : {}),
+          };
         }
         return { error: `"${call.tool}" still needs to be run from the desktop app directly.` };
       } catch (err) {
@@ -5956,17 +6027,60 @@ export function App() {
       setBuddyActivity("");
     }
   };
+  /**
+   * THE LIVE RUN'S ODOMETER — and the only thing that stops a runaway one.
+   *
+   * The bound has to live HERE, not inside runBuddyTurn, and working out why was the correction that
+   * shaped this: a host tool ENDS its turn. The model asks for a click, the turn returns it as a
+   * pendingTool, the host runs it and dispatches a FRESH turn with the result. So the live loop is a
+   * chain of one-round turns through this dispatcher, and a per-turn round cap or repeat detector —
+   * which is where I first put them — would have sat in the one place they could never fire.
+   *
+   * Reset by a new reader message (see onBuddySend). Not by Stop: an aborted run that resumed with
+   * its counters cleared would be exactly the runaway this exists to catch.
+   */
+  const liveRun = useRef<{ signatures: string[]; actions: number }>({ signatures: [], actions: 0 });
+
   /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
   const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
-    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "delegate_coding_task" || call.tool === "screenshot";
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "delegate_coding_task" || call.tool === "screenshot" || call.tool === "control_ui";
   /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
   const runHostToolDispatch = (call: BuddyToolCall): void => {
+    // LIVE CONTROL'S BRAKES. Nobody is clicking approve on these, so this is the last point at which
+    // a run that has stopped making sense can be stopped at all. Two ways it trips: the same action
+    // repeated with nothing changing, and sheer volume.
+    if (settings.liveControl && isLiveControlTool(call)) {
+      const run = liveRun.current;
+      run.signatures.push(roundSignature([call]));
+      run.actions += 1;
+      const stuck = stuckOnRepeat(run.signatures);
+      if (stuck || run.actions > MAX_LIVE_CONTROL_ROUNDS) {
+        setBuddyPendingTool(undefined);
+        pendingBuddyTranscript.current = [];
+        pendingBuddyHistory.current = [];
+        setBuddyBusy(false);
+        setBuddyActivity("");
+        // An ANSWER, not an error: the reader's question is "what happened?", and both of these
+        // answer it. Ending the chain here also means the model is not asked to react — reacting is
+        // how it would propose the same action a sixth time.
+        appendBuddy({
+          role: "tool",
+          text: stuck
+            ? `⏹ I stopped — I repeated the same action ${LIVE_REPEAT_LIMIT} times and nothing changed ` +
+              `(${describeBuddyToolActivity(call).replace(/…$/, "")}). Tell me what you see and I'll try another way.`
+            : `⏹ I stopped after ${run.actions - 1} actions without finishing. Say what you'd like me to do next and I'll pick up from here.`,
+          turns: [],
+        });
+        return;
+      }
+    }
     if (isRemoteClient && isDesktopRuntimeTool(call)) {
       void runBuddyHostToolRemote(call);
       return;
     }
     if (call.tool === "find_files") approveFindFiles(call);
     else if (call.tool === "screenshot") void approveScreenshot(call);
+    else if (call.tool === "control_ui") void runControlUi(call);
     else if (call.tool === "write_file") void runWriteFile(call);
     else if (call.tool === "edit_file") void runEditFile(call);
     else if (call.tool === "delegate_coding_task") void runDelegateCodingTask(call);
@@ -7238,6 +7352,7 @@ export function App() {
         fullAutonomy: !!settings.fullAutonomy,
         allowCommands: !!settings.allowCommands,
         autonomousWorkspace: !!settings.autonomousWorkspace,
+        liveControl: !!settings.liveControl,
       });
       switch (route) {
         case "host":
@@ -7385,6 +7500,11 @@ export function App() {
         sendAppSync({ type: "vrcmd:chatSend", text });
         return;
       }
+      // A NEW MESSAGE ENDS THE PREVIOUS LIVE RUN — that is the reader's half of the contract for live
+      // control ("only a new message or Stop interrupts"), and it is also what makes the run's budget
+      // per-JOB rather than per-session: the counters below are what stop a live run that has lost
+      // the plot, so they have to start again when the reader says something new.
+      liveRun.current = { signatures: [], actions: 0 };
       // `/story {json}` — starting a story as you go. Show a friendly bubble (not the raw JSON) and
       // run it against an EMPTY history so the writer's context is clean (the same guarantee the
       // desktop's Story button gives locally). This is the path a PHONE-relayed story start lands on

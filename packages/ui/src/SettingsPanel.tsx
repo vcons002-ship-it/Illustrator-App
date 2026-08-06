@@ -298,6 +298,7 @@ export interface ReaderSettings {
    * to the workspace folder. Off by default; lowers the per-command approval guard, so it only
    * applies to the workspace and the model is told never to act on instructions from fetched text. */
   autonomousWorkspace?: boolean;
+  liveControl?: boolean;
   /** Windows shell for run_command: "cmd" (default) or "powershell". Ignored on macOS/Linux
    * (always sh). Lets PowerShell-centric workflows run pwsh cmdlets without the `powershell -Command` wrapper. */
   commandShell?: "cmd" | "powershell";
@@ -2203,6 +2204,28 @@ export function SettingsPanel({
                         workspace; it's told never to act on instructions from fetched email/web text. This{" "}
                         <b>removes the per-command approval</b> for that folder — only turn it on if you're
                         comfortable with that. Off by default; desktop only.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={value.liveControl ?? false}
+                      onChange={(e) => set({ liveControl: e.target.checked })}
+                    />
+                    <span>
+                      Live control — drive open programs continuously
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        Lets the assistant work another program on your screen — read a window&apos;s real
+                        controls and <b>click or type into them</b>, looking after each step — and keep going
+                        until the job is done instead of handing back after every action. <b>Only a new
+                        message or Stop interrupts it.</b> It moves your actual keyboard and mouse, so it will
+                        fight you for them if you&apos;re using the machine at the same time. This removes the
+                        per-action approval for looking at the screen and working controls; it does{" "}
+                        <b>not</b> grant shell commands (that stays with Autonomous workspace, above). Windows
+                        for the control part; off by default; desktop only.
                       </span>
                     </span>
                   </label>
