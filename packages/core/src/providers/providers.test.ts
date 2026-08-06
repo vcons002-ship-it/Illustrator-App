@@ -1227,6 +1227,35 @@ describe("LocalServerLLMProvider", () => {
 });
 
 describe("assetStem / pickComponentAsset (split-file variant matching)", () => {
+  it("tries HINTS in priority order, not whatever the folder listed first", () => {
+    // The bug: `available.find(a => hints.some(...))` iterated FILES, so the winner was decided by
+    // the engine's listing order while the hint array read like a priority list. On a machine with
+    // a real Flux.2 VAE *and* Klein's small decoder, the same model decoded through a full or a
+    // reduced decoder on different renders, with nothing changed. Reported as: some generations
+    // used full_encoder_small, and looked soft and bloomed.
+    const hints = ["flux2", "flux.2", "flux-2", "flux_2", "flux", "encoder"];
+    const both = ["full_encoder_small_decoder.safetensors", "flux-2-vae.safetensors"];
+    expect(pickComponentAsset(both, undefined, [], hints)).toBe("flux-2-vae.safetensors");
+    // ...and the same either way round, which is the whole point.
+    expect(pickComponentAsset([...both].reverse(), undefined, [], hints)).toBe("flux-2-vae.safetensors");
+  });
+
+  it("still falls back to the small decoder when it is the ONLY thing installed", () => {
+    // "encoder" stays last and stays in — a machine with nothing else must still render.
+    const hints = ["flux2", "flux.2", "flux-2", "flux_2", "flux", "encoder"];
+    expect(pickComponentAsset(["full_encoder_small_decoder.safetensors"], undefined, [], hints)).toBe(
+      "full_encoder_small_decoder.safetensors",
+    );
+  });
+
+  it("an exact wanted filename still wins over every hint (Klein keeps its own VAE)", () => {
+    const hints = ["flux2", "flux.2", "flux-2", "flux_2", "flux", "encoder"];
+    const both = ["flux-2-vae.safetensors", "full_encoder_small_decoder.safetensors"];
+    expect(pickComponentAsset(both, "full_encoder_small_decoder.safetensors", [], hints)).toBe(
+      "full_encoder_small_decoder.safetensors",
+    );
+  });
+
   it("strips precision/quant qualifiers so variants share a stem", () => {
     expect(assetStem("qwen_3_8b_fp8mixed.safetensors")).toBe("qwen-3-8b");
     expect(assetStem("qwen_3_8b.safetensors")).toBe("qwen-3-8b"); // same component, no quant
