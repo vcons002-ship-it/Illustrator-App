@@ -39,17 +39,20 @@
    * nobody chose one. Every step carries more blue than red, biased toward the accent, which
    * is what makes a dark UI read as designed rather than merely dark.
    *
-   * EVENLY STEPPED, AND A TEST ENFORCES IT. The first draft of this palette put the shell at
-   * #0b0d12 and the dock at #0d1017 — two tokens nobody could tell apart, which is the
-   * 217-colours problem in miniature. Each step now clears 3 L* (perceptual lightness), which
-   * is roughly where a difference stops being a rendering artefact and starts being a surface.
+   * THESE ARE THE MOCKUP'S VALUES, and that is the point. An earlier version of this ladder was
+   * re-derived here to satisfy a test demanding every step clear 3 L*, which the approved design
+   * does not do — its bottom two steps are 1.6 and 2.6 L* apart. Spreading the ladder to pass
+   * that rule pushed the card surface from L* 10.8 to 16.5, and the chat panel shipped visibly
+   * lighter and bluer than the design that had been signed off. A self-imposed threshold is not
+   * allowed to outrank the reference; the test was the thing that was wrong, and it now
+   * distinguishes content surfaces from deep chrome instead of applying one number to both.
    *
-   * L* here: 3.0 → 6.3 → 11.2 → 16.5 → 22.0. */
-  --vr-bg: #090b10;         /* app shell — the ground everything sits on */
-  --vr-surface-0: #10141c;  /* dock, deepest chrome */
-  --vr-surface-1: #191e28;  /* sunken panels */
-  --vr-surface-2: #232935;  /* cards, modals — the most-used surface in the app */
-  --vr-surface-3: #2e3542;  /* raised / hover — nothing could hover before, so nothing used it */
+   * L* here: 3.1 → 4.7 → 7.3 → 10.8 → 15.2. */
+  --vr-bg: #0a0b0f;         /* app shell — the ground everything sits on */
+  --vr-surface-0: #0d1017;  /* dock, deepest chrome — separated by a hairline, not by value */
+  --vr-surface-1: #13161e;  /* sunken panels */
+  --vr-surface-2: #191d27;  /* cards, modals — the most-used surface in the app */
+  --vr-surface-3: #212633;  /* raised / hover — nothing could hover before, so nothing used it */
 
   /* ---- Ink ------------------------------------------------------------------------
    * Slightly brighter and cooled to match the surfaces. #e6e6e6 on the old card was a fine

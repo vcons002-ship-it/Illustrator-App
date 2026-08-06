@@ -279,17 +279,51 @@ describe("palette contrast", () => {
     return y > 0.008856 ? 116 * y ** (1 / 3) - 16 : 903.3 * y;
   }
 
-  it("the surface steps are far enough apart to read as depth", () => {
+  /**
+   * ONE NUMBER FOR EVERY STEP WAS THE WRONG RULE, AND IT COST A SHIPPED REGRESSION.
+   *
+   * This demanded 3 L* between every adjacent pair. The approved mockup does not do that — its
+   * bottom steps are 1.6 and 2.6 L* apart — so the palette was re-derived upward to pass, which
+   * put the card surface (the chat panel, the modals, the most-used surface in the app) at
+   * L* 16.5 instead of the design's 10.8. It shipped, and it was noticed immediately: the chat
+   * window was lighter and bluer than the design it came from.
+   *
+   * The premise was too crude. Value separation is what makes a surface read as raised only when
+   * two surfaces MEET WITHOUT AN EDGE. The deep chrome — ground to dock — is divided by a
+   * hairline border and a shadow, so it does not need to carry the separation in lightness too;
+   * the content surfaces, which nest inside each other with nothing between them, do.
+   *
+   * So the rule now matches the reason it exists, and the design sets the values.
+   */
+  it("content surfaces are far enough apart to read as depth", () => {
     // The failure this catches is the one the old palette had: shell #11131a and card #16181d
     // were five points apart, so nothing looked raised and shadows had nothing to work against.
-    // ~3 L* is about where a step stops being a rendering artefact and starts being a surface.
-    const steps = surfaces.map(token);
-    for (let i = 1; i < steps.length; i++) {
-      const delta = lightness(steps[i]!) - lightness(steps[i - 1]!);
+    const content = ["--vr-surface-1", "--vr-surface-2", "--vr-surface-3"];
+    for (let i = 1; i < content.length; i++) {
+      const delta = lightness(token(content[i]!)) - lightness(token(content[i - 1]!));
       expect(
         delta,
-        `${surfaces[i - 1]} → ${surfaces[i]} is only ${delta.toFixed(1)} L* apart`,
+        `${content[i - 1]} → ${content[i]} is only ${delta.toFixed(1)} L* apart`,
       ).toBeGreaterThan(3);
+    }
+  });
+
+  it("the deep chrome still steps, even though a border does most of the work", () => {
+    // Lower bar, not no bar: the draft this replaces had two of these 1.x L* apart and they were
+    // genuinely indistinguishable. The design's own smallest step is 1.6, so that is the floor.
+    const deep = ["--vr-bg", "--vr-surface-0", "--vr-surface-1"];
+    for (let i = 1; i < deep.length; i++) {
+      const delta = lightness(token(deep[i]!)) - lightness(token(deep[i - 1]!));
+      expect(delta, `${deep[i - 1]} → ${deep[i]} is only ${delta.toFixed(1)} L* apart`).toBeGreaterThanOrEqual(1.5);
+    }
+  });
+
+  it("the ladder only ever climbs", () => {
+    // Cheap, and it is the one thing neither threshold above can express on its own: a surface
+    // that is meant to be raised must never come out darker than the one it sits on.
+    const steps = surfaces.map(token).map(lightness);
+    for (let i = 1; i < steps.length; i++) {
+      expect(steps[i]!, `${surfaces[i]} is darker than ${surfaces[i - 1]}`).toBeGreaterThan(steps[i - 1]!);
     }
   });
 
@@ -350,7 +384,7 @@ describe("the stylesheets parse", () => {
  * "No raw colour literals outside the sheets" was written to inspect tokens.ts and nothing else,
  * so 40-odd hexes survived the sweep unnoticed across 19 components. They were not harmless: every
  * one was mixed by eye against the OLD ground (#11131a) and stayed put when the palette moved to
- * #090b10, leaving panels and toasts sitting at values that belong to a scheme the app no longer
+ * a new one, leaving panels and toasts sitting at values that belong to a scheme the app no longer
  * uses. That is invisible to a token-parity check — the tokens were all fine. The colours that
  * were never tokens are the ones that drift.
  *
