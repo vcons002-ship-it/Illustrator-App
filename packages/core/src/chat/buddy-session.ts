@@ -331,6 +331,7 @@ type HostToolName =
   | "plan_task"
   | "prep_order"
   | "tv_chart"
+  | "browser_eval"
   | "delegate"
   | "send_email"
   | "delegate_coding_task"
@@ -352,6 +353,8 @@ const HOST_TOOLS = new Set<HostToolName>([
   "plan_task",
   "prep_order",
   "tv_chart",
+  // Drives a page over the debug port — needs the desktop bridge, so it is handed up like tv_chart.
+  "browser_eval",
   "delegate",
   // send_email is outward-facing + irreversible — handed up so the host shows an approval card
   // (draft_email stays auto-run below: a draft just sits in Gmail for the reader to review).
@@ -876,7 +879,7 @@ async function runDocumentExtraction(
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
+  call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "browser_eval" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

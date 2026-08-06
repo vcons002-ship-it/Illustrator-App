@@ -5651,6 +5651,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
         slash.call.tool === "tv_chart" ||
+        slash.call.tool === "browser_eval" ||
         slash.call.tool === "delegate" ||
         slash.call.tool === "send_email" ||
         slash.call.tool === "delegate_coding_task" ||

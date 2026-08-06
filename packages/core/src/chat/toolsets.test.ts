@@ -730,3 +730,16 @@ describe("the shell is discoverable by a job that isn't coding", () => {
     expect(doc).toMatch(/Before telling the reader you cannot do something/i);
   });
 });
+
+describe("launching and driving are documented together", () => {
+  it("tells the model how to get a page onto the debug port in the first place", () => {
+    // Each half is useless alone: detach starts a browser that nothing drives, browser_eval drives a
+    // page that nothing started. The docs have to name the other one at the point it is needed.
+    const doc = toolsetDoc("coding", { ...FULL, loadedToolsets: [] } as unknown as Parameters<typeof toolsetDoc>[1]);
+    expect(doc).toMatch(/"detach":true/);
+    expect(doc).toMatch(/remote-debugging-port/);
+    expect(doc).toMatch(/browser_eval/);
+    // And that a detached launch trades its output away — the reader has to know to redirect.
+    expect(doc).toMatch(/output is not captured|redirect/i);
+  });
+});

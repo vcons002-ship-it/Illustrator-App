@@ -108,7 +108,7 @@ export const TOOLSETS: readonly Toolset[] = [
     // the words a non-coding job would use.
     trigger: "write, edit and RUN code; ANY command-line tool (convert, query, batch files); screenshots; GitHub; coding agents",
     flags: ["canRunCommands", "canAutonomousWorkspace", "canDelegateCoding", "canGithub"],
-    tools: ["run_command", "write_file", "edit_file", "screenshot", "delegate_coding_task", "spawn_coding_agents"],
+    tools: ["run_command", "browser_eval", "write_file", "edit_file", "screenshot", "delegate_coding_task", "spawn_coding_agents"],
   },
   {
     id: "documents",
