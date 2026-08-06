@@ -9,6 +9,8 @@ import {
   toolsetIndexBlock,
 } from "./toolsets.js";
 import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, formatBuddyToolResult, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
+import { skillsIndexBlock } from "./skills.js";
+import { withBuiltinSkills } from "./builtin-skills.js";
 
 /** Everything a fully-equipped desktop can do. */
 const FULL = {
@@ -94,11 +96,58 @@ describe("the index", () => {
   });
 });
 
+/**
+ * THE ALWAYS-ON BUDGET. An absolute ceiling, not a ratio.
+ *
+ * This guard used to read `tok(lean) < tok(legacy) / 2`, which measured the wrong thing. Being a
+ * ratio against the FULL prompt, it moved for reasons that had nothing to do with the always-on
+ * prompt: documenting a deferred toolset more thoroughly RAISED the allowance, and deleting dead
+ * text from the full prompt LOWERED it. It answered "have we deferred enough of the total?" when the
+ * only question that matters is "is the always-on prompt the right size?".
+ *
+ * So: a number, chosen deliberately, that only changes when someone decides to change it.
+ *
+ * WHY A CEILING AT ALL, given the runtime doesn't enforce one. It is not about memory — `historyBudget`
+ * already guarantees the conversation its share of the window, so a fat prompt cannot starve the chat.
+ * It is about DILUTION. Deferral exists because ~12k tokens of mostly-irrelevant instruction made a
+ * small local model worse at following any of it; every line competes with every other line for
+ * attention, and a local model re-reads the whole thing on every single turn.
+ *
+ * SPENDING IT: prefer moving text OUT over raising the number. A recognisable job with a long exact
+ * procedure belongs in a skill (one index line, body on demand). A routing rule, a negative capability
+ * ("you have no access to X"), or a correctness rule about output the model is already producing
+ * CANNOT be deferred — a model about to get it wrong does not know it needs a playbook — so those are
+ * what the budget is for.
+ *
+ * The SKILLS INDEX counts against it, which is why it is measured here rather than the system prompt
+ * alone. It is appended to the same prompt on every turn, and leaving it out would make "move it to a
+ * skill" look free when each move still costs a permanent index line. Measured with the shipped
+ * built-ins and no reader skills — a fresh install's floor, not its ceiling.
+ */
+const ALWAYS_ON_TOKEN_BUDGET = 5_800;
+
 describe("the prompt shrinks", () => {
-  it("drops the deferred documentation and adds the index", () => {
+  it("keeps the always-on prompt inside its token budget", () => {
+    const lean = `${build({ loadedToolsets: [] })}\n\n${skillsIndexBlock(withBuiltinSkills([]))}`;
+    const used = tok(lean);
+    expect(
+      used,
+      `always-on prompt is ${used} tokens, budget is ${ALWAYS_ON_TOKEN_BUDGET} (${
+        ALWAYS_ON_TOKEN_BUDGET - used
+      } spare). Move a recognisable job with a long procedure into a skill rather than raising this.`,
+    ).toBeLessThanOrEqual(ALWAYS_ON_TOKEN_BUDGET);
+  });
+
+  it("still defers the bulk of the documentation", () => {
+    // Kept as a sanity check on the mechanism (not as the budget): if deferral ever stopped removing
+    // most of the prompt, the absolute ceiling above would be met by gutting the FULL prompt instead.
     const legacy = build();
     const lean = build({ loadedToolsets: [] });
-    expect(tok(lean)).toBeLessThan(tok(legacy) / 2);
+    expect(tok(lean)).toBeLessThan(tok(legacy) * 0.6);
+  });
+
+  it("drops the deferred documentation and adds the index", () => {
+    const lean = build({ loadedToolsets: [] });
     expect(lean).toContain("YOU CAN DO MORE THAN THE TOOLS BELOW");
     expect(lean).not.toContain('"tool":"run_command"');
     expect(lean).not.toContain('"tool":"generate_video"');

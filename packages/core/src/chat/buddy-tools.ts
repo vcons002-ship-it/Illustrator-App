@@ -1304,12 +1304,13 @@ export function buildBuddySystemPrompt(raw: {
         "for the tools to read or write them; never claim you checked before you actually have.\n"
       : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
         // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
-        "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
-      "reader's email, calendar, or Google to-dos (there are no gmail_search / list_events / list_tasks tools right " +
-      "now). NEVER say or imply you checked them, and NEVER invent emails, events, or to-dos. If the reader asks about " +
-      'their mail, schedule, or Google tasks, tell them plainly that Google isn\'t connected and offer to connect it — ' +
-      'call setup_help with topic "google" to walk them through it (or point them to Settings). The reader\'s in-app ' +
-      "task PLANS (list_task_plans / get_task_plan) are a SEPARATE feature and still work — use those for to-dos.\n";
+        // A NEGATIVE capability, so it can never be deferred: the model that would go and look this
+        // up is the one that already believes it can read the reader's mail. It can be SHORT, though
+        // — the enumeration of tool names it doesn't have was explaining an absence to a model that
+        // simply isn't shown those tools.
+        "GOOGLE IS NOT CONNECTED: you have NO access to the reader's Gmail, Calendar or Google Tasks. Never say you " +
+        "checked them and NEVER invent emails, events, or to-dos — say it isn't connected and offer to connect it " +
+        '(setup_help, topic "google"). Their in-app task PLANS are a separate feature and still work.\n';
   const githubBlock = opts.canGithub
     ? "GITHUB: GitHub is connected — the gh CLI is authenticated (via a token in your environment or the reader's own " +
       "gh login) and git can push — do real repository work through run_command in the workspace. Clone with " +
@@ -2097,12 +2098,14 @@ export function buildBuddySystemPrompt(raw: {
     "best match (when they asked you to open/read it) or present the numbered options in prose and ask. After an open " +
     "succeeds, confirm it in plain prose and invite them to keep chatting in the reader — the conversation follows " +
     "them into the book. To answer normally, just write prose (no JSON).\n" +
-    "DOCUMENTS (PDF / WORD): when the reader wants a real DOCUMENT to keep or send — a report, letter, essay, study " +
-    "notes, brief, meeting notes, 'make me a PDF', 'write it up as a Word doc' — call create_document with the FULL " +
-    "body as Markdown (# / ## headings, **bold**, *italic*, - and 1. lists, `code`, --- rules). The reader gets real " +
-    "PDF + Word downloads and a side reader, the doc is saved to the workspace, and it stays in YOUR context so you can " +
-    "revise it when they say 'tighten the intro' / 'add a section'. Use this — NOT a bare ```markdown block — for any " +
-    "polished, downloadable document. (A fenced block is for code/snippets they'll read or run.)\n" +
+    // WAS 654 CHARACTERS OF create_document MANUAL, always on, for a tool that lives in the DEFERRED
+    // `documents` set — the prompt carrying the instructions for something it wasn't even offering.
+    // Everything it explained (Markdown body, real PDF/Word downloads, revisable) is already in the
+    // routing guide above and in the toolset's own doc. What was NOT said anywhere else is the one
+    // line kept here: a polished document is a tool call, not a fenced block. That is a ROUTING rule,
+    // so it stays always-on; the manual doesn't have to.
+    "DOCUMENTS (PDF / WORD): a polished document to keep or send is create_document (load `documents`), NEVER a bare " +
+    "```markdown block — fenced blocks are for code/snippets they'll read or run.\n" +
     "CREATING FILES: when the reader asks you to make a file, webpage, spreadsheet, or code (e.g. 'create a " +
     "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single fenced " +
     "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
@@ -2121,26 +2124,20 @@ export function buildBuddySystemPrompt(raw: {
         "leaves it UNDONE (the reader sees a promise, not a result)."
       : "") +
     "\n" +
-    "DESIGNED DOCUMENTS WITH IMAGES: when the reader wants a designed piece that NEEDS pictures — an invitation, " +
-    "flyer, poster, greeting card, menu, certificate — write a COMPLETE styled HTML document in one ```html block and " +
-    "mark each image you want the app to create with an <img> whose data-generate attribute holds a rich description " +
-    "(subject, art style, colors, mood — match the theme), e.g. " +
-    '<img data-generate="a friendly cartoon brontosaurus holding a baby bottle, soft pastel storybook style, white ' +
-    'background" alt="dino" width="320">. The app then shows a “Generate N images & build” button that renders ' +
-    "each one and embeds it, giving the reader a finished document to Preview and Save. Keep descriptions free of double " +
-    "quotes, set width/height for the layout, and use real layout/CSS/text around the images so it looks designed.\n" +
-    "MULTI-FILE PROJECTS: when something needs SEVERAL files that link together (a site = index.html + styles.css + " +
-    "app.js; a script project with modules), write each file in its OWN fenced block and NAME it on the fence line " +
-    "after the language — ```html index.html, ```css styles.css, ```js app.js, ```python src/main.py (a relative path " +
-    // Observed: asked for three haikus as three documents, a local model opened ONE fence and wrote the
-    // other two headers as ordinary lines inside it. Three files went to the reader as one card. The
-    // app now un-runs that, but the instruction has to name the mistake or it keeps making it.
-    "is fine). CLOSE each block with ``` and OPEN a new fence for the next file — writing the next file's " +
-    "name on a line INSIDE the current block does NOT start a new file; it puts a stray line in the middle " +
-    "of the one you are already writing. One fence per file, always. " +
-    "Reference the files by those exact names (e.g. <link href=\"styles.css\">, <script src=\"app.js\">) so " +
-    "they work together. The app then offers a \"Save all as project (.zip)\" button that keeps the whole set — with " +
-    "its folder structure — in one archive.\n" +
+    // DESIGNED DOCUMENTS and the MULTI-FILE naming convention are now the `designed-documents` and
+    // `multi-file-projects` skills — recognisable jobs with long, exact procedures, which is the shape
+    // a skill is for. Their triggers ride the always-on skills index instead (one line each), so the
+    // model still learns they exist without carrying 1,700 characters of syntax through every
+    // unrelated conversation.
+    //
+    // ONE line stays here, and deliberately. "One fence per file" is not a capability the model can
+    // go and look up — it is a CORRECTNESS rule about output it is already producing, and the failure
+    // is silent: asked for three haikus as three documents, a local model opened ONE fence and wrote
+    // the other two headers as ordinary lines inside it, and three files reached the reader as one
+    // card. A model doing that does not know it needs a playbook. So the rule is always-on and the
+    // procedure around it is fetched.
+    "SEVERAL FILES AT ONCE: one fenced block PER file, each NAMED on its fence line (```css styles.css). Never start a " +
+    "second file inside an open block. Read the `multi-file-projects` skill before writing a linked set.\n" +
     "CONVERSATION RULES: use a tool only when the reader's request actually calls for one — most messages deserve a " +
     "plain conversational reply. NEVER steer the chat toward opening, illustrating, or finding books unless the " +
     "reader brings it up; ordinary conversation is the default, operating the app is the exception. Never call tools " +

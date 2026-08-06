@@ -17,8 +17,13 @@ import {
 const mk = (name: string, description = "d", body = "b"): Skill => ({ name, description, body, at: 1 });
 
 describe("BUILTIN_SKILLS", () => {
-  it("ships the two native-control playbooks, within the index's field limits", () => {
-    expect(BUILTIN_SKILLS.map((s) => s.name)).toEqual(["control-open-programs", "office-documents"]);
+  it("ships the shipped playbooks, within the index's field limits", () => {
+    expect(BUILTIN_SKILLS.map((s) => s.name)).toEqual([
+      "control-open-programs",
+      "office-documents",
+      "designed-documents",
+      "multi-file-projects",
+    ]);
     for (const s of BUILTIN_SKILLS) {
       expect(s.name.length).toBeLessThanOrEqual(MAX_SKILL_NAME_CHARS);
       // The description is the ONLY text the model sees before deciding to load the body, so it has
@@ -46,10 +51,39 @@ describe("BUILTIN_SKILLS", () => {
   });
 });
 
+describe("the playbooks moved out of the always-on prompt", () => {
+  const body = (name: string) => readSkillBody(withBuiltinSkills([]), name);
+
+  it("still carries the exact syntax the prompt used to spell out", () => {
+    // These are rendering contracts the app's own parser depends on — if the wording moved but the
+    // syntax didn't come with it, the reader silently gets a page with no pictures / one merged file.
+    expect(body("designed-documents")).toContain("data-generate");
+    expect(body("designed-documents")).toContain("Generate N images & build");
+    expect(body("multi-file-projects")).toContain("```css styles.css");
+    expect(body("multi-file-projects")).toContain("Save all as project (.zip)");
+  });
+
+  it("keeps the hard-won mistake, not just the happy path", () => {
+    // The three-haikus-in-one-fence failure. A procedure that only describes success re-teaches
+    // nothing: the instruction has to NAME the error or a small model keeps making it.
+    expect(body("multi-file-projects")).toMatch(/does NOT start a new file/);
+  });
+
+  it("is triggered by the words a REQUEST would use, not the words the feature uses", () => {
+    // The `coding` toolset trigger said "coding", so a file-conversion request never matched it and
+    // the shell went unused. The description is all the model reads before fetching the body.
+    const merged = withBuiltinSkills([]);
+    for (const q of ["flyer", "poster", "invitation", "menu"]) {
+      expect(findSkill(merged, q)?.name, q).toBe("designed-documents");
+    }
+    expect(findSkill(merged, "website")?.name).toBe("multi-file-projects");
+  });
+});
+
 describe("withBuiltinSkills", () => {
   it("appends the built-ins after the reader's own skills", () => {
     const merged = withBuiltinSkills([mk("mine")]);
-    expect(merged.map((s) => s.name)).toEqual(["mine", "control-open-programs", "office-documents"]);
+    expect(merged.map((s) => s.name)).toEqual(["mine", ...BUILTIN_SKILLS.map((s) => s.name)]);
   });
 
   it("lets a stored skill of the same name WIN (case/space-insensitively)", () => {

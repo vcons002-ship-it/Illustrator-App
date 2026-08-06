@@ -192,6 +192,63 @@ osascript -e 'tell application "Microsoft Excel" to set value of range "B2" of a
   tool (pandoc, python-docx, openpyxl, duckdb over a CSV export) is usually simpler than automation.`;
 
 /**
+ * MOVED OUT OF THE ALWAYS-ON PROMPT. Both were carried on every turn — 1,683 characters of exact
+ * syntax serving maybe one conversation in fifty — and both pass the test a skill has to pass: the
+ * model KNOWS what kind of job it is on when it starts one, so a matching index line gets fetched in
+ * time. (A routing rule or a negative capability would not: the model about to route wrong doesn't
+ * know it needs a playbook. Those stayed in the prompt.)
+ */
+const DESIGNED_DOCUMENTS = `# A designed piece the app fills with pictures
+
+For an invitation, flyer, poster, greeting card, menu or certificate — anything where the LAYOUT
+matters and it needs images — write a COMPLETE styled HTML document in ONE \`\`\`html block, and mark
+each picture you want generated with an \`<img>\` carrying a \`data-generate\` description:
+
+\`\`\`html
+<img data-generate="a friendly cartoon brontosaurus holding a baby bottle, soft pastel storybook
+style, white background" alt="dino" width="320">
+\`\`\`
+
+The app then shows a "Generate N images & build" button that renders each one, embeds it, and hands
+the reader a finished document to Preview and Save.
+
+**Rules that matter**
+- The description carries subject, art style, colours and mood, and MATCHES the piece's theme — it is
+  the whole prompt the image model gets.
+- No double quotes inside the description (it lives in a quoted attribute).
+- Set \`width\`/\`height\` so the layout holds before the images exist.
+- Write real CSS, real layout and real text around the images. A page that is only \`<img>\` tags is
+  not a designed piece.
+- One \`\`\`html block for the whole document, not one per section.`;
+
+const MULTI_FILE_PROJECTS = `# Several files that link together
+
+A site is \`index.html\` + \`styles.css\` + \`app.js\`; a script project has modules. Write each file in
+its OWN fenced block and NAME it on the fence line, after the language:
+
+\`\`\`\`
+\`\`\`html index.html
+\`\`\`css styles.css
+\`\`\`js app.js
+\`\`\`python src/main.py      ← a relative path is fine
+\`\`\`\`
+
+The app then offers a "Save all as project (.zip)" button that keeps the whole set, folder structure
+and all, in one archive.
+
+**The mistake to avoid.** CLOSE each block with \`\`\` and OPEN a new fence for the next file. Writing
+the next file's name on a line INSIDE the block you are already in does NOT start a new file — it
+puts a stray line in the middle of the current one. Asked for three haikus as three documents, this
+is exactly what happened: three files reached the reader as one card. One fence per file, always.
+
+**Make them work together.** Reference the files by those exact names — \`<link href="styles.css">\`,
+\`<script src="app.js">\`, \`from utils import x\` — so the saved project runs as-is.
+
+**When the reader will KEEP or RUN it**, prefer \`write_file\` into the workspace over fenced blocks:
+a file on disk can be re-read, edited and executed, while a big fenced block truncates and drops out
+of your context. Fences are for a set the reader wants handed to them.`;
+
+/**
  * The shipped playbooks. `at` is 0 — they were never "written", and must never sort as newer than
  * something the reader saved.
  */
@@ -208,6 +265,24 @@ export const BUILTIN_SKILLS: readonly Skill[] = [
     description:
       "Read and edit a Word document or Excel workbook the reader has OPEN right now (live, unsaved), or a file on disk",
     body: OFFICE_DOCUMENTS,
+    at: 0,
+  },
+  // The DESCRIPTION is the trigger, and it is all the model reads before deciding to load the body —
+  // so it is written in the words a REQUEST would use ("invitation, flyer, poster") rather than the
+  // words the feature uses. The `coding` toolset trigger saying "coding" is why the shell went
+  // unused for months; this is the same lesson, applied before it costs anything.
+  {
+    name: "designed-documents",
+    description:
+      "Make an invitation, flyer, poster, greeting card, menu or certificate — a laid-out page the app generates the pictures for",
+    body: DESIGNED_DOCUMENTS,
+    at: 0,
+  },
+  {
+    name: "multi-file-projects",
+    description:
+      "Write a set of files that link together (a website, a script project with modules) so the reader can save the whole project",
+    body: MULTI_FILE_PROJECTS,
     at: 0,
   },
 ];
