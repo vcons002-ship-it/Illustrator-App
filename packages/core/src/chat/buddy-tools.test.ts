@@ -25,6 +25,7 @@ import {
   planQueueResumeFeedback,
   progressNudge,
   recentThinkingBlock,
+  roundThinkingRecap,
   RECENT_THINKING_MAX_CHARS,
   stripToolCallJson,
   toolCallFromShellCommand,
@@ -3095,5 +3096,32 @@ describe("recentThinkingBlock — what it was just thinking, carried forward", (
   it("says nothing when there was no thinking, so a non-reasoning model costs no prompt", () => {
     expect(recentThinkingBlock(undefined)).toBe("");
     expect(recentThinkingBlock("   ")).toBe("");
+  });
+});
+
+describe("roundThinkingRecap — reasoning carried between rounds of ONE turn", () => {
+  // Within a turn the model reasons, calls a tool, reads the result — and its reasoning is gone by
+  // then, because stripThink removes it from the reply pushed onto the round history. So a loop that
+  // searches, reads, then searches again re-derives its plan every round: the facts are in front of
+  // it, the intent it had for them is not.
+  it("hands the reasoning back with the results, as the model's own", () => {
+    const r = roundThinkingRecap("The doc is probably under documents/. I'll read it, then build the event.");
+    expect(r).toContain("I'll read it, then build the event.");
+    expect(r).toMatch(/^\[/);
+    expect(r).toMatch(/\]$/); // bracketed like every other thing the app feeds back
+    expect(r).toMatch(/Your own reasoning/i);
+    // Disposable the moment the results contradict it — the recap must not outrank what came back.
+    expect(r).toMatch(/drop it if the results below change things/i);
+  });
+
+  it("is shorter than the between-step carry, because a loop pays it every round", () => {
+    const r = roundThinkingRecap("y".repeat(5_000));
+    expect(r.length).toBeLessThan(600);
+  });
+
+  it("says nothing without reasoning, so a non-reasoning model's loop is untouched", () => {
+    expect(roundThinkingRecap(undefined)).toBe("");
+    expect(roundThinkingRecap("")).toBe("");
+    expect(roundThinkingRecap("   ")).toBe("");
   });
 });

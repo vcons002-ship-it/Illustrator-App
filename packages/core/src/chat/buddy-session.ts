@@ -11,6 +11,7 @@ import {
   isRetryableError,
   looksLikeToolJson,
   parseBuddyToolCalls,
+  roundThinkingRecap,
   progressNudge,
   stripToolCallJson,
   toolLimitNudge,
@@ -569,7 +570,13 @@ export async function runBuddyTurn(opts: {
     // token stream) or the model may think silently for a while — without this the turn looks frozen,
     // which is exactly what a linked phone saw. A visible token / the final answer clears it.
     opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
+    // THIS round's reasoning, not whatever was left over. `lastThinking` is outer-scoped (it also
+    // feeds the settled message), so a round that reasons silently would otherwise hand the previous
+    // round's thoughts back as if they were about the call just made — stale intent attached to
+    // fresh results, which is worse than none.
+    const thinkingBefore = lastThinking;
     const reply = await chatOnce();
+    const roundThinking = lastThinking === thinkingBefore ? "" : lastThinking;
     const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
     // Every finished outcome funnels through here, so it is also where the turn reports which
     // toolsets ended up loaded — the host keeps them for the session rather than re-paying next turn.
@@ -811,8 +818,13 @@ export async function runBuddyTurn(opts: {
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
       progressNudge(round) +
       toolLimitNudge(round, effectiveMax);
+    // The recap rides `messages` beside `steering` and NOT the transcript — context for the loop it
+    // belongs to, gone when the turn settles. That split is why carrying reasoning here is safe: in
+    // the transcript it would be a thought replayed on every future turn.
+    const recap = roundThinkingRecap(roundThinking);
     if (results.trim()) transcript.push({ role: "user", content: results });
-    if (results || steering) messages.push({ role: "user", content: results + steering });
+    if (results || steering || recap)
+      messages.push({ role: "user", content: [recap, results].filter(Boolean).join("\n\n") + steering });
   }
 }
 
