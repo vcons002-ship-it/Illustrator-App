@@ -27,16 +27,34 @@
   --vr-accent-rgb: 122 162 255;
 
   /* ---- Surfaces -------------------------------------------------------------------
-   * Five near-duplicate greys (#11131a #0e0f13 #0d1017 #13161e #16181d #171922) collapse to
-   * four steps, darkest ground → most-raised. */
-  --vr-bg: #11131a;         /* app shell */
-  --vr-surface-0: #0e0f13;  /* dock, deepest chrome */
-  --vr-surface-1: #13161e;  /* sunken panels */
-  --vr-surface-2: #16181d;  /* cards, modals — the most-used surface (17 sites) */
-  --vr-surface-3: #1c2029;  /* raised / hover — new; nothing had a hover surface before */
+   * MODERN DARK STUDIO. Two deliberate moves over what was here before.
+   *
+   * A DEEPER GROUND. The shell was #11131a and the cards #16181d — five points apart, so the
+   * app read as one flat sheet and the illustrations, which are the entire point of it, sat on
+   * roughly the same value as the chrome around them. Dropping the ground to #0b0d12 and
+   * raising the cards widens every step, so panels actually lift off the page and artwork has
+   * something dark to glow against.
+   *
+   * NEUTRALS WITH A BLUE BIAS. A pure grey reads as unconsidered — the colour you get when
+   * nobody chose one. Every step carries more blue than red, biased toward the accent, which
+   * is what makes a dark UI read as designed rather than merely dark.
+   *
+   * EVENLY STEPPED, AND A TEST ENFORCES IT. The first draft of this palette put the shell at
+   * #0b0d12 and the dock at #0d1017 — two tokens nobody could tell apart, which is the
+   * 217-colours problem in miniature. Each step now clears 3 L* (perceptual lightness), which
+   * is roughly where a difference stops being a rendering artefact and starts being a surface.
+   *
+   * L* here: 3.0 → 6.3 → 11.2 → 16.5 → 22.0. */
+  --vr-bg: #090b10;         /* app shell — the ground everything sits on */
+  --vr-surface-0: #10141c;  /* dock, deepest chrome */
+  --vr-surface-1: #191e28;  /* sunken panels */
+  --vr-surface-2: #232935;  /* cards, modals — the most-used surface in the app */
+  --vr-surface-3: #2e3542;  /* raised / hover — nothing could hover before, so nothing used it */
 
-  /* ---- Ink ------------------------------------------------------------------------ */
-  --vr-text: #e6e6e6;       /* absorbs #e7e7ee (7 sites) and #e9ecf2 (5) */
+  /* ---- Ink ------------------------------------------------------------------------
+   * Slightly brighter and cooled to match the surfaces. #e6e6e6 on the old card was a fine
+   * ratio but visibly warm against a blue-biased ground. */
+  --vr-text: #e7e9f0;
   --vr-text-dim: rgb(var(--vr-fg-rgb) / 0.65);
   --vr-text-faint: rgb(var(--vr-fg-rgb) / 0.45);
 
@@ -76,10 +94,13 @@
   --vr-space-4: 18px;
   --vr-space-5: 26px;
 
-  /* ---- Elevation ------------------------------------------------------------------ */
-  --vr-elev-1: 0 2px 8px -4px rgb(0 0 0 / 0.5);
-  --vr-elev-2: 0 8px 22px -10px rgb(0 0 0 / 0.6);
-  --vr-elev-3: 0 24px 60px -30px rgb(0 0 0 / 0.7);
+  /* ---- Elevation ------------------------------------------------------------------
+   * Deeper and softer than a default drop shadow, and negatively spread so the blur reads as
+   * depth rather than as a grey halo around the box. On a ground this dark a shadow has to be
+   * strong to register at all — the previous surfaces were too close in value for one to show. */
+  --vr-elev-1: 0 1px 2px rgb(0 0 0 / 0.4), 0 3px 10px -5px rgb(0 0 0 / 0.55);
+  --vr-elev-2: 0 2px 4px rgb(0 0 0 / 0.4), 0 10px 26px -12px rgb(0 0 0 / 0.7);
+  --vr-elev-3: 0 4px 8px rgb(0 0 0 / 0.4), 0 28px 64px -28px rgb(0 0 0 / 0.85);
 
   /* ---- Type ----------------------------------------------------------------------- */
   --vr-font-ui: system-ui, sans-serif;
