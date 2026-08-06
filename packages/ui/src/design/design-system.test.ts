@@ -150,6 +150,44 @@ describe("touch parity", () => {
     expect(components).toMatch(/\.vr-btn\.is-press/);
     expect(components).toMatch(/\.vr-card\.is-tap/);
   });
+
+  /**
+   * THE ASSERTION ABOVE WAS FALSE CONFIDENCE ON ITS OWN.
+   *
+   * It checked only that the CSS *defines* the touch rules. It passed for three commits while
+   * nothing anywhere applied them — so mobile had no interaction feedback at all and the suite
+   * was green. A test that cannot fail is worse than no test, because it is read as coverage.
+   */
+  it("something actually applies those classes", () => {
+    const src = readFileSync(join(__dirname, "..", "usePointerFeedback.ts"), "utf8");
+    expect(src).toMatch(/classList\.add\("is-press"\)/);
+    expect(src).toMatch(/classList\.add\("is-tap"\)/);
+  });
+
+  it("holds the press long enough for a tap to be visible", () => {
+    // A tap is ~60ms; applying and removing the class inside one frame shows nothing.
+    const src = readFileSync(join(__dirname, "..", "usePointerFeedback.ts"), "utf8");
+    const hold = Number(/PRESS_HOLD_MS = (\d+)/.exec(src)?.[1] ?? 0);
+    expect(hold, "press state is released too fast to see").toBeGreaterThanOrEqual(150);
+  });
+
+  it("does not try to track a finger, which would fight the scroll gesture", () => {
+    // Following a dragging finger means competing with the browser for scrolling, and losing —
+    // the only way to win is touch-action: none, which traps the page. Touch gets a TAP instead.
+    const src = readFileSync(join(__dirname, "..", "usePointerFeedback.ts"), "utf8");
+    // Bounded by the NEXT handler rather than by an indent-sensitive closing brace: the handlers
+    // live inside useEffect, so their indentation is an implementation detail this test should
+    // not encode. An empty match would make the assertion below vacuous, so it is checked first.
+    const move = /const onMove[\s\S]*?(?=const onDown)/.exec(src)?.[0] ?? "";
+    expect(move, "onMove handler not found — this test would otherwise assert nothing").toBeTruthy();
+    expect(move, "pointermove must ignore non-mouse pointers").toMatch(/pointerType !== "mouse"/);
+    expect(css).not.toMatch(/touch-action:\s*none/);
+  });
+
+  it("listens passively, so feedback can never delay a scroll", () => {
+    const src = readFileSync(join(__dirname, "..", "usePointerFeedback.ts"), "utf8");
+    expect(src).toMatch(/passive: true/);
+  });
 });
 
 describe("the token surface itself", () => {
