@@ -1496,8 +1496,27 @@ export function App() {
   // Permanently delete (from the Removed list) — gone for good (a fresh scan/import could surface
   // a still-existing source again later). Confirmed by the caller's ConfirmButton, not a dialog —
   // see removeTask for why a `window.confirm` here was unanswerable from a linked phone.
+  /**
+   * Bring a hidden workspace back into the switcher as an ordinary chat.
+   *
+   * Both delete paths need it — a scheduled action's window and a task's — and for the same reason:
+   * these are hidden and reached only from ⏰ Scheduled / 📋 Tasks, so deleting the thing that owns
+   * one leaves a session with real history that nothing can ever open again. Un-hiding beats
+   * deleting, because the conversation may be worth keeping and only the reader can judge that.
+   *
+   * A ref because the session state and `persistSessions` are declared further down and this is
+   * called from above them; one implementation rather than two so the two deletes can't drift.
+   */
+  const unhideSessionRef = useRef<(sessionId: string) => void>(() => {});
   const deleteTaskForever = useCallback(
     async (planId: string) => {
+      // ITS WORKSPACE OUTLIVES IT, AS AN ORDINARY CHAT — the same rule a deleted scheduled action
+      // follows. A task's chat is hidden from the switcher and reached from 📋 Tasks, so deleting
+      // the task without this leaves a session with real history that nothing can ever open again.
+      // Un-hiding beats deleting: the conversation in there may be worth keeping, and now that the
+      // task is gone the reader is the only one who can judge that.
+      const sessionId = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId)?.sessionId;
+      if (sessionId) unhideSessionRef.current(sessionId);
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
@@ -1875,6 +1894,13 @@ export function App() {
     (sessions: BuddySession[]) => void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(sessions)).catch(() => {}),
     [libraryStore],
   );
+  unhideSessionRef.current = (sessionId: string) =>
+    setBuddySessions((prev) => {
+      if (!prev.some((s) => s.id === sessionId && s.hidden)) return prev;
+      const next = prev.map((s) => (s.id === sessionId ? { ...s, hidden: false } : s));
+      persistSessions(next);
+      return next;
+    });
   // Rename a chat session (a user-set label that overrides the folder/"Chat N" fallback). Empty
   // clears it back to the fallback.
   const onRenameBuddySession = useCallback(
@@ -2478,18 +2504,11 @@ export function App() {
       // closure is a render old, which is exactly long enough to miss a workspace minted by a run
       // that fired moments ago — and to miss it is to orphan it.
       const sessionId = (await loadScheduledTasks(libraryStore)).find((t) => t.id === id)?.sessionId;
-      if (sessionId) {
-        setBuddySessions((prev) => {
-          if (!prev.some((s) => s.id === sessionId && s.hidden)) return prev;
-          const next = prev.map((s) => (s.id === sessionId ? { ...s, hidden: false } : s));
-          persistSessions(next);
-          return next;
-        });
-      }
+      if (sessionId) unhideSessionRef.current(sessionId);
       await deleteScheduledTask(libraryStore, id);
       refreshScheduled();
     },
-    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync, persistSessions],
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
   );
   /**
    * Change WHAT a scheduled action does — the panel's ✎ Edit.
@@ -2550,7 +2569,11 @@ export function App() {
    * are not trapped here" must not be the thing that disappears, so the chain below always ends
    * somewhere: the general chat, else any other session, else the general chat re-created. */
   const leaveChatTargetId = useMemo(() => {
-    const open = buddySessions.filter((s) => !s.closed);
+    // A hidden workspace is not somewhere to LAND. Leaving a chat drops you into whatever is next,
+    // and a task's or scheduled action's window isn't in the switcher — so arriving in one leaves
+    // the picker naming a chat you can't see listed, with no obvious way back. They are reached
+    // deliberately, from 📋 Tasks and ⏰ Scheduled, or not at all.
+    const open = buddySessions.filter((s) => !s.closed && !s.hidden);
     if (activeBuddyId !== BUDDY_CHAT_ID && open.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
     return open.find((s) => s.id !== activeBuddyId)?.id ?? BUDDY_CHAT_ID;
   }, [buddySessions, activeBuddyId]);
@@ -4505,6 +4528,11 @@ export function App() {
               workingDir: typeof s.workingDir === "string" ? s.workingDir : "",
               ...(typeof s.label === "string" && s.label.trim() ? { label: s.label } : {}),
               ...(s.closed ? { closed: true as const } : {}),
+              // AND `hidden`, for exactly the reason the label note above records. This map is an
+              // allowlist rebuilt field by field, so anything not named here survives in memory and
+              // is gone on the next reload — which is what put every scheduled task's workspace back
+              // into the chat switcher after a restart, the one place they are meant never to appear.
+              ...(s.hidden ? { hidden: true as const } : {}),
             }));
         }
       } catch {
@@ -8435,8 +8463,11 @@ export function App() {
         const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
         sessionId = sid;
         setBuddySessions((prev) => {
-          // Name the task's dedicated chat after the task, so the session list reads as the task.
-          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan) }];
+          // Name the task's dedicated chat after the task, and keep it OUT of the switcher: it
+          // belongs to the task and is opened from 📋 Tasks, exactly like a scheduled action's
+          // window is opened from ⏰ Scheduled. Listing them buries the reader's actual
+          // conversations under one entry per task they happen to be running.
+          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan), hidden: true as const }];
           persistSessions(next);
           return next;
         });
@@ -8448,7 +8479,7 @@ export function App() {
         // under it, so reopening the task brings the whole conversation back instead of a blank chat.
         const sid = sessionId;
         setBuddySessions((prev) => {
-          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan) }];
+          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan), hidden: true as const }];
           persistSessions(next);
           return next;
         });
@@ -8457,8 +8488,8 @@ export function App() {
         // a task is exactly the moment its chat should come back into the switcher.
         const label = sessionLabelForPlan(plan);
         setBuddySessions((prev) => {
-          if (prev.some((s) => s.id === sessionId && s.label === label && !s.closed)) return prev;
-          const next = prev.map((s) => (s.id === sessionId ? { ...s, label, closed: false } : s));
+          if (prev.some((s) => s.id === sessionId && s.label === label && !s.closed && s.hidden)) return prev;
+          const next = prev.map((s) => (s.id === sessionId ? { ...s, label, closed: false, hidden: true as const } : s));
           persistSessions(next);
           return next;
         });
