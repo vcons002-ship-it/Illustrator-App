@@ -226,3 +226,59 @@ describe("filterOptions", () => {
     expect(filterOptions(opts, "   ")).toEqual(opts);
   });
 });
+
+describe("the AUTOMATIC1111 / ComfyUI split", () => {
+  const videoOf = (s: Partial<ReaderSettings>) => groupsOf(s).find((g) => g.key === "video")!;
+  const A1111 = { imageProvider: "local", localBackend: "a1111" } as Partial<ReaderSettings>;
+
+  it("names the ComfyUI video actually renders on, host:port not a full URL", () => {
+    const g = videoOf({ localServerUrlByBackend: { comfyui: "http://127.0.0.1:8188/" } });
+    expect(g.note).toContain("127.0.0.1:8188");
+    expect(g.note).not.toContain("http://");
+    expect(g.warning).toBeUndefined();
+  });
+
+  it("says the two servers are DIFFERENT when images are on AUTOMATIC1111", () => {
+    // The case the note exists for: pictures come from one server, video from another, and nothing
+    // on screen used to say so.
+    const g = videoOf({ ...A1111, localServerUrlByBackend: { comfyui: "http://10.0.0.5:8188" } });
+    expect(g.note).toContain("separate server");
+    expect(g.note).toContain("AUTOMATIC1111");
+  });
+
+  it("WARNS, rather than reassures, when an A1111 reader has no ComfyUI at all", () => {
+    // Previously this tab said "Video renders on your local ComfyUI." to someone who had none — true,
+    // and no help in working out why nothing rendered.
+    const g = videoOf(A1111);
+    expect(g.note).toBeUndefined();
+    expect(g.warning).toContain("can't render video");
+    expect(g.warning).toContain("Settings");
+  });
+
+  it("warns more plainly when there's simply no ComfyUI yet", () => {
+    const g = videoOf({});
+    expect(g.warning).toContain("No ComfyUI is configured");
+    expect(g.warning).not.toContain("AUTOMATIC1111"); // they aren't on it — don't invent a conflict
+  });
+
+  it("tells the image tab that switching backend leaves video where it is", () => {
+    const ckpt = { imageModels: [model("sdxl.safetensors")] };
+    const img = groupsOf({ ...A1111, localServerUrlByBackend: { comfyui: "http://127.0.0.1:8188" } }, ckpt).find(
+      (g) => g.key === "image",
+    )!;
+    expect(img.note).toContain("video stays on ComfyUI");
+    // Not said when there's no second server in play — it would be noise.
+    expect(
+      groupsOf({ imageProvider: "local", localBackend: "comfyui" }, ckpt).find((g) => g.key === "image")!.note,
+    ).toBeUndefined();
+  });
+
+  it("carries the note and warning through sectionize, where the popover reads them", () => {
+    const g = videoOf(A1111);
+    const [section] = sectionizeGroup(g);
+    expect(section!.warning).toBe(g.warning);
+    // A group with neither still gets the generic caption rather than nothing.
+    const plain = sectionizeGroup({ key: "video", label: "Video model", options: videoOf({}).options });
+    expect(plain[0]!.note).toContain("ComfyUI");
+  });
+});
