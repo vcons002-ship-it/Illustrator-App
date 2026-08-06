@@ -13,6 +13,7 @@ export * from "./souls.js";
 export * from "./creative-log.js";
 export * from "./thinking-display.js";
 export * from "./skills.js";
+export * from "./builtin-skills.js";
 export * from "./skill-proposal.js";
 export * from "./task-history.js";
 export * from "./remote-bus.js";
