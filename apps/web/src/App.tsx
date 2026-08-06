@@ -2904,13 +2904,35 @@ export function App() {
       const branch = (await runCommand("git rev-parse --abbrev-ref HEAD", token, root)).stdout.trim();
       const head = (await runCommand("git rev-parse --short HEAD", token, root)).stdout.trim();
       const at = branch && head ? ` (${branch} @ ${head})` : "";
-      if (/already up to date/i.test(pull.stdout)) {
+      // "Nothing to pull" is NOT the same as "nothing to do".
+      //
+      // The pull moving nothing only says the FILES are current. If a previous update pulled the
+      // code but its rebuild didn't land — the build timed out, the relaunch failed, the reader
+      // closed the window — the checkout sits ahead of the binary that's running, and every later
+      // press of this button returned "you're already on the latest version" and stopped here,
+      // before install, before build, before the desktop rebuild. The one state the button exists
+      // to fix was the one state it refused to act on, and it said everything was fine while doing
+      // it. Observed in the wild: files at 5292a09, window running a build of aa7457f.
+      //
+      // So the question is whether the RUNNING BUILD matches the checkout, not whether the pull
+      // moved. Both numbers are already on screen in Settings; this just acts on them.
+      // The stamp's own field, not the formatted label — that label is for humans and reparsing it
+      // would make this depend on how it happens to be worded. `loadBuildStamp` is cached, so this
+      // is a read, not a fetch, and it yields "unstamped" rather than throwing if the file is gone.
+      const stampSha = (await loadBuildStamp().catch(() => undefined))?.sha ?? "";
+      const runningBuild = /^[0-9a-f]{7,40}$/i.test(stampSha) ? stampSha : "";
+      const buildMatchesCheckout =
+        !!runningBuild && !!head && (runningBuild.startsWith(head) || head.startsWith(runningBuild));
+      if (/already up to date/i.test(pull.stdout) && (buildMatchesCheckout || !runningBuild)) {
         return {
           status: "uptodate",
           message:
             `You're already on the latest version${at}. If you're waiting on a change that isn't here, ` +
             "check that this is the branch it went to — Settings shows the build this app is actually running.",
         };
+      }
+      if (/already up to date/i.test(pull.stdout)) {
+        onProgress(`Files are at ${head}, but this app is running a build of ${runningBuild} — rebuilding…`);
       }
       // What did the pull change? Two things a reload cannot pick up:
       //  - src-tauri: the Rust shell is a compiled binary.
@@ -2920,9 +2942,21 @@ export function App() {
       //    sibling child of the tauri CLI). Only closing the window running desktop.bat restarts it.
       // Everything else — all app source — a rebuild + reload applies, which is why the build stamp
       // is a file read at runtime rather than a value baked into the vite config.
-      const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
-      const coreChanged = /apps\/desktop\/src-tauri\//.test(diff.stdout);
-      const buildConfigChanged = /(^|\/)(vite\.config\.ts|package\.json|pnpm-lock\.yaml)$/m.test(diff.stdout);
+      //
+      // Compared against the RUNNING BUILD, not against ORIG_HEAD. git only writes ORIG_HEAD when a
+      // pull actually moves the branch, so on the catch-up path above it is either missing or left
+      // over from some earlier operation — and a stale one would answer this question about the
+      // wrong pair of commits. The build stamp is the honest other end: it is what this window is
+      // running. Falling back to ORIG_HEAD keeps the normal path exactly as it was.
+      const from = runningBuild && !buildMatchesCheckout ? runningBuild : "ORIG_HEAD";
+      const diff = await runCommand(`git diff --name-only ${from} HEAD`, token, root);
+      // An unusable range (the build predates a rebase, say) prints nothing and exits non-zero,
+      // which would silently read as "nothing changed" — the safe answer there is that everything
+      // might have, so assume both.
+      const diffUnusable = diff.code !== 0;
+      const coreChanged = diffUnusable || /apps\/desktop\/src-tauri\//.test(diff.stdout);
+      const buildConfigChanged =
+        diffUnusable || /(^|\/)(vite\.config\.ts|package\.json|pnpm-lock\.yaml)$/m.test(diff.stdout);
       onProgress("Installing dependencies…");
       const install = await runCommand("pnpm install", token, root);
       if (install.timedOut || install.code !== 0) {

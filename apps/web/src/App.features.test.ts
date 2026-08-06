@@ -215,4 +215,32 @@ describe("typography: a sans UI around a serif book", () => {
   it("leaves code and plain text on the monospace face", () => {
     expect(styleBlock("readerPlainText")).toMatch(/ui-monospace|t\.font\.mono/);
   });
+
+  /**
+   * THE SHELL WAS NOT THE ONLY PLACE THAT SAID GEORGIA.
+   *
+   * A portalled surface renders on a bare <body>, outside the app tree, so it inherits nothing and
+   * has to restate its own font. SettingsPanel restated the READING font — copied from the shell
+   * back when it did inherit — so after the shell moved to sans, the entire Settings panel stayed
+   * serif. On screen that is indistinguishable from the stylesheet failing to load, which is
+   * exactly how it was reported.
+   *
+   * Checking one file was the mistake. Anything that carries its own copy of a value carries its
+   * own copy of a mistake, so every portalled surface is checked, by finding them rather than by
+   * listing them — a new portal added later is caught without anyone remembering to add it here.
+   */
+  it("no portalled surface reintroduces the reading font as its UI font", () => {
+    const offenders: string[] = [];
+    for (const f of readdirSync(UI_SRC).filter((n) => n.endsWith(".tsx"))) {
+      const src = readFileSync(join(UI_SRC, f), "utf8");
+      if (!src.includes("createPortal")) continue;
+      src.split("\n").forEach((line, i) => {
+        if (/fontFamily:\s*["'`][^"'`]*(Georgia|Iowan|serif)/.test(line)) offenders.push(`${f}:${i + 1}`);
+      });
+    }
+    expect(
+      offenders,
+      `portalled surfaces declaring the book face for their chrome: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
 });
