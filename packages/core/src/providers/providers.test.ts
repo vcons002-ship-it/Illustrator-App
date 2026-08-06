@@ -1831,6 +1831,58 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(wf["22"]!.inputs.end_at).toBeLessThan(1);
   });
 
+  it("uses the preset spelling the INSTALLED loader declares, not the bare id", async () => {
+    // Current ComfyUI_IPAdapter_plus labels its presets. Sending "STANDARD" against this enum is a
+    // `value_not_in_list` rejection of the WHOLE prompt — reported as a 400 with node_errors on 20.
+    const presets = [
+      "LIGHT - SD1.5 only (low strength)",
+      "STANDARD (medium strength)",
+      "VIT-G (medium strength)",
+      "PLUS (high strength)",
+    ];
+    const t = transportWith({
+      IPAdapterAdvanced: { input: {} },
+      IPAdapterUnifiedLoader: { input: { required: { preset: [presets, {}] } } },
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(refInput, "sd_xl_base_1.0.safetensors");
+    expect(workflowOf(t)["20"]!.inputs.preset).toBe("STANDARD (medium strength)");
+  });
+
+  it("sends every required input the apply node declares, at the node's own defaults", async () => {
+    // The other half of the same 400: IPAdapterAdvanced grew `combine_embeds` + `embeds_scaling`,
+    // and an input we don't send is a MISSING REQUIRED INPUT — the API fills nothing in (see #482).
+    const t = transportWith({
+      IPAdapterUnifiedLoader: { input: {} },
+      IPAdapterAdvanced: {
+        input: {
+          required: {
+            combine_embeds: [["concat", "add", "average"], { default: "concat" }],
+            embeds_scaling: [["V only", "K+V"], {}],
+          },
+        },
+      },
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(refInput, "sd_xl_base_1.0.safetensors");
+    const apply = workflowOf(t)["22"]!.inputs;
+    expect(apply.combine_embeds).toBe("concat"); // declared default wins
+    expect(apply.embeds_scaling).toBe("V only"); // no default → the enum's first entry
+    // The inputs the builder already sets are untouched.
+    expect(apply.weight).toBe(0.7);
+    expect(apply.end_at).toBe(0.55);
+  });
+
+  it("keeps working against a version that declares neither", async () => {
+    // The regression guard on the fix itself: an older node set must not gain invented inputs.
+    const t = transportWith({ IPAdapterAdvanced: { input: {} }, IPAdapterUnifiedLoader: { input: {} } });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(refInput, "sd_xl_base_1.0.safetensors");
+    const apply = workflowOf(t)["22"]!.inputs;
+    expect(apply.combine_embeds).toBeUndefined();
+    expect(workflowOf(t)["20"]!.inputs.preset).toBe("STANDARD");
+  });
+
   it("old node set → IPAdapterModelLoader + CLIPVisionLoader + IPAdapterApply", async () => {
     const t = transportWith({
       IPAdapterApply: { input: {} },

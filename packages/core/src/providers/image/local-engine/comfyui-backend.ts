@@ -437,6 +437,12 @@ interface IpAdapterCaps {
   /** Classic path needs an explicit ipadapter model + clip-vision model. */
   ipadapterModel?: string;
   clipVisionModel?: string;
+  /** The INSTALLED spelling of the STANDARD preset ("STANDARD (medium strength)" in current builds).
+   * Resolved from the loader's own enum so a rename can't reject the workflow. */
+  preset?: string;
+  /** Required inputs the apply node declares beyond the ones this builder sets, with the node's own
+   * defaults — see {@link schemaDefaults}. Empty on versions that declare nothing extra. */
+  applyExtras?: Record<string, unknown>;
 }
 
 /** Uploaded reference image, as ComfyUI's LoadImage refers to it. */
@@ -1011,13 +1017,32 @@ export class ComfyUIBackend implements LocalEngineBackend {
               ? "apply"
               : undefined;
           if (!apply) return null;
+          // READ THE INSTALLED NODE'S OWN SCHEMA rather than assuming the spelling and input set this
+          // workflow was written against. ComfyUI_IPAdapter_plus has renamed its presets and grown
+          // required inputs; both are rejections of the WHOLE prompt, before a step runs, and both
+          // are answerable from the schema we already fetched here.
+          const applyNode = apply === "advanced" ? nodes.IPAdapterAdvanced : nodes.IPAdapterApply;
+          const applyExtras = schemaDefaults(applyNode, [
+            "model",
+            "ipadapter",
+            "image",
+            "weight",
+            "weight_type",
+            "start_at",
+            "end_at",
+            "clip_vision", // classic path supplies this; the unified node doesn't declare it
+          ]);
+          const extras = Object.keys(applyExtras).length > 0 ? { applyExtras } : {};
           // Modern path: one UnifiedLoader bundles the ipadapter + clip-vision models.
-          if (has("IPAdapterUnifiedLoader")) return { apply, unified: true };
+          if (has("IPAdapterUnifiedLoader")) {
+            const preset = matchEnumValue(nodes.IPAdapterUnifiedLoader, "preset", "STANDARD");
+            return { apply, unified: true, ...(preset ? { preset } : {}), ...extras };
+          }
           // Classic path: needs explicit model loaders + at least one of each model.
           if (has("IPAdapterModelLoader") && has("CLIPVisionLoader")) {
             const ip = firstEnum(nodes.IPAdapterModelLoader, "ipadapter_file");
             const cv = firstEnum(nodes.CLIPVisionLoader, "clip_name");
-            if (ip && cv) return { apply, unified: false, ipadapterModel: ip, clipVisionModel: cv };
+            if (ip && cv) return { apply, unified: false, ipadapterModel: ip, clipVisionModel: cv, ...extras };
           }
           return null;
         } catch {
@@ -2008,8 +2033,10 @@ function addUnifiedIpAdapter(
   graph["20"] = {
     class_type: "IPAdapterUnifiedLoader",
     // STANDARD (not "PLUS (high strength)") so the reference guides identity without
-    // overpowering the composition the prompt describes.
-    inputs: { model: baseModel, preset: "STANDARD" },
+    // overpowering the composition the prompt describes — but spelled the way the INSTALLED node
+    // spells it. Current builds label it "STANDARD (medium strength)" and reject the bare id
+    // outright (`value_not_in_list`), taking the whole workflow down with it.
+    inputs: { model: baseModel, preset: ip.caps.preset ?? "STANDARD" },
   };
   let current: [string, number] = ["20", 0];
   ip.refs.forEach((ref, i) => {
@@ -2028,6 +2055,10 @@ function addUnifiedIpAdapter(
         // End IP-Adapter partway so early diffusion steps establish the scene/action
         // composition; identity is refined after, not dictated from step 0 (no portrait).
         end_at: 0.55,
+        // Anything else this version of the node declares as required (combine_embeds,
+        // embeds_scaling, …), at its own defaults. The API fills nothing in — an input we don't send
+        // is a missing required input and the prompt is rejected. See schemaDefaults.
+        ...(ip.caps.applyExtras ?? {}),
       },
     };
     current = [applyId, 0];
@@ -2067,6 +2098,8 @@ function addClassicIpAdapter(
               weight_type: "linear",
               start_at: 0,
               end_at: 1,
+              // Same reason as the unified path: every input this version declares must be sent.
+              ...(ip.caps.applyExtras ?? {}),
             },
           }
         : {
@@ -2085,6 +2118,62 @@ function addClassicIpAdapter(
 }
 
 /** First value of a node's required enum input (e.g. an installed model name). */
+/**
+ * The enum value on `key` that MEANS `wanted` — exact match, else the entry that starts with it.
+ *
+ * ComfyUI_IPAdapter_plus renamed its presets from bare ids to descriptive labels: what the workflow
+ * asked for as "STANDARD" is spelled "STANDARD (medium strength)" in current builds, and the engine
+ * rejects the whole prompt with `value_not_in_list` rather than coercing it. Matching on the prefix
+ * means the same graph works either side of that rename, and keeps working through the next one.
+ * Returns undefined when the node has no such enum — the caller then sends what it always sent. PURE.
+ */
+export function matchEnumValue(node: NodeSchema | undefined, key: string, wanted: string): string | undefined {
+  const spec = node?.input?.required?.[key];
+  if (!Array.isArray(spec) || !Array.isArray(spec[0])) return undefined;
+  const options = (spec[0] as unknown[]).filter((v): v is string => typeof v === "string");
+  const target = wanted.trim().toLowerCase();
+  return options.find((o) => o.toLowerCase() === target) ?? options.find((o) => o.toLowerCase().startsWith(target));
+}
+
+/**
+ * Required inputs the node DECLARES that we aren't sending, each with a value taken from the node's
+ * own schema. PURE.
+ *
+ * The lesson of #482, generalised: a default in the schema is the node's UI default and the prompt
+ * API fills nothing in, so every declared required input has to be sent or the workflow is rejected
+ * before a step runs. IPAdapterAdvanced grew `combine_embeds` and `embeds_scaling` and the graph was
+ * still sending the older input set, which read as two missing required inputs.
+ *
+ * Deriving them from the schema rather than hard-coding today's names is the point: the next input
+ * this node grows is filled with its own default instead of breaking every reference render again.
+ * Inputs with no usable value in the schema are skipped — inventing a number we don't understand is
+ * worse than the error.
+ */
+export function schemaDefaults(node: NodeSchema | undefined, provided: readonly string[]): Record<string, unknown> {
+  const required = node?.input?.required;
+  if (!required) return {};
+  const have = new Set(provided);
+  const out: Record<string, unknown> = {};
+  for (const [key, spec] of Object.entries(required)) {
+    if (have.has(key) || !Array.isArray(spec)) continue;
+    const config = spec[1];
+    const declared =
+      config && typeof config === "object" && "default" in (config as Record<string, unknown>)
+        ? (config as Record<string, unknown>).default
+        : undefined;
+    if (declared !== undefined && (typeof declared === "string" || typeof declared === "number" || typeof declared === "boolean")) {
+      out[key] = declared;
+      continue;
+    }
+    // No declared default — an enum's first entry is the node's own effective default.
+    if (Array.isArray(spec[0])) {
+      const first = (spec[0] as unknown[])[0];
+      if (typeof first === "string") out[key] = first;
+    }
+  }
+  return out;
+}
+
 function firstEnum(node: NodeSchema | undefined, key: string): string | undefined {
   const spec = node?.input?.required?.[key];
   if (Array.isArray(spec) && Array.isArray(spec[0])) {
