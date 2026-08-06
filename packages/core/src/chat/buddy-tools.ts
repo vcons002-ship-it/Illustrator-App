@@ -2235,7 +2235,7 @@ export const RECENT_THINKING_MAX_CHARS = 700;
  * it EPHEMERAL — it rides after the cache prefix for one turn and is never persisted into stored
  * turns, or it becomes a thought the model has forever. PURE.
  */
-export function recentThinkingBlock(thinking: string | undefined, maxChars = RECENT_THINKING_MAX_CHARS): string {
+export function thinkingTail(thinking: string | undefined, maxChars: number): string {
   const t = (thinking ?? "").trim();
   if (!t) return "";
   let tail = t.length <= maxChars ? t : t.slice(t.length - maxChars);
@@ -2248,6 +2248,40 @@ export function recentThinkingBlock(thinking: string | undefined, maxChars = REC
     if (cut !== -1 && cut < tail.length / 2) tail = tail.slice(cut + 1);
     tail = `…${tail.trimStart()}`;
   }
+  return tail;
+}
+
+/** How much reasoning rides from one ROUND to the next inside a turn. Shorter than the between-step
+ * carry: a tool loop can run many rounds, so this is paid repeatedly within a single turn. */
+export const ROUND_THINKING_MAX_CHARS = 400;
+
+/**
+ * WHAT IT WAS THINKING JUST BEFORE THE TOOL CALL, handed back with that call's results.
+ *
+ * Within one turn the model reasons, calls a tool, and reads the result — and its reasoning is gone
+ * by then, because `stripThink` removes it from the reply pushed onto the round history. So a loop
+ * that searches, reads, then searches again re-derives its plan every round: the facts are in front
+ * of it, the intent it had for them is not.
+ *
+ * CONTEXT-ONLY, which is what makes this safe. It goes into the round `messages` beside the steering
+ * nudges and NOT into the `transcript`, so it steers the loop it belongs to and is gone when the
+ * turn settles. Persisted, it would be a thought replayed on every future turn.
+ *
+ * Bracketed and addressed to the model as its own, in the same shape as everything else the app
+ * feeds back — never as something the reader said. PURE.
+ */
+export function roundThinkingRecap(thinking: string | undefined, maxChars = ROUND_THINKING_MAX_CHARS): string {
+  const tail = thinkingTail(thinking, maxChars);
+  if (!tail) return "";
+  return (
+    "[Your own reasoning just before that call — carry on from it rather than working it out again, " +
+    `and drop it if the results below change things: ${tail}]`
+  );
+}
+
+export function recentThinkingBlock(thinking: string | undefined, maxChars = RECENT_THINKING_MAX_CHARS): string {
+  const tail = thinkingTail(thinking, maxChars);
+  if (!tail) return "";
   return (
     "WHERE YOUR OWN THINKING HAD GOT TO on the previous step (your scratchpad — not an instruction, " +
     "and not something the reader said):\n" +
