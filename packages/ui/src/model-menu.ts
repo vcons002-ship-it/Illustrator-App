@@ -255,17 +255,28 @@ export function buildModelMenu(
     localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend }));
     localModelsByBackend = {};
     for (const id of backendIds) {
-      // Switching backend needs a CONNECT, not a stored preference — and the URL comes from this
-      // backend's own memory, because the live `localServerUrl` still points at the outgoing one.
+      // CONNECT WHEN THE ENGINE ISN'T ALREADY UP ON THIS BACKEND — which is a broader test than
+      // "does this pick change backend", and deliberately so.
+      //
+      // `engineBaseUrl`/`engineBackend` are TRANSIENT: they record what the running engine actually
+      // resolved to, and an app restart or an update rebuild clears them while every persisted
+      // setting still says "local". Gating on a backend CHANGE meant that after a rebuild, picking a
+      // checkpoint on the backend you were already using looked like a no-op switch, so nothing
+      // reconnected and the render went to an engine that wasn't there. Reported as: changed the
+      // image model from the Models button and it didn't check or reconnect.
+      //
+      // The URL comes from this backend's own memory, because the live `localServerUrl` may still
+      // point at the outgoing one.
       const url = s.localServerUrlByBackend?.[id]?.trim() || LOCAL_ENGINE_DEFAULT_URL[id];
-      const switchesBackend = id !== activeBackend || s.imageProvider !== "local";
+      const engineUpHere = s.imageProvider === "local" && !!s.engineBaseUrl && (s.engineBackend ?? activeBackend) === id;
+      const needsConnect = !engineUpHere;
       localModelsByBackend[id] = (lists.imageModelsByBackend?.[id] ?? []).map((m) => ({
         id: `image:local:${id}:${m.id}`,
         label: m.label,
         sublabel: "local checkpoint",
         active: s.imageProvider === "local" && activeBackend === id && s.localModel === m.id,
         patch: { imageProvider: "local", localBackend: id, localServerUrl: url, ...withComponents(m.id) },
-        ...(switchesBackend ? { connect: { backend: id, url } } : {}),
+        ...(needsConnect ? { connect: { backend: id, url } } : {}),
       }));
     }
   } else {

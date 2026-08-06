@@ -452,7 +452,19 @@ export function useLocalEngine(deps: LocalEngineDeps) {
   // uses it without waiting on the debounced settings sync. No-op when not deferred (already running, a
   // user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
   const ensureRenderEngineReady = useCallback(async (): Promise<void> => {
-    if (!engineDeferredRef.current) return;
+    const s = settingsRef.current;
+    // A LOST ENGINE IS THE SAME JOB AS A DEFERRED ONE, and this only handled the deferred case.
+    //
+    // `engineBaseUrl` is transient — it records what the running engine actually resolved to, and an
+    // app restart or an update rebuild clears it while every persisted setting still says "local".
+    // Nothing then brought it back on the render path: `engineDeferredRef` is only set by the
+    // low-VRAM defer, so this returned immediately and the render went to an engine that wasn't
+    // there. Reported as: ComfyUI doesn't reconnect after an update rebuild.
+    //
+    // Starting is idempotent (startActiveLocalEngine probes first and concurrent calls share one
+    // in-flight start), so the extra condition costs nothing when the engine IS up.
+    const lostEngine = isDesktop && !isRemoteClient && s.imageProvider === "local" && !s.engineBaseUrl;
+    if (!engineDeferredRef.current && !lostEngine) return;
     setEngineStatus("Starting the local image engine…");
     const start = engineStartingRef.current ?? startActiveLocalEngine(settingsRef.current.localBackend ?? "comfyui");
     engineStartingRef.current = start;
@@ -465,11 +477,17 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         // standalone render would re-run the whole ensure/probe path and the banner would stick (H6).
         engineDeferredRef.current = false;
         setEngineStatus("");
+      } else {
+        // It didn't come up. Clear the banner and say why, rather than leaving "Starting the local
+        // image engine…" on screen forever while the render fails behind it — a stuck status reads
+        // as "still working" and is the one thing worse than an error.
+        setEngineStatus("");
+        setLocalError(`Couldn't start the local image engine: ${res.reason}`);
       }
     } finally {
       engineStartingRef.current = undefined;
     }
-  }, [startActiveLocalEngine, applyEngineConfig, setEngineStatus]);
+  }, [startActiveLocalEngine, applyEngineConfig, setEngineStatus, setLocalError, isRemoteClient]);
 
   // LOW-VRAM: when a book opens while the engine was deferred, start it now — a bible build needs it, and
   // the full start path rebuilds the book's persistent engine with the real URL (vs. the tune-only flush

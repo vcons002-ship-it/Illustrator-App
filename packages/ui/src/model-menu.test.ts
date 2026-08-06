@@ -70,7 +70,16 @@ describe("buildModelMenu", () => {
 
   it("goes provider-first for images when imageModelsByBackend is supplied", () => {
     const groups = buildModelMenu(
-      { ...DEFAULT_SETTINGS, imageProvider: "local", localBackend: "comfyui", localModel: "sdxl.safetensors" },
+      {
+        ...DEFAULT_SETTINGS,
+        imageProvider: "local",
+        localBackend: "comfyui",
+        localModel: "sdxl.safetensors",
+        // A resolved engine, so the ComfyUI picks below need no reconnect (the rule is "is the engine
+        // already up on this backend", not "does this change backend").
+        engineBaseUrl: "http://127.0.0.1:8188",
+        engineBackend: "comfyui",
+      },
       {
         textModels: [],
         imageModels: [],
@@ -99,7 +108,7 @@ describe("buildModelMenu", () => {
       localTextEncoder: "",
       localVae: "",
     });
-    // Already the active backend — nothing to reconnect.
+    // The engine is already up on this backend — nothing to reconnect.
     expect(comfy[0]!.connect).toBeUndefined();
     const a1111 = image.localModelsByBackend!.a1111!;
     expect(a1111).toHaveLength(1);
@@ -382,6 +391,8 @@ describe("a model pick carries the settings that must move with it", () => {
       localBackend: "comfyui",
       localServerUrl: "http://127.0.0.1:8188",
       localServerUrlByBackend: { comfyui: "http://127.0.0.1:8188", a1111: "http://127.0.0.1:7860" },
+      engineBaseUrl: "http://127.0.0.1:8188",
+      engineBackend: "comfyui",
     });
     const image = g.find((x) => x.key === "image")!;
     const other = image.localModelsByBackend!.a1111![0]!;
@@ -391,9 +402,34 @@ describe("a model pick carries the settings that must move with it", () => {
     expect(other.patch.localServerUrl).toBe("http://127.0.0.1:7860");
   });
 
-  it("does NOT reconnect for a pick within the backend already in use", () => {
-    const g = build({ imageProvider: "local", localBackend: "comfyui" });
+  it("does NOT reconnect for a pick within a backend whose engine is already UP", () => {
+    const g = build({
+      imageProvider: "local",
+      localBackend: "comfyui",
+      engineBaseUrl: "http://127.0.0.1:8188",
+      engineBackend: "comfyui",
+    });
     expect(g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!.connect).toBeUndefined();
+  });
+
+  it("DOES reconnect on the same backend when no engine is resolved — the post-rebuild case", () => {
+    // engineBaseUrl is transient: an update rebuild clears it while every persisted setting still
+    // says "local". Gating on a backend CHANGE made this look like a no-op switch, so nothing
+    // reconnected and the render went to an engine that wasn't there.
+    const g = build({ imageProvider: "local", localBackend: "comfyui" });
+    expect(g.find((x) => x.key === "image")!.localModelsByBackend!.comfyui![0]!.connect).toEqual({
+      backend: "comfyui",
+      url: "http://127.0.0.1:8188",
+    });
+  });
+
+  it("reconnects when the running engine is on the OTHER backend than the stored preference", () => {
+    // engineBackend is what's actually running; localBackend is only what was asked for. A fallback
+    // to the managed ComfyUI makes them disagree, and the running one is the truth.
+    const g = build({ imageProvider: "local", localBackend: "a1111", engineBaseUrl: "http://x", engineBackend: "comfyui" });
+    const image = g.find((x) => x.key === "image")!;
+    expect(image.localModelsByBackend!.comfyui![0]!.connect).toBeUndefined();
+    expect(image.localModelsByBackend!.a1111![0]!.connect).toBeDefined();
   });
 
   it("reconnects when coming from a CLOUD provider, where no local engine is up at all", () => {
