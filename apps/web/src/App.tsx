@@ -1993,9 +1993,8 @@ export function App() {
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
   // Phone-sized viewport → single-column reader, auto-collapsed toolbar + chat history.
   const narrow = useNarrow(760);
-  // Top toolbar's big button row collapses behind a "Tools" caret — default collapsed on phones
-  // to reclaim vertical space; the title + Exit book + mode badge stay visible regardless.
-  const [toolbarOpen, setToolbarOpen] = useState(() => !narrow);
+  // The "Tools" caret is gone: the header is five grouped menus, so there is no longer a wall of
+  // buttons to hide. Collapsing it was only ever a workaround for the row being too long.
   // The book's own tools (illustrate, redo, characters, export…) are a fenced-off group with their
   // own caret, so the reader can put the whole book workflow away without losing the app's tools —
   // or keep it and collapse everything else. Default collapsed on phones, like the toolbar.
@@ -3198,6 +3197,9 @@ export function App() {
     () => !!book?.pages.some((p) => p.paragraphs.some((pr) => pr.html)),
     [book],
   );
+  // Every item in "This book" is conditional, so the menu itself has to be — an empty dropdown that
+  // opens onto nothing is worse than no button at all.
+  const thisBookMenu = !!book && (book.contentMode === "code" || bookHasHtml || book.kind !== "story");
   const pageEntities =
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
@@ -9898,256 +9900,365 @@ export function App() {
               {(book.contentMode === "code" || book.code) && <option value="code">⟨⟩ Code</option>}
             </select>
           )}
-          <button
-            style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: t.accent.text } : styles.button}
-            onClick={() => setToolbarOpen((v) => !v)}
-            title="Show or hide the toolbar — collapse it to reclaim screen space, especially on a phone"
-            aria-expanded={toolbarOpen}
-          >
-            {toolbarOpen ? "▾ Tools" : "▸ Tools"}
-          </button>
-          {toolbarOpen && (
-          <>
-          {book?.contentMode === "code" && (
-            <button
-              style={styles.button}
-              onClick={() => setCodeEditMode((v) => !v)}
-              title="Switch between the full-screen code editor (run / test / edit) and the illustrated reading view"
+          {/* THE HEADER, GROUPED BY WHAT YOU ARE TRYING TO DO.
+              This was ~20 controls in one wrapping row behind a "Tools" caret, in the order they
+              were built: Library beside Story beside Skills beside Calendar. On a narrow window it
+              wrapped to four rows and ate the reader, and the caret's only answer was to hide the
+              lot. Nothing is removed here — every control is one click deeper, in a group you can
+              guess from what you came to do, and the feature inventory test pins all forty labels. */}
+          {thisBookMenu && (
+            <AnchoredMenu
+              label="📖 This book"
+              title="How this book is shown, and talking to it"
+              buttonStyle={styles.button}
+              panelStyle={styles.menuList}
             >
-              {codeEditMode ? "📖 Read view" : "✏️ Edit code"}
-            </button>
+              {(close) => (
+                <>
+                  {book?.contentMode === "code" && (
+                    <button
+                      style={styles.menuItem}
+                      onClick={() => {
+                        close();
+                        setCodeEditMode((v) => !v);
+                      }}
+                    >
+                      <b>{codeEditMode ? "📖 Read view" : "✏️ Edit code"}</b>
+                      <small>Switch between the full-screen code editor (run / test / edit) and the illustrated reading view.</small>
+                    </button>
+                  )}
+                  {bookHasHtml && (
+                    <button
+                      style={styles.menuItem}
+                      onClick={() => {
+                        close();
+                        setArticleLayout((v) => !v);
+                      }}
+                    >
+                      <b>{articleLayout ? "📄 Original layout" : "📄 Clean text"}</b>
+                      <small>Toggle between the article&rsquo;s own layout (headings, images, lists) and clean reader text.</small>
+                    </button>
+                  )}
+                  {book && book.kind !== "story" && (
+                    <button
+                      style={styles.menuItem}
+                      onClick={() => {
+                        close();
+                        setShowChat(true);
+                      }}
+                    >
+                      <b>💬 Chat</b>
+                      <small>Chat about what you&rsquo;re reading — it knows the book (spoiler-safely), can search the web, and can generate images.</small>
+                    </button>
+                  )}
+                </>
+              )}
+            </AnchoredMenu>
           )}
-          {bookHasHtml && (
-            <button
-              style={articleLayout ? { ...styles.button, borderColor: t.state.good, color: t.state.good } : styles.button}
-              onClick={() => setArticleLayout((v) => !v)}
-              title="Toggle between the original article layout (headings, images, lists) and clean reader text"
-            >
-              {articleLayout ? "📄 Original layout" : "📄 Clean text"}
-            </button>
-          )}
-          {library.length > 0 && (
-            <button
-              style={styles.button}
-              onClick={() => setShowLibrary(true)}
-              title="Your opened books — switch, remove, or carry a bible forward for a series"
-            >
-              Library ({library.length})
-            </button>
-          )}
-          {!isRemoteClient && (
-            <button
-              style={styles.button}
-              onClick={() => void openCreations()}
-              title="Every image and video the assistant has generated, across all chats and books — view, download, or delete"
-            >
-              🎨 Creations
-            </button>
-          )}
-          <label
-            style={styles.upload}
-            title="Open a book or document — EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown, HTML — or drop an image to transform it"
+          <AnchoredMenu
+            label="📚 Library"
+            title="Open something to read, or make something new"
+            buttonStyle={styles.button}
+            panelStyle={styles.menuList}
           >
-            Open book…
-            <input
-              type="file"
-              accept={IMPORT_ACCEPT}
-              style={{ display: "none" }}
-              onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
-            />
-          </label>
-          <button
-            style={styles.button}
-            onClick={() => void startStoryAsYouGo()}
-            title="Write a brand-new illustrated story you co-write as you go — no file needed. Saved to your library to keep building."
+            {(close) => (
+              <>
+                <div style={styles.menuHeading}>Open</div>
+                {library.length > 0 && (
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      close();
+                      setShowLibrary(true);
+                    }}
+                  >
+                    <b>Library ({library.length})</b>
+                    <small>Your opened books — switch, remove, or carry a bible forward for a series.</small>
+                  </button>
+                )}
+                <label
+                  style={styles.menuItem}
+                  title="EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown, HTML — or drop an image to transform it"
+                >
+                  <b>Open book…</b>
+                  <small>EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown or HTML.</small>
+                  <input
+                    type="file"
+                    accept={IMPORT_ACCEPT}
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        close();
+                        onUpload(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    setShowPasteText(true);
+                  }}
+                >
+                  <b>Paste text</b>
+                  <small>Paste any text — an article, a chapter, a paper — and read or illustrate it like a book.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    openBook(loadSampleBook());
+                  }}
+                >
+                  <b>Load sample</b>
+                  <small>A short built-in story, for trying the app out.</small>
+                </button>
+                <div style={styles.menuHeading}>Make</div>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void startStoryAsYouGo();
+                  }}
+                >
+                  <b>✍️ Story</b>
+                  <small>Write a brand-new illustrated story you co-write as you go — no file needed.</small>
+                </button>
+                {!isRemoteClient && (
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      close();
+                      void openCreations();
+                    }}
+                  >
+                    <b>🎨 Creations</b>
+                    <small>Every image and video the assistant has generated, across all chats and books.</small>
+                  </button>
+                )}
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    setPhotoInitial(undefined);
+                    setShowPhoto(true);
+                  }}
+                >
+                  <b>🖼 Photo</b>
+                  <small>Start from a photo and reimagine it with your image model.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    setPolishInitial(undefined);
+                    setShowPolish(true);
+                  }}
+                >
+                  <b>✍ Polish doc</b>
+                  <small>Summarize, condense, rewrite or proofread a document — faithfully, with no illustration.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    setShowTestImage(true);
+                  }}
+                >
+                  <b>🧪 Test image</b>
+                  <small>Render one image with the current model and style — a quick way to test providers, styles and LoRAs.</small>
+                </button>
+              </>
+            )}
+          </AnchoredMenu>
+          <AnchoredMenu
+            label="🧠 Assistant"
+            title="What the assistant knows, and what it&rsquo;s working on"
+            buttonStyle={styles.button}
+            panelStyle={styles.menuList}
           >
-            ✍️ Story
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => setShowPasteText(true)}
-            title="Paste any text (an article, a chapter, a paper) and read/illustrate it like a book"
-          >
-            Paste text
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => {
-              setPolishInitial(undefined);
-              setShowPolish(true);
-            }}
-            title="Summarize, condense, rewrite, or proofread a document — faithfully, with no illustration"
-          >
-            ✍ Polish doc
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => void openSkills()}
-            title="The assistant's skills — durable how-to playbooks it keeps across every chat (view, edit, or import a .md)"
-          >
-            🧠 Skills
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => void openMemories()}
-            title="What the assistant remembers about you — durable notes it keeps across every chat (view, add, edit, or delete)"
-          >
-            💭 Memory
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => void openSoul("self")}
-            title="The assistant's own identity — its persona, voice, and look. It speaks and behaves as this character in every chat (and plays itself in a story)."
-          >
-            🪞 Soul
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => void openSoul("user")}
-            title="Who you are — your own character's look & personality, so the assistant can portray you when you play yourself."
-          >
-            👤 You
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => void openTasks()}
-            title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
-          >
-            📋 Tasks{planningCount ? " · planning…" : ""}
-          </button>
-          <button
-            style={styles.button}
-            onClick={openCalendar}
-            disabled={!googleConnected}
-            title={
-              googleConnected
-                ? "Your calendar — Google events from all your calendars plus your planned task deadlines, in one month view"
-                : "Connect Google to see your calendar here"
-            }
-          >
-            📅 Calendar
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => openStocks()}
-            title="Markets — a TradingView chart for any ticker plus a quote, and the assistant's analysis/ideas"
-          >
-            📈 Markets
-          </button>
+            {(close) => (
+              <>
+                <div style={styles.menuHeading}>What it knows</div>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void openSkills();
+                  }}
+                >
+                  <b>🧠 Skills</b>
+                  <small>Durable how-to playbooks it keeps across every chat — view, edit, or import a .md.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void openMemories();
+                  }}
+                >
+                  <b>💭 Memory</b>
+                  <small>What it remembers about you — durable notes it keeps across every chat.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void openSoul("self");
+                  }}
+                >
+                  <b>🪞 Soul</b>
+                  <small>Its own identity — persona, voice and look. It speaks and behaves as this character everywhere.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void openSoul("user");
+                  }}
+                >
+                  <b>👤 You</b>
+                  <small>Your own character&rsquo;s look and personality, so it can portray you when you play yourself.</small>
+                </button>
+                <div style={styles.menuHeading}>What it&rsquo;s doing</div>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    void openTasks();
+                  }}
+                >
+                  <b>📋 Tasks{planningCount ? " · planning…" : ""}</b>
+                  <small>Planned multi-step tasks — research, steps, deadlines, prepped docs.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    refreshScheduled();
+                    setShowScheduled(true);
+                  }}
+                >
+                  <b>⏰ Scheduled{scheduledTasks.some((t) => t.enabled) ? ` · ${scheduledTasks.filter((t) => t.enabled).length}` : ""}</b>
+                  <small>Recurring actions it runs on a cadence while the app is open.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  disabled={!googleConnected}
+                  onClick={() => {
+                    close();
+                    openCalendar();
+                  }}
+                >
+                  <b>📅 Calendar</b>
+                  <small>
+                    {googleConnected
+                      ? "Google events from all your calendars plus your planned task deadlines, in one month view."
+                      : "Connect Google to see your calendar here."}
+                  </small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    close();
+                    openStocks();
+                  }}
+                >
+                  <b>📈 Markets</b>
+                  <small>A chart for any ticker plus a quote, and the assistant&rsquo;s analysis.</small>
+                </button>
+              </>
+            )}
+          </AnchoredMenu>
           {isDesktop && (
-            <button
-              style={styles.button}
-              onClick={() => openBrowser()}
-              title="Browse — read any web page (text + links) in the app, then illustrate it or ask the assistant about it"
+            <AnchoredMenu
+              label="🔌 Connections"
+              title="The web, and your phone"
+              buttonStyle={styles.button}
+              panelStyle={styles.menuList}
             >
-              🌐 Browse
-            </button>
+              {(close) => (
+                <>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      close();
+                      openBrowser();
+                    }}
+                  >
+                    <b>🌐 Browse</b>
+                    <small>Read any web page (text + links) in the app, then illustrate it or ask about it.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      close();
+                      void openRemoteLink();
+                    }}
+                  >
+                    <b>{remoteLink?.running ? "🔗 Phone linked" : "🔗 Link phone"}</b>
+                    <small>Link a phone on your Wi-Fi to drive the assistant.</small>
+                  </button>
+                </>
+              )}
+            </AnchoredMenu>
           )}
-          {isDesktop && (
-            <button
-              style={remoteLink?.running ? { ...styles.button, borderColor: t.state.good, color: t.state.good } : styles.button}
-              onClick={() => void openRemoteLink()}
-              title="Link a phone on your Wi-Fi to drive the assistant (experimental — see REMOTE-LINK.md)"
-            >
-              {remoteLink?.running ? "🔗 Phone linked" : "🔗 Link phone"}
-            </button>
-          )}
-          <button
-            style={styles.button}
-            onClick={() => {
-              refreshScheduled();
-              setShowScheduled(true);
-            }}
-            title="Scheduled tasks — recurring actions the assistant runs on a cadence while the app is open"
-          >
-            ⏰ Scheduled{scheduledTasks.some((t) => t.enabled) ? ` · ${scheduledTasks.filter((t) => t.enabled).length}` : ""}
-          </button>
-          <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
-            Load sample
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => setShowTestImage(true)}
-            title="Type anything and render one image with the current model + style — a quick way to test providers, styles, and LoRAs"
-          >
-            Test image
-          </button>
-          <button
-            style={styles.button}
-            onClick={() => {
-              setPhotoInitial(undefined);
-              setShowPhoto(true);
-            }}
-            title="Start from a photo and reimagine it with your image model — your local engine, or Gemini/OpenAI native image"
-          >
-            🖼 Photo
-          </button>
-          {book && book.kind !== "story" && (
-            <button
-              style={styles.button}
-              onClick={() => setShowChat(true)}
-              title="Chat about what you're reading — it knows the book (spoiler-safely), can search the web, and can generate images"
-            >
-              Chat
-            </button>
-          )}
-          <SettingsPanel
-            value={settings}
-            onChange={onSettingsChange}
-            buildStamp={buildStampLabel}
-            {...(checkoutSha ? { checkoutSha } : {})}
-            {...(isDesktop ? { onExploreNow: () => void runCreativeNow() } : {})}
-            {...(lastCreativeRunLabel ? { lastCreativeRun: lastCreativeRunLabel } : {})}
-            isDesktop={isDesktop}
-            remote={isRemoteClient}
-            {...(isDesktop
-              ? { onSoftwareUpdate }
-              : isRemoteClient
-                ? { onSoftwareUpdate: onSoftwareUpdateRemote }
-                : {})}
-            {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
-            {...(!isRemoteClient ? { onExportData, onImportData } : {})}
-            installedModels={installedModels}
-            installedTextEncoders={installedTextEncoders}
-            installedVaes={installedVaes}
-            installedDiffusionModels={installedDiffusionModels}
-            installedUpscalers={installedUpscalers}
-            installedLtxTextEncoders={installedLtxTextEncoders}
-            onDownloadModel={onDownloadModel}
-            onDownloadModelUrl={onDownloadModelUrl}
-            onDownloadVideoModel={onDownloadVideoModel}
-            onInstallIpAdapter={onInstallIpAdapter}
-            {...(ipAdapterNote ? { ipAdapterNote } : {})}
-            onDownloadFfmpeg={onDownloadFfmpeg}
-            downloadProgress={modelProgress}
-            downloadStage={downloadStage}
-            engineStatus={engineStatus}
-            installedLoras={installedLoras}
-            loraFamilies={loraFamilyMap}
-            onDownloadStyleLora={onDownloadStyleLora}
-            onConnectLocalServer={onConnectLocalServer}
-            connectingLocal={connectingLocal}
-            textModels={textModels}
-            {...(textModelContext ? { textModelContext } : {})}
-            onConnectLocalTextServer={onConnectLocalTextServer}
-            connectingLocalText={connectingLocalText}
-            onPullTextModel={onPullTextModel}
-            pullProgress={pullProgress}
-            onTestSubAgentEndpoint={onTestSubAgentEndpoint}
-            googleConnected={googleConnected}
-            schwabConnected={schwabConnected}
-            canConnectSchwab={isDesktop}
-            onConnectSchwab={() => {
-              void connectSchwab().then((r) => {
-                if (!r.ok && r.error) setLocalError(r.error);
-              });
-            }}
-            {...(googleEmail ? { googleEmail } : {})}
-            onConnectGoogle={onConnectGoogle}
-            onDisconnectGoogle={onDisconnectGoogle}
-          />
-          </>
-          )}
+        <SettingsPanel
+          value={settings}
+          onChange={onSettingsChange}
+          buildStamp={buildStampLabel}
+          {...(checkoutSha ? { checkoutSha } : {})}
+          {...(isDesktop ? { onExploreNow: () => void runCreativeNow() } : {})}
+          {...(lastCreativeRunLabel ? { lastCreativeRun: lastCreativeRunLabel } : {})}
+          isDesktop={isDesktop}
+          remote={isRemoteClient}
+          {...(isDesktop
+            ? { onSoftwareUpdate }
+            : isRemoteClient
+              ? { onSoftwareUpdate: onSoftwareUpdateRemote }
+              : {})}
+          {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
+          {...(!isRemoteClient ? { onExportData, onImportData } : {})}
+          installedModels={installedModels}
+          installedTextEncoders={installedTextEncoders}
+          installedVaes={installedVaes}
+          installedDiffusionModels={installedDiffusionModels}
+          installedUpscalers={installedUpscalers}
+          installedLtxTextEncoders={installedLtxTextEncoders}
+          onDownloadModel={onDownloadModel}
+          onDownloadModelUrl={onDownloadModelUrl}
+          onDownloadVideoModel={onDownloadVideoModel}
+          onInstallIpAdapter={onInstallIpAdapter}
+          {...(ipAdapterNote ? { ipAdapterNote } : {})}
+          onDownloadFfmpeg={onDownloadFfmpeg}
+          downloadProgress={modelProgress}
+          downloadStage={downloadStage}
+          engineStatus={engineStatus}
+          installedLoras={installedLoras}
+          loraFamilies={loraFamilyMap}
+          onDownloadStyleLora={onDownloadStyleLora}
+          onConnectLocalServer={onConnectLocalServer}
+          connectingLocal={connectingLocal}
+          textModels={textModels}
+          {...(textModelContext ? { textModelContext } : {})}
+          onConnectLocalTextServer={onConnectLocalTextServer}
+          connectingLocalText={connectingLocalText}
+          onPullTextModel={onPullTextModel}
+          pullProgress={pullProgress}
+          onTestSubAgentEndpoint={onTestSubAgentEndpoint}
+          googleConnected={googleConnected}
+          schwabConnected={schwabConnected}
+          canConnectSchwab={isDesktop}
+          onConnectSchwab={() => {
+            void connectSchwab().then((r) => {
+              if (!r.ok && r.error) setLocalError(r.error);
+            });
+          }}
+          {...(googleEmail ? { googleEmail } : {})}
+          onConnectGoogle={onConnectGoogle}
+          onDisconnectGoogle={onDisconnectGoogle}
+        />
         </div>
         </div>
         {/* THE BOOK'S OWN TOOLBAR — a separate bar with its own caret, not a section of the app's
@@ -13005,6 +13116,17 @@ const styles: Record<string, React.CSSProperties> = {
     border: `1px solid ${t.border.input}`,
     borderRadius: 8,
     boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+  },
+  // Section label inside a grouped menu ("Open", "Make", "What it knows"). Not a button: it exists
+  // to break a list of ten into two lists of five, which is the whole point of the regrouping.
+  menuHeading: {
+    padding: "10px 12px 4px",
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: t.text.faint,
+    fontFamily: "system-ui, sans-serif",
   },
   menuItem: {
     display: "flex",

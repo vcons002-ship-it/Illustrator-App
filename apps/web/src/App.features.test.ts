@@ -17,13 +17,37 @@ import { describe, expect, it } from "vitest";
  * list moving is fine; the list moving SILENTLY is what this prevents.
  */
 
-const APP = readFileSync(join(__dirname, "App.tsx"), "utf8");
+const APP_RAW = readFileSync(join(__dirname, "App.tsx"), "utf8");
+
+/**
+ * App.tsx WITH ITS COMMENTARY REMOVED.
+ *
+ * The inventory below is a substring search, and this file is heavily commented — including with
+ * comments ABOUT the controls, naming them. So a control could be deleted from the UI and the gate
+ * would still pass on the comment explaining why it went. That is not hypothetical: it happened on
+ * the toolbar regrouping, where "Tools" survived the check purely because two comments mention it.
+ *
+ * Block and full-line comments only. A trailing `// …` cannot be stripped safely without parsing
+ * strings, and it is not where this file explains itself.
+ */
+const APP = APP_RAW.replace(/\/\*[\s\S]*?\*\//g, "")
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("//"))
+  .join("\n");
 const UI_SRC = join(__dirname, "..", "..", "..", "packages", "ui", "src");
 
 /** Every button/control label reachable from the header and book toolbars. */
 const CONTROLS = [
   "Exit book",
-  "Tools",
+  // The five groups that replaced the flat "Tools" row. "Tools" itself is deliberately gone from
+  // this list: that caret no longer exists. Kept as a reminder of why the list is edited in the
+  // same commit as the UI rather than trusted to stay true on its own — and note that a bare
+  // "Tools" would still have PASSED, matching the identifier `bookToolsOpen`, which is the limit
+  // of substring matching on source and the reason these entries carry their emoji.
+  "📖 This book",
+  "📚 Library",
+  "🧠 Assistant",
+  "🔌 Connections",
   "Book tools",
   "Read view",
   "Edit code",
