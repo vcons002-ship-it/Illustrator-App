@@ -93,6 +93,16 @@ export interface ChatBuddyPanelProps {
   /** Quick model switcher popped from the input row: the current LLM / image / video options + the
    * change to apply when one is picked. Absent → the button/popover don't render. */
   modelMenu?: { groups: ModelMenuGroup[]; onSelect: (patch: Partial<ReaderSettings>) => void };
+  /**
+   * LIVE CONTROL's on/off switch, beside the model button.
+   *
+   * It lives HERE and not only in Settings because of what it does: while it's on, the assistant
+   * works the reader's screen without asking between actions. A mode like that needs to be visible
+   * from the place the reader is watching it happen, and one click from off — burying it three
+   * panels deep would mean the only quick way to stop it is Stop, which ends the run rather than
+   * the mode. Absent → the button doesn't render (not desktop, or commands are off).
+   */
+  liveControl?: { on: boolean; onToggle: (on: boolean) => void };
   /** Multiple chat sessions (each its own history + folder); switch/create/delete. */
   /** `closed` sessions are hidden from the picker and offered under a "Closed" group to reopen —
    * closing keeps a chat's history, unlike deleting it. */
@@ -1131,6 +1141,27 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             ⚙ Models
           </button>
         )}
+        {props.liveControl && (
+          <button
+            style={
+              props.liveControl.on
+                ? { ...smallButtonStyle, ...liveActiveStyle }
+                : smallButtonStyle
+            }
+            onClick={() => props.liveControl!.onToggle(!props.liveControl!.on)}
+            // The ON title says what is true RIGHT NOW and how to end it; the OFF title says what
+            // turning it on would let happen. Someone reaching for this needs the consequence, not
+            // the feature name.
+            title={
+              props.liveControl.on
+                ? "Live control is ON — I can work your open programs (click and type into them) and keep going without asking between actions. Click to turn off."
+                : "Live control — let me work your open programs directly: read a window's controls, click and type into them, and keep going until the job is done instead of asking after every action. Desktop; Windows for the control part."
+            }
+            aria-pressed={props.liveControl.on}
+          >
+            {props.liveControl.on ? "🔴 Live" : "🖱 Live"}
+          </button>
+        )}
       </div>
       <div style={inputRowStyle}>
         <textarea
@@ -1350,6 +1381,15 @@ const personaActiveStyle = {
   opacity: 1,
 } as const;
 
+/** Live control's ON state. Deliberately NOT the blue every other active toggle uses: this one means
+ * something is moving the reader's mouse right now, and it should read as armed at a glance rather
+ * than blending into the row of ordinary selections beside it. */
+const liveActiveStyle = {
+  background: "rgba(255,86,86,0.22)",
+  border: "1px solid rgba(255,86,86,0.55)",
+  opacity: 1,
+} as const;
+
 /** The quick model switcher's tab labels — one tab per builder group, shown one at a time. */
 const MODEL_TAB_LABEL: Record<ModelMenuGroup["key"], string> = {
   llm: "💬 Chat",
@@ -1460,6 +1500,9 @@ function ModelMenuPopover({
           <div key={section.label ?? i}>
             {section.label ? <div style={modelGroupLabelStyle}>{section.label}</div> : null}
             {section.note ? <div style={modelNoteStyle}>{section.note}</div> : null}
+            {/* A blocker, not context: picking below this won't render until it's fixed. Above the
+                options deliberately — under them it reads as a footnote to a working list. */}
+            {section.warning ? <div style={modelWarningStyle}>⚠ {section.warning}</div> : null}
             {options.map(item)}
             {section.backendPicker && backends.length > 0 && (
               <>
@@ -1567,6 +1610,15 @@ const modelNoteStyle = {
   fontSize: 11,
   opacity: 0.5,
   padding: "2px 12px 4px",
+} as const;
+/** Fuller opacity than a note and its own colour: this one is the difference between a video model
+ * that renders and one that silently does nothing, so it must not read as more grey caption. */
+const modelWarningStyle = {
+  fontSize: 11,
+  opacity: 0.95,
+  color: "#ffb4a8",
+  padding: "2px 12px 6px",
+  lineHeight: 1.35,
 } as const;
 const modelItemStyle = {
   display: "flex",

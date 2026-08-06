@@ -1,4 +1,4 @@
-import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS } from "@visual-reader/core";
+import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS, comfyUrlForVideo } from "@visual-reader/core";
 import { LOCAL_BACKEND_LABEL, type InstalledModel, type LocalBackendId, type ReaderSettings } from "./SettingsPanel.js";
 
 /**
@@ -34,6 +34,12 @@ export interface ModelMenuGroup {
    * chat server model before its model list has been fetched. Lets the tab summary show the real model
    * id (not "—") and keeps the chat tab treated as active. */
   activeFallbackLabel?: string;
+  /** Dim caption for the group's sole/first section — where this group's renders actually go. */
+  note?: string;
+  /** A problem the reader has to fix before picking here does anything (rendered in the warning
+   * colour, above the options). Distinct from `note` because one is context and the other is a
+   * blocker: video with no ComfyUI configured will not render, however the tab looks. */
+  warning?: string;
 }
 
 /** One provider/source section inside a tab of the switcher ("Cloud" / "Local"), derived from a group
@@ -43,6 +49,8 @@ export interface ModelMenuSection {
   label?: string;
   /** Dim caption under the header (e.g. video's "runs on local ComfyUI" note). */
   note?: string;
+  /** A blocker for this section, in the warning colour — see {@link ModelMenuGroup.warning}. */
+  warning?: string;
   options: ModelMenuOption[];
   /** Image group's "Local" section in provider-first mode: render the group's `localBackends` picker
    * here, with the chosen backend's `localModelsByBackend` checkpoints beneath it. */
@@ -56,9 +64,17 @@ export interface ModelMenuSection {
  */
 export function sectionizeGroup(g: ModelMenuGroup): ModelMenuSection[] {
   if (g.key === "video") {
-    // Single-source group — a "Local" header over everything says nothing; a note does.
+    // Single-source group — a "Local" header over everything says nothing; a note does. The note and
+    // any warning are computed at BUILD time (only the builder sees settings), because what matters
+    // here is not "video is ComfyUI" in the abstract but whether THIS reader has one.
     if (!g.options.length) return [];
-    return [{ note: "Video renders on your local ComfyUI.", options: g.options }];
+    return [
+      {
+        note: g.note ?? "Video renders on your local ComfyUI.",
+        ...(g.warning ? { warning: g.warning } : {}),
+        options: g.options,
+      },
+    ];
   }
   const isLocal = (o: ModelMenuOption): boolean =>
     g.key === "llm" ? o.patch.textProvider === "local" : o.patch.imageProvider === "local";
@@ -70,7 +86,12 @@ export function sectionizeGroup(g: ModelMenuGroup): ModelMenuSection[] {
   // so the "Local" section exists (to host the backend picker) even with zero flat options.
   const hasBackendPicker = g.key === "image" && (g.localBackends?.length ?? 0) > 0;
   if (local.length || hasBackendPicker) {
-    sections.push({ label: "Local", options: local, ...(hasBackendPicker ? { backendPicker: true } : {}) });
+    sections.push({
+      label: "Local",
+      options: local,
+      ...(g.key === "image" && g.note ? { note: g.note } : {}),
+      ...(hasBackendPicker ? { backendPicker: true } : {}),
+    });
   }
   return sections;
 }
@@ -208,6 +229,14 @@ export function buildModelMenu(
   }
 
   // ---------- Video (local ComfyUI only) ----------
+  //
+  // THE SPLIT THIS MENU HAS TO MAKE SENSE OF: images can render on AUTOMATIC1111, and video never
+  // can — it always goes to a ComfyUI, at a URL remembered per backend, which may be a completely
+  // different server from the one drawing the pictures. A reader on A1111 could pick a video model
+  // here, see it tick, and get nothing, with the menu having said only "video renders on your local
+  // ComfyUI" — true, and no help at all in working out whether they have one.
+  //
+  // So say which server, by name, and when there isn't one say that instead of a reassuring note.
   const activeVideo = s.videoModel ?? VIDEO_MODELS[0]?.id;
   const video: ModelMenuOption[] = VIDEO_MODELS.map((m) => ({
     id: `video:${m.id}`,
@@ -215,6 +244,25 @@ export function buildModelMenu(
     active: activeVideo === m.id,
     patch: { videoModel: m.id },
   }));
+  const videoComfyUrl = comfyUrlForVideo(s);
+  const imagesOnA1111 = s.imageProvider === "local" && activeBackend === "a1111";
+  const videoNote = videoComfyUrl
+    ? `Video renders on ComfyUI at ${shortUrl(videoComfyUrl)}${
+        imagesOnA1111 ? " — a separate server from the AUTOMATIC1111 drawing your images." : "."
+      }`
+    : undefined;
+  const videoWarning = videoComfyUrl
+    ? undefined
+    : imagesOnA1111
+      ? "Video needs ComfyUI, and your images run on AUTOMATIC1111 — which can't render video. Add a ComfyUI in Settings → Image engine; it can run alongside."
+      : "No ComfyUI is configured yet, so video can't render. Set one up in Settings → Image engine.";
+
+  // The IMAGE tab gets the other half of the same truth: switching the backend here moves where
+  // pictures render and leaves video where it is. Only worth saying when both are actually in play.
+  const imageNote =
+    imagesOnA1111 && videoComfyUrl
+      ? `Images render here; video stays on ComfyUI at ${shortUrl(videoComfyUrl)}.`
+      : undefined;
 
   // When a local chat server model is configured but its model list hasn't been fetched yet, no llm
   // option carries `active` — surface the configured id so the tab summary + default-tab logic still
@@ -232,10 +280,30 @@ export function buildModelMenu(
       key: "image",
       label: "Image model",
       options: image,
+      ...(imageNote ? { note: imageNote } : {}),
       ...(localBackends ? { localBackends } : {}),
       ...(localModelsByBackend ? { localModelsByBackend } : {}),
     });
   }
-  if (video.length) groups.push({ key: "video", label: "Video model", options: video });
+  if (video.length) {
+    groups.push({
+      key: "video",
+      label: "Video model",
+      options: video,
+      ...(videoNote ? { note: videoNote } : {}),
+      ...(videoWarning ? { warning: videoWarning } : {}),
+    });
+  }
   return groups;
+}
+
+/** A server URL short enough to sit in a menu caption: host:port, without the scheme or a trailing
+ * slash. Falls back to the raw string when it isn't parseable, so a hand-typed value still shows. */
+function shortUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.host;
+  } catch {
+    return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  }
 }

@@ -28,3 +28,14 @@ describe("settingsKeys classification", () => {
     expect(tuningSettingsKey(changed)).not.toBe(tuningSettingsKey(base));
   });
 });
+
+describe("live control is a tuning setting", () => {
+  it("toggling it does NOT rebuild the engine", () => {
+    // It's read per chat turn (it arms the loop and adds a prompt block). Classing it as identity
+    // would dispose the engine and reopen the book every time the reader hit the Live button.
+    const base = { ...DEFAULT_SETTINGS } as ReaderSettings;
+    const on: ReaderSettings = { ...base, liveControl: true };
+    expect(identitySettingsKey(on)).toBe(identitySettingsKey(base));
+    expect(tuningSettingsKey(on)).not.toBe(tuningSettingsKey(base));
+  });
+});

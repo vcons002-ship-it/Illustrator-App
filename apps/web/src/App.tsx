@@ -9646,6 +9646,16 @@ export function App() {
       persona={buddyPersona}
       onPersonaChange={onBuddyPersonaChange}
       modelMenu={modelMenu}
+      // Only offered where it can actually work: the desktop runtime, with the shell enabled (the
+      // same gate control_ui itself has). Elsewhere the button would toggle a mode that does nothing.
+      {...(isDesktop && settings.allowCommands
+        ? {
+            liveControl: {
+              on: !!settings.liveControl,
+              onToggle: (on: boolean) => onSettingsChange({ ...settings, liveControl: on }),
+            },
+          }
+        : {})}
       // A scheduled task's workspace is NOT a chat in the switcher — it belongs to that action and is
       // opened from ⏰ Scheduled. Listing them here would bury the reader's actual conversations under
       // one entry per recurring job. The ACTIVE one is kept in the list regardless, so that working in
