@@ -20,6 +20,7 @@ import {
   referencePhotoSupports,
   pickComponentAsset,
   resolveAssetName,
+  modelFilesInWorkflow,
 } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
@@ -2173,5 +2174,83 @@ describe("AUDIT: which image providers actually use reference photos", () => {
     const out = await new FluxProvider({ apiKey: "K", transport, pollIntervalMs: 0 }).generate(withRefs);
     expect(new TextDecoder().decode(out.bytes)).toBe("FLUXPNG");
     expect(JSON.stringify(transport.requests[0]!.body)).not.toContain(b64("FACE"));
+  });
+});
+
+/**
+ * THE FAILURE THAT POINTS AT THE WRONG THING.
+ *
+ * Reported from a real render: "ComfyUI [node KSampler #3]: HostBuffer.read_file_slice failed",
+ * read — reasonably — as the reference-image workflow breaking again, because that was the thing
+ * that had changed most recently.
+ *
+ * It is not a graph fault. ComfyUI reads weights lazily, in slices, as sampling consumes them, so
+ * an unreadable file surfaces at KSampler rather than at the loader that named it. The node in the
+ * message is the one that happened to ask, not the one that is wrong, and the engine never says
+ * which file it was — it can be any of the half-dozen a Flux graph loads.
+ */
+describe("comfyExecutionError — a weight file the engine cannot read", () => {
+  const status = (message: string) => ({
+    status_str: "error",
+    messages: [
+      ["execution_start", {}],
+      ["execution_error", { exception_message: message, node_type: "KSampler", node_id: 3 }],
+    ] as [string, Record<string, unknown>][],
+  });
+
+  it("says the file is unreadable rather than blaming the sampler", () => {
+    const msg = comfyExecutionError(status("HostBuffer.read_file_slice failed"))!;
+    expect(msg).toMatch(/could not finish reading a model file/i);
+    expect(msg).toMatch(/not the graph/i);
+    expect(msg).toMatch(/stopped early/i);
+    expect(msg).toContain("KSampler");
+    expect(msg).toContain("HostBuffer.read_file_slice failed"); // raw kept, as elsewhere
+  });
+
+  it("names every file the graph was loading, since the engine names none", () => {
+    const files = ["UNETLoader: flux2-dev-fp8.safetensors", "VAELoader: flux-2-vae.safetensors"];
+    const msg = comfyExecutionError(status("HostBuffer.read_file_slice failed"), undefined, undefined, files)!;
+    for (const f of files) expect(msg).toContain(f);
+    expect(msg).toMatch(/One of these is the file to replace/);
+  });
+
+  it("covers the other ways a short or corrupt safetensors reports itself", () => {
+    for (const raw of [
+      "Error while deserializing header: MetadataIncompleteBuffer",
+      "failed to read file",
+      "unexpected end of file",
+    ]) {
+      expect(comfyExecutionError(status(raw))!, raw).toMatch(/could not finish reading a model file/i);
+    }
+  });
+
+  it("does not swallow unrelated errors", () => {
+    // The translation must stay narrow: a shape mismatch has its own, much more specific message.
+    const msg = comfyExecutionError(status("mat1 and mat2 shapes cannot be multiplied (512x12288 and 15360x6144)"))!;
+    expect(msg).toMatch(/text encoder doesn't match/i);
+  });
+});
+
+describe("modelFilesInWorkflow", () => {
+  it("collects weight files from every loader, labelled by node, without duplicates", () => {
+    const wf = {
+      "1": { class_type: "UNETLoader", inputs: { unet_name: "flux2-dev-fp8.safetensors", weight_dtype: "default" } },
+      "2": { class_type: "VAELoader", inputs: { vae_name: "flux-2-vae.safetensors" } },
+      "3": { class_type: "CLIPLoader", inputs: { clip_name: "mistral.gguf", type: "flux2" } },
+      "4": { class_type: "VAELoader", inputs: { vae_name: "flux-2-vae.safetensors" } },
+      "5": { class_type: "KSampler", inputs: { seed: 42, steps: 20, model: ["1", 0] } },
+      "6": { class_type: "CLIPTextEncode", inputs: { text: "a cat on a roof.safetensors is not a file" } },
+    };
+    const files = modelFilesInWorkflow(wf);
+    expect(files).toEqual([
+      "UNETLoader: flux2-dev-fp8.safetensors",
+      "VAELoader: flux-2-vae.safetensors",
+      "CLIPLoader: mistral.gguf",
+    ]);
+  });
+
+  it("survives a graph with nothing to find, and malformed nodes", () => {
+    expect(modelFilesInWorkflow({})).toEqual([]);
+    expect(modelFilesInWorkflow({ a: null, b: 3, c: { class_type: "X" }, d: { inputs: null } })).toEqual([]);
   });
 });
