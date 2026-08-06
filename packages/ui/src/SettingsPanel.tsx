@@ -898,19 +898,23 @@ export function SettingsPanel({
               </button>
             </div>
           )}
-          {/* Five top-level SECTIONS. Each group below carries a CSS `order` (11/21/31/41/51) that
-              places it under the matching header — so the panel reads as five categories without
-              physically reordering the JSX. Headers hide during a search (groups then show flat). */}
-          <SectionHeader q={query} title="🧠 LLM" order={10} />
-          <SectionHeader q={query} title="🎨 Image generation" order={20} />
-          <SectionHeader q={query} title="🎬 Video generation" order={25} />
-          <SectionHeader q={query} title="🔐 Authorizations" order={30} />
-          <SectionHeader q={query} title="🔗 Links & APIs" order={40} />
-          <SectionHeader q={query} title="⚙️ Other app settings" order={50} />
+          {/* FIVE SECTIONS, NAMED FOR THE TASK RATHER THAN THE MACHINERY.
+              The previous six were named after the technology — "LLM", "Image generation",
+              "Video generation" — so "how often should it illustrate?" was filed under image
+              generation, "can it run commands?" under Authorizations, and "Other app settings"
+              had become the place four unrelated things went to hide.
+              Each group carries a CSS `order` that places it under the matching header, so
+              re-sectioning moves numbers rather than 1,500 lines of JSX. Headers hide during a
+              search, and the groups then show flat. */}
+          <SectionHeader q={query} title="🧠 LLM &amp; reasoning" order={10} />
+          <SectionHeader q={query} title="🎨 Image &amp; video models" order={20} />
+          <SectionHeader q={query} title="🖌 Book illustration style" order={30} />
+          <SectionHeader q={query} title="🔌 Connections" order={40} />
+          <SectionHeader q={query} title="⚙️ App settings" order={50} />
 
           <Group
             q={query}
-            order={26}
+            order={24}
             title="🎬 Image-to-video"
             hint="Animate an image into a short clip via ComfyUI (image-to-video)."
             keywords="video wan ltx ltx-2 comfyui image to video i2v animate motion lora high noise low noise frames fps width height steps cfg shift checkpoint text encoder gemma umt5 vae download manual safetensors ffmpeg stitch long form"
@@ -1448,7 +1452,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={21}
+            order={32}
             title="⏱ Illustration cadence"
             keywords="illustrate after chapter book when timing cadence generate"
           >
@@ -1493,7 +1497,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={21}
+            order={31}
             title="🖌 Look & layout"
             keywords="art style anime manga watercolor oil painting comic photorealistic pages per image quality draft ultra aspect ratio portrait landscape panels per view grid comic page local model checkpoint"
           >
@@ -1702,7 +1706,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={51}
+            order={55}
             title="🔞 Mature content"
             keywords="mature adult explicit nsfw content filter safety moderation uncensored"
           >
@@ -1726,7 +1730,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={52}
+            order={56}
             title="🔊 Spoken replies"
             keywords="voice speech speak aloud tts read out loud female male feminine masculine narrator"
           >
@@ -1784,7 +1788,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={31}
+            order={51}
             title="🤝 Assistant autonomy"
             keywords="autonomy autonomous learn skills pull files search full medium-risk approve permission"
           >
@@ -1855,7 +1859,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={41}
+            order={43}
             title="📱 Phone command bus"
             keywords="remote bus google tasks phone run commands VR"
           >
@@ -1880,7 +1884,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={51}
+            order={54}
             title="🔒 Privacy / incognito (phone link)"
             keywords="privacy incognito phone link hidden curtain not saved"
           >
@@ -1904,7 +1908,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={41}
+            order={42}
             title="🧩 MCP servers"
             keywords="mcp model context protocol servers tools http stdio integrations"
           >
@@ -1957,7 +1961,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={41}
+            order={44}
             title="🔬 Scientific sources (technical books)"
             keywords="google custom search programmable engine cx key grounding figures wikimedia wikipedia citations sources real diagrams"
           >
@@ -2029,7 +2033,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={11}
+            order={12}
             title="💬 Chat — model & reasoning"
             keywords="chat buddy companion local model ollama webllm chat provider private vision describe image screenshot thinking reasoning effort qwen deepseek"
           >
@@ -2110,7 +2114,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={21}
+            order={23}
             title="🖼 Chat image generation"
             keywords="chat image generation local provider draw"
           >
@@ -2136,7 +2140,7 @@ export function SettingsPanel({
           {(isDesktop || remote) && (
             <Group
               q={query}
-              order={31}
+              order={52}
               title="🛠 Assistant — commands & screen"
               keywords="run commands shell screen capture workspace autonomous test code execute conflicts"
             >
@@ -2469,7 +2473,7 @@ export function SettingsPanel({
           {(isDesktop || remote) && (
             <Group
               q={query}
-              order={11}
+              order={13}
               title="🧠 Parallel sub-agents (advanced)"
               keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast delegate spawn"
             >
@@ -2635,7 +2639,7 @@ export function SettingsPanel({
           {(isDesktop || remote) && (
             <Group
               q={query}
-              order={31}
+              order={53}
               title="✅ Task automation (permission)"
               keywords="task automation reminders google calendar tasks without asking creative explore curiosity idle free time"
             >
@@ -2705,7 +2709,7 @@ export function SettingsPanel({
           {(isDesktop || remote) && (
             <Group
               q={query}
-              order={41}
+              order={45}
               title="📈 Schwab (markets · options · positions)"
               keywords="schwab markets options positions thinkorswim quotes greeks app key secret"
             >
@@ -2792,7 +2796,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            order={21}
+            order={22}
             title="⚙️ Image — local engine & advanced"
             keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos character reference ipadapter ip-adapter clip vision face likeness identity model files low vram lowvram fp8 memory offload gpu"
           >

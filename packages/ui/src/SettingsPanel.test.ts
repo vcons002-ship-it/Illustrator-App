@@ -103,3 +103,76 @@ describe("isComfyBackend — which local engine the ComfyUI-only sections belong
     }
   });
 });
+
+/**
+ * THE SECTION STRUCTURE.
+ *
+ * Settings is 4,184 lines and its sections are assembled from CSS `order` numbers scattered
+ * across the file, not from a list anyone can read. That makes it very easy for a group to
+ * drift into the wrong section — or for "App settings" to become a dump again, which is what
+ * happened to the six sections this replaces.
+ *
+ * So the intended shape is written down once, here, and asserted. When a group genuinely moves,
+ * this list moves with it in the same commit. The list changing is fine; it changing SILENTLY is
+ * what this prevents.
+ */
+describe("settings sections", () => {
+  const src = readFileSync(join(__dirname, "SettingsPanel.tsx"), "utf8");
+
+  /** Every `<Group order={n} title="…">`, read straight out of the JSX. */
+  const groups = [...src.matchAll(/order=\{(\d+)\}\s*\n\s*title="([^"]+)"/g)].map((m) => ({
+    order: Number(m[1]),
+    title: m[2]!,
+  }));
+
+  const SECTIONS = [
+    { order: 10, name: "LLM & reasoning" },
+    { order: 20, name: "Image & video models" },
+    { order: 30, name: "Book illustration style" },
+    { order: 40, name: "Connections" },
+    { order: 50, name: "App settings" },
+  ];
+
+  it("has exactly five sections, named for the task rather than the technology", () => {
+    const headers = [...src.matchAll(/<SectionHeader[^>]*title="([^"]+)"[^>]*order=\{(\d+)\}/g)];
+    expect(headers).toHaveLength(5);
+    expect(headers.map((h) => Number(h[2]))).toEqual(SECTIONS.map((s) => s.order));
+  });
+
+  it("files every group under exactly one section", () => {
+    expect(groups.length).toBeGreaterThan(15);
+    for (const g of groups) {
+      const section = Math.floor(g.order / 10) * 10;
+      expect(
+        SECTIONS.some((s) => s.order === section),
+        `"${g.title}" has order ${g.order}, which is under no section header`,
+      ).toBe(true);
+    }
+  });
+
+  it("puts the things the reader asked to be together, together", () => {
+    const at = (title: string) => groups.find((g) => g.title.includes(title))?.order;
+    const section = (title: string) => Math.floor((at(title) ?? 0) / 10) * 10;
+
+    // Models — image AND video, which used to be a section of its own containing one group.
+    expect(section("Paint — image provider")).toBe(20);
+    expect(section("Image-to-video")).toBe(20);
+    expect(section("local engine")).toBe(20);
+
+    // Style is the craft, split out of the machinery it used to be filed under.
+    expect(section("Look & layout")).toBe(30);
+    expect(section("Illustration cadence")).toBe(30);
+
+    // Every permission in ONE place — they were split across "Authorizations" and "Other".
+    for (const perm of ["Assistant autonomy", "commands & screen", "Task automation", "incognito"]) {
+      expect(section(perm), `${perm} is not under App settings`).toBe(50);
+    }
+    expect(section("Mature content")).toBe(50);
+  });
+
+  it("leaves no group stranded in a section that no longer exists", () => {
+    // The old sections were 10/20/25/30/40/50 — 25 (Video generation) is gone, and anything
+    // still pointing at it would render under no header at all.
+    expect(groups.filter((g) => g.order >= 25 && g.order < 30)).toEqual([]);
+  });
+});
