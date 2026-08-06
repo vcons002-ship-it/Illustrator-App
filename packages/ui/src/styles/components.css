@@ -1,0 +1,190 @@
+/**
+ * COMPONENT CLASSES — everything inline styles structurally cannot do.
+ *
+ * These are ADDITIVE. A component keeps its existing `style` prop and gains a `className`
+ * beside it; the class supplies hover, press, focus and transition, which inline styles have
+ * no way to express. Inline styles win the cascade over classes, so attaching one of these to
+ * a not-yet-tokenised element can only ADD behaviour — it can never change how it looks. That
+ * property is what makes a sweep across ~48 components safe to do in one pass.
+ *
+ * TOUCH IS A FIRST-CLASS PATH, NOT AN AFTERTHOUGHT. Hover rules sit behind
+ * `@media (hover: hover)` and every one has an `.is-press` equivalent driven from
+ * pointerdown, because this app is used on a linked phone where :hover never fires at all.
+ */
+
+/* ---- Buttons ---------------------------------------------------------------------- */
+.vr-btn {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    transform var(--vr-dur-1) var(--vr-spring-snap),
+    background-color var(--vr-dur-1) var(--vr-ease),
+    border-color var(--vr-dur-1) var(--vr-ease),
+    box-shadow var(--vr-dur-2) var(--vr-ease);
+}
+
+@media (hover: hover) {
+  .vr-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    background-color: var(--vr-fill-strong);
+    border-color: var(--vr-accent-edge);
+    box-shadow: var(--vr-elev-2);
+  }
+}
+
+/* The touch equivalent of the hover state. Held for a minimum after release by the pointer
+ * handler — a tap is ~60ms, so applying and removing this within one frame shows nothing,
+ * which is exactly how "tapping does nothing" happens. */
+.vr-btn.is-press {
+  transform: translateY(-2px);
+  background-color: var(--vr-fill-strong);
+  border-color: var(--vr-accent-edge);
+  box-shadow: var(--vr-elev-2);
+}
+
+.vr-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 70ms;
+}
+
+.vr-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---- Inputs ----------------------------------------------------------------------- */
+.vr-input {
+  transition:
+    border-color var(--vr-dur-1) var(--vr-ease),
+    box-shadow var(--vr-dur-2) var(--vr-ease),
+    background-color var(--vr-dur-1) var(--vr-ease);
+}
+
+.vr-input:focus,
+.vr-input:focus-within {
+  border-color: var(--vr-accent-edge);
+  box-shadow: 0 0 0 3px var(--vr-accent-wash);
+  outline: none;
+}
+
+/* ---- Cards ------------------------------------------------------------------------
+ * The cursor-reactive surface. --vr-mx/--vr-my are written straight to the element from a
+ * pointermove handler — never through React state, the same technique BloomTransition uses
+ * to avoid re-rendering up to nine panels per frame. */
+.vr-card {
+  position: relative;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform var(--vr-dur-2) var(--vr-spring),
+    border-color var(--vr-dur-2) var(--vr-ease),
+    box-shadow var(--vr-dur-2) var(--vr-ease);
+}
+
+.vr-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    260px circle at var(--vr-mx, 50%) var(--vr-my, 50%),
+    rgb(var(--vr-accent-rgb) / 0.2),
+    transparent 62%
+  );
+  transition: opacity var(--vr-dur-2) var(--vr-ease);
+}
+
+@media (hover: hover) {
+  .vr-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--vr-accent-edge);
+    box-shadow: var(--vr-elev-3);
+  }
+  .vr-card:hover::before {
+    opacity: 1;
+  }
+}
+
+/* Touch gets a TAP gesture rather than a simulated hover — see motion.css. */
+.vr-card.is-tap {
+  animation: vr-tap-lift 700ms var(--vr-spring) both;
+}
+.vr-card.is-tap::before {
+  animation: vr-tap-glow 700ms var(--vr-ease) both;
+}
+
+/* ---- Modals -----------------------------------------------------------------------
+ * ModalShell is the single chokepoint for a dozen modals, so one rule here gives all of them
+ * a real enter AND exit. @starting-style + allow-discrete means no keeping components mounted
+ * to animate them out; a browser without support simply shows them instantly. */
+.vr-modal-overlay {
+  transition:
+    opacity var(--vr-dur-2) var(--vr-ease),
+    overlay var(--vr-dur-2) allow-discrete,
+    display var(--vr-dur-2) allow-discrete;
+  opacity: 1;
+}
+
+@starting-style {
+  .vr-modal-overlay {
+    opacity: 0;
+  }
+}
+
+.vr-modal-card {
+  transition:
+    opacity var(--vr-dur-2) var(--vr-ease),
+    transform var(--vr-dur-3) var(--vr-spring);
+  opacity: 1;
+  transform: none;
+}
+
+@starting-style {
+  .vr-modal-card {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+/* ---- Staged reveals ----------------------------------------------------------------
+ * The index rides in as --vr-i and the delay is computed here, so a list needs no per-item
+ * JS. Capped past the twelfth child: a 500-message chat must not stagger for a minute. */
+.vr-stagger > * {
+  animation: vr-rise var(--vr-dur-3) var(--vr-spring) both;
+  animation-delay: calc(var(--vr-i, 0) * 24ms);
+}
+
+.vr-stagger > :nth-child(n + 12) {
+  animation-delay: 264ms;
+}
+
+/* ---- Live work ---------------------------------------------------------------------
+ * Motion for the two components that already carry this information (WorkflowBar,
+ * ActivityCenter) so a long paint run reads as alive rather than stuck. */
+.vr-progress-fill {
+  transition: width 900ms var(--vr-ease);
+}
+
+.vr-breathing {
+  animation: vr-pulse 1.8s ease-in-out infinite;
+}
+
+.vr-settle {
+  animation: vr-rise 420ms var(--vr-spring) both;
+}
+
+/* ---- Image arrival ------------------------------------------------------------------ */
+.vr-arrive {
+  animation: vr-arrive 760ms var(--vr-spring) both;
+}
+
+.vr-arrive-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.16) 50%, transparent 62%);
+  animation: vr-sheen 900ms var(--vr-ease) 180ms both;
+}

@@ -1,0 +1,13 @@
+/**
+ * The app's entire stylesheet. Imported ONCE from an app entry (apps/web/src/main.tsx), never
+ * from a .tsx in packages/ui — that package ships raw TypeScript with no vite/client types, so
+ * a component-level `import "./x.css"` would fail typecheck.
+ *
+ * Order matters: tokens first (everything else reads them), then base, then the pieces.
+ */
+@import "./tokens.css";
+@import "./base.css";
+@import "./motion.css";
+@import "./components.css";
+@import "./layout.css";
+@import "./article.css";
