@@ -324,7 +324,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                             onBindTask(t.id, e.target.value || undefined)
                           }
                           style={{
-                            background: "#1b1b1b",
+                            background: vr.surface.sunken,
                             color: "inherit",
                             border: "1px solid #3a3a3a",
                             borderRadius: 5,
@@ -438,7 +438,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
 /** The inline cadence editors — small, so a row of them doesn't dominate the action it belongs to. */
 const editStyle: React.CSSProperties = {
   fontSize: 11,
-  background: "#1e2128",
+  background: vr.surface.sunken,
   color: vr.text.base,
   border: `1px solid ${vr.border.subtle}`,
   borderRadius: 5,

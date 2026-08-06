@@ -159,7 +159,7 @@ const figureCaptionStyle: CSSProperties = {
   textAlign: "center",
 };
 
-const sourceLinkStyle: CSSProperties = { color: "#9cc2ff" };
+const sourceLinkStyle: CSSProperties = { color: t.accent.text };
 
 const skipNoteStyle: CSSProperties = {
   fontSize: 12,

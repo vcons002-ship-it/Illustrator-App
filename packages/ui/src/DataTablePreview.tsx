@@ -251,7 +251,7 @@ export const DataTablePreview = memo(function DataTablePreview({
                         ...tdStyle,
                         textAlign: align,
                         ...(onEditCell ? { cursor: "cell" } : {}),
-                        ...(formula ? { color: "#9fd2ff" } : {}),
+                        ...(formula ? { color: t.accent.text } : {}),
                         ...(isSelected ? { outline: `2px solid ${t.accent.edge}`, outlineOffset: "-2px" } : {}),
                       }}
                     >
@@ -323,7 +323,7 @@ const tableStyle = { borderCollapse: "collapse", fontSize: 12, width: "100%" } a
 const thStyle = {
   position: "sticky",
   top: 0,
-  background: "#1b1f2a",
+  background: t.surface.sunken,
   padding: "4px 8px",
   borderBottom: `1px solid ${t.border.button}`,
   fontWeight: 600,

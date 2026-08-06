@@ -608,7 +608,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Gone while minimized: the controls it reveals are hidden anyway, so it would do nothing. */}
           {!minimized && (
           <button
-            style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : smallButtonStyle}
+            style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: t.accent.text } : smallButtonStyle}
             onClick={() => setToolsOpen((v) => !v)}
             title={toolsOpen ? "Hide chat tools" : "More chat tools (new, rename, clear, …)"}
             aria-expanded={toolsOpen}
@@ -1637,7 +1637,7 @@ const modelNoteStyle = {
 const modelWarningStyle = {
   fontSize: 11,
   opacity: 0.95,
-  color: "#ffb4a8",
+  color: t.state.danger,
   padding: "2px 12px 6px",
   lineHeight: 1.35,
 } as const;

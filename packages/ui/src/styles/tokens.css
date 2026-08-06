@@ -76,10 +76,22 @@
   --vr-accent-fill: rgb(var(--vr-accent-rgb) / 0.22);
   --vr-accent-edge: rgb(var(--vr-accent-rgb) / 0.5);
 
-  /* ---- Semantic state — separate from the accent, never used as decoration --------- */
-  --vr-good: #7dd87f;
-  --vr-warn: #ffcf8b;
-  --vr-danger: #ff9b9b;
+  /* ---- Semantic state — separate from the accent, never used as decoration ---------
+   * Channel triples for the same reason the accent has one: the tinted status surfaces (a toast's
+   * body, an armed destructive button) were hand-mixed hexes like #2a1c1e and #5a1f1f, chosen
+   * against the OLD ground and left behind when it moved. Derived from the state colour they
+   * belong to, they follow the palette instead of drifting away from it. Steps match the accent's
+   * — wash .08, fill .22, edge .5 — so a tint means the same thing wherever it appears. */
+  --vr-good-rgb: 125 216 127;
+  --vr-warn-rgb: 255 207 139;
+  --vr-danger-rgb: 255 155 155;
+  --vr-good: rgb(var(--vr-good-rgb));
+  --vr-warn: rgb(var(--vr-warn-rgb));
+  --vr-danger: rgb(var(--vr-danger-rgb));
+  --vr-good-wash: rgb(var(--vr-good-rgb) / 0.1);
+  --vr-danger-wash: rgb(var(--vr-danger-rgb) / 0.1);
+  --vr-danger-fill: rgb(var(--vr-danger-rgb) / 0.22);
+  --vr-danger-edge: rgb(var(--vr-danger-rgb) / 0.5);
 
   /* ---- Overlay -------------------------------------------------------------------- */
   --vr-overlay: rgb(8 9 13 / 0.7);

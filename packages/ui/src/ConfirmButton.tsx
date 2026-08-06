@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { t } from "./design/tokens.js";
 
 /**
  * A destructive button that asks TWICE, in place, without a browser dialog.
@@ -70,7 +71,7 @@ export function ConfirmButton({
   const armed = !!state;
   return (
     <button
-      style={armed ? { ...style, background: "#5a1f1f", borderColor: "#b45", ...confirmStyle } : style}
+      style={armed ? { ...style, background: t.state.dangerFill, borderColor: t.state.dangerEdge, ...confirmStyle } : style}
       title={armed ? (confirmTitle ?? "Press again to confirm") : title}
       aria-live="polite"
       onClick={() => {

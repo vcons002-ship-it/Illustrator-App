@@ -516,7 +516,7 @@ function SoftwareUpdateRow({
     }
   };
   const color =
-    result?.status === "error" ? t.state.danger : result?.status === "needs-restart" ? "#e0b050" : SUCCESS_GREEN;
+    result?.status === "error" ? t.state.danger : result?.status === "needs-restart" ? t.state.warn : SUCCESS_GREEN;
   return (
     <div style={{ ...rowStyle, borderBottom: `1px solid ${t.border.faint}`, paddingBottom: 10, marginBottom: 2 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -3538,7 +3538,7 @@ function StyleLoraRow({
       </div>
       {downloading && <ProgressBar pct={pct} />}
       {!installed && catalog && !compatible && (
-        <span style={{ opacity: 0.7, fontSize: 11, color: "#e0b870" }}>
+        <span style={{ opacity: 0.7, fontSize: 11, color: t.state.warn }}>
           The bundled {label} pack is built for {packFamily!.toUpperCase()} and won’t load on your{" "}
           {family!.toUpperCase()} model. Install a {family!.toUpperCase()}-compatible LoRA below (paste a
           URL or drop the file in), then pick it under “Style LoRA (override)”.

@@ -178,7 +178,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
               Tip: fill in your look/personality under 🪞 Soul and 👤 You so the illustrations match.
             </span>
             {!distinctYouAndMe ? (
-              <span role="alert" style={{ ...hint, color: "#ff9a9a", opacity: 0.9 }}>
+              <span role="alert" style={{ ...hint, color: t.state.danger, opacity: 0.9 }}>
                 You and the assistant need distinct character names.
               </span>
             ) : null}

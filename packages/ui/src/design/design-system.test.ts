@@ -41,6 +41,9 @@ describe("token parity", () => {
     const cssOnly = new Set([
       "--vr-fg-rgb",
       "--vr-accent-rgb",
+      "--vr-good-rgb",
+      "--vr-warn-rgb",
+      "--vr-danger-rgb",
       "--vr-dock-h",
       "--vr-mx",
       "--vr-my",
@@ -222,8 +225,19 @@ function ratio(a: string, b: string): number {
   return (hi! + 0.05) / (lo! + 0.05);
 }
 
-/** Read a token's literal value straight out of the stylesheet. */
+/** Read a token's literal value straight out of the stylesheet.
+ *
+ * A colour may be written either as a hex or as `rgb(var(--x-rgb))`, because the state colours
+ * now carry channel triples so their washes can be derived. The triple is resolved here rather
+ * than exempting those tokens from the contrast check — the arithmetic below is the only claim
+ * this suite can make about how the app actually LOOKS, so it must not narrow. */
 function token(name: string): string {
+  const viaTriple = new RegExp(`${name}:\\s*rgb\\(var\\((--vr-[a-z0-9-]+)\\)\\)`).exec(css);
+  if (viaTriple) {
+    const ch = new RegExp(`${viaTriple[1]}:\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)`).exec(css);
+    if (!ch) throw new Error(`${name} points at ${viaTriple[1]}, which declares no channels`);
+    return "#" + [1, 2, 3].map((i) => Number(ch[i]).toString(16).padStart(2, "0")).join("");
+  }
   const m = new RegExp(`${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(css);
   if (!m) throw new Error(`${name} is not a literal hex in tokens.css`);
   return m[1]!;
@@ -326,6 +340,67 @@ describe("the stylesheets parse", () => {
     const index = readFileSync(join(STYLES, "index.css"), "utf8");
     for (const file of sheets.filter((f) => f !== "index.css")) {
       expect(index, `${file} exists but nothing imports it`).toContain(file);
+    }
+  });
+});
+
+/**
+ * THE GATE THE PLAN PROMISED, WIDENED TO THE TREE IT WAS MEANT TO COVER.
+ *
+ * "No raw colour literals outside the sheets" was written to inspect tokens.ts and nothing else,
+ * so 40-odd hexes survived the sweep unnoticed across 19 components. They were not harmless: every
+ * one was mixed by eye against the OLD ground (#11131a) and stayed put when the palette moved to
+ * #090b10, leaving panels and toasts sitting at values that belong to a scheme the app no longer
+ * uses. That is invisible to a token-parity check — the tokens were all fine. The colours that
+ * were never tokens are the ones that drift.
+ *
+ * Two exemptions, both narrow and both stated at the point of use:
+ *   - data-driven palettes, where a colour identifies a series or a service rather than a surface;
+ *   - a `RAW-COLOUR-OK:` marker with a reason, for the handful of genuinely fixed values.
+ */
+describe("no colour drifts outside the palette", () => {
+  /** A colour here means the series, not the surface — changing it would relabel the data. */
+  const DATA_PALETTES = new Set([
+    "DataChart.tsx",
+    "Infographic.tsx",
+    "GanttChart.tsx",
+    "StockChartPanel.tsx",
+    "JsonTreeView.tsx",
+    "ContextUsageDonut.tsx",
+  ]);
+
+  const uiDir = join(__dirname, "..");
+  const files: [string, string][] = [
+    ["App.tsx", readFileSync(join(uiDir, "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8")],
+    ...readdirSync(uiDir)
+      .filter((f) => f.endsWith(".tsx") && !DATA_PALETTES.has(f))
+      .map((f): [string, string] => [f, readFileSync(join(uiDir, f), "utf8")]),
+  ];
+
+  it("every component reads its colours from the palette", () => {
+    const offenders: string[] = [];
+    for (const [name, src] of files) {
+      src.split("\n").forEach((line, i) => {
+        if (line.includes("RAW-COLOUR-OK")) return;
+        // A quoted style VALUE only — never a comment, a class name or prose.
+        for (const m of line.matchAll(/"(#[0-9a-fA-F]{3,8})"/g)) {
+          offenders.push(`${name}:${i + 1} ${m[1]}`);
+        }
+      });
+    }
+    expect(
+      offenders,
+      `hexes that will not follow the palette:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  it("the exemption has to say why, so it cannot become a silent escape hatch", () => {
+    for (const [name, src] of files) {
+      for (const line of src.split("\n")) {
+        if (!line.includes("RAW-COLOUR-OK")) continue;
+        const reason = line.split("RAW-COLOUR-OK")[1] ?? "";
+        expect(reason.replace(/^:\s*/, "").trim().length, `${name}: bare RAW-COLOUR-OK`).toBeGreaterThan(15);
+      }
     }
   });
 });

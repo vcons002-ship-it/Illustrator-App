@@ -68,7 +68,7 @@ const pill: CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
 };
-const pillBusy: CSSProperties = { borderColor: "rgba(120,170,255,0.5)", color: "#bcd4ff" };
+const pillBusy: CSSProperties = { borderColor: "rgba(120,170,255,0.5)", color: t.accent.text };
 const pillIdle: CSSProperties = { color: t.state.good, borderColor: t.state.good };
 const panel: CSSProperties = {
   position: "absolute",
