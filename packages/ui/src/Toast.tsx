@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 /** One transient notification. The HOST owns the list and its lifetimes (auto-dismiss timers live
  * there); this component only renders and forwards dismiss clicks. */
 export interface ToastItem {
@@ -55,15 +56,15 @@ const toastStyle = {
   borderRadius: 10,
   fontFamily: "system-ui, sans-serif",
   fontSize: 13,
-  color: "#e9ecf2",
+  color: t.text.base,
   background: "#1c1f2a",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
   pointerEvents: "auto",
 } as const;
 
 const toneStyles = {
-  error: { borderColor: "rgba(255,120,120,0.6)", background: "#2a1c1e" },
+  error: { borderColor: t.state.danger, background: "#2a1c1e" },
   success: { borderColor: "rgba(120,220,150,0.5)", background: "#1c2a20" },
   info: {},
 } as const;

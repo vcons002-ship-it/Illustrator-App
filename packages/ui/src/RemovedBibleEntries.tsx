@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 /**
  * The deleted bible entries, with a way back. Shared by the character bible and the world bible.
  *
@@ -48,13 +49,13 @@ const rowStyle = {
   justifyContent: "space-between",
   gap: 8,
   padding: "4px 8px",
-  border: "1px solid rgba(255,255,255,0.10)",
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 6,
 } as const;
 
 const restoreButtonStyle = {
   background: "transparent",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "2px 8px",

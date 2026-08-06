@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
@@ -457,7 +458,7 @@ function BackupRow({
     }
   };
   return (
-    <div style={{ ...rowStyle, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+    <div style={{ ...rowStyle, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${t.border.faint}` }}>
       <span>💾 Backup &amp; restore</span>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button style={buttonStyle} disabled={busy} onClick={() => void doExport()}>
@@ -515,9 +516,9 @@ function SoftwareUpdateRow({
     }
   };
   const color =
-    result?.status === "error" ? "#e0716f" : result?.status === "needs-restart" ? "#e0b050" : SUCCESS_GREEN;
+    result?.status === "error" ? t.state.danger : result?.status === "needs-restart" ? "#e0b050" : SUCCESS_GREEN;
   return (
-    <div style={{ ...rowStyle, borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 10, marginBottom: 2 }}>
+    <div style={{ ...rowStyle, borderBottom: `1px solid ${t.border.faint}`, paddingBottom: 10, marginBottom: 2 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span>⬆ Software update</span>
         <button style={buttonStyle} disabled={busy} onClick={() => void run()}>
@@ -853,7 +854,7 @@ export function SettingsPanel({
                 two numbers otherwise only differ somewhere the reader can't see, and the fix depends
                 on which way they differ. */}
             {buildStamp && checkoutSha && !buildStamp.startsWith(checkoutSha) ? (
-              <div style={{ fontSize: 11, color: "#ffcf8b", marginTop: 3, userSelect: "text" }}>
+              <div style={{ fontSize: 11, color: t.state.warn, marginTop: 3, userSelect: "text" }}>
                 Your files are at {checkoutSha}, but this window is still running the build above.
                 Reload the app to catch up — if it still doesn't match after that, fully close and
                 reopen it (desktop.bat).
@@ -880,7 +881,7 @@ export function SettingsPanel({
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 8,
-                borderBottom: "1px solid rgba(255,255,255,0.1)",
+                borderBottom: `1px solid ${t.border.faint}`,
                 paddingBottom: 10,
                 marginBottom: 2,
               }}
@@ -1767,7 +1768,7 @@ export function SettingsPanel({
             </label>
           ) : null}
           {voiceDl.state === "failed" ? (
-            <span style={{ fontSize: 11, color: "#ff8c8c" }}>Couldn't download it: {voiceDl.error}</span>
+            <span style={{ fontSize: 11, color: t.state.danger }}>Couldn't download it: {voiceDl.error}</span>
           ) : null}
           <span style={{ opacity: 0.55, fontSize: 11 }}>
             Your device's voices work offline straight away, but they're whatever your operating
@@ -1942,8 +1943,8 @@ export function SettingsPanel({
                     fontSize: 11,
                     padding: "2px 8px",
                     borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.2)",
-                    background: "rgba(255,255,255,0.05)",
+                    border: `1px solid ${t.border.button}`,
+                    background: t.fill.subtle,
                     cursor: "pointer",
                   }}
                 >
@@ -2160,7 +2161,7 @@ export function SettingsPanel({
                   style={{
                     marginTop: 12,
                     paddingTop: 10,
-                    borderTop: "1px solid rgba(255,255,255,0.1)",
+                    borderTop: `1px solid ${t.border.faint}`,
                     fontSize: 12,
                     opacity: 0.85,
                   }}
@@ -2412,9 +2413,9 @@ export function SettingsPanel({
                       value={value.backgroundPlanRate ?? 2}
                       onChange={(e) => set({ backgroundPlanRate: Number(e.target.value) })}
                       style={{
-                        background: "rgba(255,255,255,0.06)",
+                        background: t.fill.subtle,
                         color: "inherit",
-                        border: "1px solid rgba(255,255,255,0.15)",
+                        border: `1px solid ${t.border.input}`,
                         borderRadius: 6,
                         padding: "4px 6px",
                         fontSize: 12,
@@ -2449,9 +2450,9 @@ export function SettingsPanel({
                       onChange={(e) => set({ scanFocus: e.target.value })}
                       rows={3}
                       style={{
-                        background: "rgba(255,255,255,0.06)",
+                        background: t.fill.subtle,
                         color: "inherit",
-                        border: "1px solid rgba(255,255,255,0.15)",
+                        border: `1px solid ${t.border.input}`,
                         borderRadius: 6,
                         padding: "6px 8px",
                         fontSize: 12,
@@ -2493,9 +2494,9 @@ export function SettingsPanel({
                     value={value.agentConcurrency ?? 2}
                     onChange={(e) => set({ agentConcurrency: Number(e.target.value) })}
                     style={{
-                      background: "rgba(255,255,255,0.06)",
+                      background: t.fill.subtle,
                       color: "inherit",
-                      border: "1px solid rgba(255,255,255,0.15)",
+                      border: `1px solid ${t.border.input}`,
                       borderRadius: 6,
                       padding: "4px 6px",
                       fontSize: 12,
@@ -2579,7 +2580,7 @@ export function SettingsPanel({
                         {subTest.state === "testing" ? "Testing…" : "Test connection"}
                       </button>
                       {subTest.state !== "idle" && subTest.state !== "testing" && (
-                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? SUCCESS_GREEN : "#f0a868" }}>{subTest.msg}</span>
+                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? SUCCESS_GREEN : t.state.warn }}>{subTest.msg}</span>
                       )}
                     </div>
                   )}
@@ -2599,7 +2600,7 @@ export function SettingsPanel({
                           <>
                             {" "}
                             · main ≈ <b>{v.mainGb} GB</b> · total ≈ <b>{v.totalGb} GB</b> on your {cardGb} GB card —{" "}
-                            <span style={{ color: fit.fits ? SUCCESS_GREEN : "#f0a868" }}>
+                            <span style={{ color: fit.fits ? SUCCESS_GREEN : t.state.warn }}>
                               {fit.fits ? `fits, ~${fit.headroomGb} GB free for KV cache` : `tight (~${fit.headroomGb} GB left)`}
                             </span>
                           </>
@@ -2709,7 +2710,7 @@ export function SettingsPanel({
               keywords="schwab markets options positions thinkorswim quotes greeks app key secret"
             >
               <>
-                <div style={{ marginTop: 12, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <div style={{ marginTop: 12, paddingTop: 8, borderTop: `1px solid ${t.border.faint}` }}>
                   <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>📈 Schwab (markets · options · positions)</div>
                   <p style={{ opacity: 0.55, fontSize: 11, margin: "0 0 6px" }}>
                     Connect your own Charles Schwab developer app (the platform behind thinkorswim) for real quotes,
@@ -2752,7 +2753,7 @@ export function SettingsPanel({
                     you paste it back.
                   </span>
                   {schwabCallbackIssue(value.keys.schwabCallbackUrl ?? DEFAULT_SCHWAB_CALLBACK) ? (
-                    <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                    <span style={{ fontSize: 11, color: t.state.warn }}>
                       ⚠ {schwabCallbackIssue(value.keys.schwabCallbackUrl ?? DEFAULT_SCHWAB_CALLBACK)}
                     </span>
                   ) : null}
@@ -2764,7 +2765,7 @@ export function SettingsPanel({
                       {schwabConnected ? (
                         <span style={{ fontSize: 12, color: SUCCESS_GREEN }}>✓ Schwab connected</span>
                       ) : !canConnectSchwab ? (
-                        <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                        <span style={{ fontSize: 11, color: t.state.warn }}>
                           Sign in on the desktop app — swapping Schwab’s code for a token is a cross-origin request a
                           phone browser refuses. Once it’s connected there, this device uses it normally.
                         </span>
@@ -2887,7 +2888,7 @@ export function SettingsPanel({
                     ))}
                   </select>
                   {mismatch ? (
-                    <span style={{ opacity: 0.85, fontSize: 11, color: "#e0716f" }}>
+                    <span style={{ opacity: 0.85, fontSize: 11, color: t.state.danger }}>
                       ⚠ This LoRA is {chosenFamily!.toUpperCase()} but your model is{" "}
                       {localFamily.toUpperCase()} — it won’t load. Pick a {localFamily.toUpperCase()}
                       -compatible LoRA, or the prompt style alone will be used.
@@ -3268,16 +3269,16 @@ function GoogleConnectBlock({
   };
   const ready = !!value.keys.googleClientId && !!value.keys.googleClientSecret;
   const btn = {
-    background: "rgba(122,162,255,0.22)",
+    background: t.accent.fill,
     color: "inherit",
-    border: "1px solid rgba(122,162,255,0.55)",
+    border: `1px solid ${t.accent.edge}`,
     borderRadius: 6,
     padding: "5px 12px",
     fontSize: 12,
     cursor: "pointer",
   } as const;
   return (
-    <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+    <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${t.border.faint}` }}>
       <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>📧 Google (Gmail · Calendar · Tasks)</div>
       <p style={{ opacity: 0.55, fontSize: 11, margin: "0 0 6px" }}>
         Let the assistant read your email, see &amp; create calendar events, and manage to-dos. One-time setup: create a
@@ -3310,7 +3311,7 @@ function GoogleConnectBlock({
                 onClick={() => {
                   if (window.confirm("Disconnect Google? The saved sign-in is forgotten — you'll need to approve access again to reconnect.")) onDisconnect();
                 }}
-                style={{ ...btn, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)" }}
+                style={{ ...btn, background: t.fill.base, border: `1px solid ${t.fill.strong}` }}
               >
                 Disconnect
               </button>
@@ -3409,8 +3410,8 @@ function PasteUrl({ placeholder, onSubmit }: { placeholder: string; onSubmit: (u
 
 function ProgressBar({ pct }: { pct: number }) {
   return (
-    <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2, marginTop: 4 }}>
-      <div style={{ width: `${pct}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+    <div style={{ height: 4, background: t.fill.strong, borderRadius: 2, marginTop: 4 }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: t.accent.base, borderRadius: 2 }} />
     </div>
   );
 }
@@ -3783,8 +3784,8 @@ function ManagedEngine({
                   {downloadStage[m.id] && (
                     <span style={{ opacity: 0.6, fontSize: 11 }}>{downloadStage[m.id]}</span>
                   )}
-                  <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2 }}>
-                    <div style={{ width: `${progress}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+                  <div style={{ height: 4, background: t.fill.strong, borderRadius: 2 }}>
+                    <div style={{ width: `${progress}%`, height: "100%", background: t.accent.base, borderRadius: 2 }} />
                   </div>
                 </>
               )}
@@ -4016,7 +4017,7 @@ function SectionHeader({ q, title, order }: { q: string; title: string; order: n
         opacity: 0.5,
         margin: "8px 2px 0",
         paddingBottom: 2,
-        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        borderBottom: `1px solid ${t.border.subtle}`,
       }}
     >
       {title}
@@ -4025,10 +4026,10 @@ function SectionHeader({ q, title, order }: { q: string; title: string; order: n
 }
 
 const groupStyle = {
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
   padding: "8px 10px",
-  background: "rgba(255,255,255,0.03)",
+  background: t.fill.subtle,
 } as const;
 
 const groupSummaryStyle = {
@@ -4040,9 +4041,9 @@ const groupSummaryStyle = {
 const searchStyle = {
   width: "100%",
   marginTop: 8,
-  background: "rgba(255,255,255,0.07)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "6px 8px",
   fontSize: 12,
@@ -4051,7 +4052,7 @@ const searchStyle = {
 
 const buttonStyle = {
   background: "transparent",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -4066,13 +4067,13 @@ const closeRowStyle = {
   flexDirection: "column",
   margin: "-12px -16px 4px -12px", // span the panel's padding so the bar is flush
   padding: "10px 12px",
-  background: "#16181d",
-  borderBottom: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  borderBottom: `1px solid ${t.border.subtle}`,
 } as const;
 
 const closeButtonStyle = {
-  background: "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.25)",
+  background: t.fill.base,
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -4098,10 +4099,10 @@ export const panelStyle = {
   gap: 8,
   padding: 12,
   paddingRight: 16, // room for the internal scrollbar so it doesn't overlap inputs
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 8,
   width: "min(340px, calc(100vw - 16px))",
-  background: "#16181d",
+  background: t.surface.card,
   // Its OWN typography and text colour, not the app shell's.
   //
   // These used to be inherited: the panel rendered inside the header, which sits inside the app
@@ -4110,7 +4111,7 @@ export const panelStyle = {
   // backdrop-filtered header — cut every one of those. It landed on a bare <body>: black UA text on
   // this near-black card, at UA size, in Times. Anything that floats free of the tree it was written
   // in has to carry its own appearance.
-  color: "#e7e7ee",
+  color: t.text.base,
   fontFamily: "Georgia, 'Iowan Old Style', serif",
   fontSize: 13,
   /**

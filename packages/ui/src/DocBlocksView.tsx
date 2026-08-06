@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, type CSSProperties, type ReactNode } from "react";
 import { markdownToBlocks, type DocBlock, type DocInline } from "@visual-reader/core";
 
@@ -76,7 +77,7 @@ const P: CSSProperties = { margin: "0 0 0.9em" };
 const LIST: CSSProperties = { margin: "0 0 0.9em 1.4em", padding: 0 };
 const LI: CSSProperties = { margin: "0.25em 0" };
 const PRE: CSSProperties = {
-  background: "rgba(255,255,255,0.05)",
+  background: t.fill.subtle,
   padding: "10px 12px",
   borderRadius: 6,
   overflowX: "auto",
@@ -88,8 +89,8 @@ const PRE: CSSProperties = {
 const CODE_INLINE: CSSProperties = {
   fontFamily: "ui-monospace, monospace",
   fontSize: "0.9em",
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   padding: "1px 4px",
   borderRadius: 4,
 };
-const HR: CSSProperties = { border: "none", borderTop: "1px solid rgba(255,255,255,0.15)", margin: "1.3em 0" };
+const HR: CSSProperties = { border: "none", borderTop: `1px solid ${t.border.input}`, margin: "1.3em 0" };

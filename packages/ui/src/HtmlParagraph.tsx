@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo } from "react";
 
 /**
@@ -30,18 +31,18 @@ export const ARTICLE_HTML_STYLE = `
 .vr-article-html h1 { font-size: 1.5em; } .vr-article-html h2 { font-size: 1.3em; }
 .vr-article-html h3 { font-size: 1.15em; }
 .vr-article-html p { margin: 0 0 0.9em; }
-.vr-article-html a { color: #8ab4ff; text-decoration: underline; }
+.vr-article-html a { color: t.accent.text; text-decoration: underline; }
 .vr-article-html img { max-width: 100%; height: auto; border-radius: 6px; display: block; margin: 0.6em 0; }
 .vr-article-html ul, .vr-article-html ol { margin: 0 0 0.9em 1.2em; padding: 0; }
 .vr-article-html li { margin: 0.2em 0; }
 .vr-article-html blockquote {
-  margin: 0.8em 0; padding: 0.2em 0 0.2em 0.9em; border-left: 3px solid rgba(255,255,255,0.2); opacity: 0.85;
+  margin: 0.8em 0; padding: 0.2em 0 0.2em 0.9em; border-left: 3px solid ${t.fill.strong}; opacity: 0.85;
 }
 .vr-article-html pre {
-  background: rgba(255,255,255,0.05); padding: 10px 12px; border-radius: 6px; overflow-x: auto; font-size: 0.9em;
+  background: t.fill.subtle; padding: 10px 12px; border-radius: 6px; overflow-x: auto; font-size: 0.9em;
 }
 .vr-article-html code { font-family: ui-monospace, monospace; font-size: 0.92em; }
 .vr-article-html figure { margin: 0.8em 0; }
 .vr-article-html figcaption { font-size: 0.85em; opacity: 0.6; margin-top: 0.3em; }
-.vr-article-html hr { border: none; border-top: 1px solid rgba(255,255,255,0.12); margin: 1.2em 0; }
+.vr-article-html hr { border: none; border-top: 1px solid ${t.border.subtle}; margin: 1.2em 0; }
 `;

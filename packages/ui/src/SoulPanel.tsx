@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   MAX_SOUL_IMAGES,
@@ -446,9 +447,9 @@ export const SoulPanel = memo(function SoulPanel({
             flexDirection: "column",
             gap: 8,
             padding: 10,
-            border: "1px solid rgba(255,255,255,0.12)",
+            border: `1px solid ${t.border.subtle}`,
             borderRadius: 8,
-            background: "rgba(255,255,255,0.035)",
+            background: t.fill.subtle,
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -569,7 +570,7 @@ export const SoulPanel = memo(function SoulPanel({
                     flexDirection: "column",
                     gap: 4,
                     paddingTop: 7,
-                    borderTop: "1px solid rgba(255,255,255,0.09)",
+                    borderTop: `1px solid ${t.border.faint}`,
                   }}
                 >
                   <strong style={{ fontSize: 11, opacity: 0.78 }}>
@@ -596,7 +597,7 @@ export const SoulPanel = memo(function SoulPanel({
                   flexDirection: "column",
                   gap: 4,
                   paddingTop: 7,
-                  borderTop: "1px solid rgba(255,255,255,0.09)",
+                  borderTop: `1px solid ${t.border.faint}`,
                 }}
               >
                 <strong style={{ fontSize: 11, opacity: 0.78 }}>Exact physical appearance</strong>
@@ -619,7 +620,7 @@ export const SoulPanel = memo(function SoulPanel({
               <details
                 style={{
                   paddingTop: 7,
-                  borderTop: "1px solid rgba(255,255,255,0.09)",
+                  borderTop: `1px solid ${t.border.faint}`,
                   fontSize: 11,
                 }}
               >
@@ -752,7 +753,7 @@ export const SoulPanel = memo(function SoulPanel({
         {/* Hidden when the host can't save photos — on a linked phone they live on the computer,
             and an upload button that quietly discarded the picture would be worse than no button. */}
         {onSaveImages || onAddImages ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${t.border.faint}`, paddingTop: 10 }}>
           <div style={{ fontSize: 12, opacity: 0.85, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>📷 Reference photos</span>
             <span style={{ fontSize: 11, opacity: 0.6 }}>
@@ -775,7 +776,7 @@ export const SoulPanel = memo(function SoulPanel({
                     src={`data:${im.mimeType};base64,${im.dataBase64}`}
                     alt="reference"
                     decoding="async"
-                    style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
+                    style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: `1px solid ${t.border.input}` }}
                   />
                   {onSaveImages ? (
                     <button style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
@@ -788,7 +789,7 @@ export const SoulPanel = memo(function SoulPanel({
                   key={i}
                   title="Stored on your computer — add more from here, or open the Soul panel there to remove one"
                   style={{
-                    width: 64, height: 64, borderRadius: 6, border: "1px dashed rgba(255,255,255,0.25)",
+                    width: 64, height: 64, borderRadius: 6, border: `1px dashed ${t.border.button}`,
                     display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, opacity: 0.6,
                   }}
                 >
@@ -834,8 +835,8 @@ const addThumb: React.CSSProperties = {
   width: 64,
   height: 64,
   borderRadius: 6,
-  border: "1px dashed rgba(255,255,255,0.3)",
-  background: "rgba(255,255,255,0.05)",
+  border: `1px dashed ${t.border.button}`,
+  background: t.fill.subtle,
   color: "inherit",
   fontSize: 12,
   cursor: "pointer",
@@ -849,7 +850,7 @@ const removeBadge: React.CSSProperties = {
   borderRadius: "50%",
   border: "none",
   background: "rgba(0,0,0,0.75)",
-  color: "#fff",
+  color: t.text.base,
   fontSize: 13,
   lineHeight: "16px",
   cursor: "pointer",

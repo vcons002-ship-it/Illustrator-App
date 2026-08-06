@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo } from "react";
 import { DataChart } from "./DataChart.js";
 import type { ChapterDataset } from "@visual-reader/core";
@@ -25,9 +26,9 @@ export const DataSection = memo(function DataSection({ datasets, sourceLabel, de
       {...(defaultOpen ? { open: true } : {})}
       style={{
         marginTop: 10,
-        background: "rgba(90,209,155,0.06)",
-        border: "1px solid rgba(90,209,155,0.35)",
-        borderLeft: "3px solid rgba(90,209,155,0.8)",
+        background: t.state.good,
+        border: `1px solid ${t.state.good}`,
+        borderLeft: `3px solid ${t.state.good}`,
         borderRadius: 8,
         padding: "6px 10px",
       }}

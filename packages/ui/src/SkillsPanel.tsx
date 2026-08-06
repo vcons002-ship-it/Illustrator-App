@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useMemo, useRef, useState } from "react";
 import type { Skill } from "@visual-reader/core";
 
@@ -198,7 +199,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -207,9 +208,9 @@ const card: React.CSSProperties = {
   width: "min(680px, 100%)",
   maxHeight: "92vh",
   overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   display: "flex",
@@ -221,9 +222,9 @@ const header: React.CSSProperties = { display: "flex", alignItems: "center", jus
 const fieldLabel: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, opacity: 0.9 };
 const textarea: React.CSSProperties = {
   resize: "vertical",
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 6,
   padding: 8,
   fontSize: 13,
@@ -236,8 +237,8 @@ const editorBox: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  border: "1px solid rgba(122,162,255,0.4)",
-  background: "rgba(122,162,255,0.06)",
+  border: `1px solid ${t.accent.edge}`,
+  background: t.accent.wash,
   borderRadius: 8,
   padding: 12,
 };
@@ -246,14 +247,14 @@ const skillRow: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 10,
-  border: "1px solid rgba(255,255,255,0.1)",
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
   padding: "8px 10px",
 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "4px 10px",
   fontSize: 13,
@@ -261,7 +262,7 @@ const btn: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = {
   ...btn,
-  background: "rgba(122,162,255,0.25)",
-  border: "1px solid rgba(122,162,255,0.6)",
+  background: t.accent.fill,
+  border: `1px solid ${t.accent.edge}`,
 };
-const errStyle: React.CSSProperties = { color: "#ff9b9b", fontSize: 12 };
+const errStyle: React.CSSProperties = { color: t.state.danger, fontSize: 12 };

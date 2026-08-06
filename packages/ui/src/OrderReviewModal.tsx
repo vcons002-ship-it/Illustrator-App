@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useState } from "react";
 import { ModalShell } from "./ModalShell.js";
 
@@ -37,11 +38,11 @@ export const OrderReviewModal = memo(function OrderReviewModal({ summary, order,
         <pre style={pre}>{JSON.stringify(order, null, 2)}</pre>
 
         {result ? (
-          <div style={{ fontSize: 13, marginTop: 8, color: result.ok ? "#5dd19b" : "#ff8c8c" }}>{result.message}</div>
+          <div style={{ fontSize: 13, marginTop: 8, color: result.ok ? t.state.good : t.state.danger }}>{result.message}</div>
         ) : (
           <>
             {!connected ? (
-              <div style={{ fontSize: 12, color: "#ffcf8b", marginTop: 8 }}>Connect your Schwab account first (📈 Markets → Connect Schwab).</div>
+              <div style={{ fontSize: 12, color: t.state.warn, marginTop: 8 }}>Connect your Schwab account first (📈 Markets → Connect Schwab).</div>
             ) : (
               <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, fontSize: 12 }}>
                 <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
@@ -78,13 +79,13 @@ const overlay: React.CSSProperties = {
 const panel: React.CSSProperties = {
   width: "min(540px, 100%)",
   maxHeight: "90vh",
-  border: "1px solid rgba(255,255,255,0.14)",
+  border: `1px solid ${t.border.input}`,
   display: "block",
   gap: 0,
 };
 const pre: React.CSSProperties = {
-  background: "#0d1017",
-  border: "1px solid rgba(255,255,255,0.1)",
+  background: t.surface.sunken,
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
   padding: 10,
   fontSize: 11,
@@ -92,9 +93,9 @@ const pre: React.CSSProperties = {
   margin: 0,
 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 12px",
   fontSize: 12,
@@ -102,6 +103,6 @@ const btn: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = {
   ...btn,
-  background: "rgba(90,209,155,0.25)",
-  border: "1px solid rgba(90,209,155,0.6)",
+  background: t.state.good,
+  border: `1px solid ${t.state.good}`,
 };

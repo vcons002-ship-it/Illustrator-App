@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useState, type CSSProperties } from "react";
 import { activitySummary, orderActivities, type Activity } from "@visual-reader/core";
 
@@ -61,22 +62,22 @@ const pill: CSSProperties = {
   gap: 6,
   padding: "3px 10px",
   borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.15)",
-  background: "rgba(255,255,255,0.04)",
+  border: `1px solid ${t.border.input}`,
+  background: t.fill.subtle,
   color: "inherit",
   fontSize: 12,
   cursor: "pointer",
 };
 const pillBusy: CSSProperties = { borderColor: "rgba(120,170,255,0.5)", color: "#bcd4ff" };
-const pillIdle: CSSProperties = { color: "#9be8c0", borderColor: "rgba(90,209,155,0.4)" };
+const pillIdle: CSSProperties = { color: t.state.good, borderColor: t.state.good };
 const panel: CSSProperties = {
   position: "absolute",
   top: "calc(100% + 6px)",
   left: 0,
   zIndex: 60,
   width: "min(360px, 80vw)",
-  background: "#16181d",
-  border: "1px solid rgba(255,255,255,0.14)",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
   borderRadius: 10,
   padding: "10px 12px",
   boxShadow: "0 8px 24px rgba(0,0,0,0.4)",

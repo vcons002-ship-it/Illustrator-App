@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isComfyBackend, panelStyle } from "./SettingsPanel.js";
+import { t } from "./design/tokens.js";
 
 /**
  * The settings card renders through a PORTAL, at the top of the document rather than inside the app.
@@ -19,9 +22,29 @@ describe("the settings card is self-sufficient", () => {
     expect(panelStyle.fontSize).toBeTruthy();
   });
 
+  /**
+   * The assertion is now on the TOKEN rather than the hex, because the palette lives in one CSS
+   * file and this panel must read it rather than restate it. The intent is unchanged and still
+   * the point of the test: a portalled card that inherits nothing must declare a light-on-dark
+   * pair of its own, or the browser draws its default black-on-black.
+   *
+   * Deliberately not deleted when tokenising broke it — a style contract that gets removed the
+   * moment it fails is not a contract.
+   */
   it("has readable contrast — light text on a dark card, not the UA's black on black", () => {
-    expect(panelStyle.color).toBe("#e7e7ee");
-    expect(panelStyle.background).toBe("#16181d");
+    expect(panelStyle.color).toBe(t.text.base);
+    expect(panelStyle.background).toBe(t.surface.card);
+  });
+
+  it("reads those from tokens that actually exist", () => {
+    // The one silent failure of a var()-based palette: a typo resolves to nothing, and a card
+    // with no background renders transparent over whatever is behind it.
+    const css = readFileSync(join(__dirname, "styles", "tokens.css"), "utf8");
+    for (const value of [panelStyle.color, panelStyle.background]) {
+      const name = /var\((--[a-z0-9-]+)\)/.exec(String(value))?.[1];
+      expect(name, `${String(value)} is not a token reference`).toBeTruthy();
+      expect(css, `${name} is referenced but never declared`).toContain(`${name}:`);
+    }
   });
 
   /**

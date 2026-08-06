@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useState } from "react";
 import type { PageText } from "@visual-reader/core";
 
@@ -95,7 +96,7 @@ export const BrowserPanel = memo(function BrowserPanel({
           {loading ? (
             <div style={{ opacity: 0.6, padding: 12 }}>Loading {url}…</div>
           ) : error ? (
-            <div style={{ color: "#ff8c8c", padding: 12 }}>
+            <div style={{ color: t.state.danger, padding: 12 }}>
               ⚠ {error}
               <div style={{ opacity: 0.6, fontSize: 12, marginTop: 6 }}>
                 Most sites only load in the desktop app (a browser tab can't bypass cross-origin rules).
@@ -151,7 +152,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -161,9 +162,9 @@ const panel: React.CSSProperties = {
   height: "min(88vh, 760px)",
   display: "flex",
   flexDirection: "column",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   fontFamily: "system-ui, sans-serif",
@@ -173,8 +174,8 @@ const body: React.CSSProperties = {
   minHeight: 0,
   borderRadius: 8,
   overflow: "hidden",
-  background: "#0d1017",
-  border: "1px solid rgba(255,255,255,0.08)",
+  background: t.surface.sunken,
+  border: `1px solid ${t.border.faint}`,
 };
 const articleCol: React.CSSProperties = { flex: 1, minWidth: 0, overflowY: "auto", padding: 14 };
 const linksCol: React.CSSProperties = {
@@ -182,24 +183,24 @@ const linksCol: React.CSSProperties = {
   flexShrink: 0,
   overflowY: "auto",
   padding: 12,
-  borderLeft: "1px solid rgba(255,255,255,0.08)",
+  borderLeft: `1px solid ${t.border.faint}`,
   display: "flex",
   flexDirection: "column",
   gap: 4,
 };
 const addressBar: React.CSSProperties = {
   flex: "1 1 320px",
-  background: "#0d1017",
-  color: "#fff",
-  border: "1px solid rgba(255,255,255,0.2)",
+  background: t.surface.sunken,
+  color: t.text.base,
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 9px",
   fontSize: 13,
 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,
@@ -207,12 +208,12 @@ const btn: React.CSSProperties = {
 };
 const accentBtn: React.CSSProperties = {
   ...btn,
-  borderColor: "rgba(90,209,155,0.6)",
-  color: "#9be8c0",
+  borderColor: t.state.good,
+  color: t.state.good,
 };
 const linkBtn: React.CSSProperties = {
   background: "transparent",
-  color: "#8ab4ff",
+  color: t.accent.text,
   border: "none",
   borderRadius: 4,
   padding: "3px 4px",

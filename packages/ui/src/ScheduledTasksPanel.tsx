@@ -1,3 +1,5 @@
+// Aliased: `t` is already a local in this file.
+import { t as vr } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { formatStepLines, weekdayOf, type ScheduledTask } from "@visual-reader/core";
 
@@ -144,7 +146,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                       fontSize: 11,
                       opacity: g.missing ? 0.75 : 0.6,
                       marginTop: 4,
-                      color: g.missing ? "#ffcf8b" : undefined,
+                      color: g.missing ? vr.state.warn : undefined,
                     }}
                   >
                     {g.key
@@ -169,7 +171,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                         {describe(t)}
                       </span>
                       {t.enabled ? null : (
-                        <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                        <span style={{ fontSize: 11, color: vr.state.warn }}>
                           paused
                         </span>
                       )}
@@ -229,7 +231,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           {t.enabled ? "Pause" : "Resume"}
                         </button>
                         <button
-                          style={{ ...btn, color: "#ff9c9c" }}
+                          style={{ ...btn, color: vr.state.danger }}
                           onClick={() => onDelete(t.id)}
                         >
                           Delete
@@ -437,8 +439,8 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
 const editStyle: React.CSSProperties = {
   fontSize: 11,
   background: "#1e2128",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  color: vr.text.base,
+  border: `1px solid ${vr.border.subtle}`,
   borderRadius: 5,
   padding: "2px 4px",
 };
@@ -449,7 +451,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: vr.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -458,16 +460,16 @@ const panel: React.CSSProperties = {
   width: "min(640px, 100%)",
   maxHeight: "88vh",
   overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: vr.surface.card,
+  color: vr.text.base,
+  border: `1px solid ${vr.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   fontFamily: "system-ui, sans-serif",
 };
 const card: React.CSSProperties = {
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.1)",
+  background: vr.fill.subtle,
+  border: `1px solid ${vr.border.faint}`,
   borderRadius: 8,
   padding: "8px 10px",
 };
@@ -475,7 +477,7 @@ const card: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   background: "rgba(0,0,0,0.25)",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${vr.border.button}`,
   borderRadius: 6,
   padding: "6px 8px",
   fontSize: 12,
@@ -484,9 +486,9 @@ const inputStyle: React.CSSProperties = {
 };
 
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: vr.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${vr.border.button}`,
   borderRadius: 6,
   padding: "3px 9px",
   fontSize: 12,

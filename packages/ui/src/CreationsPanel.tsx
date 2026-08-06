@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useEffect, useRef, useState } from "react";
 import { ModalShell } from "./ModalShell.js";
 
@@ -157,7 +158,7 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
           </span>
           {onStitch && (counts.video >= 2 || selecting) && (
             <button
-              style={selecting ? { ...buttonStyle, borderColor: "rgba(120,180,255,0.7)" } : buttonStyle}
+              style={selecting ? { ...buttonStyle, borderColor: t.accent.edge } : buttonStyle}
               title="Pick video clips in order, then join them into one video"
               onClick={() => {
                 setSelected([]);
@@ -323,7 +324,7 @@ function CreationTile({
   return (
     <button
       ref={btnRef}
-      style={picked ? { ...tileStyle, position: "relative", borderColor: "rgba(120,180,255,0.8)", background: "rgba(96,170,255,0.12)" } : { ...tileStyle, position: "relative" }}
+      style={picked ? { ...tileStyle, position: "relative", borderColor: t.accent.edge, background: t.accent.edge } : { ...tileStyle, position: "relative" }}
       onClick={open}
       title={card.label ?? card.chatLabel}
       aria-label={selectedIndex !== undefined ? `${picked ? "Unselect" : "Select"} clip from ${card.chatLabel}` : `View creation from ${card.chatLabel}`}
@@ -360,12 +361,12 @@ const overlayStyle = {
 
 const panelCardStyle = {
   width: "min(820px, 100%)",
-  background: "#171922",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
   borderRadius: 12,
   padding: 16,
   fontFamily: "system-ui, sans-serif",
-  color: "#e9ecf2",
+  color: t.text.base,
   // Neutralize the shared card's flex/scroll defaults so the panel keeps its original block layout and
   // grows within the scrolling overlay rather than becoming an inner scroll region.
   display: "block",
@@ -378,7 +379,7 @@ const headerStyle = { display: "flex", alignItems: "center", gap: 12, marginBott
 
 const buttonStyle = {
   background: "transparent",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -387,8 +388,8 @@ const buttonStyle = {
 } as const;
 
 const chipStyle = {
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.2)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 999,
   padding: "3px 10px",
@@ -396,7 +397,7 @@ const chipStyle = {
   fontSize: 12,
 } as const;
 
-const chipActive = { ...chipStyle, background: "rgba(96,170,255,0.25)", borderColor: "rgba(120,180,255,0.7)" } as const;
+const chipActive = { ...chipStyle, background: t.accent.edge, borderColor: t.accent.edge } as const;
 
 const gridStyle = {
   display: "grid",
@@ -405,8 +406,8 @@ const gridStyle = {
 } as const;
 
 const tileStyle = {
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
   padding: 0,
   cursor: "pointer",
@@ -426,7 +427,7 @@ const placeholderStyle = {
   alignItems: "center",
   justifyContent: "center",
   fontSize: 22,
-  background: "rgba(255,255,255,0.05)",
+  background: t.fill.subtle,
 } as const;
 
 const tileCaption = { padding: "6px 8px", fontSize: 11 } as const;
@@ -440,7 +441,7 @@ const orderBadgeStyle = {
   minWidth: 20,
   height: 20,
   borderRadius: 999,
-  background: "rgba(96,170,255,0.9)",
+  background: t.accent.edge,
   color: "#0b1220",
   fontSize: 12,
   fontWeight: 700,
@@ -469,8 +470,8 @@ const lightboxCardStyle = {
   width: "auto", // shrink to the media, not the shared card's fixed width
   maxWidth: "min(920px, 92vw)",
   maxHeight: "90vh",
-  background: "#171922",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
   borderRadius: 12,
   padding: 12,
 } as const;

@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useRef } from "react";
 import { layoutFlowchart, type ChapterInfographic, type GanttRow, type InfographicSpec } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
@@ -70,7 +71,7 @@ function Flowchart({ spec, title }: { spec: Extract<InfographicSpec, { kind: "fl
     const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     bg.setAttribute("width", String(layout.width));
     bg.setAttribute("height", String(layout.height));
-    bg.setAttribute("fill", "#13161e");
+    bg.setAttribute("fill", t.surface.inset);
     clone.insertBefore(bg, clone.firstChild);
     return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
   };
@@ -136,7 +137,7 @@ function Node({ node }: { node: ReturnType<typeof layoutFlowchart>["nodes"][numb
       ) : (
         <rect x={x} y={y} width={w} height={h} rx={shape === "start" || shape === "end" ? h / 2 : 8} fill={fill} stroke={stroke} strokeWidth={1.4} />
       )}
-      <text x={x + w / 2} y={textY} textAnchor="middle" dominantBaseline="middle" fontSize={13} fill="#e6e6e6">
+      <text x={x + w / 2} y={textY} textAnchor="middle" dominantBaseline="middle" fontSize={13} fill={t.text.base}>
         {lines.map((ln, i) => (
           <tspan key={i} x={x + w / 2} dy={i === 0 ? 0 : 16}>
             {ln}
@@ -164,8 +165,8 @@ function wrapLabel(label: string, perLine: number): string[] {
 }
 
 const cardStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.1)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
   padding: "10px 12px",
   margin: "8px 0",
@@ -177,9 +178,9 @@ const listStyle: React.CSSProperties = { margin: "0 0 0 1.1em", padding: 0 };
 const itemStyle: React.CSSProperties = { margin: "0.25em 0", lineHeight: 1.5 };
 const captionStyle: React.CSSProperties = { fontSize: 11, opacity: 0.6, marginTop: 6 };
 const exportBtnStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 5,
   padding: "2px 8px",
   fontSize: 11,

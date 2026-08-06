@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useEffect, useState } from "react";
 import { BloomTransition } from "./BloomTransition.js";
 import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
@@ -97,7 +98,7 @@ function Placeholder({ label, pulse }: { label: string; pulse?: boolean }) {
         justifyContent: "center",
         textAlign: "center",
         padding: 16,
-        color: "rgba(255,255,255,0.7)",
+        color: t.fill.strong,
         background:
           "linear-gradient(135deg, rgba(80,80,110,0.5), rgba(40,40,60,0.5))",
         animation: pulse ? "vr-pulse 1.6s ease-in-out infinite" : undefined,

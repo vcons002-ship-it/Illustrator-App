@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useState } from "react";
 import { activeDownloads, type DownloadStatusInput } from "./download-status.js";
 
@@ -22,7 +23,7 @@ export function DownloadStatus(props: DownloadStatusInput): JSX.Element | null {
         width: collapsed ? "auto" : 300,
         maxWidth: "calc(100vw - 24px)",
         background: "rgba(18,20,28,0.96)",
-        border: "1px solid rgba(255,255,255,0.12)",
+        border: `1px solid ${t.border.subtle}`,
         borderRadius: 10,
         boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
         color: "#e8eaf0",
@@ -68,7 +69,7 @@ export function DownloadStatus(props: DownloadStatusInput): JSX.Element | null {
                 </span>
                 <span style={{ opacity: 0.7, flexShrink: 0 }}>{Math.round(it.percent)}%</span>
               </div>
-              <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.12)", marginTop: 3, overflow: "hidden" }}>
+              <div style={{ height: 5, borderRadius: 3, background: t.fill.strong, marginTop: 3, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${Math.round(it.percent)}%`, background: "#6ea8fe", transition: "width 0.2s" }} />
               </div>
               {it.stage || it.detail ? (

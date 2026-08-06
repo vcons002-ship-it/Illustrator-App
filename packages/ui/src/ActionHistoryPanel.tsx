@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, type CSSProperties } from "react";
 import type { ActionEntry } from "@visual-reader/core";
 
@@ -78,27 +79,27 @@ const overlay: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
 };
 const panel: CSSProperties = {
   width: "min(520px, 100%)",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 16,
   fontFamily: "system-ui, sans-serif",
 };
 const row: CSSProperties = { display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "5px 6px", borderRadius: 6 };
-const rowNew: CSSProperties = { background: "rgba(122,162,255,0.1)" };
-const newDot: CSSProperties = { width: 7, height: 7, borderRadius: "50%", background: "#7aa2ff", flexShrink: 0 };
+const rowNew: CSSProperties = { background: t.accent.fill };
+const newDot: CSSProperties = { width: 7, height: 7, borderRadius: "50%", background: t.accent.base, flexShrink: 0 };
 const btn: CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,

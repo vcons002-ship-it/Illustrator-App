@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo } from "react";
 import { BloomTransition } from "./BloomTransition.js";
 import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
@@ -90,7 +91,7 @@ const Panel = memo(function Panel({
         borderRadius: 6,
         overflow: "hidden",
         background: "linear-gradient(135deg, rgba(80,80,110,0.35), rgba(40,40,60,0.35))",
-        outline: highlight ? "2px solid rgba(140,170,255,0.9)" : "1px solid rgba(255,255,255,0.06)",
+        outline: highlight ? "2px solid rgba(140,170,255,0.9)" : `1px solid ${t.border.faint}`,
         outlineOffset: highlight ? -2 : 0,
       }}
     >

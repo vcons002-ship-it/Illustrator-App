@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
@@ -477,12 +478,12 @@ const overlayStyle = {
 
 const panelStyle = {
   width: "min(720px, 100%)",
-  background: "#171922",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
   borderRadius: 12,
   padding: 16,
   fontFamily: "system-ui, sans-serif",
-  color: "#e9ecf2",
+  color: t.text.base,
 } as const;
 
 const headerStyle = {
@@ -495,8 +496,8 @@ const headerStyle = {
 const searchStyle = {
   width: "100%",
   boxSizing: "border-box",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.18)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.button}`,
   borderRadius: 8,
   color: "inherit",
   padding: "8px 10px",
@@ -509,7 +510,7 @@ const cardStyle = {
   flexDirection: "column",
   gap: 8,
   padding: 12,
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
 } as const;
 
@@ -522,8 +523,8 @@ const gridStyle = {
 const fieldStyle = { display: "flex", flexDirection: "column", gap: 3 } as const;
 const labelStyle = { opacity: 0.6, fontSize: 11 } as const;
 const inputStyle = {
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.18)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   color: "inherit",
   padding: "4px 8px",
@@ -532,7 +533,7 @@ const inputStyle = {
 
 const buttonStyle = {
   background: "transparent",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -547,8 +548,8 @@ const smallButtonStyle = {
 
 const dangerButtonStyle = {
   ...buttonStyle,
-  borderColor: "rgba(255,120,120,0.45)",
-  color: "#ffb0b0",
+  borderColor: t.state.danger,
+  color: t.state.danger,
 } as const;
 
 
@@ -557,8 +558,8 @@ const thumbStyle = {
   width: 56,
   height: 56,
   borderRadius: 6,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.04)",
+  border: `1px solid ${t.border.button}`,
+  background: t.fill.subtle,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -574,7 +575,7 @@ const thumbImgStyle = {
 const thumbRetryStyle = {
   background: "transparent",
   border: "none",
-  color: "#ffd479",
+  color: t.state.warn,
   fontSize: 10,
   lineHeight: 1.2,
   padding: 2,
@@ -588,7 +589,7 @@ const thumbRemoveStyle = {
   right: 1,
   background: "rgba(0,0,0,0.55)",
   border: "none",
-  color: "#fff",
+  color: t.text.base,
   borderRadius: 4,
   fontSize: 10,
   lineHeight: "14px",
@@ -603,6 +604,6 @@ const outfitRowStyle = {
   flexDirection: "column",
   gap: 4,
   padding: 8,
-  border: "1px solid rgba(255,255,255,0.10)",
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 6,
 } as const;

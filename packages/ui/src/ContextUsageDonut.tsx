@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo } from "react";
 import { approxTokens, donutArcs, type ContextUsage } from "@visual-reader/core";
 
@@ -15,7 +16,7 @@ export interface ContextUsageDonutProps {
 
 /** Stable colour per segment key (dark-theme palette, matches the app accents). */
 const COLORS: Record<string, string> = {
-  book: "#7aa2ff",
+  book: t.accent.base,
   bible: "#5ad19b",
   instructions: "#c8a2ff",
   history: "#ffc14d",
@@ -39,7 +40,7 @@ export const ContextUsageDonut = memo(function ContextUsageDonut({ usage }: Cont
       <div style={{ position: "relative", width: 100, height: 100, flexShrink: 0 }}>
         <svg viewBox="0 0 100 100" width={100} height={100} role="img" aria-label="Context usage">
           {arcs.length === 0 ? (
-            <circle cx={50} cy={50} r={37} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={18} />
+            <circle cx={50} cy={50} r={37} fill="none" stroke={t.fill.base} strokeWidth={18} />
           ) : (
             arcs.map((a) => <path key={a.key} d={a.path} fill={COLORS[a.key] ?? FALLBACK} />)
           )}
@@ -90,8 +91,8 @@ const wrapStyle = {
   gap: 14,
   alignItems: "center",
   padding: "10px 12px",
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
 } as const;
 

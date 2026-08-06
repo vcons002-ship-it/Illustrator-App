@@ -1,3 +1,5 @@
+// Aliased: `t` is already a local in this file.
+import { t as vr } from "./design/tokens.js";
 import { memo, useRef } from "react";
 import { layoutGantt, type GanttRow } from "@visual-reader/core";
 
@@ -25,12 +27,12 @@ export interface GanttChartProps {
 }
 
 const ACCENT: Record<string, { fill: string; stroke: string }> = {
-  group: { fill: "rgba(122,162,255,0.16)", stroke: "#7aa2ff" },
+  group: { fill: vr.accent.fill, stroke: vr.accent.base },
   todo: { fill: "#2a3146", stroke: "#4a5470" },
-  active: { fill: "rgba(122,162,255,0.5)", stroke: "#9db8ff" },
+  active: { fill: vr.accent.edge, stroke: vr.accent.text },
   done: { fill: "rgba(90,209,155,0.28)", stroke: "#5dd19b" },
   blocked: { fill: "rgba(224,160,120,0.28)", stroke: "#e0a078" },
-  milestone: { fill: "rgba(122,162,255,0.5)", stroke: "#9db8ff" },
+  milestone: { fill: vr.accent.edge, stroke: vr.accent.text },
 };
 
 function truncate(s: string, maxChars: number): string {
@@ -59,7 +61,7 @@ export const GanttChart = memo(function GanttChart({
     const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     bg.setAttribute("width", String(layout.width));
     bg.setAttribute("height", String(layout.height));
-    bg.setAttribute("fill", "#13161e");
+    bg.setAttribute("fill", vr.surface.inset);
     clone.insertBefore(bg, clone.firstChild);
     return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
   };
@@ -112,14 +114,14 @@ export const GanttChart = memo(function GanttChart({
         {/* Axis ticks: a faint gridline + a date/index label at the top of each. */}
         {layout.ticks.map((t, i) => (
           <g key={`tick-${i}`}>
-            <line x1={t.x} y1={18} x2={t.x} y2={layout.height} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+            <line x1={t.x} y1={18} x2={t.x} y2={layout.height} stroke={vr.fill.base} strokeWidth={1} />
             <text x={t.x} y={12} textAnchor="middle" fontSize={9} fill="#8a93a8">
               {t.label}
             </text>
           </g>
         ))}
         {/* Gutter divider. */}
-        <line x1={labelWidth} y1={18} x2={labelWidth} y2={layout.height} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+        <line x1={labelWidth} y1={18} x2={labelWidth} y2={layout.height} stroke={vr.fill.strong} strokeWidth={1} />
 
         {layout.bars.map((bar) => {
           const colors = ACCENT[bar.accent] ?? ACCENT.todo!;
@@ -206,9 +208,9 @@ export const GanttChart = memo(function GanttChart({
 });
 
 const exportBtn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: vr.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${vr.border.button}`,
   borderRadius: 5,
   padding: "2px 8px",
   fontSize: 11,
