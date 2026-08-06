@@ -1306,7 +1306,14 @@ export class ComfyUIBackend implements LocalEngineBackend {
               clipG: String(components.textEncoder.inputs.clip_name2 ?? ""),
             }
           : undefined;
-      const image = await this.pollForImage(prompt_id, signal, family, hidreamClips);
+      // Read from the SUBMITTED graph, so the list is exactly what the engine was told to load.
+      const image = await this.pollForImage(
+        prompt_id,
+        signal,
+        family,
+        hidreamClips,
+        modelFilesInWorkflow(workflow),
+      );
       const view = await this.transport.send({
         url:
           `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
@@ -1570,6 +1577,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     signal?: AbortSignal,
     family?: ModelFamily,
     hidreamClips?: { clipL?: string; clipG?: string },
+    modelFiles?: readonly string[],
   ): Promise<HistoryImage> {
     // A render is NEVER timed out for being slow — only the reader's cancel (the abort signal)
     // stops a live job. We poll /history for the result, and treat the prompt as alive as long as
@@ -1614,7 +1622,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
         if (first) return first;
         // Finished but no file: surface ComfyUI's REAL execution error (otherwise it's a mystery).
         throw new Error(
-          comfyExecutionError(entry.status, family, hidreamClips) ?? "ComfyUI finished but produced no output",
+          comfyExecutionError(entry.status, family, hidreamClips, modelFiles) ??
+            "ComfyUI finished but produced no output",
         );
       }
       // Not done yet — still queued/running in ComfyUI? Then keep waiting, however long it takes.
@@ -2210,6 +2219,35 @@ function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
 }
 
+/** Weight-file extensions ComfyUI loads. Not an exhaustive list of everything on disk — the point
+ * is to pick model files out of a graph whose inputs are mostly prompts, seeds and dimensions. */
+const WEIGHT_FILE_RE = /\.(safetensors|sft|ckpt|pt|pth|gguf|bin)$/i;
+
+/**
+ * Every model file a graph tells the engine to load, as "node: file".
+ *
+ * Read out of the submitted workflow rather than tracked as we build it, because the graph is the
+ * only place that knows the FULL set — the diffusion model, the VAE, one or more text encoders,
+ * CLIP-vision, IPAdapter weights and any LoRAs, contributed by several different builders. When a
+ * read fails there is no way to tell from the error which of them it was, so the answer has to be
+ * "here is everything it was reading from".
+ */
+export function modelFilesInWorkflow(workflow: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const node of Object.values(workflow)) {
+    if (!node || typeof node !== "object") continue;
+    const { class_type: cls, inputs } = node as { class_type?: unknown; inputs?: unknown };
+    if (!inputs || typeof inputs !== "object") continue;
+    for (const value of Object.values(inputs as Record<string, unknown>)) {
+      if (typeof value === "string" && WEIGHT_FILE_RE.test(value)) {
+        const label = `${typeof cls === "string" ? cls : "?"}: ${value}`;
+        if (!out.includes(label)) out.push(label);
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Extract ComfyUI's real execution error from a history entry's status messages, and
  * translate the cryptic ones. The flagship case: a "mat1 and mat2 shapes cannot be
@@ -2222,6 +2260,7 @@ export function comfyExecutionError(
   status: HistoryResponse[string]["status"],
   family?: ModelFamily,
   hidreamClips?: { clipL?: string; clipG?: string },
+  modelFiles?: readonly string[],
 ): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
@@ -2232,6 +2271,29 @@ export function comfyExecutionError(
   const at = nodeType ? ` [node ${nodeType}${nodeId ? ` #${nodeId}` : ""}]` : "";
   if (!raw) {
     return status?.status_str === "error" ? `ComfyUI reported an execution error${at}.` : undefined;
+  }
+  /**
+   * A WEIGHT FILE THE ENGINE COULD NOT READ — not a graph problem at all.
+   *
+   * ComfyUI reads weights lazily, in slices, as sampling needs them, so a bad file does not fail at
+   * the loader that names it: it fails deep in KSampler, pointing at a node that has nothing wrong
+   * with it. "[node KSampler #3]: HostBuffer.read_file_slice failed" reads like the sampler broke,
+   * and the reader's reasonable conclusion — that whatever they changed last broke it — is wrong.
+   *
+   * The engine never says WHICH file, and it can be any of half a dozen the graph loads. So list
+   * them. A truncated download is the usual cause and is invisible in a directory listing: the file
+   * is present, named correctly, and short.
+   */
+  if (/read_file_slice|HostBuffer|MetadataIncompleteBuffer|while deserializing|failed to read|unexpected end of file/i.test(raw)) {
+    const files = modelFiles?.length
+      ? ` The graph loads: ${listOrNone(modelFiles)}. One of these is the file to replace.`
+      : "";
+    return (
+      `ComfyUI could not finish reading a model file${at} — the weights are unreadable, not the graph. ` +
+      "That is almost always a download that stopped early (the file is there and the right name, just " +
+      `short), or a model on a drive that went away mid-render.${files} ` +
+      `Re-download the suspect file and try again. Engine said: ${raw.trim().slice(0, 200)}`
+    );
   }
   if (/shapes cannot be multiplied/i.test(raw)) {
     // HiDream loads FOUR encoders via QuadrupleCLIPLoader. A shape mismatch here is almost
