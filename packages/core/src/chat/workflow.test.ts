@@ -12,6 +12,7 @@ import {
   evaluateStep,
   inferDoneWhen,
   isPlanningStep,
+  isWebSearchStep,
   isToolContract,
   needsToDoneWhen,
   recompileWorkflow,
@@ -926,5 +927,43 @@ describe("three separate documents must come out as three documents", () => {
       ],
     });
     expect(evaluateStep(wf.steps[1]!, ev([{ call: { tool: "edit_document", edits: [] } as unknown as BuddyToolCall, result: edit() }])).done).toBe(false);
+  });
+});
+
+describe("a search VERB, not the word appearing somewhere in a sentence", () => {
+  // Reported as: any line with "find" in it goes off searching instead of reading the word in
+  // context. The rule tested the WHOLE instruction, so it fired wherever the word landed — and the
+  // collar then REQUIRED a web search to succeed, which is an instruction to go and search.
+  it("leaves a search word that is describing the object, not the action", () => {
+    expect(inferDoneWhen("Read 'documents/daily.md', find the entry for that specific day")).toEqual({ kind: "text", min: 1 });
+    expect(inferDoneWhen("Calculate the day number, then find it in the table")).toEqual({ kind: "text", min: 1 });
+  });
+
+  it("does not read GOOGLE CALENDAR as an instruction to search the web", () => {
+    // The sharpest case, and not "find" at all: the step says Google Calendar, "google" was read as
+    // the verb, and a step about writing a calendar entry was compiled into a step about searching.
+    // The model then did what its contract demanded.
+    expect(inferDoneWhen("Create a Google Calendar event with the fact you found")).toEqual({ kind: "text", min: 1 });
+    expect(isWebSearchStep("google docs export of the notes")).toBe(false);
+    expect(isWebSearchStep("google drive backup check")).toBe(false);
+  });
+
+  it("still catches a step whose actual job IS a web search", () => {
+    const web = { kind: "tool_ok", tool: "search_web" };
+    expect(inferDoneWhen("Search the web for tide tables")).toEqual(web);
+    expect(inferDoneWhen("Find the tide tables")).toEqual(web);
+    expect(inferDoneWhen("Look up the population of France")).toEqual(web);
+    // Ordering words are stepped over — a checklist step often opens with one.
+    expect(inferDoneWhen("Then find the current mortgage rates")).toEqual(web);
+    expect(isWebSearchStep("Now search for the venue's opening hours")).toBe(true);
+    // "google" as a real verb survives; only the product names are excluded.
+    expect(isWebSearchStep("google the error message")).toBe(true);
+  });
+
+  it("reads “find out” as determine, not as search", () => {
+    // Satisfied by reading a file or checking mail as often as by the web, so requiring a web search
+    // would be a contract the right behaviour cannot meet.
+    expect(isWebSearchStep("find out whether the shipment arrived")).toBe(false);
+    expect(inferDoneWhen("Find out whether the shipment arrived")).toEqual({ kind: "text", min: 1 });
   });
 });

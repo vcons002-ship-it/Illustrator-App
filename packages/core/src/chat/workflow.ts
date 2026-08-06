@@ -215,6 +215,42 @@ export function isReferenceAdoptionStep(instruction: string): boolean {
   return /\breference\b/.test(t) && ADOPT_VERB.test(t) && PICTURE_WORD.test(t);
 }
 
+/**
+ * Is this step's job to SEARCH THE WEB — as opposed to a step that merely contains one of those
+ * words somewhere in an ordinary English sentence?
+ *
+ * Reported as: any line with "find" in it goes off searching instead of reading the word in
+ * context. The rule was `/\b(search|find|look up|google)\b/` against the WHOLE instruction, so it
+ * fired wherever the word landed — and the collar then required a web search to succeed, which is
+ * an instruction to go and search, not a description of one:
+ *
+ *   "Read 'documents/daily.md', find the entry for that day"  → a web search must succeed
+ *   "Create a Google Calendar event with the fact you found"  → a web search must succeed
+ *
+ * The second is the sharper one, and it isn't "find" at all: the step says GOOGLE CALENDAR, and the
+ * word "google" was being read as the verb. A step about writing a calendar entry was compiled into
+ * a step about searching the web, and the model did what its contract demanded.
+ *
+ * So the verb has to LEAD. Steps are written as imperatives — the tool prompt asks for exactly that,
+ * "one clear action that reads like the reader said it" — so the action is the first verb, and a
+ * search word later in the line is describing the thing being acted on ("the entry", "the fact you
+ * found"), not the action. Ordering words are stepped over so "Then find the tide tables" still
+ * counts.
+ *
+ * Two exclusions carry their own reasons. "Find OUT whether…" means determine, not search — it is
+ * satisfied by reading a file or checking mail as often as by the web. And "google" followed by a
+ * product name is a noun: Google Calendar, Google Docs, Google Drive. PURE.
+ */
+export function isWebSearchStep(instruction: string): boolean {
+  const t = instruction.trim().toLowerCase();
+  const lead = /^(?:(?:and|then|next|now|first|finally|also|please|afterwards)\b[,:]?\s+)*(search|find|look\s+up|google)\b(.*)$/.exec(t);
+  if (!lead) return false;
+  const rest = lead[2] ?? "";
+  if (lead[1] === "find" && /^\s+out\b/.test(rest)) return false;
+  if (lead[1] === "google" && /^\s+(calendar|docs?|drive|sheets|tasks|mail|gmail|meet|photos)\b/.test(rest)) return false;
+  return true;
+}
+
 /** Heuristic fallback when a step declares no `needs`: read the instruction and guess the contract.
  * Conservative — a step we can't classify becomes a `text` (non-empty) check, which any real reply
  * satisfies, rather than something that could wrongly block. */
@@ -246,7 +282,7 @@ export function inferDoneWhen(instruction: string): DoneWhen {
   if (/\b(save|write|export|create)\b[^.]*\b(file|\.md|\.csv|\.txt|\.json|document|script|doc)\b/.test(t))
     return { kind: "file", ...(asksForANewOne(t) ? { fresh: true } : {}) };
   if (/\b(run|execute|exec)\b[^.]*\b(command|script|test|build|it)\b/.test(t)) return { kind: "command_ok" };
-  if (/\b(search|find|look up|google)\b/.test(t)) return { kind: "tool_ok", tool: "search_web" };
+  if (isWebSearchStep(t)) return { kind: "tool_ok", tool: "search_web" };
   // "ask me / ask the reader / your favorite / what's your …" → wait for the reader.
   if (/\bask (me|the reader|them|you)\b/.test(t) || /\byour (favorite|favourite|name|preference)\b/.test(t))
     return { kind: "user_reply" };
