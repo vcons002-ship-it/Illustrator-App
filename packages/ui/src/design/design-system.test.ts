@@ -163,3 +163,131 @@ describe("the token surface itself", () => {
     expect(t.layout.measure).toBe("var(--vr-measure)");
   });
 });
+
+/**
+ * CONTRAST — the one thing about the palette that is objectively checkable without a browser.
+ *
+ * This environment has no way to render the app, so almost every claim about how it LOOKS is a
+ * claim about code. Contrast is the exception: it is arithmetic on the hex values, so a palette
+ * change that quietly makes body text unreadable can be caught here rather than on the reader's
+ * screen. Thresholds are WCAG AA — 4.5:1 for body text, 3:1 for large text and UI edges.
+ */
+function luminance(hex: string): number {
+  const n = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16) / 255);
+  const lin = (c: number): number => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+}
+
+function ratio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/** Read a token's literal value straight out of the stylesheet. */
+function token(name: string): string {
+  const m = new RegExp(`${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(css);
+  if (!m) throw new Error(`${name} is not a literal hex in tokens.css`);
+  return m[1]!;
+}
+
+describe("palette contrast", () => {
+  const text = () => token("--vr-text");
+  const surfaces = ["--vr-bg", "--vr-surface-0", "--vr-surface-1", "--vr-surface-2", "--vr-surface-3"];
+
+  it.each(surfaces)("body text is readable on %s", (surface) => {
+    const r = ratio(text(), token(surface));
+    expect(r, `${r.toFixed(2)}:1 — body text needs 4.5:1`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the accent is legible as text on the surfaces it labels", () => {
+    // The accent is used for links and active labels, not just for edges.
+    for (const surface of ["--vr-surface-1", "--vr-surface-2"]) {
+      const r = ratio(token("--vr-accent-text"), token(surface));
+      expect(r, `accent text on ${surface} is ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each(["--vr-good", "--vr-warn", "--vr-danger"])("%s reads on a card", (state) => {
+    // Status colours carry meaning; if one is unreadable the meaning is gone.
+    const r = ratio(token(state), token("--vr-surface-2"));
+    expect(r, `${state} on a card is ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  /**
+   * CIE L* — perceptual lightness, 0 (black) to 100 (white).
+   *
+   * Deliberately NOT the WCAG ratio used above. That formula adds 0.05 to both luminances, so
+   * between two near-black surfaces it compresses toward 1:1 no matter how different they
+   * actually look — it measures text legibility, not surface separation, and using it here
+   * flagged a perfectly visible step as a failure. L* is the right instrument for this job.
+   */
+  function lightness(hex: string): number {
+    const y = luminance(hex);
+    return y > 0.008856 ? 116 * y ** (1 / 3) - 16 : 903.3 * y;
+  }
+
+  it("the surface steps are far enough apart to read as depth", () => {
+    // The failure this catches is the one the old palette had: shell #11131a and card #16181d
+    // were five points apart, so nothing looked raised and shadows had nothing to work against.
+    // ~3 L* is about where a step stops being a rendering artefact and starts being a surface.
+    const steps = surfaces.map(token);
+    for (let i = 1; i < steps.length; i++) {
+      const delta = lightness(steps[i]!) - lightness(steps[i - 1]!);
+      expect(
+        delta,
+        `${surfaces[i - 1]} → ${surfaces[i]} is only ${delta.toFixed(1)} L* apart`,
+      ).toBeGreaterThan(3);
+    }
+  });
+
+  it("the neutrals are biased toward the accent, not flat grey", () => {
+    // A pure grey is the colour you get when nobody chose one. Every surface carries more blue
+    // than red, which is what makes a dark UI read as designed rather than merely dark.
+    for (const surface of surfaces) {
+      const hex = token(surface).replace("#", "");
+      const r = parseInt(hex.slice(0, 2), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      expect(b - r, `${surface} is flat grey (r${r} b${b})`).toBeGreaterThanOrEqual(5);
+    }
+  });
+});
+
+/**
+ * STRUCTURAL VALIDITY.
+ *
+ * There is no browser here, so a stylesheet that fails to parse would ship looking exactly
+ * like a stylesheet that never loaded — every var() empty, every surface transparent. While
+ * editing the palette an edit left four lines stranded outside a comment block, which would
+ * have done precisely that, and every other test still passed because they all read the file
+ * as text. These are the cheap checks that would have caught it.
+ */
+describe("the stylesheets parse", () => {
+  it.each(sheets)("%s has balanced comments", (file) => {
+    const text = readFileSync(join(STYLES, file), "utf8");
+    const open = (text.match(/\/\*/g) ?? []).length;
+    const close = (text.match(/\*\//g) ?? []).length;
+    expect(open, `${open} /* vs ${close} */`).toBe(close);
+  });
+
+  it.each(sheets)("%s has balanced braces", (file) => {
+    const text = readFileSync(join(STYLES, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const open = (text.match(/\{/g) ?? []).length;
+    const close = (text.match(/\}/g) ?? []).length;
+    expect(open, `${open} { vs ${close} }`).toBe(close);
+  });
+
+  it.each(sheets)("%s has no stray declaration outside a rule", (file) => {
+    // The exact shape of the bug: a line starting with `*` where no comment is open.
+    const text = readFileSync(join(STYLES, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const stray = text.split("\n").filter((l) => /^\s*\*/.test(l));
+    expect(stray, `stranded comment text: ${stray.join(" / ")}`).toEqual([]);
+  });
+
+  it("index.css imports every sheet, so none is written and never loaded", () => {
+    const index = readFileSync(join(STYLES, "index.css"), "utf8");
+    for (const file of sheets.filter((f) => f !== "index.css")) {
+      expect(index, `${file} exists but nothing imports it`).toContain(file);
+    }
+  });
+});
