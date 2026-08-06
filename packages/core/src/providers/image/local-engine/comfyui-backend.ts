@@ -2279,7 +2279,19 @@ export const SPLIT_FILE_HEURISTICS: Record<
   string,
   { clip: RegExp; vae: string[]; type: string; what: string }
 > = {
-  flux2: { clip: /mistral|qwen.?3.?8b/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
+  // VAE hints are tried IN ORDER (see pickComponentAsset), so they run most-specific first. The
+  // separator variants matter: a file called `flux-2-vae.safetensors` matches none of "flux2" /
+  // "flux.2" and would otherwise fall all the way through to the generic "flux" — or, before the
+  // ordering fix, lose outright to Klein's `full_encoder_small_decoder` on folder order.
+  //
+  // "encoder" stays LAST and stays in: it is the only thing that matches Klein's own VAE, so a
+  // machine with nothing else installed still renders. It must never outrank a real Flux.2 VAE.
+  flux2: {
+    clip: /mistral|qwen.?3.?8b/i,
+    vae: ["flux2", "flux.2", "flux-2", "flux_2", "flux", "encoder"],
+    type: "flux2",
+    what: "Flux.2",
+  },
   zimage: { clip: /qwen.?3.?4b/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
   qwenimage: { clip: /qwen.?2[._-]?5|qwen.*vl/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
 };
@@ -2347,8 +2359,21 @@ export function pickComponentAsset(
     const m = available.find((a) => re.test(a));
     if (m) return m;
   }
-  if (hints.length) {
-    const hit = available.find((a) => hints.some((h) => a.toLowerCase().includes(h)));
+  // HINTS ARE A PRIORITY LIST, and this loop is why they now behave like one.
+  //
+  // It used to be `available.find((a) => hints.some(...))` — iterating FILES and returning the first
+  // that matched ANY hint. The patterns loop directly above iterates patterns in order, so the two
+  // halves of the same function disagreed about what "first" meant, and the hints half was decided
+  // by whatever order the engine happened to list the folder in.
+  //
+  // Concretely: Flux.2's hints are ["flux2", "flux.2", "flux", "encoder"] — specific first, "encoder"
+  // as a last resort. Klein's VAE is named `full_encoder_small_decoder.safetensors`, which matches
+  // that last resort. So a machine with both a real `flux-2-vae` AND Klein's small decoder installed
+  // got whichever one the listing put first — the SAME model decoding through a full or a reduced
+  // decoder on different renders, with no setting changed. Reported as: some generations used
+  // full_encoder_small, and the results looked soft and bloomed.
+  for (const h of hints) {
+    const hit = available.find((a) => a.toLowerCase().includes(h));
     if (hit) return hit;
   }
   return undefined;
