@@ -335,6 +335,7 @@ import {
   // hard-codes 101 style literals.
   cx,
   t,
+  usePointerFeedback,
   type FileActions,
   type FileRef,
   type InstalledModel,
@@ -2060,6 +2061,11 @@ export function App() {
    * scrollbar next to the page's and kept the image's bottom off-screen. Published as a CSS variable
    * so the style stays declarative, and re-measured on resize (a wrapping header changes it).
    */
+  // One delegated listener gives every `.vr-btn` and `.vr-card` in the app its press/tap
+  // feedback — including on a phone, where :hover never fires and the redesign would otherwise
+  // be invisible. Opting in is carrying the class; there is nothing to wire per component.
+  usePointerFeedback();
+
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = contentScrollRef.current;
