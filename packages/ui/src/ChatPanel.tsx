@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CHAT_SLASH_COMMANDS,
@@ -670,9 +671,9 @@ export function CommandHelp({ commands, intro }: { commands: SlashCommandInfo[];
 }
 
 const helpCardStyle = {
-  borderTop: "1px solid rgba(255,255,255,0.1)",
-  borderBottom: "1px solid rgba(255,255,255,0.1)",
-  background: "rgba(122,162,255,0.06)",
+  borderTop: `1px solid ${t.border.faint}`,
+  borderBottom: `1px solid ${t.border.faint}`,
+  background: t.accent.wash,
   padding: "8px 12px",
   maxHeight: 260,
   overflowY: "auto",
@@ -686,7 +687,7 @@ export function completeSlash(draft: string, commands: SlashCommandInfo[]): stri
 }
 
 const slashMenuStyle = {
-  borderTop: "1px solid rgba(255,255,255,0.1)",
+  borderTop: `1px solid ${t.border.faint}`,
   maxHeight: 220,
   overflowY: "auto",
   display: "flex",
@@ -738,7 +739,7 @@ export const UsageDisclosure = memo(function UsageDisclosure({ usage }: { usage:
   );
 });
 
-const usageDetailsStyle = { borderBottom: "1px solid rgba(255,255,255,0.08)" } as const;
+const usageDetailsStyle = { borderBottom: `1px solid ${t.border.faint}` } as const;
 const usageSummaryStyle = {
   cursor: "pointer",
   fontSize: 11,
@@ -814,7 +815,7 @@ export const MessageBubble = memo(function MessageBubble({
       style={{
         ...bubbleStyle,
         alignSelf: isUser ? "flex-end" : "flex-start",
-        background: isUser ? "rgba(122,162,255,0.18)" : "rgba(255,255,255,0.06)",
+        background: isUser ? t.accent.fill : t.fill.subtle,
       }}
     >
       {onDelete !== undefined && index !== undefined && (
@@ -984,9 +985,9 @@ export const MessageBubble = memo(function MessageBubble({
 const fileChipStyle = {
   display: "block",
   textAlign: "left",
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 8px",
   fontSize: 12,
@@ -1001,7 +1002,7 @@ const fileMenuStyle = {
   flexDirection: "column",
   gap: 2,
   background: "#1b1d26",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: 4,
   minWidth: 150,
@@ -1187,7 +1188,7 @@ export function FileActionBar({
       </button>
       {canReadInline ? (
         <button
-          style={readOpen ? { ...fileChipStyle, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" } : fileChipStyle}
+          style={readOpen ? { ...fileChipStyle, borderColor: t.accent.edge, color: t.accent.text } : fileChipStyle}
           title="Read this document right here in the chat (no need to open the reader)"
           disabled={reading}
           onClick={() => void toggleRead()}
@@ -1249,9 +1250,9 @@ export function FileActionBar({
           overflowY: "auto",
           marginTop: 8,
           padding: "12px 16px",
-          border: "1px solid rgba(255,255,255,0.12)",
+          border: `1px solid ${t.border.subtle}`,
           borderRadius: 8,
-          background: "rgba(255,255,255,0.03)",
+          background: t.fill.subtle,
         }}
       >
         <DocBlocksView markdown={inlineText} />
@@ -1316,7 +1317,7 @@ function ImageGallery({
               borderRadius: 6,
               cursor: enlarged === i ? "zoom-out" : "zoom-in",
               border:
-                enlarged === i ? `2px solid ${ACCENT_BLUE}` : "1px solid rgba(255,255,255,0.18)",
+                enlarged === i ? `2px solid ${ACCENT_BLUE}` : `1px solid ${t.fill.strong}`,
             }}
           />
         ))}
@@ -1331,8 +1332,8 @@ function ImageGallery({
             fontSize: 12,
             padding: "4px 10px",
             borderRadius: 6,
-            border: "1px solid rgba(255,255,255,0.25)",
-            background: "rgba(255,255,255,0.08)",
+            border: `1px solid ${t.border.button}`,
+            background: t.fill.base,
             color: "inherit",
             cursor: "pointer",
           }}
@@ -1435,10 +1436,10 @@ export function ThinkingBlock({
 const thinkingStyle = {
   alignSelf: "flex-start",
   maxWidth: "92%",
-  border: "1px dashed rgba(255,255,255,0.18)",
+  border: `1px dashed ${t.border.button}`,
   borderRadius: 8,
   padding: "6px 10px",
-  background: "rgba(255,255,255,0.03)",
+  background: t.fill.subtle,
 } as const;
 
 /**
@@ -1472,8 +1473,8 @@ function AnalysisBlock({
 }
 
 const dataDownloadBtn: React.CSSProperties = {
-  background: "rgba(90,209,155,0.12)",
-  border: "1px solid rgba(90,209,155,0.5)",
+  background: t.state.good,
+  border: `1px solid ${t.state.good}`,
   color: "inherit",
   borderRadius: 6,
   padding: "2px 8px",
@@ -1674,7 +1675,7 @@ function CodeCard({
           title={`Preview of ${filename}`}
           srcDoc={code}
           sandbox="allow-scripts allow-forms allow-popups allow-modals"
-          style={{ width: "100%", height: 320, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, background: "#fff" }}
+          style={{ width: `100%`, height: 320, border: `1px solid ${t.fill.strong}`, borderRadius: 6, background: `#fff` }}
         />
       ) : (
         <pre style={codePreStyle}>
@@ -1682,7 +1683,7 @@ function CodeCard({
         </pre>
       )}
       {output && (
-        <pre style={{ ...codePreStyle, borderTop: "1px solid rgba(255,255,255,0.12)", opacity: 0.95 }}>
+        <pre style={{ ...codePreStyle, borderTop: `1px solid ${t.border.subtle}`, opacity: 0.95 }}>
           <code>
             {output.error
               ? `⚠ ${output.error}`
@@ -1833,7 +1834,7 @@ function DocumentCard({
 }
 
 const codeCardStyle = {
-  border: "1px solid rgba(255,255,255,0.14)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 8,
   margin: "6px 0",
   overflow: "hidden",
@@ -1846,12 +1847,12 @@ const codeHeaderStyle = {
   gap: 8,
   padding: "4px 8px",
   fontSize: 11,
-  borderBottom: "1px solid rgba(255,255,255,0.1)",
+  borderBottom: `1px solid ${t.border.faint}`,
 } as const;
 const codeBtnStyle = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 5,
   padding: "2px 6px",
   fontSize: 11,
@@ -1923,9 +1924,9 @@ const overlayStyle = {
 const panelStyle = {
   width: "min(680px, 94vw)",
   height: "min(78vh, 720px)",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 10,
   display: "flex",
   flexDirection: "column",

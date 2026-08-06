@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { dayToIso, isoDay, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
@@ -80,8 +81,8 @@ function StepRow({
         fontSize: 12,
         padding: "4px 8px",
         borderRadius: 6,
-        background: ready ? "rgba(122,162,255,0.14)" : "transparent",
-        border: ready ? "1px solid rgba(122,162,255,0.4)" : "1px solid transparent",
+        background: ready ? t.accent.fill : "transparent",
+        border: ready ? `1px solid ${t.accent.edge}` : "1px solid transparent",
         opacity: s.status === "done" ? 0.55 : 1,
       }}
     >
@@ -95,7 +96,7 @@ function StepRow({
           fontSize: 10,
           padding: "0 5px",
           borderRadius: 4,
-          background: s.actor === "ai_prep" ? "rgba(90,209,155,0.2)" : "rgba(255,255,255,0.08)",
+          background: s.actor === "ai_prep" ? t.state.good : t.fill.base,
         }}
       >
         {s.actor === "ai_prep" ? "AI preps" : "you do"}
@@ -106,7 +107,7 @@ function StepRow({
       {s.doneAt ? <span style={{ opacity: 0.5 }}> · done {isoDay(new Date(s.doneAt))}</span> : null}
       {s.docs.length ? <span style={{ opacity: 0.5 }}> · 📄{s.docs.length}</span> : null}
       {s.links.map((l) => (
-        <a key={l.url} href={l.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff", marginLeft: 6 }}>
+        <a key={l.url} href={l.url} target="_blank" rel="noreferrer" style={{ color: t.accent.text, marginLeft: 6 }}>
           {l.official ? "official ↗" : "link ↗"}
         </a>
       ))}
@@ -157,13 +158,13 @@ function PlanCard({
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={sourceTagStyle(plan.source ? sourceTag(plan.source) : "VR")}>{plan.source ? sourceTag(plan.source) : "VR"}</span>
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
-        {plan.deadlineIso ? <span style={{ fontSize: 11, color: "#ffcf8b" }}>due {plan.deadlineIso}</span> : null}
+        {plan.deadlineIso ? <span style={{ fontSize: 11, color: t.state.warn }}>due {plan.deadlineIso}</span> : null}
         {plan.recurrence ? (
-          <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(122,162,255,0.2)", color: "#bcd4ff" }}>
+          <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: t.accent.fill, color: "#bcd4ff" }}>
             🔁 {describeRecurrence(plan.recurrence)}
           </span>
         ) : null}
-        {noSteps ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: "#ffcf8b" }}>no plan yet</span> : null}
+        {noSteps ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: t.state.warn }}>no plan yet</span> : null}
         <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.6 }}>
           {noSteps ? "no steps" : `${doneCount}/${plan.steps.length} done${plan.status === "completed" ? " · complete" : ""}`}
         </span>
@@ -201,7 +202,7 @@ function PlanCard({
               }
             }}
             placeholder={plan.clarifyingQuestions?.length ? "Answer / add details — refines the plan" : "Add a detail or new info — refines the plan"}
-            style={{ flex: 1, fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "inherit" }}
+            style={{ flex: 1, fontSize: 12, padding: "4px 8px`, borderRadius: 6, border: `1px solid ${t.fill.strong}`, background: t.fill.subtle, color: `inherit" }}
           />
           <button
             style={{ ...btn, fontSize: 12 }}
@@ -488,12 +489,12 @@ export const TasksPanel = memo(function TasksPanel({
         )}
 
         {scanMessage && (
-          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8, color: scanMessage.startsWith("⚠") ? "#ff9b9b" : "#9be8c0" }}>
+          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8, color: scanMessage.startsWith("⚠") ? t.state.danger : t.state.good }}>
             {scanMessage}
           </div>
         )}
         {planMessage && (
-          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8, color: planMessage.startsWith("⚠") ? "#ff9b9b" : planMessage.startsWith("✓") ? "#9be8c0" : "#cdd6f4" }}>
+          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8, color: planMessage.startsWith("⚠") ? t.state.danger : planMessage.startsWith("✓") ? t.state.good : "#cdd6f4" }}>
             {planMessage}
           </div>
         )}
@@ -577,7 +578,7 @@ export const TasksPanel = memo(function TasksPanel({
         {/* Removed/ignored tasks — the undoable trash. Restore brings one back (and un-ignores it);
             Delete forever drops it for good. */}
         {removed.length > 0 ? (
-          <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8 }}>
+          <div style={{ marginTop: 14, borderTop: `1px solid ${t.border.faint}`, paddingTop: 8 }}>
             <button style={{ ...btn, fontSize: 12 }} onClick={() => setShowRemoved((v) => !v)}>
               🗑 Removed ({removed.length}) {showRemoved ? "▾" : "▸"}
             </button>
@@ -622,7 +623,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -631,15 +632,15 @@ const panel: React.CSSProperties = {
   width: "min(680px, 100%)",
   maxHeight: "92vh",
   overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   fontFamily: "system-ui, sans-serif",
 };
 const card: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.1)",
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
   padding: "10px 12px",
 };
@@ -648,7 +649,7 @@ const card: React.CSSProperties = {
 function sourceTagStyle(tag: "Gmail" | "Calendar" | "VR" | "Google Tasks"): React.CSSProperties {
   const palette: Record<string, [string, string]> = {
     Gmail: ["rgba(234,67,53,0.18)", "#ff9d92"],
-    Calendar: ["rgba(66,133,244,0.2)", "#9db8ff"],
+    Calendar: ["rgba(66,133,244,0.2)", t.accent.text],
     VR: ["rgba(160,120,255,0.22)", "#cdbcff"],
     "Google Tasks": ["rgba(52,168,83,0.18)", "#8fe3a8"],
   };
@@ -666,9 +667,9 @@ function sourceTagStyle(tag: "Gmail" | "Calendar" | "VR" | "Google Tasks"): Reac
   };
 }
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,
@@ -676,8 +677,8 @@ const btn: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = {
   ...btn,
-  background: "rgba(122,162,255,0.25)",
-  border: "1px solid rgba(122,162,255,0.6)",
+  background: t.accent.fill,
+  border: `1px solid ${t.accent.edge}`,
 };
 const toggleOff: React.CSSProperties = { ...btn, padding: "4px 8px" };
 const toggleOn: React.CSSProperties = { ...btnPrimary, padding: "4px 8px" };
@@ -694,8 +695,8 @@ const workBox: React.CSSProperties = {
   padding: "6px 8px",
   fontSize: 12,
   borderRadius: 6,
-  border: "1px solid rgba(255,255,255,0.1)",
-  background: "rgba(255,255,255,0.03)",
+  border: `1px solid ${t.border.faint}`,
+  background: t.fill.subtle,
 };
 const draftPre: React.CSSProperties = {
   whiteSpace: "pre-wrap",
@@ -724,24 +725,24 @@ const addBox: React.CSSProperties = {
   flexWrap: "wrap",
   marginBottom: 8,
   padding: 10,
-  border: "1px solid rgba(122,162,255,0.4)",
-  background: "rgba(122,162,255,0.06)",
+  border: `1px solid ${t.accent.edge}`,
+  background: t.accent.wash,
   borderRadius: 8,
 };
 const addInput: React.CSSProperties = {
   flex: 1,
   minWidth: 220,
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 6,
   padding: "6px 8px",
   fontSize: 13,
 };
 const dateInput: React.CSSProperties = {
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 6,
   padding: "5px 6px",
   fontSize: 12,

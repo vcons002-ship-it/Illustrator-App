@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useState } from "react";
 import { getProvider } from "@visual-reader/core";
 import type { ReaderSettings } from "./SettingsPanel.js";
@@ -163,7 +164,7 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
 const card: React.CSSProperties = {
   width: "min(460px, 100%)",
   background: "#1a1d27",
-  color: "#e7e7ee",
+  color: t.text.base,
   borderRadius: 14,
   padding: 24,
   // Back to the browser defaults ModalShell's shared card overrides — this card is
@@ -182,8 +183,8 @@ const choice: React.CSSProperties = {
   textAlign: "left",
   padding: "14px 16px",
   borderRadius: 10,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.03)",
+  border: `1px solid ${t.border.button}`,
+  background: t.fill.subtle,
   color: "inherit",
   cursor: "pointer",
 };
@@ -200,7 +201,7 @@ const linkBtn: React.CSSProperties = {
 };
 
 const primary: React.CSSProperties = {
-  background: "#4663d6",
+  background: t.accent.base,
   border: "none",
   color: "white",
   borderRadius: 8,

@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useState } from "react";
 import type { BookSummary, LibraryType } from "@visual-reader/core";
 import { ModalShell } from "./ModalShell.js";
@@ -175,9 +176,9 @@ const overlayStyle = {
 
 const panelStyle = {
   width: "min(640px, 100%)",
-  background: "#171922",
-  border: "1px solid rgba(255,255,255,0.15)",
-  color: "#e9ecf2",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
+  color: t.text.base,
   display: "block",
   gap: 0,
   maxHeight: "none",
@@ -190,8 +191,8 @@ const headerStyle = { display: "flex", alignItems: "center", gap: 12, marginBott
 const searchStyle = {
   flex: 1,
   minWidth: 0,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.2)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -206,15 +207,15 @@ const rowStyle = {
   alignItems: "center",
   gap: 10,
   padding: "8px 10px",
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
 } as const;
 
-const rowCurrent = { borderColor: "rgba(120,180,255,0.6)", background: "rgba(96,170,255,0.10)" } as const;
+const rowCurrent = { borderColor: t.accent.edge, background: t.accent.edge } as const;
 
 const buttonStyle = {
   background: "transparent",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 6,
   padding: "4px 10px",
@@ -223,8 +224,8 @@ const buttonStyle = {
 } as const;
 
 const chipStyle = {
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.2)",
+  background: t.fill.subtle,
+  border: `1px solid ${t.border.button}`,
   color: "inherit",
   borderRadius: 999,
   padding: "3px 10px",
@@ -232,13 +233,13 @@ const chipStyle = {
   fontSize: 12,
 } as const;
 
-const chipActive = { ...chipStyle, background: "rgba(96,170,255,0.25)", borderColor: "rgba(120,180,255,0.7)" } as const;
+const chipActive = { ...chipStyle, background: t.accent.edge, borderColor: t.accent.edge } as const;
 
 const badgeStyle = {
   display: "inline-block",
   marginRight: 6,
   padding: "1px 6px",
   borderRadius: 4,
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   fontSize: 11,
 } as const;

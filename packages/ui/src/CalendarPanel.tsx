@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import type { CalendarEvent } from "@visual-reader/core";
 
@@ -292,7 +293,7 @@ export const CalendarPanel = memo(function CalendarPanel({
           </span>
           {loading ? <span style={{ fontSize: 11, opacity: 0.6 }}>· syncing…</span> : null}
           {!loading && error ? (
-            <span style={{ fontSize: 11, color: "#ff9b9b" }} title={error}>
+            <span style={{ fontSize: 11, color: t.state.danger }} title={error}>
               · sync failed
             </span>
           ) : null}
@@ -341,8 +342,8 @@ export const CalendarPanel = memo(function CalendarPanel({
                 onClick={() => setSelected(k === selected ? null : k)}
                 style={{
                   ...dayCell,
-                  background: k === selected ? "rgba(122,162,255,0.18)" : isToday ? "rgba(255,255,255,0.06)" : "transparent",
-                  border: isToday ? "1px solid rgba(122,162,255,0.6)" : "1px solid rgba(255,255,255,0.07)",
+                  background: k === selected ? t.accent.fill : isToday ? t.fill.subtle : "transparent",
+                  border: isToday ? `1px solid ${t.accent.edge}` : `1px solid ${t.border.faint}`,
                   opacity: inMonth ? 1 : 0.38,
                 }}
               >
@@ -356,7 +357,7 @@ export const CalendarPanel = memo(function CalendarPanel({
                   {dayEvents.slice(0, 3).map((ev, i) => (
                     <div
                       key={`ev-${i}`}
-                      style={{ ...chip, background: ev.color ? hexToBg(ev.color) : "rgba(122,162,255,0.22)" }}
+                      style={{ ...chip, background: ev.color ? hexToBg(ev.color) : t.accent.fill }}
                       title={`${timeLabel(ev)} ${ev.summary}`.trim()}
                     >
                       {ev.summary}
@@ -372,7 +373,7 @@ export const CalendarPanel = memo(function CalendarPanel({
         </div>
 
         {selected ? (
-          <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10, flexShrink: 0, overflowY: "auto", maxHeight: "28vh" }}>
+          <div style={{ marginTop: 12, borderTop: `1px solid ${t.border.faint}`, paddingTop: 10, flexShrink: 0, overflowY: "auto", maxHeight: "28vh" }}>
             <strong style={{ fontSize: 13 }}>{selected}</strong>
             {selectedEvents.length === 0 && selectedDeadlines.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>Nothing scheduled.</div>
@@ -382,7 +383,7 @@ export const CalendarPanel = memo(function CalendarPanel({
                   <div
                     key={`sd-${i}`}
                     onClick={dl.planId && onOpenTask ? () => onOpenTask(dl.planId!) : undefined}
-                    style={{ fontSize: 12, cursor: dl.planId && onOpenTask ? "pointer" : "default", color: "#ffcf8b" }}
+                    style={{ fontSize: 12, cursor: dl.planId && onOpenTask ? "pointer" : "default", color: t.state.warn }}
                   >
                     ⏰ {dl.title} {dl.planId && onOpenTask ? <span style={{ opacity: 0.6 }}>· open task →</span> : null}
                   </div>
@@ -416,11 +417,11 @@ export const CalendarPanel = memo(function CalendarPanel({
                       <button style={btn} onClick={() => { setEditId(null); setEdError(null); }} disabled={edBusy}>
                         Cancel
                       </button>
-                      {edError ? <span style={{ fontSize: 11, color: "#ff9b9b", width: "100%" }}>⚠ {edError}</span> : null}
+                      {edError ? <span style={{ fontSize: 11, color: t.state.danger, width: "100%" }}>⚠ {edError}</span> : null}
                     </div>
                   ) : (
                     <div key={`se-${i}`} style={{ fontSize: 12, display: "flex", gap: 6 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: ev.color ?? "#7aa2ff", marginTop: 4, flexShrink: 0 }} />
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: ev.color ?? t.accent.base, marginTop: 4, flexShrink: 0 }} />
                       <span style={{ flex: 1 }}>
                         {ev.allDay ? <span style={{ opacity: 0.6 }}>all day</span> : <span style={{ opacity: 0.7 }}>{timeLabel(ev)}</span>}{" "}
                         {ev.summary}
@@ -461,7 +462,7 @@ export const CalendarPanel = memo(function CalendarPanel({
                     {evBusy ? "Adding…" : "Add"}
                   </button>
                   <button style={btn} onClick={() => { setAdding(false); setEvError(null); }}>Cancel</button>
-                  {evError ? <span style={{ fontSize: 11, color: "#ff9b9b", width: "100%" }}>⚠ {evError}</span> : null}
+                  {evError ? <span style={{ fontSize: 11, color: t.state.danger, width: "100%" }}>⚠ {evError}</span> : null}
                 </div>
               ) : (
                 <button style={{ ...btn, marginTop: 8 }} onClick={() => setAdding(true)} title={`Add an event on ${selected}`}>
@@ -483,7 +484,7 @@ export const CalendarPanel = memo(function CalendarPanel({
 /** Translate a calendar's hex colour into a translucent chip background. */
 function hexToBg(hex: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return "rgba(122,162,255,0.22)";
+  if (!m) return t.accent.fill;
   const n = parseInt(m[1]!, 16);
   const r = (n >> 16) & 255;
   const g = (n >> 8) & 255;
@@ -497,7 +498,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -509,9 +510,9 @@ const panel: React.CSSProperties = {
   height: "min(880px, 94vh)",
   display: "flex",
   flexDirection: "column",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   fontFamily: "system-ui, sans-serif",
@@ -539,9 +540,9 @@ const chip: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,
@@ -550,7 +551,7 @@ const btn: React.CSSProperties = {
 const evInput: React.CSSProperties = {
   background: "rgba(0,0,0,0.25)",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 8px",
   fontSize: 12,
@@ -560,7 +561,7 @@ const evInput: React.CSSProperties = {
 const evTime: React.CSSProperties = {
   background: "rgba(0,0,0,0.25)",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "4px 6px",
   fontSize: 12,

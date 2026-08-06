@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LAYOUT,
@@ -24,10 +25,10 @@ export interface DataChartProps {
 }
 
 const KINDS = ["bar", "line", "scatter"] as const;
-const ACCENT = "#7aa2ff";
-const GRID = "rgba(255,255,255,0.12)";
-const TEXT = "rgba(255,255,255,0.75)";
-const FAINT = "rgba(255,255,255,0.5)";
+const ACCENT = t.accent.base;
+const GRID = t.fill.strong;
+const TEXT = t.fill.strong;
+const FAINT = t.fill.strong;
 
 // Memoised: the chart sits in the reader aside, whose parent re-renders on every
 // reading-progress tick — geometry must be derived once per dataset/kind, not per
@@ -50,7 +51,7 @@ export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
     const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     bg.setAttribute("width", String(layout.width));
     bg.setAttribute("height", String(layout.height));
-    bg.setAttribute("fill", "#13161e");
+    bg.setAttribute("fill", t.surface.inset);
     clone.insertBefore(bg, clone.firstChild);
     return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
   };
@@ -122,7 +123,7 @@ export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
               key={k}
               onClick={() => setKind(k)}
               style={{
-                background: k === kind ? "rgba(122,162,255,0.25)" : "transparent",
+                background: k === kind ? t.accent.fill : "transparent",
                 color: k === kind ? "#cdd9ff" : FAINT,
                 border: `1px solid ${k === kind ? ACCENT : GRID}`,
                 borderRadius: 4,

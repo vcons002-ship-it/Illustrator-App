@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { ModalShell } from "./ModalShell.js";
 import { modalHeaderRowStyle as headerRow, modalInputStyle as input } from "./tokens.js";
@@ -251,7 +252,7 @@ const row: React.CSSProperties = { display: "flex", gap: 10 };
 const panel: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  border: "1px solid rgba(255,255,255,0.1)",
+  border: `1px solid ${t.border.faint}`,
   borderRadius: 8,
   padding: 10,
   gap: 4,
@@ -261,9 +262,9 @@ const hint: React.CSSProperties = { fontSize: 11, opacity: 0.55, marginTop: 4 };
 const textarea: React.CSSProperties = { ...input, minHeight: 90, resize: "vertical" };
 const select: React.CSSProperties = { ...input, cursor: "pointer" };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "6px 12px",
   fontSize: 13,
@@ -271,6 +272,6 @@ const btn: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = {
   ...btn,
-  background: "rgba(122,162,255,0.25)",
-  border: "1px solid rgba(122,162,255,0.6)",
+  background: t.accent.fill,
+  border: `1px solid ${t.accent.edge}`,
 };

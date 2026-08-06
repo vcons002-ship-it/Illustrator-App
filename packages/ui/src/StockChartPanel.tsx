@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PriceAlert, StockQuote } from "@visual-reader/core";
 
@@ -145,7 +146,7 @@ export const StockChartPanel = memo(function StockChartPanel({
             ) : (
               // Not a button that fails when pressed: swapping Schwab's code for a token is a
               // cross-origin POST the browser refuses on a phone. Say where it CAN be done.
-              <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+              <span style={{ fontSize: 11, color: t.state.warn }}>
                 Connect Schwab on the desktop app — the sign-in can’t finish from a phone. Once it’s connected there,
                 quotes and positions work here.
               </span>
@@ -227,7 +228,7 @@ export const StockChartPanel = memo(function StockChartPanel({
                 {alerts.map((a) => (
                   <div key={a.id} style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 8, opacity: a.enabled ? 1 : 0.5 }}>
                     <span>🔔 {describeAlert ? describeAlert(a) : a.symbol}</span>
-                    {a.enabled ? null : <span style={{ fontSize: 10, color: "#ffcf8b" }}>triggered</span>}
+                    {a.enabled ? null : <span style={{ fontSize: 10, color: t.state.warn }}>triggered</span>}
                     {onRemoveAlert ? (
                       <button style={{ ...miniBtn, marginLeft: "auto", color: "#ff9c9c" }} onClick={() => onRemoveAlert(a.id)}>
                         ✕
@@ -244,7 +245,7 @@ export const StockChartPanel = memo(function StockChartPanel({
           <div style={{ marginTop: 8, fontSize: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontWeight: 600 }}>🔌 TV bridge</span>
-              <span style={{ opacity: 0.75, color: tvBridge.status?.startsWith("Connected") ? "#5dd19b" : "#ffcf8b" }}>
+              <span style={{ opacity: 0.75, color: tvBridge.status?.startsWith("Connected") ? "#5dd19b" : t.state.warn }}>
                 {tvBridge.status ?? "—"}
               </span>
               {/* Launch does the step the setup doc used to ask readers to do by hand: find the
@@ -275,7 +276,7 @@ export const StockChartPanel = memo(function StockChartPanel({
                   fontSize: 11,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
-                  background: "rgba(255,255,255,0.05)",
+                  background: t.fill.subtle,
                   borderRadius: 6,
                 }}
               >
@@ -304,7 +305,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -314,9 +315,9 @@ const panel: React.CSSProperties = {
   height: "min(88vh, 760px)",
   display: "flex",
   flexDirection: "column",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   fontFamily: "system-ui, sans-serif",
@@ -326,12 +327,12 @@ const chartHolder: React.CSSProperties = {
   minHeight: 0,
   borderRadius: 8,
   overflow: "hidden",
-  background: "#0d1017",
+  background: t.surface.sunken,
 };
 const tickerInput: React.CSSProperties = {
-  background: "#0d1017",
+  background: t.surface.sunken,
   color: "#fff",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 9px",
   fontSize: 13,
@@ -339,18 +340,18 @@ const tickerInput: React.CSSProperties = {
   textTransform: "uppercase",
 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,
   cursor: "pointer",
 };
 const miniBtn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "2px 8px",
   fontSize: 11,

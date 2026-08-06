@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type Ref } from "react";
 import {
   CommandHelp,
@@ -875,7 +876,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             shares run_command's gate — so it needs its own approval card. Without one the pending
             tool would sit there with nothing rendered and no way to approve it: a silent hang. */}
         {props.pendingTool?.tool === "browser_eval" && (
-          <div style={{ ...approvalStyle, borderColor: "rgba(120,180,255,0.6)", background: "rgba(120,180,255,0.08)" }}>
+          <div style={{ ...approvalStyle, borderColor: t.accent.edge, background: t.accent.edge }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               🌐 Run this in the open page{props.pendingTool.target ? ` (${props.pendingTool.target})` : ""}?
               <code
@@ -908,7 +909,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </div>
         )}
         {props.pendingTool?.tool === "run_command" && (
-          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               ⚠ Run this command on your computer?
               <code
@@ -939,7 +940,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </div>
         )}
         {props.pendingTool?.tool === "send_email" && (
-          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               ✉ Send this email from your account?
               <span style={{ display: "block", marginTop: 4 }}>
@@ -976,7 +977,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </div>
         )}
         {props.pendingTool?.tool === "spawn_coding_agents" && (
-          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               🤖 Run {props.pendingTool.tasks.length} coding agents in parallel?
               <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
@@ -1002,7 +1003,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </div>
         )}
         {props.pendingTool?.tool === "screenshot" && (
-          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               📷 Let the assistant {props.pendingTool.window ? `capture the “${props.pendingTool.window}” window` : "capture your screen"} and look at it?
               {props.pendingTool.question && (
@@ -1073,8 +1074,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 fontSize: 12,
                 padding: "3px 8px",
                 borderRadius: 12,
-                background: a.status === "error" ? "rgba(255,120,120,0.12)" : "rgba(122,162,255,0.12)",
-                border: `1px solid ${a.status === "error" ? "rgba(255,120,120,0.4)" : "rgba(122,162,255,0.35)"}`,
+                background: a.status === "error" ? t.state.danger : t.accent.fill,
+                border: `1px solid ${a.status === "error" ? t.state.danger : t.accent.edge}`,
               }}
               title={a.error ?? a.name}
             >
@@ -1199,7 +1200,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         />
         {speechApi ? (
           <button
-            style={listening ? { ...smallButtonStyle, borderColor: "#ff8c8c", color: "#ff8c8c" } : smallButtonStyle}
+            style={listening ? { ...smallButtonStyle, borderColor: t.state.danger, color: t.state.danger } : smallButtonStyle}
             onClick={toggleMic}
             title={listening ? "Stop dictation" : "Dictate with your microphone"}
             aria-label={listening ? "Stop dictation" : "Dictate with your microphone"}
@@ -1210,7 +1211,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         ) : null}
         {ttsSupported ? (
           <button
-            style={speakOn ? { ...smallButtonStyle, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : smallButtonStyle}
+            style={speakOn ? { ...smallButtonStyle, borderColor: t.state.good, color: t.state.good } : smallButtonStyle}
             onClick={toggleSpeak}
             title={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
             aria-label={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
@@ -1238,9 +1239,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
 const panelStyle = {
   width: "min(1100px, 96vw)",
   height: "max(480px, calc(100vh - 188px))",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 10,
   display: "flex",
   flexDirection: "column",
@@ -1260,8 +1261,8 @@ const stepsBoxStyle = {
   margin: "2px 8px",
   padding: "6px 10px",
   borderRadius: 8,
-  background: "rgba(122,162,255,0.06)",
-  border: "1px solid rgba(122,162,255,0.18)",
+  background: t.accent.wash,
+  border: `1px solid ${t.accent.fill}`,
 } as const;
 
 // The pinned working-checklist box — slightly stronger than the transient steps trace so it reads as
@@ -1270,14 +1271,14 @@ const planBoxStyle = {
   margin: "2px 8px",
   padding: "6px 10px",
   borderRadius: 8,
-  background: "rgba(122,162,255,0.1)",
-  border: "1px solid rgba(122,162,255,0.3)",
+  background: t.accent.fill,
+  border: `1px solid ${t.accent.edge}`,
 } as const;
 
 const sessionSelectStyle = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 8px",
   fontSize: 13,
@@ -1352,15 +1353,15 @@ const folderBarStyle = {
   gap: 6,
   padding: "4px 10px",
   fontSize: 11,
-  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  borderBottom: `1px solid ${t.border.faint}`,
 } as const;
 
 const folderInputStyle = {
   flex: 1,
   minWidth: 0,
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "3px 8px",
   fontSize: 11,
@@ -1369,7 +1370,7 @@ const folderInputStyle = {
 
 const personaGroupStyle = {
   display: "inline-flex",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   overflow: "hidden",
 } as const;
@@ -1385,7 +1386,7 @@ const personaButtonStyle = {
 } as const;
 
 const personaActiveStyle = {
-  background: "rgba(122,162,255,0.22)",
+  background: t.accent.fill,
   opacity: 1,
 } as const;
 
@@ -1562,7 +1563,7 @@ function ModelMenuPopover({
 // Quick model-switcher popover (opens above the input, mirroring the slash menu). Capped so long
 // checkpoint lists scroll inside `modelListStyle` instead of swallowing the chat.
 const modelMenuStyle = {
-  borderTop: "1px solid rgba(255,255,255,0.1)",
+  borderTop: `1px solid ${t.border.faint}`,
   maxHeight: "60vh",
   display: "flex",
   flexDirection: "column",
@@ -1571,7 +1572,7 @@ const modelTabRowStyle = {
   display: "flex",
   gap: 4,
   padding: "6px 8px 4px",
-  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  borderBottom: `1px solid ${t.border.faint}`,
   flex: "none",
 } as const;
 const modelTabStyle = {
@@ -1592,7 +1593,7 @@ const modelTabStyle = {
 } as const;
 const modelTabActiveStyle = {
   ...personaActiveStyle,
-  border: "1px solid rgba(122,162,255,0.5)",
+  border: `1px solid ${t.accent.edge}`,
 } as const;
 /** Each tab's one-line preview of its current pick — see all three at a glance without switching. */
 const modelTabSummaryStyle = {
@@ -1606,9 +1607,9 @@ const modelTabSummaryStyle = {
 const modelFilterStyle = {
   flex: "none",
   margin: "6px 12px 2px",
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 6,
   padding: "4px 8px",
   fontSize: 12,
@@ -1657,7 +1658,7 @@ const modelItemStyle = {
 const modelBackendRowStyle = {
   display: "inline-flex",
   margin: "2px 12px 4px",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   overflow: "hidden",
 } as const;

@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, type CSSProperties, type ReactNode } from "react";
 import { segmentByTerms, subjectFromCaption } from "@visual-reader/core";
 import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
@@ -135,10 +136,10 @@ const conceptDefStyle: CSSProperties = { fontSize: 13.5, opacity: 0.85, lineHeig
 
 const figureStyle: CSSProperties = {
   margin: 0,
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 10,
   padding: 8,
-  background: "rgba(255,255,255,0.03)",
+  background: t.fill.subtle,
 };
 
 const figureImgStyle: CSSProperties = {
@@ -148,7 +149,7 @@ const figureImgStyle: CSSProperties = {
   maxHeight: 420,
   objectFit: "contain",
   borderRadius: 6,
-  background: "rgba(255,255,255,0.04)",
+  background: t.fill.subtle,
 };
 
 const figureCaptionStyle: CSSProperties = {

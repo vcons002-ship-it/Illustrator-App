@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import type { ReactNode } from "react";
 import type { SpoilerEntity } from "@visual-reader/core";
 import { shouldRevealImage } from "@visual-reader/core";
@@ -41,7 +42,7 @@ export function SpoilerGate({
             alignItems: "center",
             justifyContent: "center",
             background: "rgba(0,0,0,0.25)",
-            color: "rgba(255,255,255,0.9)",
+            color: t.fill.strong,
             fontSize: 13,
             letterSpacing: 0.4,
             pointerEvents: "none",

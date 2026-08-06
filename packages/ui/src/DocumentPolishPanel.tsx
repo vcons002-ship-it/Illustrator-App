@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useRef, useState } from "react";
 import type { PolishMode, PolishPreset } from "@visual-reader/core";
 import { fileForLang } from "./ChatPanel.js";
@@ -191,7 +192,7 @@ export const DocumentPolishPanel = memo(function DocumentPolishPanel(props: Docu
             <div style={{ fontSize: 13, margin: "4px 0 8px" }}>{plan || "(no plan returned)"}</div>
             {question && (
               <label style={fieldLabel}>
-                <span style={{ color: "#ffd479" }}>One question: {question}</span>
+                <span style={{ color: t.state.warn }}>One question: {question}</span>
                 <input
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
@@ -278,7 +279,7 @@ const overlay: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
+  background: t.surface.overlay,
   backdropFilter: "blur(6px)",
   zIndex: 100,
   padding: 20,
@@ -287,9 +288,9 @@ const card: React.CSSProperties = {
   width: "min(760px, 100%)",
   maxHeight: "92vh",
   overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.card,
+  color: t.text.base,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 12,
   padding: 18,
   display: "flex",
@@ -301,9 +302,9 @@ const header: React.CSSProperties = { display: "flex", alignItems: "center", jus
 const fieldLabel: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, opacity: 0.9 };
 const textarea: React.CSSProperties = {
   resize: "vertical",
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: `1px solid ${t.border.input}`,
   borderRadius: 6,
   padding: 8,
   fontSize: 13,
@@ -312,21 +313,21 @@ const textarea: React.CSSProperties = {
 const input: React.CSSProperties = { ...textarea, minHeight: undefined };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 };
 const confirmBox: React.CSSProperties = {
-  border: "1px solid rgba(122,162,255,0.45)",
-  background: "rgba(122,162,255,0.08)",
+  border: `1px solid ${t.accent.edge}`,
+  background: t.accent.wash,
   borderRadius: 8,
   padding: 10,
 };
 const hint: React.CSSProperties = { fontSize: 11, opacity: 0.65 };
 const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "6px 10px",
   fontSize: 12,
   cursor: "pointer",
 };
-const primary: React.CSSProperties = { ...btn, background: "#4663d6", borderColor: "#4663d6", color: "white" };
+const primary: React.CSSProperties = { ...btn, background: t.accent.base, borderColor: t.accent.base, color: "white" };
 const chip: React.CSSProperties = { ...btn, opacity: 0.75 };
-const chipActive: React.CSSProperties = { background: "rgba(122,162,255,0.25)", borderColor: "#7aa2ff", opacity: 1 };
+const chipActive: React.CSSProperties = { background: t.accent.fill, borderColor: t.accent.base, opacity: 1 };

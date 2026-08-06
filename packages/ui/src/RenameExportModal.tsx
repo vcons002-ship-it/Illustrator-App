@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { useState, type CSSProperties } from "react";
 import { ModalShell } from "./ModalShell.js";
 
@@ -62,19 +63,19 @@ const input: CSSProperties = {
   marginTop: 12,
   background: "rgba(0,0,0,0.3)",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.25)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "8px 10px",
   fontSize: 13,
   boxSizing: "border-box",
 };
 const btn: CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
+  background: t.fill.base,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "6px 12px",
   fontSize: 13,
   cursor: "pointer",
 };
-const btnPrimary: CSSProperties = { ...btn, background: "rgba(122,162,255,0.3)", borderColor: "rgba(122,162,255,0.6)" };
+const btnPrimary: CSSProperties = { ...btn, background: t.accent.edge, borderColor: t.accent.edge };

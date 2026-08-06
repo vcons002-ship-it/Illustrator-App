@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { CellValue, DataTable } from "@visual-reader/core";
 
@@ -251,7 +252,7 @@ export const DataTablePreview = memo(function DataTablePreview({
                         textAlign: align,
                         ...(onEditCell ? { cursor: "cell" } : {}),
                         ...(formula ? { color: "#9fd2ff" } : {}),
-                        ...(isSelected ? { outline: "2px solid rgba(122,162,255,0.9)", outlineOffset: "-2px" } : {}),
+                        ...(isSelected ? { outline: `2px solid ${t.accent.edge}`, outlineOffset: "-2px" } : {}),
                       }}
                     >
                       {text}
@@ -296,9 +297,9 @@ const delBtnStyle: React.CSSProperties = {
 };
 
 const addBtnStyle: React.CSSProperties = {
-  background: "rgba(90,209,155,0.12)",
+  background: t.state.good,
   color: "inherit",
-  border: "1px solid rgba(90,209,155,0.5)",
+  border: `1px solid ${t.state.good}`,
   borderRadius: 6,
   padding: "2px 9px",
   fontSize: 11,
@@ -312,8 +313,8 @@ function formatCell(v: CellValue): string {
 
 const scrollStyle = {
   overflow: "auto",
-  background: "#13161e",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.inset,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
 } as const;
 
@@ -324,7 +325,7 @@ const thStyle = {
   top: 0,
   background: "#1b1f2a",
   padding: "4px 8px",
-  borderBottom: "1px solid rgba(255,255,255,0.25)",
+  borderBottom: `1px solid ${t.border.button}`,
   fontWeight: 600,
   whiteSpace: "nowrap",
   zIndex: 1,
@@ -332,7 +333,7 @@ const thStyle = {
 
 const tdStyle = {
   padding: "3px 8px",
-  borderBottom: "1px solid rgba(255,255,255,0.06)",
+  borderBottom: `1px solid ${t.border.faint}`,
   whiteSpace: "nowrap",
   maxWidth: 260,
   overflow: "hidden",
@@ -342,9 +343,9 @@ const tdStyle = {
 const cellInputStyle = {
   width: "100%",
   boxSizing: "border-box",
-  background: "#0d1017",
-  color: "#fff",
-  border: "1px solid rgba(122,162,255,0.8)",
+  background: t.surface.sunken,
+  color: t.text.base,
+  border: `1px solid ${t.accent.edge}`,
   borderRadius: 3,
   padding: "2px 7px",
   fontSize: 12,
@@ -371,18 +372,18 @@ const fxRefStyle: React.CSSProperties = {
 };
 const fxInputStyle: React.CSSProperties = {
   flex: 1,
-  background: "#0d1017",
-  color: "#fff",
-  border: "1px solid rgba(122,162,255,0.4)",
+  background: t.surface.sunken,
+  color: t.text.base,
+  border: `1px solid ${t.accent.edge}`,
   borderRadius: 6,
   padding: "3px 8px",
   fontSize: 12,
   fontFamily: "ui-monospace, monospace",
 };
 const filterInputStyle: React.CSSProperties = {
-  background: "#0d1017",
-  color: "#fff",
-  border: "1px solid rgba(255,255,255,0.18)",
+  background: t.surface.sunken,
+  color: t.text.base,
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "3px 8px",
   fontSize: 12,

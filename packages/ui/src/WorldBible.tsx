@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { BibleEntityKind, Creature, Environment, VisualBible } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
@@ -372,12 +373,12 @@ const overlayStyle = {
 
 const panelStyle = {
   width: "min(720px, 100%)",
-  background: "#171922",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: t.surface.card,
+  border: `1px solid ${t.border.input}`,
   borderRadius: 12,
   padding: 16,
   fontFamily: "system-ui, sans-serif",
-  color: "#e9ecf2",
+  color: t.text.base,
 } as const;
 
 const headerStyle = {
@@ -392,7 +393,7 @@ const headerStyle = {
 const tabStyle = {
   background: "transparent",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.25)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 999,
   padding: "3px 12px",
   fontSize: 12,
@@ -401,16 +402,16 @@ const tabStyle = {
 
 const activeTabStyle = {
   ...tabStyle,
-  borderColor: "rgba(120,180,255,0.7)",
-  background: "rgba(96,170,255,0.15)",
-  color: "#cfe2ff",
+  borderColor: t.accent.edge,
+  background: t.accent.edge,
+  color: t.accent.text,
   fontWeight: 600,
 } as const;
 
 const buttonStyle = {
   background: "transparent",
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.3)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "4px 10px",
   fontSize: 13,
@@ -419,16 +420,16 @@ const buttonStyle = {
 
 const dangerButtonStyle = {
   ...buttonStyle,
-  borderColor: "rgba(255,120,120,0.45)",
-  color: "#ffb0b0",
+  borderColor: t.state.danger,
+  color: t.state.danger,
 } as const;
 
 const searchStyle = {
   width: "100%",
   boxSizing: "border-box",
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "6px 10px",
   fontSize: 13,
@@ -439,19 +440,19 @@ const cardStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 10,
   padding: 12,
-  background: "rgba(255,255,255,0.03)",
+  background: t.fill.subtle,
 } as const;
 
 const rowStyle = { display: "flex", gap: 8, flexWrap: "wrap" } as const;
 const fieldStyle = { display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 180 } as const;
 const labelStyle = { fontSize: 11, opacity: 0.6 } as const;
 const inputStyle = {
-  background: "rgba(255,255,255,0.06)",
+  background: t.fill.subtle,
   color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: "5px 8px",
   fontSize: 13,

@@ -334,6 +334,7 @@ import {
   // was internal to packages/ui and never exported from its index, which is why this file
   // hard-codes 101 style literals.
   cx,
+  t,
   type FileActions,
   type FileRef,
   type InstalledModel,
@@ -9799,7 +9800,7 @@ export function App() {
             position: "fixed",
             inset: 0,
             zIndex: 99999,
-            background: "#11131a",
+            background: t.surface.base,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -9879,7 +9880,7 @@ export function App() {
           )}
           {bookHasHtml && (
             <button
-              style={articleLayout ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
+              style={articleLayout ? { ...styles.button, borderColor: t.state.good, color: t.state.good } : styles.button}
               onClick={() => setArticleLayout((v) => !v)}
               title="Toggle between the original article layout (headings, images, lists) and clean reader text"
             >
@@ -10005,7 +10006,7 @@ export function App() {
           )}
           {isDesktop && (
             <button
-              style={remoteLink?.running ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
+              style={remoteLink?.running ? { ...styles.button, borderColor: t.state.good, color: t.state.good } : styles.button}
               onClick={() => void openRemoteLink()}
               title="Link a phone on your Wi-Fi to drive the assistant (experimental — see REMOTE-LINK.md)"
             >
@@ -10509,7 +10510,7 @@ export function App() {
                   type="button"
                   style={
                     codePreviewOpen
-                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      ? { ...styles.button, borderColor: t.accent.edge, color: t.accent.text }
                       : styles.button
                   }
                   onClick={() => setCodePreviewOpen((v) => !v)}
@@ -10523,7 +10524,7 @@ export function App() {
                   type="button"
                   style={
                     codeAnalysisOpen
-                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      ? { ...styles.button, borderColor: t.accent.edge, color: t.accent.text }
                       : styles.button
                   }
                   onClick={() => setCodeAnalysisOpen((v) => !v)}
@@ -11357,9 +11358,9 @@ export function App() {
             alignItems: "center",
             gap: 10,
             maxWidth: "min(560px, 94vw)",
-            background: "#16181d",
-            color: "#e6e6e6",
-            border: "1px solid rgba(90,209,155,0.4)",
+            background: t.surface.card,
+            color: t.text.base,
+            border: `1px solid ${t.state.good}`,
             borderRadius: 10,
             padding: "10px 14px",
             boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
@@ -11373,7 +11374,7 @@ export function App() {
               {pendingSkill.description || "a reusable playbook for tasks like this"}
             </div>
           </div>
-          <button style={{ ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" }} onClick={() => void keepPendingSkill()}>
+          <button style={{ ...styles.button, borderColor: t.state.good, color: t.state.good }} onClick={() => void keepPendingSkill()}>
             Keep
           </button>
           <button style={styles.button} onClick={() => setPendingSkill(null)}>
@@ -11384,11 +11385,11 @@ export function App() {
 
       {showRemoteLink && remoteLink && (
         <div
-          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(8,9,13,0.7)", backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
+          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: t.surface.overlay, backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
           onClick={() => setShowRemoteLink(false)}
         >
           <div
-            style={{ width: "min(460px, 100%)", background: "#16181d", color: "#e6e6e6", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 18, fontFamily: "system-ui, sans-serif" }}
+            style={{ width: `min(460px, 100%)`, background: t.surface.card, color: t.text.base, border: `1px solid ${t.fill.strong}`, borderRadius: 12, padding: 18, fontFamily: `system-ui, sans-serif` }}
             onClick={(e) => e.stopPropagation()}
           >
             <strong style={{ fontSize: 15 }}>🔗 Link a phone</strong>
@@ -11397,7 +11398,7 @@ export function App() {
                 <p style={{ fontSize: 13, opacity: 0.8, marginTop: 8 }}>
                   On a phone on the <b>same Wi-Fi</b>, open this address (it carries a one-time pairing code):
                 </p>
-                <code style={{ display: "block", background: "#0d1017", padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all" }}>
+                <code style={{ display: "block", background: t.surface.sunken, padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all" }}>
                   {remoteLink.url}
                 </code>
                 <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
@@ -11407,12 +11408,12 @@ export function App() {
                 </p>
 
                 {/* Internet link via a tunnel (e.g. Cloudflare) — works off Wi-Fi when configured. */}
-                <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 12 }}>
+                <div style={{ marginTop: 14, borderTop: `1px solid ${t.border.faint}`, paddingTop: 12 }}>
                   <p style={{ fontSize: 13, opacity: 0.8, margin: 0 }}>
                     <b>From anywhere (internet)</b> — your tunnel hostname (e.g. a Cloudflare named tunnel):
                   </p>
                   <input
-                    style={{ width: "100%", boxSizing: "border-box", marginTop: 6, background: "rgba(255,255,255,0.06)", color: "inherit", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: 8, fontSize: 13 }}
+                    style={{ width: "100%", boxSizing: "border-box", marginTop: 6, background: t.fill.subtle, color: "inherit", border: `1px solid ${t.fill.strong}`, borderRadius: 6, padding: 8, fontSize: 13 }}
                     value={settings.remoteLinkHost ?? ""}
                     placeholder="vr.example.com"
                     onChange={(e) => setSettings((s) => ({ ...s, remoteLinkHost: e.target.value }))}
@@ -11421,7 +11422,7 @@ export function App() {
                     const remoteUrl = remoteLink.token ? buildRemoteLinkUrl(settings.remoteLinkHost ?? "", remoteLink.token) : undefined;
                     return remoteUrl ? (
                       <>
-                        <code style={{ display: "block", background: "#0d1017", padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all", marginTop: 8 }}>
+                        <code style={{ display: "block", background: t.surface.sunken, padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all", marginTop: 8 }}>
                           {remoteUrl}
                         </code>
                         <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
@@ -11441,7 +11442,7 @@ export function App() {
                 </div>
               </>
             ) : (
-              <p style={{ fontSize: 13, color: "#ff8c8c", marginTop: 8 }}>⚠ {remoteLink.error ?? "Couldn't start the phone link."}</p>
+              <p style={{ fontSize: 13, color: t.state.danger, marginTop: 8 }}>⚠ {remoteLink.error ?? "Couldn't start the phone link."}</p>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {remoteLink.running ? (
@@ -11692,7 +11693,7 @@ const ReaderColumn = memo(function ReaderColumn({
                   style={{
                     ...styles.smallButton,
                     ...(i === Math.min(activeSheet, sheets.length - 1)
-                      ? { background: "rgba(90,209,155,0.3)", fontWeight: 600 }
+                      ? { background: t.state.good, fontWeight: 600 }
                       : {}),
                   }}
                   title={`View sheet "${s.name}"`}
@@ -12186,7 +12187,7 @@ function ImportBibleModal({
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}
         />
-        {preview?.error && <div style={{ color: "#ff9b9b", fontSize: 13 }}>{preview.error}</div>}
+        {preview?.error && <div style={{ color: t.state.danger, fontSize: 13 }}>{preview.error}</div>}
         {preview?.stats && (
           <div style={{ fontSize: 13, opacity: 0.85 }}>
             Ready to import: {preview.stats.characters} characters · {preview.stats.creatures} creatures ·{" "}
@@ -12195,7 +12196,7 @@ function ImportBibleModal({
           </div>
         )}
         {result && (
-          <div style={{ color: result.ok ? "#7dd87f" : "#ff9b9b", fontSize: 13 }}>
+          <div style={{ color: result.ok ? t.state.good : t.state.danger, fontSize: 13 }}>
             {result.ok ? "Imported ✓ — the Visual Bible has been updated." : result.error}
           </div>
         )}
@@ -12387,7 +12388,7 @@ function TestImageModal({
           </button>
         </div>
         {result?.error && (
-          <div style={{ color: "#ff9b9b", fontSize: 13, whiteSpace: "pre-wrap" }}>{result.error}</div>
+          <div style={{ color: t.state.danger, fontSize: 13, whiteSpace: "pre-wrap" }}>{result.error}</div>
         )}
         {result?.ok && imageUrl && (
           <>
@@ -12624,7 +12625,7 @@ function PhotoTransformModal({
           </button>
         </div>
         {result?.error && (
-          <div style={{ color: "#ff9b9b", fontSize: 13, whiteSpace: "pre-wrap", marginTop: 8 }}>{result.error}</div>
+          <div style={{ color: t.state.danger, fontSize: 13, whiteSpace: "pre-wrap", marginTop: 8 }}>{result.error}</div>
         )}
         {result?.ok && resultUrl && (
           <>
@@ -12861,8 +12862,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: "#11131a",
-    color: "#e7e7ee",
+    background: t.surface.base,
+    color: t.text.base,
     fontFamily: "Georgia, 'Iowan Old Style', serif",
   },
   // The middle region between header and bottom dock — this is what scrolls. `minHeight: 0` is
@@ -12876,7 +12877,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 6,
     padding: "12px 20px 8px",
     background: "rgba(17,19,26,0.92)",
-    borderBottom: "1px solid rgba(255,255,255,0.08)",
+    borderBottom: `1px solid ${t.border.faint}`,
     backdropFilter: "blur(8px)",
   },
   headerRow: {
@@ -12899,14 +12900,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     flexWrap: "wrap",
     padding: "5px 8px",
-    border: "1px solid rgba(120,180,255,0.25)",
+    border: `1px solid ${t.accent.edge}`,
     borderRadius: 8,
-    background: "rgba(96,170,255,0.06)",
+    background: t.accent.edge,
   },
   bookBarToggle: {
     background: "transparent",
-    color: "#cfe2ff",
-    border: "1px solid rgba(120,180,255,0.5)",
+    color: t.accent.text,
+    border: `1px solid ${t.accent.edge}`,
     borderRadius: 6,
     padding: "3px 9px",
     cursor: "pointer",
@@ -12926,19 +12927,19 @@ const styles: Record<string, React.CSSProperties> = {
   stageChip: {
     padding: "2px 8px",
     borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.18)",
+    border: `1px solid ${t.border.button}`,
     opacity: 0.55,
     whiteSpace: "nowrap",
   },
   stageChipActive: {
     opacity: 1,
-    border: "1px solid rgba(120,180,255,0.7)",
-    background: "rgba(96,170,255,0.15)",
-    color: "#cfe2ff",
+    border: `1px solid ${t.accent.edge}`,
+    background: t.accent.edge,
+    color: t.accent.text,
     animation: "vr-pulse 2s ease-in-out infinite",
   },
   stageChipDone: { opacity: 0.85, border: "1px solid rgba(125,216,127,0.5)", color: "#9fdfa1" },
-  stageChipPaused: { opacity: 0.9, border: "1px solid rgba(255,212,121,0.6)", color: "#ffd479" },
+  stageChipPaused: { opacity: 0.9, border: "1px solid rgba(255,212,121,0.6)", color: t.state.warn },
   stageArrow: { opacity: 0.35 },
   workflowNow: { marginLeft: 8, opacity: 0.9 },
   actionNote: { marginLeft: "auto", color: "#9fdfa1", fontSize: 12 },
@@ -12950,7 +12951,7 @@ const styles: Record<string, React.CSSProperties> = {
   menuSummary: {
     background: "transparent",
     color: "inherit",
-    border: "1px solid rgba(255,255,255,0.3)",
+    border: `1px solid ${t.border.button}`,
     borderRadius: 6,
     padding: "4px 10px",
     cursor: "pointer",
@@ -12962,8 +12963,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     background: "#1b1e2a",
-    color: "#e7e7ee",
-    border: "1px solid rgba(255,255,255,0.15)",
+    color: t.text.base,
+    border: `1px solid ${t.border.input}`,
     borderRadius: 8,
     boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
   },
@@ -12975,7 +12976,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 12px",
     background: "transparent",
     border: "none",
-    borderBottom: "1px solid rgba(255,255,255,0.07)",
+    borderBottom: `1px solid ${t.border.faint}`,
     color: "inherit",
     cursor: "pointer",
     textAlign: "left",
@@ -12985,7 +12986,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   upload: {
-    border: "1px solid rgba(255,255,255,0.3)",
+    border: `1px solid ${t.border.button}`,
     borderRadius: 6,
     padding: "4px 10px",
     cursor: "pointer",
@@ -12993,7 +12994,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   button: {
     background: "transparent",
-    border: "1px solid rgba(255,255,255,0.3)",
+    border: `1px solid ${t.border.button}`,
     color: "inherit",
     borderRadius: 6,
     padding: "4px 10px",
@@ -13001,9 +13002,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   buttonPrimary: {
-    background: "rgba(96,170,255,0.18)",
-    border: "1px solid rgba(120,180,255,0.6)",
-    color: "#cfe2ff",
+    background: t.accent.edge,
+    border: `1px solid ${t.accent.edge}`,
+    color: t.accent.text,
     borderRadius: 6,
     padding: "4px 10px",
     cursor: "pointer",
@@ -13011,15 +13012,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   smallButton: {
-    background: "rgba(90,209,155,0.12)",
-    border: "1px solid rgba(90,209,155,0.5)",
+    background: t.state.good,
+    border: `1px solid ${t.state.good}`,
     color: "inherit",
     borderRadius: 6,
     padding: "3px 9px",
     cursor: "pointer",
     fontSize: 12,
   },
-  status: { padding: "10px 20px", color: "#ffd479" },
+  status: { padding: "10px 20px", color: t.state.warn },
   bibleStatus: { padding: "4px 20px 0", fontSize: 12, opacity: 0.75, fontFamily: "system-ui, sans-serif" },
   // The status row is ambient information, not content — it sat above the chat taking a band of the
   // screen roughly as tall as a message. Tightened rather than hidden: the pills still say what they
@@ -13050,17 +13051,17 @@ const styles: Record<string, React.CSSProperties> = {
   badgeWarn: {
     background: "rgba(200,140,40,0.16)",
     borderColor: "rgba(230,170,70,0.45)",
-    color: "#ffd479",
+    color: t.state.warn,
   },
   badgeBusy: {
     background: "rgba(90,120,200,0.16)",
     borderColor: "rgba(120,150,220,0.45)",
-    color: "#bcd0ff",
+    color: t.accent.text,
   },
   badgeErr: {
     background: "rgba(200,60,60,0.16)",
     borderColor: "rgba(230,90,90,0.5)",
-    color: "#ff9c9c",
+    color: t.state.danger,
   },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
   // With a book open the chat docks at the bottom of the page (full width), beneath the reader. It's
@@ -13073,15 +13074,15 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 6,
     padding: 10,
     boxSizing: "border-box",
-    background: "#0e0f13",
-    borderTop: "1px solid rgba(255,255,255,0.12)",
+    background: t.surface.sunken,
+    borderTop: `1px solid ${t.border.subtle}`,
   },
   // The story dock's control row: workflow + cadence dropdowns and an Illustrate button (no model round).
   storyControls: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
   storyControlSelect: {
-    background: "rgba(255,255,255,0.08)",
+    background: t.fill.base,
     color: "inherit",
-    border: "1px solid rgba(255,255,255,0.2)",
+    border: `1px solid ${t.border.button}`,
     borderRadius: 6,
     padding: "5px 8px",
     fontSize: 12,
@@ -13090,9 +13091,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   // The reader's "view as…" category drop-down (replaces the old static mode badge).
   viewAsSelect: {
-    background: "rgba(255,255,255,0.08)",
+    background: t.fill.base,
     color: "inherit",
-    border: "1px solid rgba(255,255,255,0.2)",
+    border: `1px solid ${t.border.button}`,
     borderRadius: 999,
     padding: "4px 8px",
     fontSize: 12,
@@ -13122,8 +13123,8 @@ const styles: Record<string, React.CSSProperties> = {
   lockLookRow: { display: "flex", flexWrap: "wrap", gap: 6 },
   lockLookButton: {
     background: "#23262d",
-    color: "#e6e6e6",
-    border: "1px solid rgba(255,255,255,0.18)",
+    color: t.text.base,
+    border: `1px solid ${t.border.button}`,
     borderRadius: 999,
     padding: "3px 10px",
     fontSize: 12,
@@ -13180,15 +13181,15 @@ const styles: Record<string, React.CSSProperties> = {
   column: { maxWidth: 640 },
   dataPreview: {
     marginBottom: 24,
-    background: "rgba(122,162,255,0.05)",
-    border: "1px solid rgba(122,162,255,0.25)",
+    background: t.accent.wash,
+    border: `1px solid ${t.accent.fill}`,
     borderRadius: 10,
     padding: "8px 12px",
   },
   dataPreviewSummary: { cursor: "pointer", fontSize: 13, fontFamily: "system-ui, sans-serif" },
   page: { marginBottom: 32, transition: "border-color 0.4s ease" },
   sectionActive: {
-    borderLeft: "2px solid rgba(120,180,255,0.6)",
+    borderLeft: `2px solid ${t.accent.edge}`,
     paddingLeft: 16,
     marginLeft: -18,
   },
@@ -13197,7 +13198,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     margin: "44px 0 20px",
     paddingTop: 20,
-    borderTop: "1px solid rgba(255,255,255,0.12)",
+    borderTop: `1px solid ${t.border.subtle}`,
     scrollMarginTop: 80,
   },
   pageDivider: {
@@ -13205,15 +13206,15 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     margin: "8px 0 28px",
-    borderTop: "1px dashed rgba(255,255,255,0.12)",
+    borderTop: `1px dashed ${t.border.subtle}`,
   },
   pageDividerLabel: {
     transform: "translateY(-50%)",
-    background: "#11131a",
+    background: t.surface.base,
     padding: "0 10px",
     fontSize: 12,
     letterSpacing: 0.4,
-    color: "rgba(255,255,255,0.45)",
+    color: t.fill.strong,
     fontFamily: "system-ui, sans-serif",
   },
   paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
@@ -13224,7 +13225,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 0 14px",
     padding: "10px 14px",
     background: "rgba(0,0,0,0.28)",
-    border: "1px solid rgba(255,255,255,0.08)",
+    border: `1px solid ${t.border.faint}`,
     borderRadius: 8,
     overflowX: "auto" as const,
     whiteSpace: "pre" as const,
@@ -13235,8 +13236,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     padding: "3px 10px",
     borderRadius: 999,
-    border: "1px solid rgba(255,255,255,0.18)",
-    color: "rgba(255,255,255,0.82)",
+    border: `1px solid ${t.border.button}`,
+    color: t.fill.strong,
     whiteSpace: "nowrap" as const,
     fontFamily: "system-ui, sans-serif",
   },
@@ -13269,9 +13270,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     fontSize: 14,
     lineHeight: 1.6,
-    color: "#e7e7ee",
+    color: t.text.base,
     background: "rgba(0,0,0,0.32)",
-    border: "1px solid rgba(255,255,255,0.12)",
+    border: `1px solid ${t.border.subtle}`,
     borderRadius: 8,
     padding: "12px 14px",
     whiteSpace: "pre" as const,
@@ -13283,9 +13284,9 @@ const styles: Record<string, React.CSSProperties> = {
   codePreview: {
     flex: 1,
     width: "100%",
-    border: "1px solid rgba(255,255,255,0.12)",
+    border: `1px solid ${t.border.subtle}`,
     borderRadius: 8,
-    background: "#fff",
+    background: t.text.base,
     boxSizing: "border-box" as const,
   },
   codeOutput: {
@@ -13297,7 +13298,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.55,
     color: "#d7dbe6",
     background: "rgba(0,0,0,0.4)",
-    border: "1px solid rgba(255,255,255,0.1)",
+    border: `1px solid ${t.border.faint}`,
     borderRadius: 8,
     padding: "10px 12px",
     whiteSpace: "pre-wrap" as const,
@@ -13309,8 +13310,8 @@ const styles: Record<string, React.CSSProperties> = {
     width: 340,
     flexShrink: 0,
     overflow: "auto" as const,
-    background: "rgba(122,162,255,0.05)",
-    border: "1px solid rgba(122,162,255,0.22)",
+    background: t.accent.wash,
+    border: `1px solid ${t.accent.fill}`,
     borderRadius: 8,
     padding: "12px 14px",
     fontFamily: "system-ui, sans-serif",
@@ -13324,7 +13325,7 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.6,
     marginBottom: 6,
   },
-  codeAnalysisItem: { fontSize: 12.5, lineHeight: 1.5, marginBottom: 6, color: "rgba(255,255,255,0.85)" },
+  codeAnalysisItem: { fontSize: 12.5, lineHeight: 1.5, marginBottom: 6, color: t.fill.strong },
   codeAnalysisHint: { fontSize: 11.5, opacity: 0.6, lineHeight: 1.5, marginTop: 4 },
   aside: {},
   // The aside is sticky; when its content (image + data charts on technical
@@ -13378,8 +13379,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modalPanel: {
     width: "min(620px, 100%)",
-    background: "#171922",
-    border: "1px solid rgba(255,255,255,0.15)",
+    background: t.surface.card,
+    border: `1px solid ${t.border.input}`,
     borderRadius: 12,
     padding: 16,
     display: "flex",
@@ -13391,8 +13392,8 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     boxSizing: "border-box",
     minHeight: 160,
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.18)",
+    background: t.fill.subtle,
+    border: `1px solid ${t.border.button}`,
     borderRadius: 8,
     color: "inherit",
     padding: 10,

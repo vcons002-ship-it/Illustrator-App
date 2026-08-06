@@ -1,3 +1,4 @@
+import { t } from "./design/tokens.js";
 import { memo, type ReactNode } from "react";
 import type { JsonValue } from "@visual-reader/core";
 
@@ -89,7 +90,7 @@ function formatPrimitive(v: null | boolean | number | string): string {
 
 function valueStyle(v: JsonValue) {
   const color =
-    v === null ? "#8b93a7" : typeof v === "number" ? "#7aa2ff" : typeof v === "boolean" ? "#bb9af7" : "#9ece6a";
+    v === null ? "#8b93a7" : typeof v === "number" ? t.accent.base : typeof v === "boolean" ? "#bb9af7" : "#9ece6a";
   return { color, wordBreak: "break-word" as const };
 }
 
@@ -97,8 +98,8 @@ const INDENT = 14;
 
 const scrollStyle = {
   overflow: "auto",
-  background: "#13161e",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: t.surface.inset,
+  border: `1px solid ${t.border.subtle}`,
   borderRadius: 8,
   padding: "6px 8px",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
