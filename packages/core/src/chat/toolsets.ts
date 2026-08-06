@@ -100,7 +100,13 @@ export const TOOLSETS: readonly Toolset[] = [
   },
   {
     id: "coding",
-    trigger: "write, edit and RUN code; shell commands; screenshots; GitHub; hand work to a coding agent",
+    // NAMED FOR WHAT IT UNLOCKS, not for what it is. This trigger is the only thing the model reads
+    // when deciding whether to load the set, and it said "coding" — so a request to convert a file,
+    // batch-process a folder or query a big CSV never matched, the set never loaded, and the shell
+    // was never even in front of it. Reported as: it has never once used the command line. It was
+    // not declining to; it did not know it had one. Everything after "code" is the same set, said in
+    // the words a non-coding job would use.
+    trigger: "write, edit and RUN code; ANY command-line tool (convert, query, batch files); screenshots; GitHub; coding agents",
     flags: ["canRunCommands", "canAutonomousWorkspace", "canDelegateCoding", "canGithub"],
     tools: ["run_command", "write_file", "edit_file", "screenshot", "delegate_coding_task", "spawn_coding_agents"],
   },
@@ -291,6 +297,6 @@ export function toolsetIndexBlock(available: readonly string[], loaded: readonly
     // that looking the answer up outside is not an alternative. It is the one place a wrong turn
     // costs a whole unattended run, because the web will always return SOMETHING and none of it is
     // about this app.
-    "Never search the WEB for your own tools; it doesn't document them. load_toolset is the source."
+    "Never search the WEB for your own tools — load_toolset is the source."
   );
 }

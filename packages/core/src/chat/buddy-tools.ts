@@ -1109,7 +1109,12 @@ export function buildBuddySystemPrompt(raw: {
       : "";
   const commandTool = opts.canRunCommands
     ? '- {"tool":"run_command","command":"…"} — run ONE shell command in the reader\'s VisualReader workspace ' +
-      "folder (install dependencies, run a build or tests, execute a script you wrote). " +
+      "folder. NOT only for code: this is how you do ANYTHING there is no tool for, because every command-line " +
+      "program on the reader's machine is reachable from here. Converting a file (ffmpeg, pandoc, imagemagick), " +
+      "searching a folder properly (ripgrep), querying a data file far too big to read into this conversation " +
+      "(duckdb, sqlite, a pandas script you write first), unzipping, checking a folder's size, calling an API with " +
+      "curl — all of it. Before telling the reader you cannot do something, ask whether a command could: usually " +
+      "one can. And the code case too (install dependencies, run a build or tests, execute a script you wrote). " +
       (opts.canAutonomousWorkspace
         ? "It runs without a click (Autonomous workspace). "
         : "The reader must APPROVE every command before it runs. ") +

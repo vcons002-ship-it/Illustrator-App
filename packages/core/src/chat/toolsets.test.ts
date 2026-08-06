@@ -703,3 +703,30 @@ describe("the index forbids the escape hatch the model actually took", () => {
     expect(toolsetIndexBlock(["files"], [])).toMatch(/load_toolset is the source/i);
   });
 });
+
+describe("the shell is discoverable by a job that isn't coding", () => {
+  // Reported as: it has never once used the command line. It wasn't declining to — the set is named
+  // `coding` and its trigger said so, so a request to convert a file or batch-process a folder never
+  // matched, the set never loaded, and run_command was never in front of the model at all.
+  it("advertises the general case, not just code, in the line the model matches on", () => {
+    const idx = toolsetIndexBlock(["coding"], []);
+    expect(idx).toMatch(/command-line tool/i);
+    // The words a NON-coding job would use — matching on these is the whole point.
+    expect(idx).toMatch(/convert/i);
+    expect(idx).toMatch(/batch/i);
+    // …without losing what it already surfaced.
+    expect(idx).toMatch(/code/i);
+    expect(idx).toMatch(/GitHub/i);
+    expect(idx).toMatch(/screenshots/i);
+  });
+
+  it("tells the model the shell is what to reach for when no tool fits", () => {
+    const doc = toolsetDoc("coding", { ...FULL, loadedToolsets: [] } as unknown as Parameters<typeof toolsetDoc>[1]);
+    expect(doc).toMatch(/NOT only for code/i);
+    expect(doc).toMatch(/anything there is no tool for/i);
+    // Named examples, because "any CLI" is abstract and a model reaches for what it can picture.
+    expect(doc).toMatch(/ffmpeg|pandoc|ripgrep|duckdb/i);
+    // And the instruction that actually changes behaviour at the moment it matters.
+    expect(doc).toMatch(/Before telling the reader you cannot do something/i);
+  });
+});
