@@ -200,14 +200,24 @@ export function buildModelMenu(
   const activeBackend = s.localBackend ?? "comfyui";
   let localBackends: ModelMenuGroup["localBackends"];
   let localModelsByBackend: ModelMenuGroup["localModelsByBackend"];
-  if (lists.imageModelsByBackend) {
+  // WHICH MODE, decided by whether there are actually BACKENDS to choose between — not by whether the
+  // caller passed an object.
+  //
+  // The host seeds this map as `{}` and fills it once the per-backend inventory loads. An empty object
+  // is truthy, so the old `if (lists.imageModelsByBackend)` took the provider-first path, found no
+  // backend ids, built an empty picker, and — because the flat fallback lives in the `else` — never
+  // listed `imageModels` at all. The group's own guard (`image.length || localBackends?.length`) then
+  // saw nothing on either side and dropped the Image tab out of the menu entirely. Reported as: only
+  // chat and video show up. It bit exactly the readers with a purely local image setup, since a cloud
+  // image key would have put an option in `image` and kept the tab alive by accident.
+  const backendIds = Object.keys(lists.imageModelsByBackend ?? {}) as LocalBackendId[];
+  if (backendIds.length > 0) {
     // Provider-first: list ComfyUI/AUTOMATIC1111 as backends to choose between, each with ONLY its own
     // installed checkpoints beneath it (never mixed with the other backend's models).
-    const backendIds = Object.keys(lists.imageModelsByBackend) as LocalBackendId[];
     localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend }));
     localModelsByBackend = {};
     for (const id of backendIds) {
-      localModelsByBackend[id] = (lists.imageModelsByBackend[id] ?? []).map((m) => ({
+      localModelsByBackend[id] = (lists.imageModelsByBackend?.[id] ?? []).map((m) => ({
         id: `image:local:${id}:${m.id}`,
         label: m.label,
         sublabel: "local checkpoint",
@@ -216,7 +226,9 @@ export function buildModelMenu(
       }));
     }
   } else {
-    // No by-backend inventory supplied — flat fallback (backend-agnostic, matches legacy behavior).
+    // No backends known — flat fallback (backend-agnostic, matches legacy behaviour). This is also
+    // the path taken BEFORE the per-backend inventory has loaded, which is why it must never be
+    // skipped: it is the only thing standing between a still-loading map and an empty menu.
     for (const m of lists.imageModels) {
       image.push({
         id: `image:local:${m.id}`,
