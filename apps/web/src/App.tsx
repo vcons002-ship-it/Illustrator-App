@@ -9788,7 +9788,6 @@ export function App() {
     // `vr-app` is the root every global rule hangs off — never <body>, because the browser
     // extension mounts these same components into arbitrary websites with no shadow DOM.
     <div className={cx.app} style={styles.shell}>
-      <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
           purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that
@@ -12848,12 +12847,6 @@ function WorkflowBar({
     </div>
   );
 }
-
-const KEYFRAMES =
-  `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }\n` +
-  // The collapsible sections use a native <details>; hide its default triangle marker.
-  `details > summary { list-style: none; }\n` +
-  `details > summary::-webkit-details-marker { display: none; }`;
 
 const styles: Record<string, React.CSSProperties> = {
   // Full-height flex column: fixed header on top, a scrolling content region in the middle, and a

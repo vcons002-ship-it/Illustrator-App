@@ -1,3 +1,4 @@
+import "@visual-reader/ui/styles.css";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -353,7 +354,6 @@ function Overlay() {
 
   return (
     <div style={panel}>
-      <style>{KEYFRAMES}</style>
       <div style={bar}>
         <strong>Visual Reader</strong>
         <button style={btn} onClick={() => setVisible(false)}>
@@ -384,7 +384,6 @@ function Overlay() {
   );
 }
 
-const KEYFRAMES = `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }`;
 
 const panel: React.CSSProperties = {
   position: "fixed",
