@@ -4116,7 +4116,11 @@ export const panelStyle = {
   // this near-black card, at UA size, in Times. Anything that floats free of the tree it was written
   // in has to carry its own appearance.
   color: t.text.base,
-  fontFamily: "Georgia, 'Iowan Old Style', serif",
+  // The UI font. This restated the READING font, copied from the shell back when the panel
+  // inherited it — so Settings stayed entirely serif after the shell moved to sans, and it looked
+  // exactly like the stylesheet had failed to load. A portalled surface carrying its own copy of a
+  // value is the cost of floating free of the tree; it also means it has its own copy of a mistake.
+  fontFamily: t.font.ui,
   fontSize: 13,
   /**
    * Render NATIVE controls dark too.
