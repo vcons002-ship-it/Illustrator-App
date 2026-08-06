@@ -164,3 +164,55 @@ describe("the reader's own affordances", () => {
     expect(APP).toContain("Lock this look");
   });
 });
+
+/**
+ * WHICH FACE GOES WHERE.
+ *
+ * `styles.shell` used to declare the READING font — `Georgia, 'Iowan Old Style', serif` — and it
+ * sits on the app's root element, so every button, pill, menu, status chip and chat message
+ * inherited a book face. A serif UI is what "the new colour scheme doesn't seem right" actually
+ * turned out to be: the palette was landing correctly and the typography was wrong.
+ *
+ * It also silently disabled base.css. `.vr-app { font-family: var(--vr-font-ui) }` can never win
+ * against an inline style on the same element, so the stylesheet's own font rule was inert — the
+ * exact cascade fact this whole migration is built on, working against us for once.
+ *
+ * The split is now explicit in both directions, and both directions are asserted: the shell takes
+ * the UI font, and prose asks for the reading font by name. Either half regressing alone is a bug
+ * — a serif UI, or a sans-serif book — so neither is left to inheritance.
+ */
+describe("typography: a sans UI around a serif book", () => {
+  /** Pull one style object out of the `styles` record by key, WITHOUT its comments — these blocks
+   * are commented in prose that names the very fonts being asserted about, and a gate that reads
+   * commentary is a gate that fires on a sentence rather than on the code. */
+  const styleBlock = (key: string): string => {
+    const at = APP.indexOf(`\n  ${key}: {`);
+    expect(at, `styles.${key} not found`).toBeGreaterThan(-1);
+    return APP.slice(at, APP.indexOf("\n  },", at)).replace(/\/\/.*$/gm, "");
+  };
+
+  it("does not put the reading serif on the app shell, where everything inherits it", () => {
+    expect(styleBlock("shell")).not.toMatch(/Georgia|serif/);
+  });
+
+  it("gives the shell the UI font, so chrome is sans by default", () => {
+    expect(styleBlock("shell")).toContain("t.font.ui");
+  });
+
+  it("keeps the book itself in the reading face", () => {
+    // These inherited their serif from the shell. With the shell switched they must state it, or
+    // the reader silently becomes sans — a regression nothing else in the suite would notice.
+    for (const key of ["paragraph", "chapterHeading", "readerDocInner"]) {
+      expect(styleBlock(key), `styles.${key} lost the reading font`).toContain("t.font.read");
+    }
+  });
+
+  it("keeps imported articles in the reading face too", () => {
+    const article = readFileSync(join(UI_SRC, "styles", "article.css"), "utf8");
+    expect(article).toMatch(/\.vr-article-html\s*\{[^}]*--vr-font-read/);
+  });
+
+  it("leaves code and plain text on the monospace face", () => {
+    expect(styleBlock("readerPlainText")).toMatch(/ui-monospace|t\.font\.mono/);
+  });
+});

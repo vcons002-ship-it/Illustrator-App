@@ -7,7 +7,9 @@
  * it satisfies the scoping invariant unchanged; colours are tokenised.
  */
 
-.vr-article-html { margin: 0 0 1em; line-height: 1.7; }
+/* An imported article is prose, so it takes the reading face. Stated rather than inherited: the app
+ * shell carries the UI font, and only the reader's own text opts into the book serif. */
+.vr-article-html { margin: 0 0 1em; line-height: 1.7; font-family: var(--vr-font-read); }
 .vr-article-html h1, .vr-article-html h2, .vr-article-html h3,
 .vr-article-html h4, .vr-article-html h5, .vr-article-html h6 {
   line-height: 1.3; margin: 1.2em 0 0.4em; font-weight: 600; font-family: var(--vr-font-ui);
