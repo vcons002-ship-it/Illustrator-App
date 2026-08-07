@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { placePopover, type PopoverPlacement } from "./popover-position.js";
+import { cx } from "./design/classes.js";
 
 /**
  * A button with a dropdown panel that is guaranteed to be on screen.
@@ -94,7 +95,7 @@ export function AnchoredMenu({
       <button
         ref={buttonRef}
         type="button"
-        style={buttonStyle}
+        className={cx.btn} style={buttonStyle}
         title={title}
         aria-expanded={open}
         aria-haspopup="menu"

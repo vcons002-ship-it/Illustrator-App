@@ -2,6 +2,7 @@ import { t } from "./design/tokens.js";
 import { useState } from "react";
 import type { BookSummary, LibraryType } from "@visual-reader/core";
 import { ModalShell } from "./ModalShell.js";
+import { cx } from "./design/classes.js";
 
 /** Human labels + emoji for each library type tag (the filter chips + per-book badge). */
 const TYPE_LABELS: Record<LibraryType, string> = {
@@ -60,7 +61,7 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
           <span style={{ opacity: 0.6, fontSize: 12 }}>
             {books.length} book{books.length === 1 ? "" : "s"}
           </span>
-          <button style={buttonStyle} onClick={onClose}>
+          <button className={cx.btn} style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
@@ -121,13 +122,13 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                     {!current && (
-                      <button style={buttonStyle} onClick={() => onOpen(b.id)}>
+                      <button className={cx.btn} style={buttonStyle} onClick={() => onOpen(b.id)}>
                         Open
                       </button>
                     )}
                     {!current && currentId && (
                       <button
-                        style={buttonStyle}
+                        className={cx.btn} style={buttonStyle}
                         title="Carry this book's characters/world into the book you have open (series continuity)"
                         onClick={() => onCarryOver(b.id)}
                       >
@@ -135,7 +136,7 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
                       </button>
                     )}
                     <button
-                      style={buttonStyle}
+                      className={cx.btn} style={buttonStyle}
                       title="Remove from library"
                       aria-label={`Remove ${b.title} from library`}
                       onClick={() => {

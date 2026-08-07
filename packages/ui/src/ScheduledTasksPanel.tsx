@@ -2,6 +2,7 @@
 import { t as vr } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { formatStepLines, weekdayOf, type ScheduledTask } from "@visual-reader/core";
+import { cx } from "./design/classes.js";
 
 /**
  * Manage scheduled / periodic tasks — recurring actions the assistant runs on a cadence
@@ -258,7 +259,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     {onEdit && editing === t.id ? (
                       <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                         <input
-                          style={inputStyle}
+                          className={cx.input} style={inputStyle}
                           value={draft.title}
                           onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
                           placeholder="Title"

@@ -438,3 +438,50 @@ describe("no colour drifts outside the palette", () => {
     }
   });
 });
+
+/**
+ * DEFINED IS NOT APPLIED.
+ *
+ * Every rule in components.css existed and did nothing for three commits, because no component
+ * carried the class. The suite was green throughout: the tests asserted the CSS *declared* the
+ * rules. So these check the other end — that something in the tree actually wears them.
+ *
+ * Written to fail loudly if the interaction pass is ever reverted piecemeal, which is exactly how
+ * a styling migration rots: a component gets rewritten, its className quietly doesn't come back,
+ * and nothing anywhere notices because the stylesheet is still perfect.
+ */
+describe("the interaction classes are actually worn by components", () => {
+  const uiDir = join(__dirname, "..");
+  const sources = [
+    readFileSync(join(uiDir, "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8"),
+    ...readdirSync(uiDir)
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => readFileSync(join(uiDir, f), "utf8")),
+  ];
+  const all = sources.join("\n");
+
+  it("puts the modal classes on ModalShell, where twelve modals inherit them", () => {
+    // The one file that had to be first: these two classes animate every modal in the app, and
+    // @starting-style + allow-discrete means the EXIT needs no mount-keeping in any of them.
+    const shell = readFileSync(join(uiDir, "ModalShell.tsx"), "utf8");
+    expect(shell).toContain("cx.modalOverlay");
+    expect(shell).toContain("cx.modalCard");
+  });
+
+  it("wears the button class widely enough to be the app's buttons, not a sample", () => {
+    const worn = (all.match(/className=\{cx\.btn\}/g) ?? []).length;
+    expect(worn, `only ${worn} elements carry cx.btn`).toBeGreaterThan(40);
+  });
+
+  it("gives inputs their focus class, since inline styles cannot express :focus", () => {
+    expect(all).toMatch(/className=\{cx\.input\}/);
+  });
+
+  it("never leaves a className referring to a class the sheets don't define", () => {
+    // A className that matches nothing is invisible: it looks exactly like the animation not
+    // working, and there is no runtime error to find.
+    const used = new Set([...all.matchAll(/cx\.([a-zA-Z]+)/g)].map((m) => m[1]!));
+    const unknown = [...used].filter((k) => !(k in cx));
+    expect(unknown, `cx.${unknown.join(", cx.")} is not in classes.ts`).toEqual([]);
+  });
+});

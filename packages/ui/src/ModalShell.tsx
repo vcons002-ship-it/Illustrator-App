@@ -1,5 +1,6 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { modalCardStyle, modalOverlayStyle } from "./tokens.js";
+import { cx } from "./design/classes.js";
 
 /**
  * Module-level stack of the currently-mounted shells (most-recently-mounted last). `aria-modal` claims
@@ -122,8 +123,21 @@ export function ModalShell({
       opener?.focus();
     };
   }, []);
+  /**
+   * The two classes below are why this file is the first stop of the interaction pass: TWELVE
+   * modals render through this shell, so one pair of class names animates all of them.
+   *
+   * They enter via `@starting-style` and leave via `transition-behavior: allow-discrete`, which
+   * means the exit needs NO mount-keeping — no `closing` state, no timer, no waiting to unmount.
+   * That matters because every one of these modals currently unmounts instantly, and the usual fix
+   * (hold the component mounted while it animates out) would have meant touching all twelve.
+   *
+   * The inline styles below still win on appearance, exactly as in every other file in this sweep,
+   * so a class can only add motion here — never move a modal or change how it looks.
+   */
   return (
     <div
+      className={cx.modalOverlay}
       style={{ ...modalOverlayStyle, ...overlayStyle }}
       onClick={disableBackdropClose || !onClose ? undefined : onClose}
     >
@@ -133,6 +147,7 @@ export function ModalShell({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
+        className={cx.modalCard}
         style={{
           ...modalCardStyle,
           outline: "none",
