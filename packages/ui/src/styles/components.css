@@ -175,6 +175,43 @@
   animation-delay: calc(var(--vr-i, 0) * 24ms);
 }
 
+/* --vr-i, declared in CSS rather than threaded through every component as a prop. The rule above
+ * reads it; without these it resolves to its 0 fallback and every child animates simultaneously —
+ * a rise, but not a stagger, which is a difference nobody would ever debug. */
+.vr-stagger > *:nth-child(1) {
+  --vr-i: 0;
+}
+.vr-stagger > *:nth-child(2) {
+  --vr-i: 1;
+}
+.vr-stagger > *:nth-child(3) {
+  --vr-i: 2;
+}
+.vr-stagger > *:nth-child(4) {
+  --vr-i: 3;
+}
+.vr-stagger > *:nth-child(5) {
+  --vr-i: 4;
+}
+.vr-stagger > *:nth-child(6) {
+  --vr-i: 5;
+}
+.vr-stagger > *:nth-child(7) {
+  --vr-i: 6;
+}
+.vr-stagger > *:nth-child(8) {
+  --vr-i: 7;
+}
+.vr-stagger > *:nth-child(9) {
+  --vr-i: 8;
+}
+.vr-stagger > *:nth-child(10) {
+  --vr-i: 9;
+}
+.vr-stagger > *:nth-child(11) {
+  --vr-i: 10;
+}
+
 .vr-stagger > :nth-child(n + 12) {
   animation-delay: 264ms;
 }

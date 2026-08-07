@@ -326,6 +326,8 @@ import {
   DocBlocksView,
   HtmlParagraph,
   AnchoredMenu,
+  DOCK_CLASS,
+  type DockMode,
   ARTICLE_HTML_STYLE,
   InlineFigure,
   SupportRow,
@@ -2001,9 +2003,41 @@ export function App() {
   const [bookToolsOpen, setBookToolsOpen] = useState(() => !narrow);
   /** Which world-bible list is open ("" = closed) — the Places / Creatures buttons. */
   const [showWorld, setShowWorld] = useState<"" | "places" | "creatures">("");
-  // The bottom chat dock keeps its input bar always visible; its message history expands/collapses.
-  // Default expanded on desktop, collapsed on phones (the reader gets the room).
-  const [chatHistoryOpen, setChatHistoryOpen] = useState(() => !narrow);
+  /**
+   * THE DOCK HAS THREE HEIGHTS, NOT TWO STATES.
+   *
+   * It was a boolean whose single open height was a hard `min(62vh, 560px)`, defaulting to OPEN —
+   * so on a tall window the chat took 560px and the book got what was left. That is the "chat dock
+   * eats the reader" complaint exactly. `peek` is the new default: enough to read the last exchange,
+   * not enough to out-measure the book.
+   *
+   * `dockUserPinned` is the guarantee that nothing moves on you. The moment the caret is used, every
+   * automatic promotion below stops for the rest of the session. Automation you cannot switch off is
+   * worse than no automation.
+   */
+  const [dockMode, setDockMode] = useState<DockMode>(() => (narrow ? "bar" : "peek"));
+  const [dockUserPinned, setDockUserPinned] = useState(false);
+  const chatHistoryOpen = dockMode !== "bar";
+  /** Cycle bar → peek → full → bar, and pin: this is the reader taking manual control. */
+  const cycleDock = useCallback(() => {
+    setDockUserPinned(true);
+    setDockMode((m) => (m === "bar" ? "peek" : m === "peek" ? "full" : "bar"));
+  }, []);
+  /** Promote automatically, never demote — and never once pinned. Raising the dock to show a reply
+   * is helpful; dropping it while someone is mid-sentence is not, which is why there is no
+   * corresponding auto-collapse. */
+  const promoteDock = useCallback(
+    (to: DockMode) => {
+      if (dockUserPinned) return;
+      setDockMode((m) => (m === "bar" && to !== "bar" ? to : m === "peek" && to === "full" ? "full" : m));
+    },
+    [dockUserPinned],
+  );
+  // Raise the dock far enough to show an arriving reply. Promote-only and pin-respecting (see
+  // promoteDock): the dock never drops on its own, so nothing vanishes mid-sentence.
+  useEffect(() => {
+    if (buddyMessages.length > 0) promoteDock("peek");
+  }, [buddyMessages.length, promoteDock]);
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
   // on hydration so the initial empty-keys render can't clobber the saved keys.
@@ -9829,7 +9863,10 @@ export function App() {
   return (
     // `vr-app` is the root every global rule hangs off — never <body>, because the browser
     // extension mounts these same components into arbitrary websites with no shadow DOM.
-    <div className={cx.app} style={styles.shell}>
+    <div
+      className={`${cx.app}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}`}
+      style={styles.shell}
+    >
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
           purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that
@@ -10568,7 +10605,7 @@ export function App() {
       </header>
 
       {/* Everything between the (fixed-height) header and the bottom chat dock scrolls here. */}
-      <div style={styles.contentScroll} ref={contentScrollRef}>
+      <div className={cx.readerYield} style={styles.contentScroll} ref={contentScrollRef}>
 
       {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
@@ -10911,9 +10948,13 @@ export function App() {
           reader. Its input bar is always visible; the message history expands/collapses (caret in the
           panel header). A "story as you go" book also gets its workflow/cadence controls here. */}
       {book && (
-        <section style={chatHistoryOpen ? { ...styles.chatDock, height: "min(62vh, 560px)" } : styles.chatDock}>
+        <section
+          className={`${cx.dock} ${DOCK_CLASS[dockMode]}`}
+          style={styles.chatDock}
+          onFocusCapture={() => promoteDock("peek")}
+        >
           {storyControlsRow}
-          {renderBuddyChat(true, !chatHistoryOpen, () => setChatHistoryOpen((v) => !v))}
+          {renderBuddyChat(true, !chatHistoryOpen, cycleDock)}
         </section>
       )}
 

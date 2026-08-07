@@ -23,8 +23,9 @@ export const cx = {
   /** Children get a computed delay from `--vr-i`; capped past the twelfth. */
   stagger: "vr-stagger",
 
-  shell: "vr-shell",
-  shellNoDock: "vr-shell--nodock",
+  /** On the chat dock itself: reads --vr-dock-h, which the three mode classes set. */
+  dock: "vr-dock",
+  /** On the app shell, while the reader is in conversation — dims the book, never moves it. */
   shellChatting: "vr-shell--chatting",
 
   dockBar: "vr-dock--bar",
