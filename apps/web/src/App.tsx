@@ -13152,11 +13152,11 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: 13,
   },
+  // background / border / radius / colour deliberately ABSENT — `.vr-btn` owns them (see
+  // components.css). Declared here they were inline, and inline beats the hover rule, so hover
+  // could never change the colour of the app's most-used button. What's left is the geometry the
+  // class has no business deciding.
   button: {
-    background: "transparent",
-    border: `1px solid ${t.border.button}`,
-    color: "inherit",
-    borderRadius: 6,
     padding: "4px 10px",
     cursor: "pointer",
     fontSize: 13,

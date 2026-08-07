@@ -485,3 +485,49 @@ describe("the interaction classes are actually worn by components", () => {
     expect(unknown, `cx.${unknown.join(", cx.")} is not in classes.ts`).toEqual([]);
   });
 });
+
+/**
+ * THE CLASS HAS TO BE ALLOWED TO WIN.
+ *
+ * Adding `className` beside `style` is safe precisely because inline styles beat class rules — a
+ * class can only add behaviour, never break appearance. That same fact is why the interaction pass
+ * shipped invisible: `styles.button` and Settings' `buttonStyle` declared `background` and `border`
+ * INLINE, so `.vr-btn:hover`'s `background-color` and `border-color` were overridden on every
+ * button in the app. Hovering moved a transparent button two pixels and nothing else.
+ *
+ * Half a migration looks exactly like a finished one from the test suite's side. This is the half
+ * that was missing: the declarations the class now owns have to leave the inline object.
+ */
+describe("hover can actually reach the app's buttons", () => {
+  const components = readFileSync(join(STYLES, "components.css"), "utf8");
+
+  it("gives .vr-btn a resting background and border to transition FROM", () => {
+    const base = /\.vr-btn \{([\s\S]*?)\}/.exec(components)?.[1] ?? "";
+    expect(base, ".vr-btn declares no resting background").toMatch(/background:/);
+    expect(base, ".vr-btn declares no resting border").toMatch(/border:/);
+  });
+
+  it("leaves those out of the inline button styles, so the hover rule is not overridden", () => {
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    const appBtn = /\n {2}button: \{([\s\S]*?)\n {2}\},/.exec(app)?.[1] ?? "";
+    expect(appBtn, "styles.button not found").toBeTruthy();
+    for (const prop of ["background:", "border:"]) {
+      expect(appBtn, `styles.button still sets ${prop} inline, which beats :hover`).not.toContain(prop);
+    }
+
+    const settings = readFileSync(join(__dirname, "..", "SettingsPanel.tsx"), "utf8");
+    const setBtn = /const buttonStyle = \{([\s\S]*?)\} as const;/.exec(settings)?.[1] ?? "";
+    expect(setBtn, "buttonStyle not found").toBeTruthy();
+    for (const prop of ["background:", "border:"]) {
+      expect(setBtn, `Settings' buttonStyle still sets ${prop} inline`).not.toContain(prop);
+    }
+  });
+
+  it("changes something a transparent button can actually show on hover", () => {
+    // A lift and a shadow alone are close to invisible on a transparent button against a dark
+    // ground — which is exactly what shipped. The colour change is the part that reads.
+    const hover = /@media \(hover: hover\) \{([\s\S]*?)\n\}/.exec(components)?.[1] ?? "";
+    expect(hover).toMatch(/\.vr-btn:hover[\s\S]*background-color:/);
+    expect(hover).toMatch(/\.vr-btn:hover[\s\S]*border-color:/);
+  });
+});
