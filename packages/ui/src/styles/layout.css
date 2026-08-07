@@ -36,6 +36,10 @@
  * an unregistered custom property does not interpolate either. */
 .vr-dock {
   height: var(--vr-dock-h);
+  /* A floor under every mode, not just bar. Whatever the height token says, the dock may never
+   * render shorter than its own input row — that is the one element that must always be reachable,
+   * because it carries the control that reopens the dock. */
+  min-height: var(--vr-dock-bar);
   transition: --vr-dock-h var(--vr-dur-3) var(--vr-spring);
 }
 
@@ -43,8 +47,22 @@
  * Three states replacing the old boolean, whose single open height was a hard
  * min(62vh, 560px) that defaulted to OPEN — so on a 1440px-tall window the chat took 560px
  * and the book got ~440px. `peek` is the new default. */
+/**
+ * BAR IS AUTO HEIGHT, AND THAT IS NOT AN OPTIMISATION — IT IS THE DOCK'S CONTRACT.
+ *
+ * This was `--vr-dock-h: var(--vr-dock-bar)`, a flat 56px. The dock carries 10px of padding, so
+ * that left 36px of content box for an input row that needs more — the input bar and the caret
+ * that reopens the dock were clipped out of existence, and collapsing the chat made it vanish
+ * with no way back. The dock's whole promise is "the input bar is always visible"; a fixed height
+ * cannot keep that promise, because nothing in CSS knows how tall that bar is.
+ *
+ * So the content decides, and the token becomes a FLOOR rather than a ceiling. The cost is that
+ * bar↔peek doesn't animate (auto is not interpolable); peek↔full still does. A dock that cannot
+ * be reopened is not worth an animation.
+ */
 .vr-dock--bar {
-  --vr-dock-h: var(--vr-dock-bar);
+  height: auto;
+  min-height: var(--vr-dock-bar);
 }
 .vr-dock--peek {
   --vr-dock-h: var(--vr-dock-peek);

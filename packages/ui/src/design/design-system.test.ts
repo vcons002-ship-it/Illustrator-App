@@ -531,3 +531,30 @@ describe("hover can actually reach the app's buttons", () => {
     expect(hover).toMatch(/\.vr-btn:hover[\s\S]*border-color:/);
   });
 });
+
+/**
+ * THE DOCK MUST ALWAYS BE REOPENABLE.
+ *
+ * `bar` shipped as a flat 56px. The dock carries 10px of padding, leaving 36px of content box for
+ * an input row that needs more — so collapsing the chat clipped away the input bar AND the caret
+ * that reopens it. The chat vanished with no way back, which is the worst class of UI bug: not a
+ * wrong pixel, a trapped user.
+ *
+ * The dock's contract has always been "the input bar is always visible". Nothing in CSS knows how
+ * tall that bar is, so a fixed height can never honour it — the content has to decide.
+ */
+describe("the collapsed dock cannot swallow its own controls", () => {
+  const layout = readFileSync(join(STYLES, "layout.css"), "utf8");
+  const rule = (sel: string): string =>
+    new RegExp(`\\${sel} \\{([^}]*)\\}`).exec(layout)?.[1] ?? "";
+
+  it("lets content decide the collapsed height instead of pinning it", () => {
+    const bar = rule(".vr-dock--bar");
+    expect(bar, ".vr-dock--bar rule not found").toBeTruthy();
+    expect(bar, "a fixed collapsed height cannot keep the input bar visible").toMatch(/height:\s*auto/);
+  });
+
+  it("keeps a floor under every mode, so no height token can clip the input row", () => {
+    expect(rule(".vr-dock")).toMatch(/min-height:/);
+  });
+});
