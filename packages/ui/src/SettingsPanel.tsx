@@ -4055,11 +4055,10 @@ const searchStyle = {
   boxSizing: "border-box",
 } as const;
 
+// Appearance intentionally left to `.vr-btn` — every consumer of this style carries that class.
+// Declared here they were INLINE, which beats the hover rule, so no button in Settings could
+// change colour on hover no matter what the stylesheet said.
 const buttonStyle = {
-  background: "transparent",
-  border: `1px solid ${t.border.button}`,
-  color: "inherit",
-  borderRadius: 6,
   padding: "4px 10px",
   cursor: "pointer",
 } as const;

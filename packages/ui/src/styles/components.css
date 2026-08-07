@@ -13,7 +13,25 @@
  */
 
 /* ---- Buttons ---------------------------------------------------------------------- */
+/**
+ * THE RESTING LOOK LIVES HERE NOW, AND IT HAS TO.
+ *
+ * Adding the class beside the inline style was only half of the pass. `styles.button` declared
+ * `background` and `border` INLINE, and inline always beats a class — so the hover rule's
+ * `background-color` and `border-color` were overridden every time and hovering changed nothing
+ * but a 2px lift on a transparent button. Effectively invisible. The very property that makes this
+ * migration safe to do at all is what was suppressing its result.
+ *
+ * So the class owns the resting appearance and the inline declarations are gone from
+ * `styles.button`. Every OTHER element wearing `.vr-btn` — menu items, uploads, the settings
+ * buttons — still sets its own padding/border inline, and those still win, exactly as before. This
+ * can only take effect where the inline declaration was deliberately removed.
+ */
 .vr-btn {
+  background: transparent;
+  border: 1px solid var(--vr-border-button);
+  border-radius: var(--vr-radius-sm);
+  color: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
