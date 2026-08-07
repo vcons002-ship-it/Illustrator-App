@@ -108,9 +108,9 @@
   opacity: 0;
   pointer-events: none;
   background: radial-gradient(
-    260px circle at var(--vr-mx, 50%) var(--vr-my, 50%),
-    rgb(var(--vr-accent-rgb) / 0.2),
-    transparent 62%
+    340px circle at var(--vr-mx, 50%) var(--vr-my, 50%),
+    rgb(var(--vr-accent-rgb) / 0.38),
+    transparent 66%
   );
   transition: opacity var(--vr-dur-2) var(--vr-ease);
 }
@@ -250,8 +250,72 @@
 
 /* Every message rises into place. `both` holds the start frame, so a message cannot flash at
  * full opacity for one frame before the animation takes hold. */
+/* 560ms, not 340: a spring that overshoots needs room to be seen doing it. */
 .vr-msg {
-  animation: vr-msg-in var(--vr-dur-3) var(--vr-spring) both;
+  animation: vr-msg-in 560ms var(--vr-spring) both;
+  position: relative;
+}
+
+/* The user's message arrives from their own side. Selected by alignment rather than a second
+ * class, so the component decides where a message sits and the sheet follows it. */
+.vr-msg[data-from="user"] {
+  animation-name: vr-msg-in-user;
+}
+
+/* A band of light crosses each message as it lands. `overflow: hidden` comes from .vr-card, which
+ * every bubble also carries, so the band is clipped to the bubble's own rounded shape. */
+.vr-msg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(var(--vr-fg-rgb) / 0.18) 50%,
+    transparent 70%
+  );
+  animation: vr-msg-sheen 900ms var(--vr-ease) 120ms both;
+}
+
+/**
+ * STILL PRODUCING — the aura.
+ *
+ * A travelling gradient around the edge of the live bubble, so "the model is working" is visible
+ * from across the room rather than being a caret you have to look for. Painted on a ::before that
+ * sits behind the content, inset by -1px so it reads as a lit border rather than a fill.
+ */
+.vr-live::before {
+  content: "";
+  position: absolute;
+  /* inset 0, NOT a negative inset: every bubble also carries .vr-card, whose `overflow: hidden`
+   * would clip anything outside the box — and the mask paints ONLY the outer band, so a negative
+   * inset would have clipped away the entire effect and left nothing on screen. */
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(
+    100deg,
+    rgb(var(--vr-accent-rgb) / 0) 20%,
+    rgb(var(--vr-accent-rgb) / 0.95) 35%,
+    rgb(var(--vr-fg-rgb) / 0.9) 45%,
+    rgb(var(--vr-accent-rgb) / 0.95) 55%,
+    rgb(var(--vr-accent-rgb) / 0) 75%
+  );
+  background-size: 300% 100%;
+  animation: vr-aura 2.2s linear infinite;
+  /* Mask out the middle so only the border band paints. Both properties: -webkit- for WebView2. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.9;
 }
 
 /**
@@ -284,6 +348,10 @@
 
 /* TYPING. A block caret at the end of the streaming text. On the bubble rather than inside the
  * markdown, so it survives every re-render of the streamed content. */
+.vr-live {
+  position: relative;
+}
+
 .vr-typing::after {
   content: "";
   display: inline-block;

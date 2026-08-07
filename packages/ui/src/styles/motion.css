@@ -94,14 +94,68 @@
  * thinks, a caret while it types, and a send that feels like something left your hands. */
 
 /* A message settles into place from below, slightly overshooting. One-shot, on mount only. */
+/**
+ * A message ARRIVES. The first version of this moved 10px over 340ms with a 1.5% scale — correct
+ * by the textbook, and completely invisible in use. It was reported as "I don't see much".
+ *
+ * Restraint is the right instinct for a form control clicked a hundred times an hour. It is the
+ * wrong instinct for the two or three moments a minute that carry the whole feel of the app: a
+ * message landing, a model starting to think, a question leaving your hands. Those get to be big.
+ */
 @keyframes vr-msg-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.985);
+    transform: translateY(26px) scale(0.9);
+    filter: blur(7px);
+  }
+  60% {
+    filter: blur(0);
   }
   to {
     opacity: 1;
     transform: none;
+    filter: blur(0);
+  }
+}
+
+/* The user's own message comes from THEIR side of the conversation, so it arrives from the right
+ * — the direction it was just sent from. */
+@keyframes vr-msg-in-user {
+  from {
+    opacity: 0;
+    transform: translate(30px, 18px) scale(0.9);
+    filter: blur(7px);
+  }
+  60% {
+    filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+/* A band of light crossing a surface once, as it lands. */
+@keyframes vr-msg-sheen {
+  from {
+    transform: translateX(-130%) skewX(-14deg);
+    opacity: 0.85;
+  }
+  to {
+    transform: translateX(230%) skewX(-14deg);
+    opacity: 0;
+  }
+}
+
+/* The live aura: a gradient that travels around the edge of whatever is still producing. This is
+ * the "it is working" signal, and it is meant to be seen from across the room. */
+@keyframes vr-aura {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 300% 50%;
   }
 }
 
@@ -130,17 +184,29 @@
 
 /* Send: a quick compress, then a ring that expands away. The compression is what makes it feel
  * mechanical and satisfying; the ring is what makes it feel like the message left. */
+/* Send: a real recoil. Compress, flash the accent through the field, then throw a ring off the
+ * edge. The earlier version put a 16px ring around a full-width bar, which reads as a faint edge
+ * glow and nothing else. */
 @keyframes vr-send-burst {
   0% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgb(var(--vr-accent-rgb) / 0.55);
+    box-shadow:
+      0 0 0 0 rgb(var(--vr-accent-rgb) / 0.7),
+      0 0 0 0 rgb(var(--vr-accent-rgb) / 0);
+    border-color: var(--vr-accent);
   }
-  35% {
-    transform: scale(0.93);
+  28% {
+    transform: scale(0.965) translateY(2px);
+    box-shadow:
+      0 0 0 4px rgb(var(--vr-accent-rgb) / 0.35),
+      0 0 34px 6px rgb(var(--vr-accent-rgb) / 0.4);
+    border-color: var(--vr-accent);
   }
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 16px rgb(var(--vr-accent-rgb) / 0);
+    box-shadow:
+      0 0 0 26px rgb(var(--vr-accent-rgb) / 0),
+      0 0 0 0 rgb(var(--vr-accent-rgb) / 0);
   }
 }
 

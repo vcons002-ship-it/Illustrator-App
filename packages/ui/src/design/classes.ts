@@ -58,6 +58,9 @@ export const cx = {
   thinking: "vr-thinking",
   /** The model is producing words — a caret at the end of the streamed text. */
   typing: "vr-typing",
+  /** Still working: a gradient travels around this element's edge. On the streaming bubble AND
+   * the thinking block, so "it is running" is visible without looking for it. */
+  live: "vr-live",
   /** One-shot, on the composer, when a message is sent. */
   sent: "vr-sent",
 

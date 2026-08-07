@@ -817,7 +817,8 @@ export const MessageBubble = memo(function MessageBubble({
   const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
   return (
     <div
-      className={`${cx.msg} ${cx.card}${streaming ? ` ${cx.typing}` : ""}`}
+      className={`${cx.msg} ${cx.card}${streaming ? ` ${cx.typing} ${cx.live}` : ""}`}
+      data-from={isUser ? "user" : "assistant"}
       style={{
         ...bubbleStyle,
         alignSelf: isUser ? "flex-end" : "flex-start",
@@ -1418,6 +1419,7 @@ export function ThinkingBlock({
         const next = (e.currentTarget as HTMLDetailsElement).open;
         if (next !== open) onOpenChange?.(next);
       }}
+      className={cx.live}
       style={thinkingStyle}
     >
       <summary className={cx.thinking} style={{ cursor: "pointer", fontSize: 11 }}>
