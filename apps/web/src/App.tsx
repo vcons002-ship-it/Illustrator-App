@@ -9817,7 +9817,7 @@ export function App() {
         <option value="manual">Manual only</option>
       </select>
       <button
-        style={styles.button}
+        className={cx.btn} style={styles.button}
         onClick={() => storyRenderLatest()}
         title="Illustrate (or redraw) the most recent beat now"
       >
@@ -9877,7 +9877,7 @@ export function App() {
         <div style={styles.headerControls}>
           {book && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={onExitBook}
               title="Close this book and return to the home screen (the book stays in your library)"
             >
@@ -9917,7 +9917,7 @@ export function App() {
                 <>
                   {book?.contentMode === "code" && (
                     <button
-                      style={styles.menuItem}
+                      className={cx.btn} style={styles.menuItem}
                       onClick={() => {
                         close();
                         setCodeEditMode((v) => !v);
@@ -9929,7 +9929,7 @@ export function App() {
                   )}
                   {bookHasHtml && (
                     <button
-                      style={styles.menuItem}
+                      className={cx.btn} style={styles.menuItem}
                       onClick={() => {
                         close();
                         setArticleLayout((v) => !v);
@@ -9941,7 +9941,7 @@ export function App() {
                   )}
                   {book && book.kind !== "story" && (
                     <button
-                      style={styles.menuItem}
+                      className={cx.btn} style={styles.menuItem}
                       onClick={() => {
                         close();
                         setShowChat(true);
@@ -9966,7 +9966,7 @@ export function App() {
                 <div style={styles.menuHeading}>Open</div>
                 {library.length > 0 && (
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       close();
                       setShowLibrary(true);
@@ -9977,7 +9977,7 @@ export function App() {
                   </button>
                 )}
                 <label
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   title="EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown, HTML — or drop an image to transform it"
                 >
                   <b>Open book…</b>
@@ -9995,7 +9995,7 @@ export function App() {
                   />
                 </label>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     setShowPasteText(true);
@@ -10005,7 +10005,7 @@ export function App() {
                   <small>Paste any text — an article, a chapter, a paper — and read or illustrate it like a book.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     openBook(loadSampleBook());
@@ -10016,7 +10016,7 @@ export function App() {
                 </button>
                 <div style={styles.menuHeading}>Make</div>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void startStoryAsYouGo();
@@ -10027,7 +10027,7 @@ export function App() {
                 </button>
                 {!isRemoteClient && (
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       close();
                       void openCreations();
@@ -10038,7 +10038,7 @@ export function App() {
                   </button>
                 )}
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     setPhotoInitial(undefined);
@@ -10049,7 +10049,7 @@ export function App() {
                   <small>Start from a photo and reimagine it with your image model.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     setPolishInitial(undefined);
@@ -10060,7 +10060,7 @@ export function App() {
                   <small>Summarize, condense, rewrite or proofread a document — faithfully, with no illustration.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     setShowTestImage(true);
@@ -10082,7 +10082,7 @@ export function App() {
               <>
                 <div style={styles.menuHeading}>What it knows</div>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void openSkills();
@@ -10092,7 +10092,7 @@ export function App() {
                   <small>Durable how-to playbooks it keeps across every chat — view, edit, or import a .md.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void openMemories();
@@ -10102,7 +10102,7 @@ export function App() {
                   <small>What it remembers about you — durable notes it keeps across every chat.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void openSoul("self");
@@ -10112,7 +10112,7 @@ export function App() {
                   <small>Its own identity — persona, voice and look. It speaks and behaves as this character everywhere.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void openSoul("user");
@@ -10123,7 +10123,7 @@ export function App() {
                 </button>
                 <div style={styles.menuHeading}>What it&rsquo;s doing</div>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     void openTasks();
@@ -10133,7 +10133,7 @@ export function App() {
                   <small>Planned multi-step tasks — research, steps, deadlines, prepped docs.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     refreshScheduled();
@@ -10144,7 +10144,7 @@ export function App() {
                   <small>Recurring actions it runs on a cadence while the app is open.</small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   disabled={!googleConnected}
                   onClick={() => {
                     close();
@@ -10159,7 +10159,7 @@ export function App() {
                   </small>
                 </button>
                 <button
-                  style={styles.menuItem}
+                  className={cx.btn} style={styles.menuItem}
                   onClick={() => {
                     close();
                     openStocks();
@@ -10181,7 +10181,7 @@ export function App() {
               {(close) => (
                 <>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       close();
                       openBrowser();
@@ -10191,7 +10191,7 @@ export function App() {
                     <small>Read any web page (text + links) in the app, then illustrate it or ask about it.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       close();
                       void openRemoteLink();
@@ -10278,7 +10278,7 @@ export function App() {
               <>
           {book && viewAs === "story" && !generating && (
             <button
-              style={styles.buttonPrimary}
+              className={cx.btn} style={styles.buttonPrimary}
               onClick={() => {
                 startGeneration();
                 noteAction("✓ Started — reading the book, then writing prompts, then painting. Anything from past sessions is reused.");
@@ -10290,7 +10290,7 @@ export function App() {
           )}
           {book && (generating || results.size > 0) && (
             <button
-              style={gapCount > 0 ? styles.buttonPrimary : styles.button}
+              className={cx.btn} style={gapCount > 0 ? styles.buttonPrimary : styles.button}
               onClick={() => {
                 completeBook();
                 noteAction(
@@ -10308,7 +10308,7 @@ export function App() {
             <>
               {(paused.bible || paused.images) && (
                 <button
-                  style={styles.buttonPrimary}
+                  className={cx.btn} style={styles.buttonPrimary}
                   onClick={() => {
                     resume();
                     noteAction("✓ Resumed reading and painting.");
@@ -10319,7 +10319,7 @@ export function App() {
                 </button>
               )}
               <button
-                style={paused.bible ? styles.buttonPrimary : styles.button}
+                className={cx.btn} style={paused.bible ? styles.buttonPrimary : styles.button}
                 onClick={() => {
                   if (paused.bible) {
                     resumeBible();
@@ -10338,7 +10338,7 @@ export function App() {
                 {paused.bible ? "▶ Reading" : "⏸ Reading"}
               </button>
               <button
-                style={paused.images ? styles.buttonPrimary : styles.button}
+                className={cx.btn} style={paused.images ? styles.buttonPrimary : styles.button}
                 onClick={() => {
                   if (paused.images) {
                     resumeImages();
@@ -10368,7 +10368,7 @@ export function App() {
               {(closeRedoMenu) => (
                 <>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       closeRedoMenu();
                       regenerateImage(unitIndex);
@@ -10379,7 +10379,7 @@ export function App() {
                     <small>Repaint only the illustration you’re on. Keeps everything else.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       if (!confirm("Repaint EVERY illustration in the book?\n\nKeeps: story analysis + prompts.\nRedoes: all images (uses the current image model/style/quality).")) return;
                       closeRedoMenu();
@@ -10391,7 +10391,7 @@ export function App() {
                     <small>Repaint every illustration with the current image settings. Keeps analysis + prompts.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       closeRedoMenu();
                       rebuildPrompts();
@@ -10402,7 +10402,7 @@ export function App() {
                     <small>Rewrite the illustration prompts (e.g. after editing characters). Keeps analysis; images stay until repainted.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       if (!confirm("Re-read the WHOLE book?\n\nKeeps: existing images (until you repaint).\nRedoes: story analysis (characters, places, world style) AND all prompts — uses the current text model.")) return;
                       closeRedoMenu();
@@ -10414,7 +10414,7 @@ export function App() {
                     <small>Re-run the whole text analysis + prompts with the current text model. Keeps images.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       closeRedoMenu();
                       onPaintForward();
@@ -10432,7 +10432,7 @@ export function App() {
           )}
           {book && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={onToggleContentMode}
               title={
                 isTechnical
@@ -10445,7 +10445,7 @@ export function App() {
           )}
           {book && !isTechnical && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={() => setShowCharacters(true)}
               title="View and correct each character's appearance in the Visual Bible"
             >
@@ -10457,7 +10457,7 @@ export function App() {
               there was no way to read, let alone correct, either of them. */}
           {book && !isTechnical && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={() => setShowWorld("places")}
               title="View and correct each place's description in the Visual Bible — the look and atmosphere used whenever a scene is set there"
             >
@@ -10466,7 +10466,7 @@ export function App() {
           )}
           {book && !isTechnical && (bible?.creatures?.length ?? 0) > 0 && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={() => setShowWorld("creatures")}
               title="View and correct each creature's description in the Visual Bible"
             >
@@ -10475,7 +10475,7 @@ export function App() {
           )}
           {book && isTechnical && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={() => setShowData(true)}
               title="Every dataset extracted from this book — real values, charted by the app"
             >
@@ -10492,7 +10492,7 @@ export function App() {
               {(closeExportMenu) => (
                 <>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     disabled={illustratedCount === 0}
                     onClick={() => {
                       closeExportMenu();
@@ -10503,7 +10503,7 @@ export function App() {
                     <small>One self-contained web page — text with the images inline. Opens anywhere.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     disabled={illustratedCount === 0}
                     onClick={() => {
                       closeExportMenu();
@@ -10514,7 +10514,7 @@ export function App() {
                     <small>A real ebook with the illustrations embedded — for e-readers / Apple Books.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     disabled={results.get(unitIndex)?.status !== "ready" || !results.get(unitIndex)?.image}
                     onClick={() => {
                       closeExportMenu();
@@ -10525,7 +10525,7 @@ export function App() {
                     <small>Save the illustration you’re looking at as a picture file.</small>
                   </button>
                   <button
-                    style={styles.menuItem}
+                    className={cx.btn} style={styles.menuItem}
                     onClick={() => {
                       closeExportMenu();
                       exportBible();
@@ -10540,7 +10540,7 @@ export function App() {
           )}
           {book && (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               onClick={() => setShowImport(true)}
               title="Import a Visual Bible JSON (from an export or an external AI) onto this book"
             >
@@ -10658,7 +10658,7 @@ export function App() {
               {markupPreviewKind(book, codeDraft) && (
                 <button
                   type="button"
-                  style={
+                  className={cx.btn} style={
                     codePreviewOpen
                       ? { ...styles.button, borderColor: t.accent.edge, color: t.accent.text }
                       : styles.button
@@ -10672,7 +10672,7 @@ export function App() {
               {bible && (
                 <button
                   type="button"
-                  style={
+                  className={cx.btn} style={
                     codeAnalysisOpen
                       ? { ...styles.button, borderColor: t.accent.edge, color: t.accent.text }
                       : styles.button
@@ -10686,7 +10686,7 @@ export function App() {
               {(isDesktop || isRemoteClient) && settings.allowCommands && (
                 <button
                   type="button"
-                  style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
+                  className={cx.btn} style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
                   onClick={() => void runCodeBook()}
                   disabled={codeRunning}
                   title="Write the current code into the workspace and run it (Python / JavaScript / shell)"
@@ -11527,7 +11527,7 @@ export function App() {
           <button style={{ ...styles.button, borderColor: t.state.good, color: t.state.good }} onClick={() => void keepPendingSkill()}>
             Keep
           </button>
-          <button style={styles.button} onClick={() => setPendingSkill(null)}>
+          <button className={cx.btn} style={styles.button} onClick={() => setPendingSkill(null)}>
             Dismiss
           </button>
         </div>
@@ -11597,10 +11597,10 @@ export function App() {
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {remoteLink.running ? (
                 <>
-                  <button style={styles.button} onClick={() => void stopRemoteLink()}>
+                  <button className={cx.btn} style={styles.button} onClick={() => void stopRemoteLink()}>
                     Stop
                   </button>
-                  <button style={styles.button} onClick={() => void changeRemoteLink()} title="Rotate the pairing code — previously linked phones must open the new address.">
+                  <button className={cx.btn} style={styles.button} onClick={() => void changeRemoteLink()} title="Rotate the pairing code — previously linked phones must open the new address.">
                     Change link
                   </button>
                 </>
@@ -12258,7 +12258,7 @@ function DataModal({
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>📊 Data — every extracted dataset ({datasets.length})</strong>
-          <button style={styles.button} onClick={onClose}>
+          <button className={cx.btn} style={styles.button} onClick={onClose}>
             Close
           </button>
         </div>
@@ -12313,7 +12313,7 @@ function ImportBibleModal({
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Import Visual Bible</strong>
-          <button style={styles.button} onClick={onClose}>
+          <button className={cx.btn} style={styles.button} onClick={onClose}>
             Close
           </button>
         </div>
@@ -12321,7 +12321,7 @@ function ImportBibleModal({
           Paste a Visual Bible JSON (or upload a file). It merges onto this book and is saved;
           existing images are kept.
         </p>
-        <label style={styles.upload}>
+        <label className={cx.btn} style={styles.upload}>
           Choose .json file
           <input
             type="file"
@@ -12352,7 +12352,7 @@ function ImportBibleModal({
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button
-            style={styles.buttonPrimary}
+            className={cx.btn} style={styles.buttonPrimary}
             disabled={!preview?.stats}
             onClick={() => onImport(text)}
           >
@@ -12394,7 +12394,7 @@ function PasteTextModal({
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Read pasted text</strong>
-          <button style={styles.button} onClick={onClose}>
+          <button className={cx.btn} style={styles.button} onClick={onClose}>
             Close
           </button>
         </div>
@@ -12446,7 +12446,7 @@ function PasteTextModal({
           <span style={{ display: "flex", gap: 6 }}>
             {onPolish && (
               <button
-                style={styles.button}
+                className={cx.btn} style={styles.button}
                 disabled={!text.trim()}
                 title="Summarize, rewrite, or proofread this text faithfully — no illustration"
                 onClick={() => onPolish(title.trim() || "Document", text)}
@@ -12455,7 +12455,7 @@ function PasteTextModal({
               </button>
             )}
             <button
-              style={styles.buttonPrimary}
+              className={cx.btn} style={styles.buttonPrimary}
               disabled={!text.trim()}
               onClick={() => onCreate(title.trim() || "Pasted text", text, mode)}
             >
@@ -12512,7 +12512,7 @@ function TestImageModal({
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Test an image</strong>
-          <button style={styles.button} onClick={onClose}>
+          <button className={cx.btn} style={styles.button} onClick={onClose}>
             Close
           </button>
         </div>
@@ -12533,7 +12533,7 @@ function TestImageModal({
               {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
             </span>
           )}
-          <button style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
+          <button className={cx.btn} style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Render"}
           </button>
         </div>
@@ -12560,7 +12560,7 @@ function TestImageModal({
             {onAddToChat && result.image && (
               <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
                 <button
-                  style={styles.button}
+                  className={cx.btn} style={styles.button}
                   onClick={() => {
                     onAddToChat(result.image!);
                     setAddedToChat(true);
@@ -12696,7 +12696,7 @@ function PhotoTransformModal({
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Transform a photo</strong>
-          <button style={styles.button} onClick={onClose}>
+          <button className={cx.btn} style={styles.button} onClick={onClose}>
             Close
           </button>
         </div>
@@ -12762,7 +12762,7 @@ function PhotoTransformModal({
           )}
           {onExtractText ? (
             <button
-              style={styles.button}
+              className={cx.btn} style={styles.button}
               disabled={busy || !base}
               onClick={() => base && onExtractText({ name: base.name, bytes: base.bytes, mimeType: base.mimeType })}
               title="Read the text in this image (OCR via your vision model) and open it as a document"
@@ -12770,7 +12770,7 @@ function PhotoTransformModal({
               🔤 Extract text
             </button>
           ) : null}
-          <button style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
+          <button className={cx.btn} style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Transform"}
           </button>
         </div>
@@ -12795,12 +12795,12 @@ function PhotoTransformModal({
               }}
             />
             <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-              <button style={styles.button} onClick={() => void saveResult()}>
+              <button className={cx.btn} style={styles.button} onClick={() => void saveResult()}>
                 ⤓ Save
               </button>
               {onAddToChat && result.image && (
                 <button
-                  style={styles.button}
+                  className={cx.btn} style={styles.button}
                   onClick={() => {
                     onAddToChat(result.image!);
                     setNote("✓ Added to chat.");
@@ -12809,7 +12809,7 @@ function PhotoTransformModal({
                   💬 Add to chat
                 </button>
               )}
-              <button style={styles.button} onClick={useResultAsBase}>
+              <button className={cx.btn} style={styles.button} onClick={useResultAsBase}>
                 ↺ Use as new base
               </button>
             </div>

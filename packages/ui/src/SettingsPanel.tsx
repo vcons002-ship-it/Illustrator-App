@@ -44,6 +44,7 @@ import {
   type ProviderInfo,
   type VideoLora,
 } from "@visual-reader/core";
+import { cx } from "./design/classes.js";
 
 /**
  * Settings: pick a text provider and an image provider independently, each with
@@ -461,10 +462,10 @@ function BackupRow({
     <div style={{ ...rowStyle, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${t.border.faint}` }}>
       <span>💾 Backup &amp; restore</span>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button style={buttonStyle} disabled={busy} onClick={() => void doExport()}>
+        <button className={cx.btn} style={buttonStyle} disabled={busy} onClick={() => void doExport()}>
           Export backup
         </button>
-        <button style={buttonStyle} disabled={busy} onClick={() => fileRef.current?.click()}>
+        <button className={cx.btn} style={buttonStyle} disabled={busy} onClick={() => fileRef.current?.click()}>
           Restore from file…
         </button>
         <input
@@ -521,7 +522,7 @@ function SoftwareUpdateRow({
     <div style={{ ...rowStyle, borderBottom: `1px solid ${t.border.faint}`, paddingBottom: 10, marginBottom: 2 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span>⬆ Software update</span>
-        <button style={buttonStyle} disabled={busy} onClick={() => void run()}>
+        <button className={cx.btn} style={buttonStyle} disabled={busy} onClick={() => void run()}>
           {busy ? "Updating…" : "Check & install"}
         </button>
       </div>
@@ -540,7 +541,7 @@ function SoftwareUpdateRow({
         <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color }}>{result.message}</span>
           {onRestart && (result.status === "needs-restart" || result.status === "updated") && (
-            <button style={buttonStyle} onClick={() => onRestart()} title="Relaunch Visual Reader to finish the update">
+            <button className={cx.btn} style={buttonStyle} onClick={() => onRestart()} title="Relaunch Visual Reader to finish the update">
               ↻ Restart now
             </button>
           )}
@@ -817,7 +818,7 @@ export function SettingsPanel({
 
   return (
     <div style={{ fontSize: 13, position: "relative" }}>
-      <button onClick={() => setOpen((o) => !o)} style={buttonStyle}>
+      <button onClick={() => setOpen((o) => !o)} className={cx.btn} style={buttonStyle}>
         {open ? "Hide settings" : "Settings"}
       </button>
       {open && portalled(
@@ -828,7 +829,7 @@ export function SettingsPanel({
           <div style={closeRowStyle}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <strong>Settings</strong>
-              <button onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close settings">
+              <button onClick={() => setOpen(false)} className={cx.btn} style={closeButtonStyle} aria-label="Close settings">
                 ✕ Close
               </button>
             </div>
@@ -888,7 +889,7 @@ export function SettingsPanel({
             >
               <span>↻ Restart app</span>
               <button
-                style={buttonStyle}
+                className={cx.btn} style={buttonStyle}
                 title="Fully relaunch the app — recovers a stuck engine or finishes a core update"
                 onClick={() => {
                   if (window.confirm("Restart Visual Reader now?")) onRestartApp();
@@ -931,7 +932,7 @@ export function SettingsPanel({
                   ) : downloading ? (
                     <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
                   ) : onDownloadFfmpeg ? (
-                    <button type="button" style={buttonStyle} onClick={onDownloadFfmpeg}>
+                    <button type="button" className={cx.btn} style={buttonStyle} onClick={onDownloadFfmpeg}>
                       Download ffmpeg (~80 MB)
                     </button>
                   ) : null;
@@ -2686,7 +2687,7 @@ export function SettingsPanel({
                 {onExploreNow && (
                   <div style={{ ...rowStyle, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <button
-                      style={buttonStyle}
+                      className={cx.btn} style={buttonStyle}
                       disabled={!value.allowCreativeIdle}
                       title={
                         value.allowCreativeIdle
@@ -3405,7 +3406,7 @@ function PasteUrl({ placeholder, onSubmit }: { placeholder: string; onSubmit: (u
         spellCheck={false}
         onChange={(e) => setUrl(e.target.value)}
       />
-      <button style={buttonStyle} disabled={!url.trim()} onClick={go}>
+      <button className={cx.btn} style={buttonStyle} disabled={!url.trim()} onClick={go}>
         Get
       </button>
     </div>
@@ -3531,7 +3532,7 @@ function StyleLoraRow({
         ) : downloading ? (
           <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
         ) : catalog && compatible ? (
-          <button style={buttonStyle} onClick={() => onDownload?.(styleId)}>
+          <button className={cx.btn} style={buttonStyle} onClick={() => onDownload?.(styleId)}>
             Download style pack
           </button>
         ) : null}
@@ -3654,7 +3655,7 @@ function LocalEngine({
                   onChange={(e) => setUrl(e.target.value)}
                 />
                 <button
-                  style={buttonStyle}
+                  className={cx.btn} style={buttonStyle}
                   disabled={connecting}
                   onClick={() => onConnect?.(id, url.trim() || LOCAL_ENGINE_DEFAULT_URL[id])}
                   title={isActive ? "Reconnect this server" : "Connect this server and use it for image generation"}
@@ -3773,7 +3774,7 @@ function ManagedEngine({
                 ) : downloading ? (
                   <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
                 ) : m.url ? (
-                  <button style={buttonStyle} onClick={() => onDownload?.(m.id)}>
+                  <button className={cx.btn} style={buttonStyle} onClick={() => onDownload?.(m.id)}>
                     Download
                   </button>
                 ) : (
@@ -3851,7 +3852,7 @@ function LocalTextServer({
           onChange={(e) => onSet({ localServerTextUrl: e.target.value })}
         />
         <button
-          style={buttonStyle}
+          className={cx.btn} style={buttonStyle}
           disabled={connecting}
           onClick={() => onConnect?.(server, url.trim() || placeholder)}
         >
@@ -3914,7 +3915,7 @@ function OllamaModelMenu({
                     {pull.percent !== undefined ? `${Math.round(pull.percent)}%` : pull.status}
                   </span>
                 ) : (
-                  <button style={buttonStyle} onClick={() => onPull(m.id)}>
+                  <button className={cx.btn} style={buttonStyle} onClick={() => onPull(m.id)}>
                     Download
                   </button>
                 )}

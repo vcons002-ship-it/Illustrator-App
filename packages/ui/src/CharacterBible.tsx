@@ -4,6 +4,7 @@ import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visua
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
+import { cx } from "./design/classes.js";
 
 /**
  * Read + correct the Visual Bible's characters. The LLM fills in each character's
@@ -97,7 +98,7 @@ export function CharacterBible({
             {q ? `${filtered.length} of ${characters.length}` : characters.length} character
             {characters.length === 1 ? "" : "s"} tracked
           </span>
-          <button style={buttonStyle} onClick={onClose}>
+          <button className={cx.btn} style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
@@ -236,7 +237,7 @@ const CharacterCard = memo(function CharacterCard({
       <label style={fieldStyle}>
         <span style={labelStyle}>Also known as (comma-separated — other names for this person)</span>
         <input
-          style={inputStyle}
+          className={cx.input} style={inputStyle}
           value={aliases}
           placeholder="e.g. the Captain, Vi"
           onChange={(e) => setAliases(e.target.value)}
@@ -247,7 +248,7 @@ const CharacterCard = memo(function CharacterCard({
           <label key={key} style={fieldStyle}>
             <span style={labelStyle}>{label}</span>
             <input
-              style={inputStyle}
+              className={cx.input} style={inputStyle}
               value={appearance[key]}
               onChange={(e) => setAppearance((a) => ({ ...a, [key]: e.target.value }))}
             />
@@ -284,7 +285,7 @@ const CharacterCard = memo(function CharacterCard({
               </button>
             </div>
             <input
-              style={inputStyle}
+              className={cx.input} style={inputStyle}
               value={o.description}
               placeholder="description: garments, fabric, colour, accessories"
               onChange={(e) => setOutfit(i, { description: e.target.value })}
@@ -319,7 +320,7 @@ const CharacterCard = memo(function CharacterCard({
             Delete
           </button>
         )}
-        <button style={buttonStyle} disabled={!dirty} onClick={save}>
+        <button className={cx.btn} style={buttonStyle} disabled={!dirty} onClick={save}>
           Save
         </button>
       </div>

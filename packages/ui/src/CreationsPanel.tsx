@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { useEffect, useRef, useState } from "react";
 import { ModalShell } from "./ModalShell.js";
+import { cx } from "./design/classes.js";
 
 /** How many tiles may hydrate (read + materialize their Blob) at once. Opening a 200-image gallery must
  * not fire 200 parallel blob reads — the rest queue behind this cap as tiles scroll into view. */
@@ -158,7 +159,7 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
           </span>
           {onStitch && (counts.video >= 2 || selecting) && (
             <button
-              style={selecting ? { ...buttonStyle, borderColor: t.accent.edge } : buttonStyle}
+              className={cx.btn} style={selecting ? { ...buttonStyle, borderColor: t.accent.edge } : buttonStyle}
               title="Pick video clips in order, then join them into one video"
               onClick={() => {
                 setSelected([]);
@@ -169,7 +170,7 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
               {selecting ? "Cancel select" : "🎬 Select clips"}
             </button>
           )}
-          <button style={buttonStyle} onClick={onClose}>
+          <button className={cx.btn} style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
@@ -253,13 +254,13 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
             <span style={{ opacity: 0.7, fontSize: 12, flex: 1, minWidth: 120 }}>
               {viewing.chatLabel} · {new Date(viewing.at).toLocaleString()}
             </span>
-            <button style={buttonStyle} onClick={() => void download(viewing)}>
+            <button className={cx.btn} style={buttonStyle} onClick={() => void download(viewing)}>
               ⬇ Download
             </button>
-            <button style={buttonStyle} onClick={() => remove(viewing)}>
+            <button className={cx.btn} style={buttonStyle} onClick={() => remove(viewing)}>
               🗑 Delete
             </button>
-            <button style={buttonStyle} onClick={() => setViewing(undefined)}>
+            <button className={cx.btn} style={buttonStyle} onClick={() => setViewing(undefined)}>
               Close
             </button>
           </div>

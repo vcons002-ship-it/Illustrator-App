@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { BibleEntityKind, Creature, Environment, VisualBible } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
+import { cx } from "./design/classes.js";
 
 /**
  * Read + correct the Visual Bible's CREATURES and PLACES — the two lists that had no window of
@@ -90,7 +91,7 @@ export function WorldBible({
               Creatures ({creatures.length})
             </button>
           </span>
-          <button style={buttonStyle} onClick={onClose}>
+          <button className={cx.btn} style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
@@ -199,11 +200,11 @@ const CreatureCard = memo(function CreatureCard({
       <div style={rowStyle}>
         <label style={fieldStyle}>
           <span style={labelStyle}>Name</span>
-          <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
+          <input className={cx.input} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
         <label style={fieldStyle}>
           <span style={labelStyle}>Kind (dragon, hound, drone…)</span>
-          <input style={inputStyle} value={kind} onChange={(e) => setKind(e.target.value)} />
+          <input className={cx.input} style={inputStyle} value={kind} onChange={(e) => setKind(e.target.value)} />
         </label>
       </div>
       <AliasField value={aliases} onChange={setAliases} />
@@ -258,7 +259,7 @@ const PlaceCard = memo(function PlaceCard({
     <div style={cardStyle}>
       <label style={fieldStyle}>
         <span style={labelStyle}>Name</span>
-        <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
+        <input className={cx.input} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       <AliasField value={aliases} onChange={setAliases} />
       <DescriptionField value={description} onChange={setDescription} what="place" />
@@ -285,7 +286,7 @@ function AliasField({ value, onChange }: { value: string; onChange: (v: string) 
     <label style={fieldStyle}>
       <span style={labelStyle}>Also known as (comma-separated)</span>
       <input
-        style={inputStyle}
+        className={cx.input} style={inputStyle}
         value={value}
         placeholder="other names the story uses for this"
         onChange={(e) => onChange(e.target.value)}
@@ -352,7 +353,7 @@ function SaveRow({
           Delete
         </button>
       )}
-      <button style={buttonStyle} disabled={!dirty} onClick={onSave}>
+      <button className={cx.btn} style={buttonStyle} disabled={!dirty} onClick={onSave}>
         Save
       </button>
     </div>
