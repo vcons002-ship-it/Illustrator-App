@@ -243,3 +243,61 @@
   background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.16) 50%, transparent 62%);
   animation: vr-sheen 900ms var(--vr-ease) 180ms both;
 }
+
+/* ---- Conversation -------------------------------------------------------------------
+ * The chat is where the reader spends their time, and until now it had no motion at all —
+ * messages appeared, the model thought invisibly, and sending felt like nothing happened. */
+
+/* Every message rises into place. `both` holds the start frame, so a message cannot flash at
+ * full opacity for one frame before the animation takes hold. */
+.vr-msg {
+  animation: vr-msg-in var(--vr-dur-3) var(--vr-spring) both;
+}
+
+/**
+ * THINKING. A highlight travels along the text while the model reasons.
+ *
+ * `background-clip: text` paints the gradient through the glyphs, which requires the text
+ * colour to be transparent — and if that property is not supported, transparent text is
+ * INVISIBLE text. So the colour is set normally first and only made transparent inside an
+ * @supports guard. Unsupported means a dim static label; it never means nothing on screen.
+ */
+.vr-thinking {
+  color: var(--vr-text-dim);
+}
+
+@supports ((background-clip: text) or (-webkit-background-clip: text)) {
+  .vr-thinking {
+    background-image: linear-gradient(
+      100deg,
+      var(--vr-text-faint) 20%,
+      var(--vr-accent-text) 45%,
+      var(--vr-text-faint) 70%
+    );
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: vr-shimmer 2.6s linear infinite;
+  }
+}
+
+/* TYPING. A block caret at the end of the streaming text. On the bubble rather than inside the
+ * markdown, so it survives every re-render of the streamed content. */
+.vr-typing::after {
+  content: "";
+  display: inline-block;
+  width: 0.46em;
+  height: 1.02em;
+  margin-left: 3px;
+  vertical-align: -0.16em;
+  border-radius: 1px;
+  background: var(--vr-accent);
+  animation: vr-blink 1.05s steps(1) infinite;
+}
+
+/* SEND. Played on the composer when a message goes; the class is removed on animationend so the
+ * next send replays it. */
+.vr-sent {
+  animation: vr-send-burst 440ms var(--vr-spring-snap);
+}

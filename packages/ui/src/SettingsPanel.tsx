@@ -822,7 +822,7 @@ export function SettingsPanel({
         {open ? "Hide settings" : "Settings"}
       </button>
       {open && portalled(
-        <div style={narrow ? { ...panelStyle, left: 8, width: "auto" } : panelStyle}>
+        <div className={`${cx.portalRoot} ${cx.modalCard}`} style={narrow ? { ...panelStyle, left: 8, width: "auto" } : panelStyle}>
           {/* The panel floats at the viewport's top-right, over the Settings button —
               so it needs its OWN always-visible close control. On a narrow screen it spans
               edge-to-edge instead of a cramped 340px strip. */}

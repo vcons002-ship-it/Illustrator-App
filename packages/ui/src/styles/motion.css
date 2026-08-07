@@ -87,6 +87,63 @@
   }
 }
 
+
+/* ---- Conversation --------------------------------------------------------------------
+ * The chat is the surface the reader actually lives in, so it gets the most considered motion
+ * in the app: a message that arrives rather than appears, a visible pulse while the model
+ * thinks, a caret while it types, and a send that feels like something left your hands. */
+
+/* A message settles into place from below, slightly overshooting. One-shot, on mount only. */
+@keyframes vr-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The thinking shimmer: a highlight travelling along the text. Reads as "working" without a
+ * spinner, which would say "blocked" — the model IS producing, just not words yet. */
+@keyframes vr-shimmer {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -220% 0;
+  }
+}
+
+/* Steps(1) so the caret snaps rather than fading — a fade reads as a glow, not a cursor. */
+@keyframes vr-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Send: a quick compress, then a ring that expands away. The compression is what makes it feel
+ * mechanical and satisfying; the ring is what makes it feel like the message left. */
+@keyframes vr-send-burst {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--vr-accent-rgb) / 0.55);
+  }
+  35% {
+    transform: scale(0.93);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 16px rgb(var(--vr-accent-rgb) / 0);
+  }
+}
+
 /**
  * REDUCED MOTION — belt and braces.
  *

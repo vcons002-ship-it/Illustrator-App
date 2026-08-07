@@ -26,6 +26,7 @@ import {
   chatTextareaStyle as textareaStyle,
   smallButtonStyle,
 } from "./tokens.js";
+import { cx } from "./design/classes.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -770,6 +771,7 @@ export const MessageBubble = memo(function MessageBubble({
   desktop,
   thinkingOpen,
   onThinkingOpenChange,
+  streaming,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -794,6 +796,9 @@ export const MessageBubble = memo(function MessageBubble({
   onUseImageAsReference?: (item: { full: string; title?: string }) => void;
   /** Desktop build — enables the Open-on-PC action. */
   desktop?: boolean;
+  /** This bubble is the LIVE one being streamed into — it gets a typing caret. On the bubble
+   * rather than inside the markdown so it survives every re-render of the streamed content. */
+  streaming?: boolean;
   /** Whether this message's saved reasoning is expanded. The reader's ONE choice, shared with the
    * live block: it used to be hardcoded closed here, so the moment a turn finished its reasoning
    * collapsed under someone who had deliberately opened it. Defaults closed for older history. */
@@ -812,6 +817,7 @@ export const MessageBubble = memo(function MessageBubble({
   const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
   return (
     <div
+      className={`${cx.msg} ${cx.card}${streaming ? ` ${cx.typing}` : ""}`}
       style={{
         ...bubbleStyle,
         alignSelf: isUser ? "flex-end" : "flex-start",
@@ -1414,7 +1420,9 @@ export function ThinkingBlock({
       }}
       style={thinkingStyle}
     >
-      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.7 }}>{label}</summary>
+      <summary className={cx.thinking} style={{ cursor: "pointer", fontSize: 11 }}>
+        {label}
+      </summary>
       <div
         ref={ref}
         style={{

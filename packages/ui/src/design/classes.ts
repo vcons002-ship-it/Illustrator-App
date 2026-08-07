@@ -52,6 +52,15 @@ export const cx = {
   isPress: "is-press",
   isTap: "is-tap",
 
+  /** A chat message, arriving. */
+  msg: "vr-msg",
+  /** The model is reasoning — a highlight travels along the text. */
+  thinking: "vr-thinking",
+  /** The model is producing words — a caret at the end of the streamed text. */
+  typing: "vr-typing",
+  /** One-shot, on the composer, when a message is sent. */
+  sent: "vr-sent",
+
   /** Sanitized article HTML rendered with dangerouslySetInnerHTML. */
   articleHtml: "vr-article-html",
 } as const;

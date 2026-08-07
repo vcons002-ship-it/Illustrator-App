@@ -36,6 +36,7 @@ import {
   chatTextareaStyle as textareaStyle,
   smallButtonStyle,
 } from "./tokens.js";
+import { cx } from "./design/classes.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -432,6 +433,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasReadyAttachment = (props.attachments ?? []).some((a) => a.status === "ready");
+  /** The composer, so a send can be felt as well as seen. */
+  const composerRef = useRef<HTMLDivElement | null>(null);
   const send = () => {
     const text = draft.trim();
     // Allow sending with only attachments (the host supplies a default ask); never while busy.
@@ -439,6 +442,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     // Asking something new means you're done listening to the last answer.
     stopSpeaking();
     setDraft("");
+    // Restart the burst even if the class is still on from the last send — removing it and
+    // forcing a reflow is the only way to replay a CSS animation on the same element.
+    const el = composerRef.current;
+    if (el) {
+      el.classList.remove(cx.sent);
+      void el.offsetWidth;
+      el.classList.add(cx.sent);
+    }
     props.onSend(text);
   };
   const pickFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -698,7 +709,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           />
         ) : null}
         {props.streamingText ? (
-          <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
+          <MessageBubble message={{ role: "assistant", text: props.streamingText }} streaming />
         ) : null}
         {props.plan && props.plan.steps.length > 0 ? (
           <div style={planBoxStyle}>
@@ -1172,7 +1183,16 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </button>
         )}
       </div>
-      <div style={inputRowStyle}>
+      <div
+        ref={composerRef}
+        className={cx.input}
+        style={inputRowStyle}
+        onAnimationEnd={(e) => {
+          // Drop the class as soon as the burst finishes, so the element is clean for the next
+          // send. Guarded by name: the composer contains other animated children.
+          if (e.animationName === "vr-send-burst") e.currentTarget.classList.remove(cx.sent);
+        }}
+      >
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
