@@ -115,7 +115,9 @@ export function AnchoredMenu({
               onClick={close}
               aria-hidden="true"
             />
-            <div role="menu" style={{ ...panelStyle, ...positioned }}>
+            {/* Items cascade in rather than appearing all at once. The delay is computed in CSS from
+                --vr-i and capped past the twelfth child, so a long menu never staggers for a second. */}
+            <div role="menu" className={`${cx.settle} ${cx.stagger}`} style={{ ...panelStyle, ...positioned }}>
               {children(close)}
             </div>
           </>,

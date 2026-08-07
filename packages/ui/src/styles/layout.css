@@ -23,18 +23,20 @@
   initial-value: 56px;
 }
 
-/* ---- Shell -------------------------------------------------------------------------
- * A grid rather than a flex column, so the dock's height is a track that can be animated. */
-.vr-shell {
-  height: 100vh;
-  display: grid;
-  grid-template-rows: auto 1fr var(--vr-dock-h);
+/* ---- Dock height --------------------------------------------------------------------
+ * The dock animates its OWN height rather than the shell animating a grid track.
+ *
+ * The grid version was written first and rejected on contact with the real tree: the shell has
+ * a dozen conditionally-rendered children (modals, overlays, panels), and every one that is not
+ * `position: fixed` would be auto-placed into a new grid row the moment it mounted. A three-row
+ * template cannot survive that. Animating the section itself needs nothing from its parent, so
+ * the shell stays the flex column it has always been.
+ *
+ * The @property registration above is still what makes this work at all — `height: var(…)` with
+ * an unregistered custom property does not interpolate either. */
+.vr-dock {
+  height: var(--vr-dock-h);
   transition: --vr-dock-h var(--vr-dur-3) var(--vr-spring);
-}
-
-/* No book open — no dock row at all. */
-.vr-shell--nodock {
-  grid-template-rows: auto 1fr;
 }
 
 /* ---- Dock ---------------------------------------------------------------------------
