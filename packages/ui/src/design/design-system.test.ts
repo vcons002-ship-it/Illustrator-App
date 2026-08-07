@@ -558,3 +558,54 @@ describe("the collapsed dock cannot swallow its own controls", () => {
     expect(rule(".vr-dock")).toMatch(/min-height:/);
   });
 });
+
+/**
+ * THE CONVERSATION IS THE SURFACE THE READER LIVES IN.
+ *
+ * An audit of class-application counts found the delight layer almost entirely disconnected:
+ * `vr-card`, `vr-arrive`, `vr-breathing` and `vr-progress-fill` were applied ZERO times between
+ * them, and the chat — messages, thinking, typing, sending — had no motion whatsoever. The CSS for
+ * all of it existed. Nothing wore any of it, and every gate was green.
+ *
+ * So the counts are the gate now. Not "the rule is defined", not "some element has a class" —
+ * these specific effects, on the specific surfaces they were written for.
+ */
+describe("the conversation actually moves", () => {
+  const uiDir = join(__dirname, "..");
+  const all = readdirSync(uiDir)
+    .filter((f) => f.endsWith(".tsx"))
+    .map((f) => readFileSync(join(uiDir, f), "utf8"))
+    .join("\n");
+
+  it.each([
+    ["cx.msg", "a message arrives instead of appearing"],
+    ["cx.card", "message bubbles are cursor-reactive surfaces"],
+    ["cx.typing", "a caret shows while the model is producing words"],
+    ["cx.thinking", "reasoning shimmers rather than sitting still"],
+    ["cx.sent", "sending a message is felt, not just done"],
+  ])("%s is applied — %s", (name) => {
+    expect(all, `${name} is defined in CSS and worn by nothing`).toContain(`${name}`);
+  });
+
+  it("wires the effects that spent three commits attached to nothing", () => {
+    for (const name of ["cx.arrive", "cx.breathing", "cx.progressFill"]) {
+      expect(all, `${name} is still unused`).toContain(name);
+    }
+  });
+
+  it("keeps the thinking shimmer readable where background-clip is unsupported", () => {
+    // The gradient is painted THROUGH the glyphs, which needs transparent text — and transparent
+    // text with no gradient is invisible text. The colour must be set outside the @supports guard.
+    // Comments stripped FIRST. The comment above the rule explains the @supports guard and
+    // therefore contains the word, so splitting on it cut the file before the rule itself — a
+    // gate defeated by its own documentation, which is the third time that has happened here.
+    const components = readFileSync(join(STYLES, "components.css"), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      "",
+    );
+    const before = components.split("@supports")[0] ?? "";
+    expect(before, ".vr-thinking has no unguarded colour to fall back to").toMatch(
+      /\.vr-thinking \{[^}]*color:/,
+    );
+  });
+});

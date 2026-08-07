@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { useState } from "react";
 import { activeDownloads, type DownloadStatusInput } from "./download-status.js";
+import { cx } from "./design/classes.js";
 
 /**
  * A small, app-wide indicator of every in-flight download (image/video/LoRA models + Ollama text-model
@@ -70,7 +71,7 @@ export function DownloadStatus(props: DownloadStatusInput): JSX.Element | null {
                 <span style={{ opacity: 0.7, flexShrink: 0 }}>{Math.round(it.percent)}%</span>
               </div>
               <div style={{ height: 5, borderRadius: 3, background: t.fill.strong, marginTop: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${Math.round(it.percent)}%`, background: t.accent.text, transition: "width 0.2s" }} />
+                <div className={cx.progressFill} style={{ height: "100%", width: `${Math.round(it.percent)}%`, background: t.accent.text }} />
               </div>
               {it.stage || it.detail ? (
                 <div
