@@ -491,7 +491,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     const x = r.right;
     const y = r.top + r.height * 0.5;
     fieldRef.current?.emit(x, y, 8);
-    fieldRef.current?.pulse(x, y, 2.2);
+    fieldRef.current?.pulse(x, y, 3.4);
   }, [streamingText]);
   const send = () => {
     const text = draft.trim();

@@ -291,3 +291,46 @@ describe("finding the newest character", () => {
     expect(pickLastTextNode([{ data: "" }, { data: "\n" }])).toBeNull();
   });
 });
+
+/**
+ * THE BACKGROUND HAS TO BE REACHABLE, AT EVERY DEPTH IT IS SEEDED AT.
+ *
+ * Making the field 3D silently broke the thing it was meant to improve. The volume is seeded across
+ * ±DEPTH in z, and the impulse measured a plain 3D distance — so a mote at |z| ≥ the pulse radius
+ * could never be touched however close it was on screen. That was HALF of them, and the survivors
+ * had a collapsing on-screen reach: 83px at z=100, 16px at z=129.
+ *
+ * Every existing test passed. They all place particles at z = 0, which is the one depth where the
+ * bug does not exist. Reported as "the background particles aren't reacting", which is exactly what
+ * the geometry says should have happened.
+ */
+describe("a pulse reaches the whole volume, not just the screen plane", () => {
+  it.each([0, DEPTH / 2, DEPTH * 0.9, DEPTH])("moves a mote seeded at z=%i", (z) => {
+    // Directly "under" the impulse on screen — if this cannot be reached, nothing at that depth can.
+    const v = impulseVelocity({ x: 0, y: 0, z }, 0, 0, 3.4);
+    expect(
+      Math.hypot(v.vx, v.vy, v.vz),
+      `a mote at z=${z} is unreachable — half the field would never react`,
+    ).toBeGreaterThan(0.2);
+  });
+
+  it("still keeps a pulse local across the screen", () => {
+    // The flattening must not turn into "the whole field moves at once", which reads as the page
+    // wobbling rather than as the text disturbing the air near it.
+    const far = impulseVelocity({ x: PULSE_RADIUS + 60, y: 0, z: 0 }, 0, 0, 3.4);
+    expect(far).toEqual({ vx: 0, vy: 0, vz: 0 });
+  });
+
+  it("pushes hard enough for the movement to be seen", () => {
+    // Measured through the real spring and damping rather than asserted on the impulse alone: an
+    // impulse that produces a sub-pixel excursion is the 1.3px drift bug wearing a different hat.
+    const v = impulseVelocity({ x: 0, y: 0, z: 60 }, 0, 0, 3.4);
+    let p: Particle = { ...at(0, 0), z: 60, hz: 60, vx: v.vx, vy: v.vy, vz: v.vz };
+    let worst = 0;
+    for (let i = 0; i < 600; i++) {
+      p = stepParticle(p, 1);
+      worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy, p.z - p.hz));
+    }
+    expect(worst, `peaks at ${worst.toFixed(1)}px — too small to notice`).toBeGreaterThan(5);
+  });
+});
