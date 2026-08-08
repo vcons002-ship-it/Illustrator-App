@@ -448,6 +448,22 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
    * The pulses queue inside the field and are drained once per frame, so a fast local model
    * emitting several tokens between frames does one batch of work rather than several.
    */
+  /**
+   * YOUR typing moves the field as well as the model's.
+   *
+   * Only the assistant's stream was wired up, so the whole effect was invisible unless a reply was
+   * mid-flight — which is exactly when you are not typing. Pulsed from the composer, gently: this
+   * fires per keystroke, so it has to be a nudge rather than a shove or holding a key down would
+   * boil the field.
+   */
+  useEffect(() => {
+    if (!draft) return;
+    const el = composerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    fieldRef.current?.pulse(r.left + r.width * 0.5, r.top, 1.1);
+  }, [draft]);
+
   const streamingText = props.streamingText;
   useEffect(() => {
     if (!streamingText) return;
@@ -471,6 +487,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       el.classList.remove(cx.sent);
       void el.offsetWidth;
       el.classList.add(cx.sent);
+      // A hard shove up through the field from where the message left, so sending is felt in the
+      // background as well as on the button.
+      const r = el.getBoundingClientRect();
+      fieldRef.current?.pulse(r.left + r.width * 0.5, r.top, 11);
     }
     props.onSend(text);
   };

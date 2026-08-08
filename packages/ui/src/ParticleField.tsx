@@ -40,8 +40,18 @@ const SPRING = 0.018;
 const DAMPING = 0.94;
 /** How far an impulse reaches, in CSS pixels. */
 export const PULSE_RADIUS = 130;
-/** Ambient acceleration. Small enough that the spring still dominates, large enough to see. */
-const DRIFT = 0.016;
+/**
+ * Ambient acceleration. MEASURED, not guessed: against this spring and damping, the steady-state
+ * wander is ~79px per unit of drift, so 0.18 gives roughly 14px — visible on a 2px dot without
+ * ever reading as snow. The first value shipped here was 0.016, which works out to 1.3px. The
+ * field was moving the whole time and no one could possibly have seen it.
+ */
+const DRIFT = 0.18;
+
+/** How close the cursor has to be to push a particle, and how hard it pushes. Wider and softer
+ * than a keystroke: the pointer is a presence to be felt, not an event. */
+const CURSOR_RADIUS = 150;
+const CURSOR_PUSH = 0.42;
 
 /**
  * THE FIELD WAS COMPLETELY STATIC AND THE PHYSICS SAID SO.
@@ -147,6 +157,10 @@ export function ParticleField({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const partsRef = useRef<Particle[]>([]);
   const pendingRef = useRef<{ x: number; y: number; s: number }[]>([]);
+  /** The cursor, in canvas space, or null when it is elsewhere. A CONTINUOUS force each frame
+   * rather than a pulse per pointermove: mousemove fires far more often than a frame, so pulsing
+   * on it would queue dozens of identical impulses and land them all at once as a shove. */
+  const cursorRef = useRef<{ x: number; y: number } | null>(null);
 
   useImperativeHandle(handleRef, () => ({
     pulse: (clientX, clientY, strength = 2.4) => {
@@ -213,7 +227,15 @@ export function ParticleField({
           if (vx || vy) p = { ...p, vx: p.vx + vx, vy: p.vy + vy };
         }
         const { ax, ay } = driftAcceleration(p, now);
-        parts[i] = stepParticle({ ...p, vx: p.vx + ax * dt, vy: p.vy + ay * dt }, dt);
+        let vx = p.vx + ax * dt;
+        let vy = p.vy + ay * dt;
+        const cur = cursorRef.current;
+        if (cur) {
+          const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
+          vx += cv.vx;
+          vy += cv.vy;
+        }
+        parts[i] = stepParticle({ ...p, vx, vy }, dt);
       }
 
       ctx.clearRect(0, 0, w, h);
@@ -228,6 +250,22 @@ export function ParticleField({
       }
       raf = requestAnimationFrame(frame);
     };
+
+    const onPointer = (e: PointerEvent): void => {
+      const r = canvas.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      // Outside the field entirely → forget it, so particles settle instead of being held aside
+      // by a cursor that left the area.
+      cursorRef.current = x < -40 || y < -40 || x > r.width + 40 || y > r.height + 40 ? null : { x, y };
+    };
+    const onLeave = (): void => {
+      cursorRef.current = null;
+    };
+    if (!reduced) {
+      document.addEventListener("pointermove", onPointer, { passive: true });
+      document.addEventListener("pointerleave", onLeave, { passive: true });
+    }
 
     resize();
     const ro = new ResizeObserver(resize);
@@ -246,6 +284,8 @@ export function ParticleField({
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      document.removeEventListener("pointermove", onPointer);
+      document.removeEventListener("pointerleave", onLeave);
     };
   }, [density]);
 
