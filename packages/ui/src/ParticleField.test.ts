@@ -3,8 +3,9 @@ import {
   DEPTH,
   MAX_SPARKS,
   driftAcceleration,
+  displaceHome,
   emitSparks,
-  estimateCaretX,
+  caretXFromWidth,
   impulseVelocity,
   pickLastTextNode,
   project,
@@ -26,7 +27,7 @@ import {
  */
 
 const at = (x: number, y: number, vx = 0, vy = 0, z = 0): Particle => ({
-  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4,
+  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4, sx: x, sy: y, sz: z,
 });
 
 const rndSeq = (seed = 7) => () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
@@ -337,31 +338,73 @@ describe("a pulse reaches the whole volume, not just the screen plane", () => {
 });
 
 /**
- * The composer's caret cannot be measured the way the reply's can: a <textarea>'s value lives in
- * its `value`, not in text nodes, so there is nothing for a Range to select. This is the estimate
- * that stands in for it — and the only thing that really matters is that it never emits outside the
- * box, because a spark origin off the end of a long line is a burst appearing in the wrong place.
+ * A <textarea>'s value lives in its `value`, not in text nodes, so a Range cannot select it the way
+ * it can a reply. The first version multiplied character COUNT by an assumed ~0.52em advance, which
+ * is wrong per glyph and — the part that actually bit — wrong CUMULATIVELY: the error compounds
+ * along the line, so the sparks landed about a tab too far right after a few words.
+ *
+ * Real measurement replaced the estimate, so what is left to test is the clamp: the origin must
+ * stay inside the field whatever the measurement says, because a burst appearing past the end of a
+ * long line is worse than one a few pixels off.
  */
-describe("estimating the composer caret", () => {
-  it("advances along the line as you type", () => {
-    const a = estimateCaretX(0, 13, 100, 900);
-    const b = estimateCaretX(20, 13, 100, 900);
-    expect(b).toBeGreaterThan(a);
+describe("placing the composer caret", () => {
+  it("advances along the line as the text gets wider", () => {
+    expect(caretXFromWidth(80, 100, 900)).toBeGreaterThan(caretXFromWidth(10, 100, 900));
   });
 
-  it("never escapes the field, however long the line", () => {
-    for (const n of [0, 50, 500, 100000]) {
-      const x = estimateCaretX(n, 13, 100, 900);
-      expect(x, `${n} chars put the origin outside the box`).toBeGreaterThanOrEqual(100);
+  it("never escapes the field, however wide the text measures", () => {
+    for (const w of [0, 200, 5000, 1e9]) {
+      const x = caretXFromWidth(w, 100, 900);
+      expect(x, `width ${w} put the origin outside the box`).toBeGreaterThanOrEqual(100);
       expect(x).toBeLessThanOrEqual(900);
     }
   });
 
   it("survives a zero-width field without producing a backwards range", () => {
     // First paint, or a collapsed composer: right - 8 is less than left, and an unclamped min/max
-    // pair would return the larger bound and emit outside the element.
-    const x = estimateCaretX(10, 13, 500, 500);
+    // pair returns the wrong bound and emits outside the element.
+    const x = caretXFromWidth(50, 500, 500);
     expect(Number.isFinite(x)).toBe(true);
     expect(x).toBe(500);
+  });
+});
+
+/**
+ * THE FIELD HAS TO BE REARRANGEABLE, OR A DISTURBANCE IS ONLY EVER A FLINCH.
+ *
+ * A purely elastic tether returns every mote to exactly where it started, so however hard the field
+ * is pushed it looks identical a few seconds later. Plasticity is what lets typing and arriving
+ * messages actually move the field — and it is also the thing that, unbounded, migrates the whole
+ * volume toward wherever the text appears and empties the corners.
+ */
+describe("a disturbance rearranges the field", () => {
+  it("carries a mote's home along when it is pushed hard", () => {
+    const p = { ...at(100, 100), x: 160, y: 100 };
+    const moved = displaceHome(p, 1, 400, 300);
+    expect(moved.hx, "the home did not move — the mote will snap back exactly").toBeGreaterThan(p.hx);
+    expect(moved.hx).toBeLessThan(160); // and not all the way; it is a drag, not a teleport
+  });
+
+  it("never strands a mote outside the box", () => {
+    // A mote displaced near an edge would otherwise be pushed out of the field: invisible, still
+    // simulated, and gone from the volume for good.
+    const p = { ...at(390, 290), x: 900, y: 900 };
+    const moved = displaceHome(p, 1, 400, 300);
+    expect(moved.hx).toBeLessThanOrEqual(400);
+    expect(moved.hy).toBeLessThanOrEqual(300);
+    expect(moved.hz).toBeGreaterThanOrEqual(-DEPTH);
+  });
+
+  it("does nothing at all for a glancing touch", () => {
+    const p = at(100, 100);
+    expect(displaceHome(p, 0, 400, 300)).toEqual(p);
+  });
+
+  it("creeps back toward where it was seeded, so the volume cannot migrate", () => {
+    // Without recovery, every disturbance is permanent and the field slowly drains toward the
+    // bottom of the panel where the composer is.
+    let p: Particle = { ...at(100, 100), hx: 260, hy: 100 };
+    for (let i = 0; i < 20000; i++) p = stepParticle(p, 1);
+    expect(p.hx, "the home never returned to its seed").toBeLessThan(140);
   });
 });
