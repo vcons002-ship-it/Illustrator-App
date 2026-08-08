@@ -46,6 +46,8 @@ export const cx = {
   breathing: "vr-breathing",
   settle: "vr-settle",
   arrive: "vr-arrive",
+  /** Positioned, clipping wrapper so the arrival sheen has something to cross. */
+  arriveWrap: "vr-arrive-wrap",
   arriveSheen: "vr-arrive-sheen",
 
   /** Applied by the pointer handlers, not by a component's own render. */

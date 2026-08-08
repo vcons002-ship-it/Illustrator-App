@@ -648,3 +648,39 @@ describe("decoration cannot break layout or interaction", () => {
     },
   );
 });
+
+/**
+ * ONE ARRIVAL, USED EVERYWHERE A PICTURE LANDS.
+ *
+ * The book's illustration and the chat's generated image are produced by the same engine and should
+ * land the same way. They were two separate <img> tags, and only one of them had the effect — which
+ * is how "the chat images don't do the thing" happens without anyone writing a bug.
+ *
+ * So the effect is a component rather than a class applied twice, and this asserts that both call
+ * sites use it. Applying `cx.arrive` directly to an <img> would ALSO look right and be subtly wrong:
+ * the sheen is a sibling because replaced elements have no ::after to hang it on.
+ */
+describe("every generated picture arrives the same way", () => {
+  const uiDir = join(__dirname, "..");
+  const read = (f: string): string => readFileSync(join(uiDir, f), "utf8");
+
+  it.each(["ImagePanel.tsx", "ChatPanel.tsx"])("%s renders through ArrivingImage", (f) => {
+    expect(read(f), `${f} still renders a bare <img> for generated content`).toMatch(/<ArrivingImage\b/);
+  });
+
+  it("keys the arrival on the source, or it plays exactly once per mount and never again", () => {
+    // A CSS animation runs on mount. Without the key, the second picture in the same element simply
+    // appears — no error, no warning, and identical to the effect not existing.
+    const src = read("ArrivingImage.tsx");
+    expect(src).toMatch(/key=\{src\}/);
+    expect(src, "the sheen would sit finished over the new picture").toMatch(/key=\{`\$\{src\}-sheen`\}/);
+  });
+
+  it("gives the sheen a positioned, clipping parent to cross", () => {
+    const components = readFileSync(join(STYLES, "components.css"), "utf8");
+    const wrap = /\.vr-arrive-wrap \{([^}]*)\}/.exec(components)?.[1] ?? "";
+    expect(wrap, ".vr-arrive-wrap rule not found").toBeTruthy();
+    expect(wrap).toMatch(/position:\s*relative/);
+    expect(wrap, "an unclipped sheen sweeps across the whole message").toMatch(/overflow:\s*hidden/);
+  });
+});
