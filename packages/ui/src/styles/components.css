@@ -126,6 +126,16 @@
   }
 }
 
+/* Gentler over a message bubble than over a card: there is PROSE behind this one, and a bright
+ * wash across a paragraph makes the text swim. Two classes, so it outranks the base rule. */
+.vr-msg.vr-card::before {
+  background: radial-gradient(
+    300px circle at var(--vr-mx, 50%) var(--vr-my, 50%),
+    rgb(var(--vr-accent-rgb) / 0.17),
+    transparent 68%
+  );
+}
+
 /* Touch gets a TAP gesture rather than a simulated hover — see motion.css. */
 .vr-card.is-tap {
   animation: vr-tap-lift 700ms var(--vr-spring) both;

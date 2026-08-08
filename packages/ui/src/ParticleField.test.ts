@@ -119,15 +119,24 @@ describe("seeding", () => {
  * asserts the opposite property — that something is always nudging it.
  */
 describe("ambient drift", () => {
-  it("keeps the field alive when nothing is typing", () => {
+  /**
+   * "> 0.5px" WAS A USELESS BAR AND THIS TEST PASSED WHILE THE EFFECT DID NOT EXIST.
+   *
+   * The first drift constant produced a measured steady-state wander of 1.3 pixels. Mathematically
+   * moving; visually a still image, and reported as "no particle movement at all" after it shipped.
+   * A threshold that a sub-pixel effect clears is not a test of whether something is visible.
+   *
+   * The bar is now a distance a person can actually see a dot travel.
+   */
+  it("wanders far enough to be SEEN, not merely far enough to be non-zero", () => {
     let p: Particle = at(100, 100);
-    const start = { x: p.x, y: p.y };
-    for (let i = 0; i < 240; i++) {
+    let worst = 0;
+    for (let i = 0; i < 8000; i++) {
       const { ax, ay } = driftAcceleration(p, i * 16.7);
       p = stepParticle({ ...p, vx: p.vx + ax, vy: p.vy + ay }, 1);
+      if (i > 2000) worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy));
     }
-    const moved = Math.hypot(p.x - start.x, p.y - start.y);
-    expect(moved, "the field never moved on its own").toBeGreaterThan(0.5);
+    expect(worst, `wanders only ${worst.toFixed(1)}px — invisible on a 2px dot`).toBeGreaterThan(6);
   });
 
   it("stays gentle — drift must never overpower the spring", () => {
@@ -141,6 +150,9 @@ describe("ambient drift", () => {
       worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy));
     }
     expect(worst, `drifted ${worst.toFixed(1)}px from home`).toBeLessThan(30);
+    // Bounded on BOTH sides now: too little is as much a bug as too much, and only one of the two
+    // had a test until the field shipped invisible.
+    expect(worst).toBeGreaterThan(6);
   });
 
   it("gives neighbouring particles different phases, so the field does not pulse as one", () => {
