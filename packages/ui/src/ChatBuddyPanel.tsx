@@ -39,8 +39,9 @@ import {
 import { cx } from "./design/classes.js";
 import {
   ParticleField,
-  estimateCaretX,
+  caretXFromWidth,
   lastCharRect,
+  measureTextWidth,
   type ParticleFieldHandle,
 } from "./ParticleField.js";
 
@@ -441,6 +442,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const hasReadyAttachment = (props.attachments ?? []).some((a) => a.status === "ready");
   /** The composer, so a send can be felt as well as seen. */
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fieldRef = useRef<ParticleFieldHandle | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -465,11 +467,17 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     if (!draft) return;
     const el = composerRef.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    const fs = parseFloat(getComputedStyle(el).fontSize) || 13;
+    // The TEXTAREA, not the composer row. The row also holds the mic, attach and send buttons and
+    // carries its own padding, so measuring it put the origin a whole control's width off.
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const r = ta.getBoundingClientRect();
+    const cs = getComputedStyle(ta);
+    const textLeft = r.left + parseFloat(cs.paddingLeft || "0") + parseFloat(cs.borderLeftWidth || "0");
     const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
-    const x = estimateCaretX(lastLine.length, fs, r.left, r.right);
-    const y = r.top + 14;
+    const w = measureTextWidth(lastLine, ta) ?? lastLine.length * 6.5;
+    const x = caretXFromWidth(w, textLeft, r.right);
+    const y = r.top + r.height * 0.5;
     // Sparks, not just a nudge. The model's typing throws 8 per chunk; yours threw none, so the
     // field looked inert exactly when you were the one making something happen.
     fieldRef.current?.emit(x, y, 4);
@@ -1298,6 +1306,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         }}
       >
         <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

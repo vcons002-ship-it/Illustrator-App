@@ -41,6 +41,11 @@ export interface Particle {
   a: number;
   /** Phase offset for the ambient drift, so no two motes wander in step. */
   ph: number;
+  /** Where this mote was SEEDED. The home drifts when the field is disturbed; this is what it
+   * eventually creeps back toward, and what keeps the volume evenly covered over hours. */
+  sx: number;
+  sy: number;
+  sz: number;
 }
 
 /**
@@ -72,7 +77,26 @@ const FOCAL = 520;
 export const DEPTH = 260;
 
 const SPRING = 0.018;
-const DAMPING = 0.94;
+/** 0.97 rather than 0.94: a disturbed mote coasts ~6s instead of ~3s before it settles, which is
+ * the difference between being nudged and drifting away. Measured, not chosen by feel. */
+const DAMPING = 0.97;
+
+/**
+ * HOW MUCH A DISTURBANCE DRAGS A MOTE'S HOME ALONG WITH IT.
+ *
+ * A purely elastic tether means every mote returns to exactly where it started, so however hard the
+ * field is disturbed it looks identical a few seconds later — "pushed around" for a moment and then
+ * unchanged. Making the tether PLASTIC is what lets the field actually be rearranged: a strong shove
+ * carries the home with it, and the mote settles somewhere new.
+ *
+ * It cannot be unbounded. Left alone, plasticity migrates the whole volume toward wherever the text
+ * usually appears and the corners empty out, so homes are clamped to the box and creep back toward
+ * the seed over a long timescale.
+ */
+export const PLASTICITY = 0.55;
+/** Per-frame pull of a displaced home back to where it was seeded. ~40s to undo a full displacement
+ * — slow enough to read as permanent, fast enough that the field never permanently thins. */
+export const HOME_RECOVERY = 0.0004;
 export const PULSE_RADIUS = 200;
 /**
  * HOW MUCH DEPTH COUNTS TOWARD AN IMPULSE'S DISTANCE, and the reason the background stopped
@@ -132,7 +156,39 @@ export function stepParticle(p: Particle, dt: number): Particle {
   const vx = (p.vx + (p.hx - p.x) * SPRING * dt) * d;
   const vy = (p.vy + (p.hy - p.y) * SPRING * dt) * d;
   const vz = (p.vz + (p.hz - p.z) * SPRING * dt) * d;
-  return { ...p, vx, vy, vz, x: p.x + vx * dt, y: p.y + vy * dt, z: p.z + vz * dt };
+  // The home creeps back toward where this mote was seeded, undoing accumulated displacement over
+  // roughly forty seconds. Without it the field slowly migrates to wherever the text appears.
+  const k = HOME_RECOVERY * dt;
+  return {
+    ...p,
+    vx,
+    vy,
+    vz,
+    x: p.x + vx * dt,
+    y: p.y + vy * dt,
+    z: p.z + vz * dt,
+    hx: p.hx + (p.sx - p.hx) * k,
+    hy: p.hy + (p.sy - p.hy) * k,
+    hz: p.hz + (p.sz - p.hz) * k,
+  };
+}
+
+/**
+ * Drag a mote's home toward where it currently is, in proportion to how hard it was hit.
+ *
+ * This is what turns a shove into a rearrangement. Clamped to the box so a mote displaced near an
+ * edge cannot be pushed out of the field and stranded off screen, invisible but still simulated.
+ */
+export function displaceHome(p: Particle, hit: number, w: number, h: number): Particle {
+  const k = Math.min(1, hit) * PLASTICITY;
+  if (k <= 0) return p;
+  const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(v, hi));
+  return {
+    ...p,
+    hx: clamp(p.hx + (p.x - p.hx) * k, 0, Math.max(0, w)),
+    hy: clamp(p.hy + (p.y - p.hy) * k, 0, Math.max(0, h)),
+    hz: clamp(p.hz + (p.z - p.hz) * k, -DEPTH, DEPTH),
+  };
 }
 
 /**
@@ -228,6 +284,9 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
       r: 0.7 + rnd() * 1.6,
       a: 0.16 + rnd() * 0.36,
       ph: rnd() * Math.PI * 2,
+      sx: cx,
+      sy: cy,
+      sz: cz,
     });
   }
   return out;
@@ -271,22 +330,38 @@ export function lastCharRect(el: Element): DOMRect | null {
 }
 
 /**
- * Roughly where the caret sits in a plain text field, in viewport x.
+ * Where the caret sits in a plain text field, in viewport x.
  *
- * A <textarea>'s value lives in its `value`, not in text nodes, so `lastCharRect` cannot see it and
- * a Range cannot be built over it — measuring it properly means rendering a mirror element with
- * identical metrics, which is a lot of machinery for a spark origin. An average advance of ~0.52em
- * is close enough for a caret you cannot see, and clamped so a long line still emits inside the box
- * rather than off the end of the world.
+ * A <textarea>'s value lives in its `value`, not in text nodes, so a Range cannot select it the way
+ * `lastCharRect` does for a reply. The first version of this multiplied the character count by an
+ * assumed ~0.52em advance — which is wrong per glyph and, worse, wrong CUMULATIVELY: the error
+ * compounds along the line, so it landed about a tab too far right by the time you had typed a few
+ * words.
+ *
+ * `measureText` with the field's own computed font has no such drift. The caller supplies the width,
+ * because measuring belongs to the DOM and this stays a pure clamp: text origin plus advance, held
+ * inside the box so a long line still emits somewhere real.
  */
-export function estimateCaretX(
-  lastLineLength: number,
-  fontSize: number,
-  left: number,
+export function caretXFromWidth(
+  textWidth: number,
+  textLeft: number,
   right: number,
 ): number {
-  const x = left + 10 + lastLineLength * fontSize * 0.52;
-  return Math.max(left, Math.min(x, right - 8));
+  return Math.max(textLeft, Math.min(textLeft + textWidth, right - 8));
+}
+
+/** One reusable measuring context. Creating a canvas per keystroke is an allocation and a layout. */
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+/** Advance width of `text` in the exact font `el` renders with, or null if canvas is unavailable. */
+export function measureTextWidth(text: string, el: Element): number | null {
+  if (typeof document === "undefined") return null;
+  measureCtx ??= document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return null;
+  const cs = getComputedStyle(el);
+  // The `font` shorthand can come back empty in some engines; rebuild it when it does.
+  measureCtx.font = cs.font || `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  return measureCtx.measureText(text).width;
 }
 
 export interface ParticleFieldHandle {
@@ -441,9 +516,13 @@ export function ParticleField({
       const parts = partsRef.current;
       for (let i = 0; i < parts.length; i++) {
         let p = parts[i]!;
+        let hit = 0;
         for (const q of pending) {
           const v = impulseVelocity(p, q.x, q.y, q.s);
-          if (v.vx || v.vy || v.vz) p = { ...p, vx: p.vx + v.vx, vy: p.vy + v.vy, vz: p.vz + v.vz };
+          if (v.vx || v.vy || v.vz) {
+            hit += Math.hypot(v.vx, v.vy, v.vz);
+            p = { ...p, vx: p.vx + v.vx, vy: p.vy + v.vy, vz: p.vz + v.vz };
+          }
         }
         const { ax, ay, az } = driftAcceleration(p, now);
         let vx = p.vx + ax * dt;
@@ -455,6 +534,9 @@ export function ParticleField({
           vx += cv.vx;
           vy += cv.vy;
         }
+        // Only a real disturbance rearranges the field — ambient drift and the cursor's constant
+        // nudge must not, or the volume would slowly migrate wherever the pointer spends its time.
+        if (hit > 0.35) p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
         parts[i] = stepParticle({ ...p, vx, vy, vz }, dt);
       }
 
