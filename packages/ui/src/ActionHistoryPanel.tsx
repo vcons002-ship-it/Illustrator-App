@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, type CSSProperties } from "react";
 import type { ActionEntry } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * A scrollable log of what the assistant did on its own or for the reader (scans, planning,
@@ -31,8 +32,12 @@ function when(at: number): string {
 
 export const ActionHistoryPanel = memo(function ActionHistoryPanel({ entries, newSince, onClear, onClose }: ActionHistoryPanelProps) {
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Agent activity"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
           <strong style={{ fontSize: 15 }}>🗒️ Agent activity</strong>
           <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -68,8 +73,7 @@ export const ActionHistoryPanel = memo(function ActionHistoryPanel({ entries, ne
             })}
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

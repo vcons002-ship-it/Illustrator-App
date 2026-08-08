@@ -2,6 +2,7 @@ import { t } from "./design/tokens.js";
 import { memo, useRef, useState } from "react";
 import type { PolishMode, PolishPreset } from "@visual-reader/core";
 import { fileForLang } from "./ChatPanel.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Faithful document polish / summarize / rework. The user pastes (or uploads) a
@@ -115,8 +116,13 @@ export const DocumentPolishPanel = memo(function DocumentPolishPanel(props: Docu
   };
 
   return (
-    <div style={overlay}>
-      <div style={card}>
+    <ModalShell
+      title="Polish or summarize a document"
+      onClose={props.onClose}
+      overlayStyle={overlay}
+      cardStyle={card}
+      disableBackdropClose
+    >
         <div style={header}>
           <strong>Polish / summarize a document</strong>
           <button style={btn} onClick={props.onClose}>
@@ -264,8 +270,7 @@ export const DocumentPolishPanel = memo(function DocumentPolishPanel(props: Docu
         )}
 
         {error && <div style={{ ...hint, color: t.state.danger }}>⚠ {error}</div>}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

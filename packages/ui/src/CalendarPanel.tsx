@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import type { CalendarEvent } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * An in-app month-grid calendar synced with the user's Google calendar(s). Shows every
@@ -284,8 +285,12 @@ export const CalendarPanel = memo(function CalendarPanel({
   const selectedDeadlines = selected ? deadlinesByDay.get(selected) ?? [] : [];
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Calendar"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
           <strong style={{ fontSize: 15 }}>📅 Calendar</strong>
           <span style={{ fontSize: 13, opacity: 0.75 }}>
@@ -476,8 +481,7 @@ export const CalendarPanel = memo(function CalendarPanel({
             Synced with your Google calendar(s) plus your planned task deadlines. Click a day to see its schedule.
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

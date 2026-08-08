@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PriceAlert, StockQuote } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * A Markets panel: TradingView's free, keyless **advanced chart** widget for a symbol,
@@ -116,8 +117,12 @@ export const StockChartPanel = memo(function StockChartPanel({
   const pct = quote && chg !== undefined && quote.open ? (chg / quote.open) * 100 : undefined;
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Markets"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <strong style={{ fontSize: 15 }}>📈 Markets</strong>
           <input
@@ -294,8 +299,7 @@ export const StockChartPanel = memo(function StockChartPanel({
           Charts by TradingView (free, no account). Quotes from Yahoo (keyless, and delayed for most exchanges). Alerts run while the app is open. Not
           investment advice.
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

@@ -3,6 +3,7 @@ import { t as vr } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { formatStepLines, weekdayOf, type ScheduledTask } from "@visual-reader/core";
 import { cx } from "./design/classes.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Manage scheduled / periodic tasks — recurring actions the assistant runs on a cadence
@@ -110,8 +111,12 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   const [editing, setEditing] = useState<string | undefined>();
   const [draft, setDraft] = useState<{ title: string; prompt: string; stepText: string }>({ title: "", prompt: "", stepText: "" });
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Scheduled tasks"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div
           style={{
             display: "flex",
@@ -431,8 +436,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
           server). For phone-side reminders, ask the assistant to also add a
           Google Calendar/Tasks reminder.
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 
