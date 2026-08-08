@@ -73,7 +73,21 @@ export const DEPTH = 260;
 
 const SPRING = 0.018;
 const DAMPING = 0.94;
-export const PULSE_RADIUS = 130;
+export const PULSE_RADIUS = 200;
+/**
+ * HOW MUCH DEPTH COUNTS TOWARD AN IMPULSE'S DISTANCE, and the reason the background stopped
+ * reacting when this field became 3D.
+ *
+ * The volume is seeded across ±DEPTH (260) in z, and the impulse measured a plain 3D distance —
+ * so any mote at |z| ≥ the radius was unreachable no matter where it sat on screen. That was HALF
+ * of them, and the rest had a shrinking on-screen radius: 83px at z=100, 16px at z=129. The field
+ * was doing exactly what it was told and almost none of it could be touched.
+ *
+ * The text is a PLANE in this scene, so its wake should be a flattened ellipsoid — wide across the
+ * screen, shallow through depth — not a sphere. At 0.35 the reach is 200px at the screen plane and
+ * still 178px at the very back.
+ */
+export const PULSE_Z_WEIGHT = 0.35;
 /** Measured against this spring and damping: steady-state wander is ~79px per unit of drift. */
 const DRIFT = 0.18;
 const CURSOR_RADIUS = 150;
@@ -154,7 +168,9 @@ export function impulseVelocity(
 ): { vx: number; vy: number; vz: number } {
   const dx = p.x - cx;
   const dy = p.y - cy;
-  const dz = p.z;
+  // Depth counts for less than screen distance — see PULSE_Z_WEIGHT. The push it receives is still
+  // in true 3D; only the reach is flattened.
+  const dz = p.z * PULSE_Z_WEIGHT;
   const d = Math.hypot(dx, dy, dz);
   if (d > radius) return { vx: 0, vy: 0, vz: 0 };
   // A particle exactly on the impulse has no direction; pick one rather than dividing by zero and
