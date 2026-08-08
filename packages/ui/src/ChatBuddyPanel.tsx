@@ -37,7 +37,7 @@ import {
   smallButtonStyle,
 } from "./tokens.js";
 import { cx } from "./design/classes.js";
-import { ParticleField, type ParticleFieldHandle } from "./ParticleField.js";
+import { ParticleField, lastCharRect, type ParticleFieldHandle } from "./ParticleField.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -482,13 +482,16 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const streamingText = props.streamingText;
   useEffect(() => {
     if (!streamingText) return;
-    const caret = panelRef.current?.querySelector(`.${cx.typing}`);
-    if (!caret) return;
-    const r = caret.getBoundingClientRect();
-    // At the caret, where the newest characters actually are. Sparks are thrown OFF the letters;
-    // the pulse behind them displaces the ambient volume so the burst has somewhere to go.
-    fieldRef.current?.emit(r.right - 6, r.bottom - 10, 6);
-    fieldRef.current?.pulse(r.right - 10, r.bottom - 12, 1.6);
+    const bubble = panelRef.current?.querySelector(`.${cx.typing}`);
+    if (!bubble) return;
+    // The LAST CHARACTER, not the bubble. Measuring the bubble put every spark at its bottom-right
+    // corner — nowhere near the text, and stationary until the box grew a line, which is exactly
+    // why the field did not appear to react to the words at all.
+    const r = lastCharRect(bubble) ?? bubble.getBoundingClientRect();
+    const x = r.right;
+    const y = r.top + r.height * 0.5;
+    fieldRef.current?.emit(x, y, 8);
+    fieldRef.current?.pulse(x, y, 2.2);
   }, [streamingText]);
   const send = () => {
     const text = draft.trim();

@@ -5,6 +5,7 @@ import {
   driftAcceleration,
   emitSparks,
   impulseVelocity,
+  pickLastTextNode,
   project,
   seedParticles,
   stepParticle,
@@ -256,5 +257,37 @@ describe("the volume has depth", () => {
   it("pushes in three dimensions, not two", () => {
     const v = impulseVelocity(at(0, 0, 0, 0, 30), 0, 0, 5);
     expect(v.vz, "an impulse does nothing in depth").not.toBe(0);
+  });
+});
+
+/**
+ * WHERE THE SPARKS ARE BORN IS THE WHOLE EFFECT.
+ *
+ * The emission measured the BUBBLE — a box up to 85% of the panel wide — so every spark spawned at
+ * its bottom-right corner: nowhere near the words, and stationary until the box grew a line.
+ * Reported as "the particles don't really seem to react to the text", which is exactly what it was.
+ *
+ * The DOM walk is three lines of TreeWalker; the bug lives in WHICH node gets picked, so that is
+ * what is split out and tested. Markdown routinely leaves trailing whitespace-only text nodes, and
+ * choosing one puts the caret out in the margin — the same class of miss as measuring the bubble.
+ */
+describe("finding the newest character", () => {
+  it("picks the last node that actually has characters in it", () => {
+    const nodes = [{ data: "Hello" }, { data: " world" }];
+    expect(pickLastTextNode(nodes)?.data).toBe(" world");
+  });
+
+  it("skips the whitespace-only nodes markdown leaves behind", () => {
+    const nodes = [{ data: "the answer" }, { data: "\n  " }, { data: "   " }];
+    expect(pickLastTextNode(nodes)?.data, "picked a whitespace node — sparks land in the margin").toBe(
+      "the answer",
+    );
+  });
+
+  it("returns null rather than a bogus node when there is no text at all", () => {
+    // An image-only or empty bubble. The caller falls back to the element's own box; returning a
+    // whitespace node instead would silently emit at a meaningless point forever.
+    expect(pickLastTextNode([])).toBeNull();
+    expect(pickLastTextNode([{ data: "" }, { data: "\n" }])).toBeNull();
   });
 });
