@@ -28,6 +28,7 @@ import {
 } from "./tokens.js";
 import { cx } from "./design/classes.js";
 import { ModalShell } from "./ModalShell.js";
+import { ArrivingImage } from "./ArrivingImage.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -908,10 +909,10 @@ export const MessageBubble = memo(function MessageBubble({
         />
       ) : null}
       {url ? (
-        <img
+        <ArrivingImage
           src={url}
           alt="Chat image"
-          decoding="async"
+          wrapStyle={{ marginTop: message.text ? 6 : 0 }}
           style={{
             display: "block",
             maxWidth: "100%",
@@ -919,7 +920,6 @@ export const MessageBubble = memo(function MessageBubble({
             maxHeight: 420,
             objectFit: "contain",
             borderRadius: 6,
-            marginTop: message.text ? 6 : 0,
           }}
         />
       ) : null}
@@ -936,11 +936,11 @@ export const MessageBubble = memo(function MessageBubble({
           />
         ) : (
           // An animated webp/gif loops natively in an <img> (no <video> controls needed).
-          <img
+          <ArrivingImage
             src={videoUrl}
             alt="Generated animation"
-            decoding="async"
-            style={{ display: "block", maxWidth: "100%", height: "auto", maxHeight: 420, objectFit: "contain", borderRadius: 6, marginTop: message.text ? 6 : 0 }}
+            wrapStyle={{ marginTop: message.text ? 6 : 0 }}
+            style={{ display: "block", maxWidth: "100%", height: "auto", maxHeight: 420, objectFit: "contain", borderRadius: 6 }}
           />
         )
       ) : null}

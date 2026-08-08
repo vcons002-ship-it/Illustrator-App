@@ -4,6 +4,7 @@ import { BloomTransition } from "./BloomTransition.js";
 import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
 import { placeholderLabel } from "./imageStatus.js";
 import { cx } from "./design/classes.js";
+import { ArrivingImage } from "./ArrivingImage.js";
 
 /**
  * The reading-companion image panel. The image "blooms" in as the reader
@@ -67,15 +68,12 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart, fit }: Image
       title={manualReveal ? "Click to follow your reading again" : "Click to reveal the full image"}
     >
       <BloomTransition key={pageKey} target={effectiveBloom} {...(fit ? { fill: true } : {})}>
-        {/* Keyed on the source so a NEW illustration replays the arrival; React remounts the
-            element and the one-shot animation runs again. BloomTransition wraps this img and
-            animates its own element, so the two compose rather than fight over one property. */}
-        <img
-          key={displaySrc}
-          className={cx.arrive}
+        {/* The SAME component the chat's generated pictures use, so the two can never drift apart.
+            BloomTransition wraps this and animates its own element, so the two compose rather than
+            fight over one property. */}
+        <ArrivingImage
           src={displaySrc}
           alt="Illustration of the current passage"
-          decoding="async"
           style={{
             display: "block",
             width: "100%",

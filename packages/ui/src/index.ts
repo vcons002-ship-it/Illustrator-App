@@ -53,3 +53,4 @@ export * from "./buildProviders.js";
 export * from "./settingsKeys.js";
 export { ParticleField, stepParticle, impulseVelocity, seedParticles, PULSE_RADIUS } from "./ParticleField.js";
 export type { Particle, ParticleFieldHandle } from "./ParticleField.js";
+export { ArrivingImage } from "./ArrivingImage.js";

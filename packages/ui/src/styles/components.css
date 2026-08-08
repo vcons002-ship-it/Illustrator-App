@@ -246,6 +246,16 @@
   animation: vr-arrive 760ms var(--vr-spring) both;
 }
 
+/* The sheen needs a positioned, clipping parent — and the image cannot be that parent, because a
+ * replaced element has no ::after to hang it on. `display: block` so the wrapper takes the image's
+ * own box rather than an inline one with a descender gap under it. */
+.vr-arrive-wrap {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--vr-radius-sm);
+}
+
 .vr-arrive-sheen {
   position: absolute;
   inset: 0;
