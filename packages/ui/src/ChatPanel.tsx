@@ -1408,11 +1408,15 @@ export function ThinkingBlock({
   open = true,
   label = "💭 Thinking…",
   onOpenChange,
+  live,
 }: {
   text: string;
   open?: boolean;
   label?: string;
   onOpenChange?: (open: boolean) => void;
+  /** This reasoning is arriving RIGHT NOW. Saved reasoning on a finished message is not live and
+   * must not shimmer or glow — an old conversation lighting up says the model is still working. */
+  live?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1426,10 +1430,13 @@ export function ThinkingBlock({
         const next = (e.currentTarget as HTMLDetailsElement).open;
         if (next !== open) onOpenChange?.(next);
       }}
-      className={cx.live}
+      className={live ? cx.live : undefined}
       style={thinkingStyle}
     >
-      <summary className={cx.thinking} style={{ cursor: "pointer", fontSize: 11 }}>
+      <summary
+        className={live ? cx.thinking : undefined}
+        style={{ cursor: "pointer", fontSize: 11, opacity: live ? 1 : 0.7 }}
+      >
         {label}
       </summary>
       <div

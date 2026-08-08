@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { impulseVelocity, seedParticles, stepParticle, PULSE_RADIUS, type Particle } from "./ParticleField.js";
+import {
+  driftAcceleration,
+  impulseVelocity,
+  seedParticles,
+  stepParticle,
+  PULSE_RADIUS,
+  type Particle,
+} from "./ParticleField.js";
 
 /**
  * The physics is pure on purpose — no canvas, no DOM, no clock — so the two properties that make
@@ -11,7 +18,7 @@ import { impulseVelocity, seedParticles, stepParticle, PULSE_RADIUS, type Partic
  *      displacing the air and starts reading as the page wobbling.
  */
 
-const at = (x: number, y: number, vx = 0, vy = 0): Particle => ({ x, y, vx, vy, hx: x, hy: y, r: 1, a: 0.3 });
+const at = (x: number, y: number, vx = 0, vy = 0): Particle => ({ x, y, vx, vy, hx: x, hy: y, r: 1, a: 0.3, ph: 0.4 });
 
 describe("the field always settles", () => {
   it("returns a shoved particle home and stops", () => {
@@ -97,5 +104,48 @@ describe("seeding", () => {
     // At the shipped density a large desktop chat area should still be well under a few hundred.
     const DENSITY = 0.00007;
     expect(Math.round(1600 * 700 * DENSITY)).toBeLessThan(120);
+  });
+});
+
+/**
+ * THE FIELD WAS PERFECTLY STATIC AND EVERY TEST ABOVE PASSED.
+ *
+ * Each particle starts AT its home with zero velocity, and the only forces were a spring pulling
+ * it home and an impulse from typing. A particle already home with no velocity therefore never
+ * moved — the field drew a fixed pattern of dots and stayed that way until the model typed, which
+ * is not what "a drifting particle field" means and was reported as exactly that.
+ *
+ * The settling tests could not have caught it: a field that never moves settles trivially. This
+ * asserts the opposite property — that something is always nudging it.
+ */
+describe("ambient drift", () => {
+  it("keeps the field alive when nothing is typing", () => {
+    let p: Particle = at(100, 100);
+    const start = { x: p.x, y: p.y };
+    for (let i = 0; i < 240; i++) {
+      const { ax, ay } = driftAcceleration(p, i * 16.7);
+      p = stepParticle({ ...p, vx: p.vx + ax, vy: p.vy + ay }, 1);
+    }
+    const moved = Math.hypot(p.x - start.x, p.y - start.y);
+    expect(moved, "the field never moved on its own").toBeGreaterThan(0.5);
+  });
+
+  it("stays gentle — drift must never overpower the spring", () => {
+    // If ambient force can push a particle far from home the field stops reading as atmosphere
+    // and starts reading as snow. Run it long enough for any resonance to show.
+    let p: Particle = at(0, 0);
+    let worst = 0;
+    for (let i = 0; i < 6000; i++) {
+      const { ax, ay } = driftAcceleration(p, i * 16.7);
+      p = stepParticle({ ...p, vx: p.vx + ax, vy: p.vy + ay }, 1);
+      worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy));
+    }
+    expect(worst, `drifted ${worst.toFixed(1)}px from home`).toBeLessThan(30);
+  });
+
+  it("gives neighbouring particles different phases, so the field does not pulse as one", () => {
+    const a = driftAcceleration({ ph: 0 }, 1000);
+    const b = driftAcceleration({ ph: 2.1 }, 1000);
+    expect(Math.abs(a.ax - b.ax) + Math.abs(a.ay - b.ay)).toBeGreaterThan(0.001);
   });
 });

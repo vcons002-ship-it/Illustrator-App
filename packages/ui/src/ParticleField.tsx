@@ -30,6 +30,8 @@ export interface Particle {
   /** Per-particle size and base alpha, so the field has depth rather than reading as a grid. */
   r: number;
   a: number;
+  /** Phase offset for the ambient drift, so no two particles wander in step. */
+  ph: number;
 }
 
 /** Spring constant pulling a particle home. Higher = snappier return, less lingering drift. */
@@ -38,6 +40,28 @@ const SPRING = 0.018;
 const DAMPING = 0.94;
 /** How far an impulse reaches, in CSS pixels. */
 export const PULSE_RADIUS = 130;
+/** Ambient acceleration. Small enough that the spring still dominates, large enough to see. */
+const DRIFT = 0.016;
+
+/**
+ * THE FIELD WAS COMPLETELY STATIC AND THE PHYSICS SAID SO.
+ *
+ * Every particle starts AT its home with zero velocity, and the only forces were a spring pulling
+ * it home and an impulse from typing. A particle already at home with no velocity therefore never
+ * moved at all — the field rendered as a fixed pattern of dots and stayed that way until the model
+ * typed. Reported, correctly, as "the particles don't move".
+ *
+ * This is the missing force: a slow, per-particle wander on two incommensurate frequencies, so the
+ * field breathes without any two points travelling in step. Kept as its own pure function rather
+ * than folded into `stepParticle` so the settling guarantee stays testable in isolation — with a
+ * permanent ambient force the field never comes fully to rest, by design.
+ */
+export function driftAcceleration(p: Pick<Particle, "ph">, t: number): { ax: number; ay: number } {
+  return {
+    ax: Math.cos(t * 0.00042 + p.ph) * DRIFT,
+    ay: Math.sin(t * 0.00031 + p.ph * 1.7) * DRIFT,
+  };
+}
 
 /**
  * Advance one particle by one frame. PURE — the whole reason the physics is testable without a
@@ -98,6 +122,7 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
       hy: cy,
       r: 0.7 + rnd() * 1.5,
       a: 0.18 + rnd() * 0.34,
+      ph: rnd() * Math.PI * 2,
     });
   }
   return out;
@@ -187,7 +212,8 @@ export function ParticleField({
           const { vx, vy } = impulseVelocity(p, q.x, q.y, q.s);
           if (vx || vy) p = { ...p, vx: p.vx + vx, vy: p.vy + vy };
         }
-        parts[i] = stepParticle(p, dt);
+        const { ax, ay } = driftAcceleration(p, now);
+        parts[i] = stepParticle({ ...p, vx: p.vx + ax * dt, vy: p.vy + ay * dt }, dt);
       }
 
       ctx.clearRect(0, 0, w, h);
