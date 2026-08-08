@@ -64,6 +64,15 @@ export const cx = {
   /** One-shot, on the composer, when a message is sent. */
   sent: "vr-sent",
 
+  /** The dock with its panel chrome removed — messages float on the page instead. */
+  chatOpen: "vr-chat-open",
+  /** A message bubble as a floating pane: translucent, blurred, legible over the field. */
+  msgFloat: "vr-msg-float",
+  /** The particle canvas. */
+  field: "vr-field",
+  /** Anything that must paint above the field. */
+  aboveField: "vr-above-field",
+
   /** Sanitized article HTML rendered with dangerouslySetInnerHTML. */
   articleHtml: "vr-article-html",
 } as const;

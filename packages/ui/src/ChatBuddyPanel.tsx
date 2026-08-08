@@ -37,6 +37,7 @@ import {
   smallButtonStyle,
 } from "./tokens.js";
 import { cx } from "./design/classes.js";
+import { ParticleField, type ParticleFieldHandle } from "./ParticleField.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -435,6 +436,27 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const hasReadyAttachment = (props.attachments ?? []).some((a) => a.status === "ready");
   /** The composer, so a send can be felt as well as seen. */
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const fieldRef = useRef<ParticleFieldHandle | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Every streaming update shoves the field where the caret is.
+   *
+   * The caret is located by CLASS rather than by a ref: it is drawn by `.vr-typing`, which lives on
+   * whichever bubble is currently live, and that bubble is created and destroyed by the message
+   * list rather than owned here. A query costs one DOM read per token and cannot go stale.
+   *
+   * The pulses queue inside the field and are drained once per frame, so a fast local model
+   * emitting several tokens between frames does one batch of work rather than several.
+   */
+  const streamingText = props.streamingText;
+  useEffect(() => {
+    if (!streamingText) return;
+    const caret = panelRef.current?.querySelector(`.${cx.typing}`);
+    if (!caret) return;
+    const r = caret.getBoundingClientRect();
+    // Near the END of the live bubble — where the newest characters actually are.
+    fieldRef.current?.pulse(r.right - 10, r.bottom - 12);
+  }, [streamingText]);
   const send = () => {
     const text = draft.trim();
     // Allow sending with only attachments (the host supplies a default ask); never while busy.
@@ -479,7 +501,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const minimized = props.historyCollapsed === true;
   const showTools = toolsOpen && !minimized;
   return (
-    <div style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}>
+    <div
+      ref={panelRef}
+      className={`${cx.chatOpen} ${cx.aboveField}`}
+      style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}
+    >
+      {/* The field fills the PANEL, not the scroller — inside the scroll container it would slide
+          away with the messages. Absolute against this root, which .vr-above-field positions. */}
+      <ParticleField className={cx.field} handleRef={fieldRef} />
       <div style={minimized ? { ...headerStyle, paddingBottom: 0 } : headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -656,7 +685,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         />
       )}
 
-      <div ref={scrollRef} onScroll={trackNearBottom} style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}>
+      <div
+        ref={scrollRef}
+        onScroll={trackNearBottom}
+        className={cx.aboveField}
+        style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}
+      >
         {props.messages.length === 0 && !props.streamingText && props.awaitingSync && (
           // A linked phone keeps no chat of its own — the desktop owns it and sends it over. Until it
           // arrives, showing the "ask me anything" intro states something false: that this is a fresh
