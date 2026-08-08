@@ -777,6 +777,7 @@ export const MessageBubble = memo(function MessageBubble({
   thinkingOpen,
   onThinkingOpenChange,
   streaming,
+  justFinished,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -804,6 +805,11 @@ export const MessageBubble = memo(function MessageBubble({
   /** This bubble is the LIVE one being streamed into — it gets a typing caret. On the bubble
    * rather than inside the markdown so it survives every re-render of the streamed content. */
   streaming?: boolean;
+  /** This message is the reply that JUST landed, so the bubble condenses around it. Set by the
+   * list, not inferred here: a bubble cannot know whether it replaced a stream or was loaded
+   * from history, and replaying the animation on every old message when a chat opens would be
+   * a wall of movement. */
+  justFinished?: boolean;
   /** Whether this message's saved reasoning is expanded. The reader's ONE choice, shared with the
    * live block: it used to be hardcoded closed here, so the moment a turn finished its reasoning
    * collapsed under someone who had deliberately opened it. Defaults closed for older history. */
@@ -822,7 +828,14 @@ export const MessageBubble = memo(function MessageBubble({
   const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
   return (
     <div
-      className={`${cx.msg} ${cx.card} ${cx.msgFloat}${streaming ? ` ${cx.typing} ${cx.live}` : ""}`}
+      className={
+        // While streaming there is no bubble at all — `forming` strips the pane so the letters
+        // arrive straight onto the field. `solidify` runs once, on the message that replaces the
+        // streaming one, which is a fresh mount and therefore plays its animation exactly once.
+        `${cx.msg} ${cx.card} ${cx.msgFloat}` +
+        (streaming ? ` ${cx.typing} ${cx.live} ${cx.forming}` : "") +
+        (justFinished ? ` ${cx.solidify}` : "")
+      }
       data-from={isUser ? "user" : "assistant"}
       // `background` is deliberately NOT set here. It used to be, and an inline background beats
       // the class that now paints the translucent floating pane — the same cascade trap that made

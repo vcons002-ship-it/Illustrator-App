@@ -63,6 +63,10 @@ export const cx = {
   live: "vr-live",
   /** One-shot, on the composer, when a message is sent. */
   sent: "vr-sent",
+  /** Being written: no bubble at all, just glowing letters on the field. */
+  forming: "vr-msg--forming",
+  /** The bubble condensing around a reply that just finished. */
+  solidify: "vr-msg--solidify",
 
   /** The dock with its panel chrome removed — messages float on the page instead. */
   chatOpen: "vr-chat-open",

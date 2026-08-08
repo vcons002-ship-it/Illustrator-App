@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEPTH,
+  MAX_SPARKS,
   driftAcceleration,
+  emitSparks,
   impulseVelocity,
+  project,
   seedParticles,
   stepParticle,
+  stepSpark,
   PULSE_RADIUS,
   type Particle,
 } from "./ParticleField.js";
@@ -18,7 +23,11 @@ import {
  *      displacing the air and starts reading as the page wobbling.
  */
 
-const at = (x: number, y: number, vx = 0, vy = 0): Particle => ({ x, y, vx, vy, hx: x, hy: y, r: 1, a: 0.3, ph: 0.4 });
+const at = (x: number, y: number, vx = 0, vy = 0, z = 0): Particle => ({
+  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4,
+});
+
+const rndSeq = (seed = 7) => () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
 
 describe("the field always settles", () => {
   it("returns a shoved particle home and stops", () => {
@@ -57,7 +66,7 @@ describe("the field always settles", () => {
 describe("a pulse stays local", () => {
   it("does nothing at all beyond its radius", () => {
     const far = at(PULSE_RADIUS + 1, 0);
-    expect(impulseVelocity(far, 0, 0, 5)).toEqual({ vx: 0, vy: 0 });
+    expect(impulseVelocity(far, 0, 0, 5)).toEqual({ vx: 0, vy: 0, vz: 0 });
   });
 
   it("pushes outward, hardest at the centre", () => {
@@ -159,5 +168,93 @@ describe("ambient drift", () => {
     const a = driftAcceleration({ ph: 0 }, 1000);
     const b = driftAcceleration({ ph: 2.1 }, 1000);
     expect(Math.abs(a.ax - b.ax) + Math.abs(a.ay - b.ay)).toBeGreaterThan(0.001);
+  });
+});
+
+
+/**
+ * THE FIELD IS 3D, AND THE THING THAT MAKES IT LOOK 3D IS THE PROJECTION.
+ *
+ * Physics in three dimensions is only half of it — flat rendering of 3D positions looks exactly
+ * like 2D. The perspective divide is what buys parallax, depth falloff and occlusion order, so
+ * that is what is asserted: not "z exists" but "z changes what you see".
+ */
+describe("perspective", () => {
+  it("makes near things bigger than far things", () => {
+    const near = project({ x: 0, y: 0, z: -DEPTH }, 0, 0);
+    const far = project({ x: 0, y: 0, z: DEPTH }, 0, 0);
+    expect(near.scale).toBeGreaterThan(far.scale);
+    expect(far.scale).toBeGreaterThan(0);
+  });
+
+  it("sweeps near things further across the screen — this is the parallax", () => {
+    // Same world displacement from centre, different depths: the nearer one must move more.
+    const near = project({ x: 100, y: 0, z: -DEPTH }, 0, 0);
+    const far = project({ x: 100, y: 0, z: DEPTH }, 0, 0);
+    expect(Math.abs(near.sx)).toBeGreaterThan(Math.abs(far.sx));
+  });
+
+  it("never inverts or divides by zero, however close to the camera", () => {
+    // A particle at or behind the pinhole would flip the field inside out for a frame, or blow up
+    // to Infinity — either of which is a visible catastrophe from an invisible cause.
+    for (const z of [-100000, -1000, -520, 0, 1e6]) {
+      const q = project({ x: 50, y: 50, z }, 0, 0);
+      expect(Number.isFinite(q.sx) && Number.isFinite(q.sy), `z=${z}`).toBe(true);
+      expect(q.scale, `z=${z} inverted the projection`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("sparks — the particles born from the letters", () => {
+  it("throws them outward in every direction, not into a box corner", () => {
+    // A naive (rnd,rnd,rnd) direction clusters toward the cube's corners and the burst comes out
+    // visibly boxy. Speeds should be near-uniform across a sphere instead.
+    const ss = emitSparks(0, 0, 120, rndSeq());
+    const speeds = ss.map((s) => Math.hypot(s.vx, s.vy, s.vz));
+    const min = Math.min(...speeds);
+    const max = Math.max(...speeds);
+    expect(min).toBeGreaterThan(0.3);
+    expect(max / min, "speed spread is wildly uneven").toBeLessThan(6);
+    // And they must genuinely span the axes rather than favouring one.
+    expect(Math.max(...ss.map((s) => Math.abs(s.vz)))).toBeGreaterThan(0.2);
+  });
+
+  it("every spark dies, so emission can run forever without the field filling up", () => {
+    let live = emitSparks(10, 10, 40, rndSeq());
+    for (let i = 0; i < 3000 && live.length; i++) {
+      live = live.map((s) => stepSpark(s, 1, i * 16.7)).filter((s): s is NonNullable<typeof s> => s !== null);
+    }
+    expect(live.length, "sparks outlived a 50-second run — they are immortal").toBe(0);
+  });
+
+  it("caps how many can exist at once", () => {
+    // Emission is per-keystroke and a model can stream for minutes; without a ceiling a long reply
+    // grows the array without bound and takes the frame rate with it.
+    expect(MAX_SPARKS).toBeLessThanOrEqual(600);
+    expect(MAX_SPARKS).toBeGreaterThan(80);
+  });
+
+  it("stays finite for its whole life", () => {
+    let s = emitSparks(0, 0, 1, rndSeq())[0]!;
+    for (let i = 0; i < 400; i++) {
+      const n = stepSpark(s, 2, i * 16.7);
+      if (!n) break;
+      s = n;
+      expect(Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.z)).toBe(true);
+    }
+  });
+});
+
+describe("the volume has depth", () => {
+  it("seeds particles through it rather than onto one plane", () => {
+    const ps = seedParticles(400, 300, 80, rndSeq());
+    const zs = ps.map((p) => p.z);
+    expect(Math.max(...zs) - Math.min(...zs), "the field is flat").toBeGreaterThan(DEPTH);
+    for (const p of ps) expect(p.z).toBe(p.hz);
+  });
+
+  it("pushes in three dimensions, not two", () => {
+    const v = impulseVelocity(at(0, 0, 0, 0, 30), 0, 0, 5);
+    expect(v.vz, "an impulse does nothing in depth").not.toBe(0);
   });
 });

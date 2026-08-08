@@ -464,14 +464,31 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     fieldRef.current?.pulse(r.left + r.width * 0.5, r.top, 1.1);
   }, [draft]);
 
+  /**
+   * WHICH message just condensed out of the stream.
+   *
+   * The streaming bubble is not the same element as the message that replaces it — the list
+   * remounts — so the solidify animation has to be pointed at the new one. Keyed on the message
+   * COUNT at the moment streaming stopped, and compared by index at render, so opening a chat
+   * from history animates nothing: no stream ended, so no index is marked.
+   */
+  const solidifyAtRef = useRef<number>(-1);
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !props.streamingText) solidifyAtRef.current = props.messages.length - 1;
+    wasStreamingRef.current = !!props.streamingText;
+  }, [props.streamingText, props.messages.length]);
+
   const streamingText = props.streamingText;
   useEffect(() => {
     if (!streamingText) return;
     const caret = panelRef.current?.querySelector(`.${cx.typing}`);
     if (!caret) return;
     const r = caret.getBoundingClientRect();
-    // Near the END of the live bubble — where the newest characters actually are.
-    fieldRef.current?.pulse(r.right - 10, r.bottom - 12);
+    // At the caret, where the newest characters actually are. Sparks are thrown OFF the letters;
+    // the pulse behind them displaces the ambient volume so the burst has somewhere to go.
+    fieldRef.current?.emit(r.right - 6, r.bottom - 10, 6);
+    fieldRef.current?.pulse(r.right - 10, r.bottom - 12, 1.6);
   }, [streamingText]);
   const send = () => {
     const text = draft.trim();
@@ -735,6 +752,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           const m = props.messages[i]!;
           return (
           <MessageBubble
+            {...(i === solidifyAtRef.current ? { justFinished: true } : {})}
             key={mkey}
             message={m}
             index={i}
