@@ -369,3 +369,49 @@
 .vr-sent {
   animation: vr-send-burst 440ms var(--vr-spring-snap);
 }
+
+/* ---- The open conversation ----------------------------------------------------------
+ * The dock used to be a panel: its own sunken background, a hard top border, messages sitting
+ * in a box. Removing the chrome is what makes messages read as floating in the page rather than
+ * filed in a container — so the surface goes away and only the messages remain.
+ *
+ * The messages keep a faint translucent fill and a blur, NOT a solid one. Fully transparent
+ * bubbles put prose directly over drifting particles and the reader loses the text; a blurred
+ * pane keeps them legible while still showing the field moving underneath. */
+.vr-chat-open {
+  background: transparent;
+  border-top: none;
+}
+
+.vr-msg-float {
+  background: rgb(var(--vr-fg-rgb) / 0.055);
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
+  border: 1px solid rgb(var(--vr-fg-rgb) / 0.08);
+  box-shadow: var(--vr-elev-2);
+}
+
+/* The reader's own messages carry the accent, still translucent so the field shows through. */
+.vr-msg-float[data-from="user"] {
+  background: rgb(var(--vr-accent-rgb) / 0.16);
+  border-color: rgb(var(--vr-accent-rgb) / 0.28);
+}
+
+/* The field itself: behind everything, never interactive, never a scroll target. */
+.vr-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Anything that must sit ABOVE the field needs a stacking context of its own; without this the
+ * messages and the canvas are siblings at the same level and paint order decides, which is how
+ * a background ends up on top of the text. */
+.vr-above-field {
+  position: relative;
+  z-index: 1;
+}

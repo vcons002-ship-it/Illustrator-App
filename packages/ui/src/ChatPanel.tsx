@@ -817,12 +817,14 @@ export const MessageBubble = memo(function MessageBubble({
   const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
   return (
     <div
-      className={`${cx.msg} ${cx.card}${streaming ? ` ${cx.typing} ${cx.live}` : ""}`}
+      className={`${cx.msg} ${cx.card} ${cx.msgFloat}${streaming ? ` ${cx.typing} ${cx.live}` : ""}`}
       data-from={isUser ? "user" : "assistant"}
+      // `background` is deliberately NOT set here. It used to be, and an inline background beats
+      // the class that now paints the translucent floating pane — the same cascade trap that made
+      // button hover invisible. .vr-msg-float owns the fill, the blur and the edge.
       style={{
         ...bubbleStyle,
         alignSelf: isUser ? "flex-end" : "flex-start",
-        background: isUser ? t.accent.fill : t.fill.subtle,
       }}
     >
       {onDelete !== undefined && index !== undefined && (
