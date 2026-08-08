@@ -27,6 +27,7 @@ import {
   smallButtonStyle,
 } from "./tokens.js";
 import { cx } from "./design/classes.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -437,8 +438,13 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   };
 
   return (
-    <div style={overlayStyle}>
-      <div style={panelStyle}>
+    <ModalShell
+      title={`Chat — ${props.title}`}
+      onClose={props.onClose}
+      overlayStyle={overlayStyle}
+      cardStyle={panelStyle}
+      disableBackdropClose
+    >
         <div style={headerStyle}>
           <strong style={{ fontSize: 14 }} title={props.title}>Chat · {props.title}</strong>
           <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
@@ -594,8 +600,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             </button>
           )}
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

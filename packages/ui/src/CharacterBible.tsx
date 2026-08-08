@@ -5,6 +5,7 @@ import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
 import { cx } from "./design/classes.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Read + correct the Visual Bible's characters. The LLM fills in each character's
@@ -90,8 +91,12 @@ export function CharacterBible({
     [characters, haystacks, q],
   );
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Character bible"
+      onClose={onClose}
+      overlayStyle={overlayStyle}
+      cardStyle={panelStyle}
+    >
         <div style={headerStyle}>
           <strong>Character bible</strong>
           <span style={{ opacity: 0.6, fontSize: 12 }}>
@@ -144,8 +149,7 @@ export function CharacterBible({
             onRestore={onRestore}
           />
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

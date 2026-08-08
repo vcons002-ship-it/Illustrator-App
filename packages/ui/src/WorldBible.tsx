@@ -4,6 +4,7 @@ import type { BibleEntityKind, Creature, Environment, VisualBible } from "@visua
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
 import { cx } from "./design/classes.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Read + correct the Visual Bible's CREATURES and PLACES — the two lists that had no window of
@@ -79,8 +80,12 @@ export function WorldBible({
     [bible?.removed, tab],
   );
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="World bible"
+      onClose={onClose}
+      overlayStyle={overlayStyle}
+      cardStyle={panelStyle}
+    >
         <div style={headerStyle}>
           <strong>World bible</strong>
           <span style={{ display: "flex", gap: 6 }}>
@@ -145,8 +150,7 @@ export function WorldBible({
             onRestore={(id) => onRestore(tab === "creatures" ? "creature" : "environment", id)}
           />
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

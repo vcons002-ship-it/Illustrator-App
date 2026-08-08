@@ -3,6 +3,7 @@ import { memo, useMemo, useState } from "react";
 import { dayToIso, isoDay, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 import { ConfirmButton } from "./ConfirmButton.js";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * The Task Orchestrator's panel — the durable plans the assistant built, shown two ways:
@@ -396,8 +397,12 @@ export const TasksPanel = memo(function TasksPanel({
   );
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Tasks"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <strong>📋 Tasks — your to-do timeline</strong>
           <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
@@ -612,8 +617,7 @@ export const TasksPanel = memo(function TasksPanel({
             ) : null}
           </div>
         ) : null}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

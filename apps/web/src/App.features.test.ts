@@ -268,3 +268,63 @@ describe("typography: a sans UI around a serif book", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * EVERY FULL-SCREEN PANEL GOES THROUGH ModalShell.
+ *
+ * Ten of them were hand-rolled `position: fixed` overlays. An audit found the same three zeros in
+ * every one: no Escape handling, no `role="dialog"`, no `aria-modal`. Structurally they were divs.
+ * That meant Tab walked out of the panel into the page behind it — still there, still interactive,
+ * now invisible — focus never entered or returned, and a screen reader announced nothing at all.
+ *
+ * ModalShell already solved this for the modals that used it. The fix was to stop having two kinds
+ * of modal, and this keeps it that way: a new panel that hand-rolls an overlay fails here, with a
+ * pointer to the component it should be using instead.
+ */
+describe("every overlay panel is a real dialog", () => {
+  const UI_FILES = readdirSync(UI_SRC).filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"));
+
+  /** Not modals: a menu dismisses on outside-tap and must NOT trap focus or claim the page is
+   * inert, and the particle field is a decorative canvas. Both are listed rather than pattern-
+   * matched, so adding a third exemption is a deliberate act. */
+  const NOT_MODALS = new Set(["AnchoredMenu.tsx", "ParticleField.tsx", "ModalShell.tsx"]);
+
+  it("no panel hand-rolls a full-screen overlay", () => {
+    const offenders = UI_FILES.filter((f) => {
+      if (NOT_MODALS.has(f)) return false;
+      const src = readFileSync(join(UI_SRC, f), "utf8");
+      const fullScreen = /position:\s*"fixed"/.test(src) && /inset:\s*0/.test(src);
+      return fullScreen && !src.includes("ModalShell");
+    });
+    expect(
+      offenders,
+      `hand-rolled overlays — use ModalShell so they get Escape, a focus trap and aria-modal: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("keeps the panels that were converted on it", () => {
+    // Named individually: a regex could go green because ModalShell appears in a comment.
+    for (const f of [
+      "TasksPanel",
+      "SkillsPanel",
+      "CalendarPanel",
+      "ActionHistoryPanel",
+      "StockChartPanel",
+      "BrowserPanel",
+      "ScheduledTasksPanel",
+      "WorldBible",
+      "CharacterBible",
+      "DocumentPolishPanel",
+    ]) {
+      const src = readFileSync(join(UI_SRC, `${f}.tsx`), "utf8");
+      expect(src, `${f} no longer renders through ModalShell`).toMatch(/<ModalShell\b/);
+    }
+  });
+
+  it("does not make a form dismissable that deliberately was not", () => {
+    // DocumentPolishPanel never had a backdrop onClick — a stray tap must not throw away a
+    // half-written document. Converting it without this would have quietly changed that.
+    const src = readFileSync(join(UI_SRC, "DocumentPolishPanel.tsx"), "utf8");
+    expect(src).toContain("disableBackdropClose");
+  });
+});

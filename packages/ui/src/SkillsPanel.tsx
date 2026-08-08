@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, useMemo, useRef, useState } from "react";
 import type { Skill } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Manage the assistant's SKILLS — its durable "intelligence docs" (named markdown
@@ -77,8 +78,12 @@ export const SkillsPanel = memo(function SkillsPanel({ skills, onSave, onDelete,
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={card} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Skills"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={card}
+    >
         <div style={header}>
           <strong>🧠 Skills — the assistant's playbooks</strong>
           <button style={btn} onClick={onClose}>
@@ -188,8 +193,7 @@ export const SkillsPanel = memo(function SkillsPanel({ skills, onSave, onDelete,
             )}
           </>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 

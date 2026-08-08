@@ -1,6 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, useState } from "react";
 import type { PageText } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * An in-app **browser** (desktop): enter a URL and the host fetches its *readable text +
@@ -49,8 +50,12 @@ export const BrowserPanel = memo(function BrowserPanel({
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Browse"
+      onClose={onClose}
+      overlayStyle={overlay}
+      cardStyle={panel}
+    >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <strong style={{ fontSize: 15 }}>🌐 Browse</strong>
           <button style={btn} onClick={onBack} disabled={!canBack} title="Back">
@@ -129,8 +134,7 @@ export const BrowserPanel = memo(function BrowserPanel({
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
           Readable text + links only (no scripts run). Best in the desktop app.
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 
