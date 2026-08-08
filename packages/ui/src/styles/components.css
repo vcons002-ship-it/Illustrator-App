@@ -433,3 +433,26 @@
   position: relative;
   z-index: 1;
 }
+
+
+/* ---- The message that has not become a message yet -----------------------------------
+ * While the model is writing, there IS no bubble: the letters arrive directly onto the field, with
+ * sparks coming off them. The container only exists once the thought is finished.
+ *
+ * This overrides .vr-msg-float, so it must beat it — same class count, declared later. */
+.vr-msg--forming {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* The text itself carries a faint glow while it is being written, so unbubbled letters still
+   * read against a moving field rather than getting lost in it. */
+  text-shadow: 0 0 18px rgb(var(--vr-accent-rgb) / 0.45);
+}
+
+/* And then it solidifies. Longer than the arrival animation on purpose — this is the moment the
+ * reply becomes a thing you can keep, and it is the one beat in the conversation worth waiting for. */
+.vr-msg--solidify {
+  animation: vr-solidify 720ms var(--vr-spring) both;
+}

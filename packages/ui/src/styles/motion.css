@@ -235,3 +235,27 @@
     scroll-behavior: auto !important;
   }
 }
+
+
+/* The bubble condensing around a finished reply: the pane fades up, the edge draws itself, the
+ * glow the loose text was carrying burns off. Keyed on background/border rather than opacity so
+ * the TEXT never moves — it was already readable, and reflowing it at the end would undo that. */
+@keyframes vr-solidify {
+  from {
+    background-color: rgb(var(--vr-fg-rgb) / 0);
+    border-color: rgb(var(--vr-fg-rgb) / 0);
+    box-shadow: 0 0 26px rgb(var(--vr-accent-rgb) / 0.5);
+    text-shadow: 0 0 18px rgb(var(--vr-accent-rgb) / 0.45);
+    transform: scale(0.985);
+  }
+  60% {
+    box-shadow: 0 0 14px rgb(var(--vr-accent-rgb) / 0.28);
+  }
+  to {
+    background-color: rgb(var(--vr-fg-rgb) / 0.055);
+    border-color: rgb(var(--vr-fg-rgb) / 0.08);
+    box-shadow: var(--vr-elev-2);
+    text-shadow: none;
+    transform: none;
+  }
+}

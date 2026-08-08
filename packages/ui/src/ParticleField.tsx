@@ -1,137 +1,216 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 
 /**
- * A DRIFTING PARTICLE FIELD THAT THE ASSISTANT'S TYPING PUSHES AROUND.
+ * A 3D PARTICLE FIELD THAT THE CONVERSATION LIVES INSIDE.
  *
- * Sits behind the conversation, full-bleed, `pointer-events: none`. Every few characters the model
- * emits, the caret's screen position is handed to `pulse()` and the particles near it are shoved
- * outward, then drawn back by a spring. The text appears to displace the air around it.
+ * Two populations, because they answer two different questions:
  *
- * WHY A CANVAS AND AN IMPERATIVE HANDLE. A hundred particles at 60fps is 6,000 position updates a
- * second. Through React state that is 60 re-renders a second of a subtree containing the entire
- * chat — the exact cost `BloomTransition` already exists to avoid in this codebase. So the field
- * owns a canvas, runs its own rAF loop, and exposes one method. React renders it once.
+ *   AMBIENT — a tethered volume of motes filling the chat's depth. Always drifting, pushed by the
+ *   cursor, pulled back by a spring. This is the room the words are spoken in.
  *
- * WHY IT STAYS CALM. "Beautiful but not overwhelming" is a constraint on the physics, not a note on
- * the palette: low density, slow drift, a spring that always wins, and an impulse that decays with
- * distance. Nothing here can build up energy over time — every particle is permanently tethered to
- * a home position, so the field always settles back to stillness after the model stops typing.
+ *   SPARKS — emitted AT the caret as letters arrive, thrown outward with real velocity, dancing on
+ *   a slow orbit while they fade. These are the words themselves scattering the air. The earlier
+ *   version only ever shoved ambient motes, which is why it read as "wiggle in place": nothing was
+ *   ever born at the text.
+ *
+ * WHY THIS IS 3D WITHOUT WebGL. `packages/ui` ships raw TypeScript into three separate Vite builds,
+ * and a WebGL library is several hundred kilobytes for a background. So the physics is genuinely
+ * three-dimensional — position, velocity and every force carry a z — and the renderer projects it
+ * through a pinhole camera: `scale = FOCAL / (FOCAL + z)`. That single division buys perspective,
+ * parallax (near motes sweep further across the screen for the same world motion), size and alpha
+ * falloff with distance, and depth-of-field. Painter's algorithm for occlusion: sort far to near.
+ *
+ * WHY A CANVAS AND AN IMPERATIVE HANDLE. Several hundred particles at 60fps is tens of thousands of
+ * updates a second. Through React state that is 60 re-renders a second of a subtree containing the
+ * whole chat — the cost `BloomTransition` already exists to avoid here. React renders this once.
  */
 
-/** One particle: where it is, how fast, and the home it is always pulled back toward. */
+/** A mote of the ambient volume: where it is in space, and the home it is tethered to. */
 export interface Particle {
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
-  /** Home position — the tether that guarantees the field settles. */
+  vz: number;
   hx: number;
   hy: number;
-  /** Per-particle size and base alpha, so the field has depth rather than reading as a grid. */
+  hz: number;
+  /** World-space radius and base alpha, before perspective scales them. */
   r: number;
   a: number;
-  /** Phase offset for the ambient drift, so no two particles wander in step. */
+  /** Phase offset for the ambient drift, so no two motes wander in step. */
   ph: number;
 }
 
-/** Spring constant pulling a particle home. Higher = snappier return, less lingering drift. */
-const SPRING = 0.018;
-/** Velocity retained per frame. Below ~0.9 the motion dies before it reads as physics. */
-const DAMPING = 0.94;
-/** How far an impulse reaches, in CSS pixels. */
-export const PULSE_RADIUS = 130;
 /**
- * Ambient acceleration. MEASURED, not guessed: against this spring and damping, the steady-state
- * wander is ~79px per unit of drift, so 0.18 gives roughly 14px — visible on a 2px dot without
- * ever reading as snow. The first value shipped here was 0.016, which works out to 1.3px. The
- * field was moving the whole time and no one could possibly have seen it.
+ * A spark thrown off the text. Untethered and mortal — it has no home to return to and dies when
+ * its life runs out, which is what lets emission be continuous without the field ever filling up.
  */
-const DRIFT = 0.18;
+export interface Spark {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  /** 1 at birth, 0 at death. Drives both alpha and size, so a spark shrinks as it fades. */
+  life: number;
+  /** Life lost per frame. */
+  decay: number;
+  r: number;
+  /** Orbit phase and radius — the "dance" — applied as a force, not a position, so a spark still
+   * obeys its own momentum rather than being teleported onto a circle. */
+  ph: number;
+  spin: number;
+}
 
-/** How close the cursor has to be to push a particle, and how hard it pushes. Wider and softer
- * than a keystroke: the pointer is a presence to be felt, not an event. */
+/** Camera distance. Larger = weaker perspective; this is tuned so a mote at the back plane is
+ * roughly half the size of one at the front. */
+const FOCAL = 520;
+/** How deep the volume is, in world units, either side of the screen plane. */
+export const DEPTH = 260;
+
+const SPRING = 0.018;
+const DAMPING = 0.94;
+export const PULSE_RADIUS = 130;
+/** Measured against this spring and damping: steady-state wander is ~79px per unit of drift. */
+const DRIFT = 0.18;
 const CURSOR_RADIUS = 150;
 const CURSOR_PUSH = 0.42;
 
+/** Hard ceiling on live sparks. Emission is per-keystroke and a model can stream for minutes, so
+ * without this a long reply would grow the array without bound and take the frame rate with it. */
+export const MAX_SPARKS = 320;
+
 /**
- * THE FIELD WAS COMPLETELY STATIC AND THE PHYSICS SAID SO.
+ * Perspective projection through a pinhole at z = -FOCAL.
  *
- * Every particle starts AT its home with zero velocity, and the only forces were a spring pulling
- * it home and an impulse from typing. A particle already at home with no velocity therefore never
- * moved at all — the field rendered as a fixed pattern of dots and stayed that way until the model
- * typed. Reported, correctly, as "the particles don't move".
- *
- * This is the missing force: a slow, per-particle wander on two incommensurate frequencies, so the
- * field breathes without any two points travelling in step. Kept as its own pure function rather
- * than folded into `stepParticle` so the settling guarantee stays testable in isolation — with a
- * permanent ambient force the field never comes fully to rest, by design.
+ * Returns the screen position and the scale factor everything else is multiplied by — radius,
+ * alpha, and the parallax that makes near motes sweep further than far ones for the same motion.
+ * Clamped: a particle at or behind the camera would divide by zero or invert, turning the field
+ * inside out for one frame.
  */
-export function driftAcceleration(p: Pick<Particle, "ph">, t: number): { ax: number; ay: number } {
+export function project(
+  p: { x: number; y: number; z: number },
+  cx: number,
+  cy: number,
+): { sx: number; sy: number; scale: number } {
+  const scale = FOCAL / Math.max(FOCAL + p.z, 1);
+  return { sx: cx + (p.x - cx) * scale, sy: cy + (p.y - cy) * scale, scale };
+}
+
+/** Ambient wander, on three incommensurate frequencies so the volume breathes in every axis. */
+export function driftAcceleration(
+  p: Pick<Particle, "ph">,
+  t: number,
+): { ax: number; ay: number; az: number } {
   return {
     ax: Math.cos(t * 0.00042 + p.ph) * DRIFT,
     ay: Math.sin(t * 0.00031 + p.ph * 1.7) * DRIFT,
+    az: Math.sin(t * 0.00023 + p.ph * 2.3) * DRIFT * 0.8,
   };
 }
 
-/**
- * Advance one particle by one frame. PURE — the whole reason the physics is testable without a
- * canvas, a DOM, or a clock.
- *
- * `dt` is in frames (1 = a 60fps frame), not milliseconds, so a dropped frame scales the step
- * instead of freezing the field. Clamped by the caller: a backgrounded tab returns dt in the
- * hundreds, which would fling every particle off screen on the first frame back.
- */
+/** Advance one tethered mote. PURE — the reason the physics is testable with no canvas or clock. */
 export function stepParticle(p: Particle, dt: number): Particle {
-  const ax = (p.hx - p.x) * SPRING;
-  const ay = (p.hy - p.y) * SPRING;
-  const vx = (p.vx + ax * dt) * DAMPING ** dt;
-  const vy = (p.vy + ay * dt) * DAMPING ** dt;
-  return { ...p, vx, vy, x: p.x + vx * dt, y: p.y + vy * dt };
+  const d = DAMPING ** dt;
+  const vx = (p.vx + (p.hx - p.x) * SPRING * dt) * d;
+  const vy = (p.vy + (p.hy - p.y) * SPRING * dt) * d;
+  const vz = (p.vz + (p.hz - p.z) * SPRING * dt) * d;
+  return { ...p, vx, vy, vz, x: p.x + vx * dt, y: p.y + vy * dt, z: p.z + vz * dt };
 }
 
 /**
- * The velocity an impulse at (cx, cy) adds to a particle: outward, falling off to nothing at the
- * radius. Returns zero beyond it, so a pulse can never reach the whole field at once.
+ * Advance one spark. No spring — a spark is free — but it drags, drifts back toward the screen
+ * plane so the dance stays legible rather than vanishing into depth, and orbits its own axis.
  *
- * Quadratic falloff rather than linear — linear makes the whole disc move as a slab, which reads
- * as a UI element sliding rather than as air being displaced.
+ * Returns null when it dies, so the caller can filter in one pass.
+ */
+export function stepSpark(s: Spark, dt: number, t: number): Spark | null {
+  const life = s.life - s.decay * dt;
+  if (life <= 0) return null;
+  const drag = 0.955 ** dt;
+  // The dance: a slow circular force, each spark on its own phase.
+  const ox = Math.cos(t * 0.004 + s.ph) * s.spin;
+  const oy = Math.sin(t * 0.004 + s.ph) * s.spin;
+  const vx = (s.vx + ox * dt) * drag;
+  const vy = (s.vy + oy * dt - 0.012 * dt) * drag; // a whisper of lift, so sparks rise as they fade
+  const vz = (s.vz - s.z * 0.004 * dt) * drag;
+  return { ...s, life, vx, vy, vz, x: s.x + vx * dt, y: s.y + vy * dt, z: s.z + vz * dt };
+}
+
+/**
+ * Velocity an impulse adds: outward in 3D, falling off quadratically to nothing at the radius.
+ * Linear falloff moves the whole disc as a slab, which reads as a UI element sliding rather than
+ * as air being displaced.
  */
 export function impulseVelocity(
-  p: Pick<Particle, "x" | "y">,
+  p: Pick<Particle, "x" | "y" | "z">,
   cx: number,
   cy: number,
   strength: number,
   radius = PULSE_RADIUS,
-): { vx: number; vy: number } {
+): { vx: number; vy: number; vz: number } {
   const dx = p.x - cx;
   const dy = p.y - cy;
-  const d = Math.hypot(dx, dy);
-  if (d > radius) return { vx: 0, vy: 0 };
-  // A particle sitting exactly on the impulse has no direction to go; pick one deterministically
-  // rather than dividing by zero and producing NaN, which would silently blank the whole field.
-  const ux = d < 0.001 ? 0 : dx / d;
-  const uy = d < 0.001 ? -1 : dy / d;
-  const falloff = (1 - d / radius) ** 2;
-  return { vx: ux * strength * falloff, vy: uy * strength * falloff };
+  const dz = p.z;
+  const d = Math.hypot(dx, dy, dz);
+  if (d > radius) return { vx: 0, vy: 0, vz: 0 };
+  // A particle exactly on the impulse has no direction; pick one rather than dividing by zero and
+  // producing NaN, which would silently remove it from every later frame with nothing logged.
+  const [ux, uy, uz] = d < 0.001 ? [0, -1, 0] : [dx / d, dy / d, dz / d];
+  const f = (1 - d / radius) ** 2 * strength;
+  return { vx: ux * f, vy: uy * f, vz: uz * f };
 }
 
-/** Lay particles out on a jittered grid: even coverage without the visible rows of a true grid. */
+/** Sparks born at a point: thrown outward on a random 3D direction, with spread in life and size. */
+export function emitSparks(x: number, y: number, n: number, rnd: () => number): Spark[] {
+  const out: Spark[] = [];
+  for (let i = 0; i < n; i++) {
+    // Uniform on a sphere — a naive (rnd, rnd, rnd) direction clusters toward the cube's corners
+    // and the burst comes out visibly boxy.
+    const th = rnd() * Math.PI * 2;
+    const ph = Math.acos(2 * rnd() - 1);
+    const speed = 0.9 + rnd() * 2.4;
+    out.push({
+      x,
+      y,
+      z: (rnd() - 0.5) * 40,
+      vx: Math.sin(ph) * Math.cos(th) * speed,
+      vy: Math.sin(ph) * Math.sin(th) * speed,
+      vz: Math.cos(ph) * speed * 0.6,
+      life: 1,
+      decay: 0.006 + rnd() * 0.008,
+      r: 0.8 + rnd() * 1.6,
+      ph: rnd() * Math.PI * 2,
+      spin: 0.02 + rnd() * 0.05,
+    });
+  }
+  return out;
+}
+
+/** Lay the ambient volume out on a jittered 3D grid: even coverage, no visible rows. */
 export function seedParticles(w: number, h: number, count: number, rnd: () => number): Particle[] {
   const out: Particle[] = [];
   const cols = Math.max(1, Math.round(Math.sqrt((count * w) / Math.max(h, 1))));
   const rows = Math.max(1, Math.ceil(count / cols));
   for (let i = 0; i < count; i++) {
-    const cx = ((i % cols) + 0.5) * (w / cols) + (rnd() - 0.5) * (w / cols) * 0.8;
-    const cy = (Math.floor(i / cols) + 0.5) * (h / rows) + (rnd() - 0.5) * (h / rows) * 0.8;
+    const cx = ((i % cols) + 0.5) * (w / cols) + (rnd() - 0.5) * (w / cols) * 0.9;
+    const cy = (Math.floor(i / cols) + 0.5) * (h / rows) + (rnd() - 0.5) * (h / rows) * 0.9;
+    const cz = (rnd() - 0.5) * 2 * DEPTH;
     out.push({
       x: cx,
       y: cy,
+      z: cz,
       vx: 0,
       vy: 0,
+      vz: 0,
       hx: cx,
       hy: cy,
-      r: 0.7 + rnd() * 1.5,
-      a: 0.18 + rnd() * 0.34,
+      hz: cz,
+      r: 0.7 + rnd() * 1.6,
+      a: 0.16 + rnd() * 0.36,
       ph: rnd() * Math.PI * 2,
     });
   }
@@ -139,53 +218,69 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
 }
 
 export interface ParticleFieldHandle {
-  /** Push the field outward from a point in VIEWPORT coordinates (what getBoundingClientRect
-   * returns) — the component converts to its own canvas space. */
+  /** Push the volume outward from a point in VIEWPORT coordinates. */
   pulse: (clientX: number, clientY: number, strength?: number) => void;
+  /** Throw sparks off the text at a point in VIEWPORT coordinates. */
+  emit: (clientX: number, clientY: number, count?: number) => void;
 }
 
 export function ParticleField({
   handleRef,
-  density = 0.00007,
+  density = 0.00019,
   className,
 }: {
   handleRef?: Ref<ParticleFieldHandle>;
-  /** Particles per square pixel. Deliberately sparse — this is atmosphere, not a screensaver. */
+  /** Motes per square pixel of the chat area. */
   density?: number;
   className?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const partsRef = useRef<Particle[]>([]);
+  const sparksRef = useRef<Spark[]>([]);
   const pendingRef = useRef<{ x: number; y: number; s: number }[]>([]);
-  /** The cursor, in canvas space, or null when it is elsewhere. A CONTINUOUS force each frame
-   * rather than a pulse per pointermove: mousemove fires far more often than a frame, so pulsing
-   * on it would queue dozens of identical impulses and land them all at once as a shove. */
+  const emitRef = useRef<{ x: number; y: number; n: number }[]>([]);
   const cursorRef = useRef<{ x: number; y: number } | null>(null);
 
-  useImperativeHandle(handleRef, () => ({
-    pulse: (clientX, clientY, strength = 2.4) => {
+  /** Deterministic PRNG — a shared one, so nothing here depends on Math.random. */
+  const rndRef = useRef<() => number>(() => 0);
+  if (rndRef.current() === 0) {
+    let seed = 20260812;
+    rndRef.current = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+  }
+
+  useImperativeHandle(handleRef, () => {
+    const toLocal = (cxp: number, cyp: number): { x: number; y: number } | null => {
       const el = canvasRef.current;
-      if (!el) return;
+      if (!el) return null;
       const r = el.getBoundingClientRect();
-      // Queued rather than applied here: pulses arrive on streaming updates, which can land
-      // several times between frames. Applying each immediately would do the same work repeatedly
-      // against a field that hasn't moved.
-      pendingRef.current.push({ x: clientX - r.left, y: clientY - r.top, s: strength });
-    },
-  }));
+      return { x: cxp - r.left, y: cyp - r.top };
+    };
+    return {
+      // Both queue rather than act: they are called from streaming updates, which can land several
+      // times between frames, and the loop drains the queue once per frame.
+      pulse: (clientX, clientY, strength = 2.4) => {
+        const l = toLocal(clientX, clientY);
+        if (l) pendingRef.current.push({ ...l, s: strength });
+      },
+      emit: (clientX, clientY, count = 7) => {
+        const l = toLocal(clientX, clientY);
+        if (l) emitRef.current.push({ ...l, n: count });
+      },
+    };
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const rnd = rndRef.current;
 
-    // Honour the OS setting. A field of drifting dots is exactly the kind of ambient motion that
-    // setting exists for, so it is not merely slowed — it is never started.
     const reduced =
       typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    // The accent, read from the cascade rather than hardcoded, so the field follows the palette.
     const accent =
       getComputedStyle(canvas).getPropertyValue("--vr-accent-rgb").trim() || "122 162 255";
     const [cr, cg, cb] = accent.split(/\s+/).map(Number);
@@ -196,58 +291,109 @@ export function ParticleField({
     let h = 0;
 
     const resize = (): void => {
-      const dpr = Math.min(devicePixelRatio || 1, 2); // 3x on a phone is a lot of fill rate for atmosphere
+      const dpr = Math.min(devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
       w = rect.width;
       h = rect.height;
       canvas.width = Math.max(1, Math.round(w * dpr));
       canvas.height = Math.max(1, Math.round(h * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // Deterministic seeding, so a resize doesn't reshuffle the whole field into a new pattern.
-      let seed = 1;
-      const rnd = (): number => {
-        seed = (seed * 1664525 + 1013904223) % 4294967296;
-        return seed / 4294967296;
+      let s = 1;
+      const seeded = (): number => {
+        s = (s * 1664525 + 1013904223) % 4294967296;
+        return s / 4294967296;
       };
-      partsRef.current = seedParticles(w, h, Math.round(w * h * density), rnd);
+      partsRef.current = seedParticles(w, h, Math.round(w * h * density), seeded);
+    };
+
+    const draw = (): void => {
+      const midX = w / 2;
+      const midY = h / 2;
+      // Painter's algorithm: far to near, so nearer motes occlude the ones behind them.
+      const all: { z: number; sx: number; sy: number; rad: number; alpha: number; hot: number }[] = [];
+      for (const p of partsRef.current) {
+        const { sx, sy, scale } = project(p, midX, midY);
+        const speed = Math.hypot(p.vx, p.vy, p.vz);
+        all.push({
+          z: p.z,
+          sx,
+          sy,
+          rad: Math.max(0.2, (p.r + Math.min(speed * 0.6, 1.4)) * scale),
+          alpha: Math.min(1, (p.a + speed * 0.45) * scale),
+          hot: Math.min(1, speed * 0.5),
+        });
+      }
+      for (const s of sparksRef.current) {
+        const { sx, sy, scale } = project(s, midX, midY);
+        all.push({
+          z: s.z,
+          sx,
+          sy,
+          rad: Math.max(0.2, s.r * scale * (0.4 + s.life * 0.9)),
+          alpha: Math.min(1, s.life * s.life * 0.95 * scale),
+          hot: 1,
+        });
+      }
+      all.sort((a, b) => b.z - a.z);
+
+      ctx.clearRect(0, 0, w, h);
+      for (const d of all) {
+        // Hot particles get a halo — the wake of the typing reads as light rather than as motion.
+        if (d.hot > 0.35) {
+          ctx.beginPath();
+          ctx.arc(d.sx, d.sy, d.rad * 3.2, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${d.alpha * 0.13 * d.hot})`;
+          ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.arc(d.sx, d.sy, d.rad, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${d.alpha})`;
+        ctx.fill();
+      }
     };
 
     const frame = (now: number): void => {
-      const dt = last ? Math.min((now - last) / 16.667, 3) : 1; // clamp: a backgrounded tab returns a huge delta
+      const dt = last ? Math.min((now - last) / 16.667, 3) : 1;
       last = now;
 
       const pending = pendingRef.current;
       pendingRef.current = [];
-      const parts = partsRef.current;
+      const births = emitRef.current;
+      emitRef.current = [];
 
+      for (const b of births) {
+        const room = MAX_SPARKS - sparksRef.current.length;
+        if (room > 0) sparksRef.current.push(...emitSparks(b.x, b.y, Math.min(b.n, room), rnd));
+      }
+
+      const parts = partsRef.current;
       for (let i = 0; i < parts.length; i++) {
         let p = parts[i]!;
         for (const q of pending) {
-          const { vx, vy } = impulseVelocity(p, q.x, q.y, q.s);
-          if (vx || vy) p = { ...p, vx: p.vx + vx, vy: p.vy + vy };
+          const v = impulseVelocity(p, q.x, q.y, q.s);
+          if (v.vx || v.vy || v.vz) p = { ...p, vx: p.vx + v.vx, vy: p.vy + v.vy, vz: p.vz + v.vz };
         }
-        const { ax, ay } = driftAcceleration(p, now);
+        const { ax, ay, az } = driftAcceleration(p, now);
         let vx = p.vx + ax * dt;
         let vy = p.vy + ay * dt;
+        const vz = p.vz + az * dt;
         const cur = cursorRef.current;
         if (cur) {
           const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
           vx += cv.vx;
           vy += cv.vy;
         }
-        parts[i] = stepParticle({ ...p, vx, vy }, dt);
+        parts[i] = stepParticle({ ...p, vx, vy, vz }, dt);
       }
 
-      ctx.clearRect(0, 0, w, h);
-      for (const p of parts) {
-        // Moving particles brighten: the wake of the typing reads as light, not as displacement.
-        const speed = Math.hypot(p.vx, p.vy);
-        const alpha = Math.min(1, p.a + speed * 0.5);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r + Math.min(speed * 0.6, 1.4), 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${alpha})`;
-        ctx.fill();
+      const live: Spark[] = [];
+      for (const s of sparksRef.current) {
+        const n = stepSpark(s, dt, now);
+        if (n) live.push(n);
       }
+      sparksRef.current = live;
+
+      draw();
       raf = requestAnimationFrame(frame);
     };
 
@@ -255,8 +401,6 @@ export function ParticleField({
       const r = canvas.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
-      // Outside the field entirely → forget it, so particles settle instead of being held aside
-      // by a cursor that left the area.
       cursorRef.current = x < -40 || y < -40 || x > r.width + 40 || y > r.height + 40 ? null : { x, y };
     };
     const onLeave = (): void => {
@@ -271,16 +415,8 @@ export function ParticleField({
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
     if (!reduced) raf = requestAnimationFrame(frame);
-    else {
-      // Draw the field once, still. Reduced motion means no ANIMATION, not a blank background.
-      ctx.clearRect(0, 0, w, h);
-      for (const p of partsRef.current) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${p.a})`;
-        ctx.fill();
-      }
-    }
+    else draw(); // reduced motion means no ANIMATION, not a blank background
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
