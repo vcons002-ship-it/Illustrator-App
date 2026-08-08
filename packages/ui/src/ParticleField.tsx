@@ -217,6 +217,43 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
   return out;
 }
 
+/**
+ * Choose the text node a caret would sit at the end of: the LAST one with actual characters.
+ *
+ * Split out from the DOM walk so the decision is testable — the walk itself is three lines of
+ * TreeWalker, but "which node" is where the bugs live. Trailing whitespace-only nodes are the
+ * common case markdown leaves behind, and picking one puts the caret in the margin.
+ */
+export function pickLastTextNode<T extends { data: string }>(nodes: readonly T[]): T | null {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i]!;
+    if (n.data.trim().length > 0) return n;
+  }
+  return null;
+}
+
+/**
+ * Where the newest character actually is, in viewport coordinates.
+ *
+ * The reason this exists: the emission used to measure the BUBBLE, which is a wide box, so sparks
+ * spawned at its bottom-right corner — nowhere near the text, and barely moving as words arrived.
+ * A collapsed Range would give a zero-width rect in some engines, so this selects the final
+ * character and takes the last of its client rects, which is a real box on a real line.
+ */
+export function lastCharRect(el: Element): DOMRect | null {
+  if (typeof document === "undefined") return null;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  const node = pickLastTextNode(nodes);
+  if (!node) return null;
+  const range = document.createRange();
+  range.setStart(node, Math.max(0, node.data.length - 1));
+  range.setEnd(node, node.data.length);
+  const rects = range.getClientRects();
+  return rects.length ? rects[rects.length - 1]! : null;
+}
+
 export interface ParticleFieldHandle {
   /** Push the volume outward from a point in VIEWPORT coordinates. */
   pulse: (clientX: number, clientY: number, strength?: number) => void;
