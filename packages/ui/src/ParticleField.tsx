@@ -350,6 +350,55 @@ export function caretXFromWidth(
   return Math.max(textLeft, Math.min(textLeft + textWidth, right - 8));
 }
 
+/**
+ * WHERE THE CARET IS WHEN THE FIELD SOFT-WRAPS.
+ *
+ * A <textarea> wraps VISUALLY without inserting anything into its value, so splitting on "\n" says
+ * a wrapped message is one enormous line. Its measured width then exceeds the field and the clamp
+ * pins every spark to the right-hand edge — which is exactly what happens the moment you reach the
+ * second line.
+ *
+ * So the wrap has to be reproduced: greedy, breaking at the last word that fits, exactly as the
+ * browser does. A word longer than the whole line breaks by character, or the loop would never
+ * advance and the count would run away.
+ *
+ * `measure` is injected rather than taken from a canvas here, which is what makes this testable
+ * with an arithmetic stand-in instead of a font.
+ */
+export function wrapCaret(
+  before: string,
+  measure: (s: string) => number,
+  maxWidth: number,
+): { line: number; x: number } {
+  let line = 0;
+  let cur = "";
+  const width = Math.max(1, maxWidth);
+
+  for (const para of before.split("\n")) {
+    cur = "";
+    // Words carry their trailing whitespace so the measurement matches what is actually drawn.
+    for (const token of para.match(/\S+\s*|\s+/g) ?? []) {
+      let t = token;
+      // A single token wider than the line: consume it a character at a time.
+      while (cur === "" && measure(t) > width && t.length > 1) {
+        let fit = 1;
+        while (fit < t.length && measure(t.slice(0, fit + 1)) <= width) fit++;
+        line++;
+        t = t.slice(fit);
+      }
+      if (cur !== "" && measure(cur + t) > width) {
+        line++;
+        cur = t;
+      } else {
+        cur += t;
+      }
+    }
+    line++; // an explicit newline always starts one
+  }
+  // The loop counts a break after the final paragraph too; the caret sits on the line before it.
+  return { line: Math.max(0, line - 1), x: measure(cur) };
+}
+
 /** One reusable measuring context. Creating a canvas per keystroke is an allocation and a layout. */
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 

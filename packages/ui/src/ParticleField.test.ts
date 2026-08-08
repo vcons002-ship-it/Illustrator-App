@@ -12,6 +12,7 @@ import {
   seedParticles,
   stepParticle,
   stepSpark,
+  wrapCaret,
   PULSE_RADIUS,
   type Particle,
 } from "./ParticleField.js";
@@ -406,5 +407,53 @@ describe("a disturbance rearranges the field", () => {
     let p: Particle = { ...at(100, 100), hx: 260, hy: 100 };
     for (let i = 0; i < 20000; i++) p = stepParticle(p, 1);
     expect(p.hx, "the home never returned to its seed").toBeLessThan(140);
+  });
+});
+
+/**
+ * A <textarea> WRAPS WITHOUT PUTTING ANYTHING IN ITS VALUE.
+ *
+ * Splitting on "\n" therefore says a wrapped message is one enormous line: its measured width
+ * exceeds the field, the clamp pins it to the right edge, and every spark sticks there from the
+ * moment you reach the second line. Reported as exactly that.
+ *
+ * `measure` is injected, so these run on arithmetic rather than a font: ten pixels a character
+ * makes every expectation something you can check by counting.
+ */
+describe("finding the caret when the field wraps", () => {
+  const measure = (s: string): number => s.length * 10;
+
+  it("stays on the first line while the text still fits", () => {
+    expect(wrapCaret("abc", measure, 200)).toEqual({ line: 0, x: 30 });
+  });
+
+  it("moves to the next line when the words no longer fit", () => {
+    // "aaaa bbbb " is 100 wide; "cccc" would take it past 120, so the caret is on line 1.
+    const r = wrapCaret("aaaa bbbb cccc", measure, 120);
+    expect(r.line, "the caret never left the first line — sparks would stick at the edge").toBe(1);
+    expect(r.x, "x did not reset at the line break").toBeLessThan(120);
+  });
+
+  it("counts an explicit newline as a break", () => {
+    expect(wrapCaret("ab\ncd", measure, 500)).toEqual({ line: 1, x: 20 });
+  });
+
+  it("breaks a word longer than the whole line instead of looping forever", () => {
+    // Without character-level breaking the greedy loop cannot advance: the token never fits, the
+    // line never ends, and the caret runs off the right of the field permanently.
+    const r = wrapCaret("x".repeat(25), measure, 100);
+    expect(r.line).toBeGreaterThan(0);
+    expect(r.x).toBeLessThanOrEqual(100);
+  });
+
+  it("never reports a negative line, whatever it is given", () => {
+    for (const s of ["", "\n", "\n\n\n", "   "]) {
+      expect(wrapCaret(s, measure, 100).line, JSON.stringify(s)).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("survives a zero-width field rather than dividing into an infinite loop", () => {
+    const r = wrapCaret("hello world", measure, 0);
+    expect(Number.isFinite(r.line) && Number.isFinite(r.x)).toBe(true);
   });
 });

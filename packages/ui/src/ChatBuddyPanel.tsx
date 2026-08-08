@@ -42,6 +42,7 @@ import {
   caretXFromWidth,
   lastCharRect,
   measureTextWidth,
+  wrapCaret,
   type ParticleFieldHandle,
 } from "./ParticleField.js";
 
@@ -473,11 +474,19 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     if (!ta) return;
     const r = ta.getBoundingClientRect();
     const cs = getComputedStyle(ta);
-    const textLeft = r.left + parseFloat(cs.paddingLeft || "0") + parseFloat(cs.borderLeftWidth || "0");
-    const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
-    const w = measureTextWidth(lastLine, ta) ?? lastLine.length * 6.5;
-    const x = caretXFromWidth(w, textLeft, r.right);
-    const y = r.top + r.height * 0.5;
+    const padL = parseFloat(cs.paddingLeft || "0") + parseFloat(cs.borderLeftWidth || "0");
+    const padT = parseFloat(cs.paddingTop || "0") + parseFloat(cs.borderTopWidth || "0");
+    const fs = parseFloat(cs.fontSize) || 13;
+    // "normal" is a valid computed line-height and parses to NaN; fall back rather than emit at NaN,
+    // which would place the burst nowhere and silently do nothing.
+    const lh = parseFloat(cs.lineHeight) || fs * 1.35;
+    // The caret, not the end of the value — you can type in the middle of what you have written.
+    const before = draft.slice(0, ta.selectionStart ?? draft.length);
+    const inner = ta.clientWidth - padL - parseFloat(cs.paddingRight || "0");
+    const { line, x: dx } = wrapCaret(before, (str) => measureTextWidth(str, ta) ?? str.length * 6.5, inner);
+    const x = caretXFromWidth(dx, r.left + padL, r.right);
+    // scrollTop matters once the composer has more lines than it shows.
+    const y = r.top + padT + (line + 0.5) * lh - ta.scrollTop;
     // Sparks, not just a nudge. The model's typing throws 8 per chunk; yours threw none, so the
     // field looked inert exactly when you were the one making something happen.
     fieldRef.current?.emit(x, y, 4);
