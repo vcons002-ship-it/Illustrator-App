@@ -37,7 +37,12 @@ import {
   smallButtonStyle,
 } from "./tokens.js";
 import { cx } from "./design/classes.js";
-import { ParticleField, lastCharRect, type ParticleFieldHandle } from "./ParticleField.js";
+import {
+  ParticleField,
+  estimateCaretX,
+  lastCharRect,
+  type ParticleFieldHandle,
+} from "./ParticleField.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -461,7 +466,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     const el = composerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    fieldRef.current?.pulse(r.left + r.width * 0.5, r.top, 1.1);
+    const fs = parseFloat(getComputedStyle(el).fontSize) || 13;
+    const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
+    const x = estimateCaretX(lastLine.length, fs, r.left, r.right);
+    const y = r.top + 14;
+    // Sparks, not just a nudge. The model's typing throws 8 per chunk; yours threw none, so the
+    // field looked inert exactly when you were the one making something happen.
+    fieldRef.current?.emit(x, y, 4);
+    fieldRef.current?.pulse(x, y, 2.6);
   }, [draft]);
 
   /**
@@ -474,10 +486,19 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
    */
   const solidifyAtRef = useRef<number>(-1);
   const wasStreamingRef = useRef(false);
+  /** Set the moment YOU send, consumed when your message actually appears in the list. The two are
+   * separate events — the host echoes the message back — so the flag has to wait for the list. */
+  const sentPendingRef = useRef(false);
   useEffect(() => {
     if (wasStreamingRef.current && !props.streamingText) solidifyAtRef.current = props.messages.length - 1;
     wasStreamingRef.current = !!props.streamingText;
   }, [props.streamingText, props.messages.length]);
+  useEffect(() => {
+    if (sentPendingRef.current && props.messages.length > 0) {
+      solidifyAtRef.current = props.messages.length - 1;
+      sentPendingRef.current = false;
+    }
+  }, [props.messages.length]);
 
   const streamingText = props.streamingText;
   useEffect(() => {
@@ -502,6 +523,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     setDraft("");
     // Restart the burst even if the class is still on from the last send — removing it and
     // forcing a reflow is the only way to replay a CSS animation on the same element.
+    sentPendingRef.current = true;
     const el = composerRef.current;
     if (el) {
       el.classList.remove(cx.sent);
@@ -510,7 +532,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       // A hard shove up through the field from where the message left, so sending is felt in the
       // background as well as on the button.
       const r = el.getBoundingClientRect();
-      fieldRef.current?.pulse(r.left + r.width * 0.5, r.top, 11);
+      const cxp = r.left + r.width * 0.5;
+      // A wide spray along the composer rather than one point: the message left from the whole bar,
+      // and a single origin on a 900px-wide element reads as a dot rather than a departure.
+      for (const f of [0.2, 0.35, 0.5, 0.65, 0.8]) {
+        fieldRef.current?.emit(r.left + r.width * f, r.top + 6, 9);
+      }
+      fieldRef.current?.pulse(cxp, r.top, 11);
     }
     props.onSend(text);
   };

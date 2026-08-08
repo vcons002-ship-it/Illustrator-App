@@ -259,3 +259,28 @@
     transform: none;
   }
 }
+
+
+/* The same condensation, ending on the READER's colours. Without this variant a sent message
+ * solidifies into the assistant's neutral pane — the animation's `to` state would override the
+ * accent tint `.vr-msg-float[data-from="user"]` gives it, so your own message would change colour
+ * as it landed. */
+@keyframes vr-solidify-user {
+  from {
+    background-color: rgb(var(--vr-accent-rgb) / 0);
+    border-color: rgb(var(--vr-accent-rgb) / 0);
+    box-shadow: 0 0 30px rgb(var(--vr-accent-rgb) / 0.6);
+    text-shadow: 0 0 18px rgb(var(--vr-accent-rgb) / 0.5);
+    transform: scale(0.985);
+  }
+  60% {
+    box-shadow: 0 0 16px rgb(var(--vr-accent-rgb) / 0.32);
+  }
+  to {
+    background-color: rgb(var(--vr-accent-rgb) / 0.16);
+    border-color: rgb(var(--vr-accent-rgb) / 0.28);
+    box-shadow: var(--vr-elev-2);
+    text-shadow: none;
+    transform: none;
+  }
+}
