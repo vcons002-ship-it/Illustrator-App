@@ -4,6 +4,7 @@ import {
   MAX_SPARKS,
   driftAcceleration,
   emitSparks,
+  estimateCaretX,
   impulseVelocity,
   pickLastTextNode,
   project,
@@ -332,5 +333,35 @@ describe("a pulse reaches the whole volume, not just the screen plane", () => {
       worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy, p.z - p.hz));
     }
     expect(worst, `peaks at ${worst.toFixed(1)}px — too small to notice`).toBeGreaterThan(5);
+  });
+});
+
+/**
+ * The composer's caret cannot be measured the way the reply's can: a <textarea>'s value lives in
+ * its `value`, not in text nodes, so there is nothing for a Range to select. This is the estimate
+ * that stands in for it — and the only thing that really matters is that it never emits outside the
+ * box, because a spark origin off the end of a long line is a burst appearing in the wrong place.
+ */
+describe("estimating the composer caret", () => {
+  it("advances along the line as you type", () => {
+    const a = estimateCaretX(0, 13, 100, 900);
+    const b = estimateCaretX(20, 13, 100, 900);
+    expect(b).toBeGreaterThan(a);
+  });
+
+  it("never escapes the field, however long the line", () => {
+    for (const n of [0, 50, 500, 100000]) {
+      const x = estimateCaretX(n, 13, 100, 900);
+      expect(x, `${n} chars put the origin outside the box`).toBeGreaterThanOrEqual(100);
+      expect(x).toBeLessThanOrEqual(900);
+    }
+  });
+
+  it("survives a zero-width field without producing a backwards range", () => {
+    // First paint, or a collapsed composer: right - 8 is less than left, and an unclamped min/max
+    // pair would return the larger bound and emit outside the element.
+    const x = estimateCaretX(10, 13, 500, 500);
+    expect(Number.isFinite(x)).toBe(true);
+    expect(x).toBe(500);
   });
 });

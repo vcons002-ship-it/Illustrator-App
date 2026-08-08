@@ -456,3 +456,8 @@
 .vr-msg--solidify {
   animation: vr-solidify 720ms var(--vr-spring) both;
 }
+
+/* Your own message condenses too — same beat, your colours. */
+.vr-msg--solidify[data-from="user"] {
+  animation-name: vr-solidify-user;
+}

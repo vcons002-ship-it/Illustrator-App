@@ -270,6 +270,25 @@ export function lastCharRect(el: Element): DOMRect | null {
   return rects.length ? rects[rects.length - 1]! : null;
 }
 
+/**
+ * Roughly where the caret sits in a plain text field, in viewport x.
+ *
+ * A <textarea>'s value lives in its `value`, not in text nodes, so `lastCharRect` cannot see it and
+ * a Range cannot be built over it — measuring it properly means rendering a mirror element with
+ * identical metrics, which is a lot of machinery for a spark origin. An average advance of ~0.52em
+ * is close enough for a caret you cannot see, and clamped so a long line still emits inside the box
+ * rather than off the end of the world.
+ */
+export function estimateCaretX(
+  lastLineLength: number,
+  fontSize: number,
+  left: number,
+  right: number,
+): number {
+  const x = left + 10 + lastLineLength * fontSize * 0.52;
+  return Math.max(left, Math.min(x, right - 8));
+}
+
 export interface ParticleFieldHandle {
   /** Push the volume outward from a point in VIEWPORT coordinates. */
   pulse: (clientX: number, clientY: number, strength?: number) => void;
