@@ -737,6 +737,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         })}
         {props.thinking ? (
           <ThinkingBlock
+            live
             text={props.thinking}
             open={props.thinkingOpen ?? true}
             {...(props.onThinkingOpenChange ? { onOpenChange: props.onThinkingOpenChange } : {})}
@@ -1293,9 +1294,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
 const panelStyle = {
   width: "min(1100px, 96vw)",
   height: "max(480px, calc(100vh - 188px))",
-  background: t.surface.card,
+  // background and border deliberately ABSENT — `.vr-chat-open` owns them, and declared here they
+  // were inline, which beats the class. The chat is meant to open onto the app's own background.
   color: t.text.base,
-  border: `1px solid ${t.border.subtle}`,
   borderRadius: 10,
   display: "flex",
   flexDirection: "column",

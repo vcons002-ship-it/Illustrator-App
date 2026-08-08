@@ -254,6 +254,10 @@
 .vr-msg {
   animation: vr-msg-in 560ms var(--vr-spring) both;
   position: relative;
+  /* The message list is a flex column, and `overflow: hidden` (which .vr-card sets, so the sheen
+   * and the glow are clipped to the bubble) replaces the automatic minimum size of `auto` with 0.
+   * That let the browser squeeze bubbles below their content height and cut the text off. */
+  flex-shrink: 0;
 }
 
 /* The user's message arrives from their own side. Selected by alignment rather than a second
@@ -288,6 +292,10 @@
  */
 .vr-live::before {
   content: "";
+  /* WITHOUT THIS THE AURA SWALLOWS EVERY CLICK BENEATH IT. It is an absolutely-positioned overlay
+   * covering its whole host, so on the reasoning disclosure it sat directly over the <summary> and
+   * made it unopenable. A decorative layer must never be a hit target. */
+  pointer-events: none;
   position: absolute;
   /* inset 0, NOT a negative inset: every bubble also carries .vr-card, whose `overflow: hidden`
    * would clip anything outside the box — and the mask paints ONLY the outer band, so a negative

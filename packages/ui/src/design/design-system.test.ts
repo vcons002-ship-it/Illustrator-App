@@ -609,3 +609,42 @@ describe("the conversation actually moves", () => {
     );
   });
 });
+
+/**
+ * THREE FAULTS FROM ONE CHANGE, ALL SHIPPED, ALL GREEN.
+ *
+ * Putting `.vr-card` on message bubbles brought `overflow: hidden` with it, and that has a
+ * consequence nothing about "a card" suggests: in a flex container, `overflow` other than `visible`
+ * replaces an item's automatic minimum size of `auto` with 0. The bubbles became free to shrink
+ * below their own text, so the chat squeezed an entire conversation into one screen with every
+ * message clipped to a single line and no scrollbar.
+ *
+ * The aura shipped with the same shape of mistake: an absolutely-positioned decorative layer with
+ * no `pointer-events: none`, sitting over the reasoning disclosure and swallowing the click that
+ * opens it.
+ *
+ * Neither is visible in a stylesheet read on its own. Both are asserted here.
+ */
+describe("decoration cannot break layout or interaction", () => {
+  const components = readFileSync(join(STYLES, "components.css"), "utf8");
+  const rule = (sel: string): string =>
+    new RegExp(`\\${sel}(?:::before|::after)? \\{([^}]*)\\}`).exec(components)?.[1] ?? "";
+
+  it("keeps message bubbles from being squeezed below their own text", () => {
+    // .vr-card sets overflow:hidden, which in a flex column zeroes the automatic minimum size.
+    const msg = rule(".vr-msg");
+    expect(msg, ".vr-msg rule not found").toBeTruthy();
+    expect(msg, "bubbles can be shrunk below their content — the chat will clip every message").toMatch(
+      /flex-shrink:\s*0/,
+    );
+  });
+
+  it.each([".vr-card::before", ".vr-msg::after", ".vr-live::before"])(
+    "%s is decoration, not a hit target",
+    (sel) => {
+      // Each covers its whole host. Without this the layer eats every click underneath it, and the
+      // control below simply stops working with nothing logged anywhere.
+      expect(rule(sel), `${sel} has no pointer-events: none`).toMatch(/pointer-events:\s*none/);
+    },
+  );
+});
