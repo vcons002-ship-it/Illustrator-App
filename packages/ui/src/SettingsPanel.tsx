@@ -4015,14 +4015,18 @@ function SectionHeader({ q, title, order }: { q: string; title: string; order: n
     <div
       style={{
         order,
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 700,
-        letterSpacing: 0.6,
+        letterSpacing: 0.8,
         textTransform: "uppercase",
-        opacity: 0.5,
-        margin: "8px 2px 0",
-        paddingBottom: 2,
-        borderBottom: `1px solid ${t.border.subtle}`,
+        // These were at opacity 0.5, which made the five section headings the DIMMEST text in the
+        // panel — dimmer than the group titles they contain, so the hierarchy read upside down and
+        // the sections they exist to separate were hard to pick out at a glance. They are the
+        // panel's primary navigation; they should be the most legible thing in it.
+        color: t.accent.text,
+        margin: "16px 2px 2px",
+        paddingBottom: 4,
+        borderBottom: `1px solid ${t.accent.edge}`,
       }}
     >
       {title}

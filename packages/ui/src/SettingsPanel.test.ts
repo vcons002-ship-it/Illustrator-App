@@ -176,3 +176,30 @@ describe("settings sections", () => {
     expect(groups.filter((g) => g.order >= 25 && g.order < 30)).toEqual([]);
   });
 });
+
+/**
+ * THE SECTION HEADINGS ARE THE PANEL'S NAVIGATION.
+ *
+ * They shipped at `opacity: 0.5`, which made the five headings the DIMMEST text in a panel of 4,000
+ * lines — dimmer than the group titles they contain. The hierarchy read upside down and the
+ * sections they exist to separate were hard to pick out at a glance, which is precisely the problem
+ * the re-sectioning was meant to solve.
+ *
+ * Asserted rather than left to taste, because "make it brighter" is exactly the kind of change that
+ * gets quietly undone by the next person tidying inline styles.
+ */
+describe("the settings section headings are legible", () => {
+  const src = readFileSync(join(__dirname, "SettingsPanel.tsx"), "utf8");
+  const header = /function SectionHeader[\s\S]*?\n\}/.exec(src)?.[0] ?? "";
+
+  it("is not dimmed", () => {
+    expect(header, "SectionHeader not found").toBeTruthy();
+    const dim = /opacity:\s*0?\.\d+/.exec(header)?.[0];
+    expect(dim, `headings are still dimmed (${dim}) — they are the panel's navigation`).toBeUndefined();
+  });
+
+  it("carries a colour of its own rather than inheriting the body text", () => {
+    // A heading the same colour as everything around it separates nothing, whatever its weight.
+    expect(header).toMatch(/color:\s*t\./);
+  });
+});
