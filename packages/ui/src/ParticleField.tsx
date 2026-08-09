@@ -251,10 +251,21 @@ export function stepSpark(s: Spark, dt: number, t: number): Spark | null {
  * the spark's final position to a new mote is what makes typing ADD to the background rather than
  * decorate it.
  *
- * It arrives with its tether already slack, so it drifts on for a moment before the volume claims
- * it, and its seed is where it landed — this is now its home, not a place it is borrowing.
+ * HOME AT THE LANDING POINT, SEED SOMEWHERE IN THE ROOM. This is the whole difference between a
+ * background that typing feeds and one that typing empties. The first version seeded the new mote
+ * where it landed, on the reasoning that it would otherwise "drift back to somewhere it has never
+ * been" — which sounds right and is measurably catastrophic: fifteen seconds of typing replaced the
+ * entire volume with motes whose homes AND seeds were all in one strip beside the caret. The top 60%
+ * of the field ended up completely empty, and `HOME_RECOVERY` reinforced the pile instead of undoing
+ * it, because the pile was now what the field considered home. From outside, a clump nobody is
+ * attracting is indistinguishable from gravity.
+ *
+ * So it settles where it landed — you see the words pile material up right there — and only over the
+ * next forty seconds does it wander out and join the room. Feeding, then dispersing.
+ *
+ * It arrives with its tether already slack, so it drifts on for a moment before the volume claims it.
  */
-export function sparkToParticle(s: Spark, rnd: () => number): Particle {
+export function sparkToParticle(s: Spark, rnd: () => number, w: number, h: number): Particle {
   const z = Math.max(-DEPTH, Math.min(s.z, DEPTH));
   return {
     x: s.x,
@@ -266,9 +277,9 @@ export function sparkToParticle(s: Spark, rnd: () => number): Particle {
     hx: s.x,
     hy: s.y,
     hz: z,
-    sx: s.x,
-    sy: s.y,
-    sz: z,
+    sx: rnd() * w,
+    sy: rnd() * h,
+    sz: (rnd() - 0.5) * 2 * DEPTH,
     r: 0.7 + rnd() * 1.2,
     a: 0.16 + rnd() * 0.3,
     ph: rnd() * Math.PI * 2,
@@ -585,6 +596,8 @@ export function ParticleField({
     let w = 0;
     let h = 0;
     let maxAmbient = 0;
+    /** How many motes at the front of the array are original seeds. They are never retired. */
+    let seedCount = 0;
 
     const resize = (): void => {
       const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -602,6 +615,7 @@ export function ParticleField({
       const n = Math.round(w * h * density);
       maxAmbient = Math.round(n * 1.6); // headroom for sparks that settle, without unbounded growth
       partsRef.current = seedParticles(w, h, n, seeded);
+      seedCount = partsRef.current.length;
     };
 
     const draw = (): void => {
@@ -687,19 +701,26 @@ export function ParticleField({
           vx += cv.vx;
           vy += cv.vy;
         }
+        // A GATHER RELEASES BUT NEVER RESHAPES. Its force is counted toward the slack — so nearby
+        // motes genuinely sweep in as the bubble condenses — and deliberately NOT toward the home
+        // displacement below. A bubble's pull should last exactly long enough to make the air move
+        // and then let go of it; if it dragged homes along, every message would leave a permanent
+        // dent in the volume at the spot it landed, and the field would slowly become a record of
+        // where bubbles have been.
+        let pull = 0;
         for (const g of pulls) {
           const av = attractVelocity(p, g.x, g.y, g.s, g.r);
           vx += av.vx;
           vy += av.vy;
           vz += av.vz;
-          hit += Math.hypot(av.vx, av.vy, av.vz);
+          pull += Math.hypot(av.vx, av.vy, av.vz);
         }
         // Only a real disturbance rearranges the field — ambient drift and the cursor's constant
         // nudge must not, or the volume would slowly migrate wherever the pointer spends its time.
-        if (hit > 0.35) {
-          p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
-          // Release the tether so the mote TRAVELS instead of springing straight back.
-          p = { ...p, slack: Math.min(1, p.slack + Math.min(1, hit / 2)) };
+        if (hit > 0.35) p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
+        // Release the tether so the mote TRAVELS instead of springing straight back.
+        if (hit + pull > 0.35) {
+          p = { ...p, slack: Math.min(1, p.slack + Math.min(1, (hit + pull) / 2)) };
         }
         parts[i] = stepParticle({ ...p, vx, vy, vz }, dt);
       }
@@ -711,10 +732,18 @@ export function ParticleField({
         // A spent spark becomes background — typing ADDS to the field rather than decorating it.
         // Only inside the box: one that flew off the edge would be simulated forever, unseen.
         else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
-          parts.push(sparkToParticle(s, rnd));
-          // Bounded, and the OLDEST goes: those are the original seeds, so a long conversation
-          // gradually replaces the starting field with one the words themselves built.
-          if (parts.length > maxAmbient) parts.splice(0, parts.length - maxAmbient);
+          parts.push(sparkToParticle(s, rnd, w, h));
+          /**
+           * THE SEEDED VOLUME IS IMMORTAL. Retirement starts at `seedCount`, so it can only ever
+           * consume spark-born motes — the ones appended after it — in the order they arrived.
+           *
+           * This used to splice from 0, described as "a long conversation gradually replaces the
+           * starting field with one the words themselves built". It does exactly that, and the
+           * result is that the evenly-distributed volume is gone within about fifteen seconds of
+           * typing, leaving only motes born beside the caret. The room the words are spoken in has
+           * to outlive the words; sparks are allowed to furnish it, never to become it.
+           */
+          if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
         }
       }
       sparksRef.current = live;

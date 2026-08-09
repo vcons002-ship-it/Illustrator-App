@@ -521,13 +521,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
    * A BUBBLE CONDENSING GATHERS THE AIR AROUND IT.
    *
    * Fired one frame after the message lands, so the element exists and can be measured — on the
-   * same tick the list has only just been told about it. Located by the solidify class rather than
-   * a ref, because the bubble is created by the list rather than owned here.
+   * same tick the list has only just been told about it. Located by index rather than by a ref,
+   * because the bubble is created by the list rather than owned here.
+   *
+   * BY INDEX, NOT BY `.vr-solidify`. The class comes from `solidifyAtRef`, and writing a ref does
+   * not schedule a render — so when this ran, the class was still painted on the PREVIOUS message
+   * and each new bubble pulled the air toward the one before it. The index attribute is emitted on
+   * every bubble on every render and cannot be a commit behind.
    */
   useEffect(() => {
     if (props.messages.length === 0) return;
     const id = requestAnimationFrame(() => {
-      const el = panelRef.current?.querySelector(`.${cx.solidify}`);
+      const at = solidifyAtRef.current;
+      if (at < 0) return;
+      const el = panelRef.current?.querySelector(`[data-msg-index="${at}"]`);
       if (!el) return;
       const r = el.getBoundingClientRect();
       fieldRef.current?.gather(r.left + r.width / 2, r.top + r.height / 2, 3.2, 360);

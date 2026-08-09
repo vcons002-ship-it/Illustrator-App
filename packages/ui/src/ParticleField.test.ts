@@ -17,6 +17,7 @@ import {
   wrapCaret,
   PULSE_RADIUS,
   type Particle,
+  type Spark,
 } from "./ParticleField.js";
 
 /**
@@ -520,17 +521,74 @@ describe("sparks carry, and then become the background", () => {
     expect(s.z, "sparks never travelled into depth").toBeGreaterThan(0);
   });
 
-  it("hands its final position to a mote that belongs there", () => {
+  it("settles where it landed", () => {
     const s = { ...emitSparks(40, 60, 1, rndSeq())[0]!, x: 120, y: 90, z: 40 };
-    const p = sparkToParticle(s, rndSeq());
-    expect(p.hx).toBe(120);
-    expect(p.sx, "the new mote would drift back to somewhere it has never been").toBe(120);
+    const p = sparkToParticle(s, rndSeq(), 600, 400);
+    expect(p.hx, "a spent spark should come to rest where it flew to").toBe(120);
+    expect(p.hy).toBe(90);
     expect(p.slack, "it should coast a moment before the volume claims it").toBeGreaterThan(0);
+  });
+
+  it("is seeded into the room rather than at the caret", () => {
+    // The inverse of this assertion is what emptied the top of the field: seeding a converted spark
+    // where it landed meant HOME_RECOVERY pulled it back to the clump forever, so the clump was
+    // permanent. Its long-term home has to be the volume, not the spot the words were typed.
+    const seeds = Array.from({ length: 40 }, (_, i) => {
+      const s = { ...emitSparks(0, 0, 1, rndSeq(i + 1))[0]!, x: 120, y: 390, z: 0 };
+      return sparkToParticle(s, rndSeq(i + 1), 600, 400).sy;
+    });
+    expect(
+      Math.min(...seeds),
+      "every converted spark seeded down by the caret; the field will pile up there",
+    ).toBeLessThan(150);
+    expect(Math.max(...seeds), "no converted spark seeded in the top of the volume").toBeGreaterThan(250);
   });
 
   it("clamps a converted spark into the volume's depth", () => {
     const s = { ...emitSparks(0, 0, 1, rndSeq())[0]!, z: DEPTH * 10 };
-    expect(sparkToParticle(s, rndSeq()).z).toBeLessThanOrEqual(DEPTH);
+    expect(sparkToParticle(s, rndSeq(), 600, 400).z).toBeLessThanOrEqual(DEPTH);
+  });
+
+  it("does not empty the volume it is thrown through", () => {
+    /**
+     * THE GATE FOR THE BUG THE OWNER ACTUALLY SAW. Fifteen seconds of typing at the composer used to
+     * leave the top 60% of the field with literally zero motes — measured [0, 0, 0, 31, 69] across
+     * five horizontal bands — because spent sparks were seeded at the caret and the retirement pass
+     * consumed the original seeds oldest-first. Nothing attracts anything here; the clump is simply
+     * all that is left. This asserts on the OUTCOME rather than on any one force, which is the only
+     * form that could have caught it.
+     */
+    const w = 620;
+    const h = 520;
+    const rnd = rndSeq(11);
+    const n = Math.round(w * h * 0.00019);
+    const parts = seedParticles(w, h, n, rnd);
+    const seedCount = parts.length;
+    const maxAmbient = Math.round(n * 1.6);
+    let sparks: Spark[] = [];
+
+    for (let f = 0; f < 900; f++) {
+      if (f % 8 === 0) sparks.push(...emitSparks(120 + (f % 300), h - 52, 4, rnd));
+      for (let i = 0; i < parts.length; i++) parts[i] = stepParticle(parts[i]!, 1);
+      const live: Spark[] = [];
+      for (const s of sparks) {
+        const nx = stepSpark(s, 1, f * 16.667);
+        if (nx) live.push(nx);
+        else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
+          parts.push(sparkToParticle(s, rnd, w, h));
+          if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
+        }
+      }
+      sparks = live;
+    }
+
+    const bands = [0, 0, 0, 0, 0];
+    for (const p of parts) bands[Math.min(4, Math.floor((p.y / h) * 5))]! += 1;
+    const topHalf = bands[0]! + bands[1]!;
+    expect(
+      topHalf / parts.length,
+      `typing hollowed the field out: bands ${bands.join(",")}`,
+    ).toBeGreaterThan(0.2);
   });
 });
 

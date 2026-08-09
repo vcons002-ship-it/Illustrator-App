@@ -838,6 +838,11 @@ export const MessageBubble = memo(function MessageBubble({
         (justFinished ? ` ${cx.solidify}` : "")
       }
       data-from={isUser ? "user" : "assistant"}
+      // The gather aims at this, not at `.vr-solidify`. A ref set in an effect does not re-render,
+      // so at the moment the gather runs the solidify class is still on the PREVIOUS message —
+      // searching for it aimed a message's gravity at the one before it. The index is in the DOM
+      // for every bubble on every render, so it is never a commit behind.
+      data-msg-index={index}
       // `background` is deliberately NOT set here. It used to be, and an inline background beats
       // the class that now paints the translucent floating pane — the same cascade trap that made
       // button hover invisible. .vr-msg-float owns the fill, the blur and the edge.
