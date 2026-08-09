@@ -223,7 +223,19 @@ export function stepSpark(s: Spark, dt: number, t: number): Spark | null {
   const ox = Math.cos(t * 0.004 + s.ph) * s.spin;
   const oy = Math.sin(t * 0.004 + s.ph) * s.spin;
   const vx = (s.vx + ox * dt) * drag;
-  const vy = (s.vy + oy * dt - 0.012 * dt) * drag; // a whisper of lift, so sparks rise as they fade
+  /**
+   * NO LIFT. There was a constant -0.012/frame here, described as "a whisper" — against this drag
+   * that is a terminal speed of 0.8px per frame, so every spark rose 57–134px before it converted.
+   *
+   * A whisper applied to EVERY spark is not a whisper, it is a current. The burst acquired a net
+   * upward flow, and because spent sparks become motes where they land, the field accumulated them
+   * up there too. From the outside that reads exactly as a centre of gravity hanging above the
+   * chat — an attractor nobody wrote, made of a bias nobody would notice in one particle.
+   *
+   * A spark now carries only what it was thrown with, its own orbit, and drag. It shoots away and
+   * slows down, which is all it was ever supposed to do.
+   */
+  const vy = (s.vy + oy * dt) * drag;
   // Receding INTO the volume rather than being pulled back to the screen plane. This is what makes
   // the letters look like they are throwing material into the background instead of sprinkling it
   // in front of the text.
