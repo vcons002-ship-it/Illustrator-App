@@ -3,6 +3,7 @@ import {
   DEPTH,
   MAX_SPARKS,
   driftAcceleration,
+  attractVelocity,
   displaceHome,
   emitSparks,
   caretXFromWidth,
@@ -11,6 +12,7 @@ import {
   project,
   seedParticles,
   stepParticle,
+  sparkToParticle,
   stepSpark,
   wrapCaret,
   PULSE_RADIUS,
@@ -28,7 +30,7 @@ import {
  */
 
 const at = (x: number, y: number, vx = 0, vy = 0, z = 0): Particle => ({
-  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4, sx: x, sy: y, sz: z,
+  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4, sx: x, sy: y, sz: z, slack: 0,
 });
 
 const rndSeq = (seed = 7) => () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
@@ -455,5 +457,101 @@ describe("finding the caret when the field wraps", () => {
   it("survives a zero-width field rather than dividing into an infinite loop", () => {
     const r = wrapCaret("hello world", measure, 0);
     expect(Number.isFinite(r.line) && Number.isFinite(r.x)).toBe(true);
+  });
+});
+
+/**
+ * "THEY JUST WIGGLE" WAS A STRUCTURAL COMPLAINT, NOT A TUNING ONE.
+ *
+ * With the tether at full grip a shoved mote peaks 16px away after TEN frames and is already on its
+ * way back — the spring catches it before the eye registers a direction. No amount of extra impulse
+ * fixes that shape; it just makes a faster wiggle.
+ *
+ * Releasing the tether on impact is the fix: the mote coasts, decelerating on drag alone, and the
+ * spring fades back in as the slack decays. Same push travels ~40px over half a second.
+ */
+describe("a push travels instead of springing back", () => {
+  const push = (slack: number): { peak: number; frame: number } => {
+    let p: Particle = { ...at(0, 0), vx: 2.6, slack };
+    let peak = 0;
+    let frame = 0;
+    for (let i = 0; i < 900; i++) {
+      p = stepParticle(p, 1);
+      const d = Math.abs(p.x - p.hx);
+      if (d > peak) {
+        peak = d;
+        frame = i;
+      }
+    }
+    return { peak, frame };
+  };
+
+  it("carries far enough, and long enough, to read as being pushed", () => {
+    const free = push(1);
+    expect(free.peak, `only travelled ${free.peak.toFixed(1)}px`).toBeGreaterThan(30);
+    expect(free.frame, "peaked too fast to see a direction").toBeGreaterThan(18);
+  });
+
+  it("travels much further released than gripped — this is the whole difference", () => {
+    expect(push(1).peak).toBeGreaterThan(push(0).peak * 2);
+  });
+
+  it("still comes to rest, so slack cannot leave a mote adrift", () => {
+    let p: Particle = { ...at(0, 0), vx: 2.6, slack: 1 };
+    for (let i = 0; i < 6000; i++) p = stepParticle(p, 1);
+    expect(p.slack).toBeLessThan(0.01);
+    expect(Math.hypot(p.vx, p.vy, p.vz), "never settled").toBeLessThan(0.05);
+  });
+});
+
+describe("sparks carry, and then become the background", () => {
+  it("keeps most of its speed rather than stopping on the spot", () => {
+    let s = emitSparks(0, 0, 1, rndSeq())[0]!;
+    const v0 = Math.hypot(s.vx, s.vy, s.vz);
+    for (let i = 0; i < 30; i++) s = stepSpark(s, 1, i * 16.7)!;
+    expect(Math.hypot(s.vx, s.vy, s.vz) / v0, "a thrown spark stalled immediately").toBeGreaterThan(0.4);
+  });
+
+  it("recedes into the volume rather than being pulled back to the screen", () => {
+    // Sparks that hug the screen plane read as sprinkles in front of the text; the ask was for
+    // material thrown INTO the background.
+    let s = { ...emitSparks(0, 0, 1, rndSeq())[0]!, z: 0, vz: 0 };
+    for (let i = 0; i < 60; i++) s = stepSpark(s, 1, i * 16.7)!;
+    expect(s.z, "sparks never travelled into depth").toBeGreaterThan(0);
+  });
+
+  it("hands its final position to a mote that belongs there", () => {
+    const s = { ...emitSparks(40, 60, 1, rndSeq())[0]!, x: 120, y: 90, z: 40 };
+    const p = sparkToParticle(s, rndSeq());
+    expect(p.hx).toBe(120);
+    expect(p.sx, "the new mote would drift back to somewhere it has never been").toBe(120);
+    expect(p.slack, "it should coast a moment before the volume claims it").toBeGreaterThan(0);
+  });
+
+  it("clamps a converted spark into the volume's depth", () => {
+    const s = { ...emitSparks(0, 0, 1, rndSeq())[0]!, z: DEPTH * 10 };
+    expect(sparkToParticle(s, rndSeq()).z).toBeLessThanOrEqual(DEPTH);
+  });
+});
+
+describe("a forming bubble gathers the air", () => {
+  it("pulls a nearby mote toward it", () => {
+    const v = attractVelocity({ x: 200, y: 0, z: 0 }, 0, 0, 3, 340);
+    expect(v.vx, "pushed away instead of drawn in").toBeLessThan(0);
+  });
+
+  it("does nothing beyond its reach", () => {
+    expect(attractVelocity({ x: 400, y: 0, z: 0 }, 0, 0, 3, 340)).toEqual({ vx: 0, vy: 0, vz: 0 });
+  });
+
+  it("is weakest at the centre, so nothing collapses into a point", () => {
+    const near = Math.abs(attractVelocity({ x: 8, y: 0, z: 0 }, 0, 0, 3, 340).vx);
+    const mid = Math.abs(attractVelocity({ x: 170, y: 0, z: 0 }, 0, 0, 3, 340).vx);
+    expect(mid, "the pull is strongest where the motes already are").toBeGreaterThan(near);
+  });
+
+  it("never divides by zero for a mote sitting exactly on the bubble", () => {
+    const v = attractVelocity({ x: 0, y: 0, z: 0 }, 0, 0, 3, 340);
+    expect(Number.isFinite(v.vx) && Number.isFinite(v.vy) && Number.isFinite(v.vz)).toBe(true);
   });
 });
