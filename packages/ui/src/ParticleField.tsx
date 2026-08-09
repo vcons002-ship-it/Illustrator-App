@@ -46,6 +46,16 @@ export interface Particle {
   sx: number;
   sy: number;
   sz: number;
+  /**
+   * HOW MUCH THE TETHER IS CURRENTLY RELEASED. 1 = free, 0 = fully sprung.
+   *
+   * This is what turns a shove into travel. With the spring always at full grip a pushed mote
+   * peaks 16px away after ten frames and is on its way back before the eye registers it — which is
+   * precisely the "they just wiggle" that kept being reported. Releasing the tether on impact lets
+   * the mote coast and decelerate on drag alone, reaching ~40px over half a second, and the spring
+   * fades back in as the slack decays.
+   */
+  slack: number;
 }
 
 /**
@@ -97,6 +107,8 @@ export const PLASTICITY = 0.55;
 /** Per-frame pull of a displaced home back to where it was seeded. ~40s to undo a full displacement
  * — slow enough to read as permanent, fast enough that the field never permanently thins. */
 export const HOME_RECOVERY = 0.0004;
+/** Per-frame decay of the released tether. 0.995 ≈ half a second of near-free flight. */
+export const SLACK_DECAY = 0.995;
 export const PULSE_RADIUS = 200;
 /**
  * HOW MUCH DEPTH COUNTS TOWARD AN IMPULSE'S DISTANCE, and the reason the background stopped
@@ -153,9 +165,11 @@ export function driftAcceleration(
 /** Advance one tethered mote. PURE — the reason the physics is testable with no canvas or clock. */
 export function stepParticle(p: Particle, dt: number): Particle {
   const d = DAMPING ** dt;
-  const vx = (p.vx + (p.hx - p.x) * SPRING * dt) * d;
-  const vy = (p.vy + (p.hy - p.y) * SPRING * dt) * d;
-  const vz = (p.vz + (p.hz - p.z) * SPRING * dt) * d;
+  // A released tether pulls proportionally less; drag alone slows the mote until it fades back in.
+  const grip = SPRING * (1 - p.slack);
+  const vx = (p.vx + (p.hx - p.x) * grip * dt) * d;
+  const vy = (p.vy + (p.hy - p.y) * grip * dt) * d;
+  const vz = (p.vz + (p.hz - p.z) * grip * dt) * d;
   // The home creeps back toward where this mote was seeded, undoing accumulated displacement over
   // roughly forty seconds. Without it the field slowly migrates to wherever the text appears.
   const k = HOME_RECOVERY * dt;
@@ -170,6 +184,7 @@ export function stepParticle(p: Particle, dt: number): Particle {
     hx: p.hx + (p.sx - p.hx) * k,
     hy: p.hy + (p.sy - p.hy) * k,
     hz: p.hz + (p.sz - p.hz) * k,
+    slack: p.slack * SLACK_DECAY ** dt,
   };
 }
 
@@ -200,14 +215,78 @@ export function displaceHome(p: Particle, hit: number, w: number, h: number): Pa
 export function stepSpark(s: Spark, dt: number, t: number): Spark | null {
   const life = s.life - s.decay * dt;
   if (life <= 0) return null;
-  const drag = 0.955 ** dt;
-  // The dance: a slow circular force, each spark on its own phase.
+  // 0.985, not 0.955: a spark thrown off a letter should CARRY. At the old drag it lost almost all
+  // its speed within a few frames and danced on the spot, which is not what being thrown looks like.
+  const drag = 0.985 ** dt;
+  // The dance rides on top of the travel rather than replacing it — a small circular force, each
+  // spark on its own phase, so a burst spreads instead of moving as one clump.
   const ox = Math.cos(t * 0.004 + s.ph) * s.spin;
   const oy = Math.sin(t * 0.004 + s.ph) * s.spin;
   const vx = (s.vx + ox * dt) * drag;
   const vy = (s.vy + oy * dt - 0.012 * dt) * drag; // a whisper of lift, so sparks rise as they fade
-  const vz = (s.vz - s.z * 0.004 * dt) * drag;
+  // Receding INTO the volume rather than being pulled back to the screen plane. This is what makes
+  // the letters look like they are throwing material into the background instead of sprinkling it
+  // in front of the text.
+  const vz = (s.vz + 0.06 * dt) * drag;
   return { ...s, life, vx, vy, vz, x: s.x + vx * dt, y: s.y + vy * dt, z: s.z + vz * dt };
+}
+
+/**
+ * A spent spark becomes part of the background it flew into.
+ *
+ * Sparks used to simply vanish, so the field they were thrown through was never actually changed by
+ * the typing — the words scattered some light and the room went back to exactly how it was. Handing
+ * the spark's final position to a new mote is what makes typing ADD to the background rather than
+ * decorate it.
+ *
+ * It arrives with its tether already slack, so it drifts on for a moment before the volume claims
+ * it, and its seed is where it landed — this is now its home, not a place it is borrowing.
+ */
+export function sparkToParticle(s: Spark, rnd: () => number): Particle {
+  const z = Math.max(-DEPTH, Math.min(s.z, DEPTH));
+  return {
+    x: s.x,
+    y: s.y,
+    z,
+    vx: s.vx,
+    vy: s.vy,
+    vz: s.vz,
+    hx: s.x,
+    hy: s.y,
+    hz: z,
+    sx: s.x,
+    sy: s.y,
+    sz: z,
+    r: 0.7 + rnd() * 1.2,
+    a: 0.16 + rnd() * 0.3,
+    ph: rnd() * Math.PI * 2,
+    slack: 0.85,
+  };
+}
+
+/**
+ * The pull a newly-formed bubble exerts, drawing nearby motes toward it.
+ *
+ * The mirror of `impulseVelocity` — inward rather than outward, weakest at the centre so nothing
+ * piles up in a point, and reaching further because a message landing is a larger event than a
+ * keystroke. A bubble condensing out of loose text ought to gather the air around it.
+ */
+export function attractVelocity(
+  p: Pick<Particle, "x" | "y" | "z">,
+  cx: number,
+  cy: number,
+  strength: number,
+  radius: number,
+): { vx: number; vy: number; vz: number } {
+  const dx = cx - p.x;
+  const dy = cy - p.y;
+  const dz = -p.z * PULSE_Z_WEIGHT;
+  const d = Math.hypot(dx, dy, dz);
+  if (d > radius || d < 0.001) return { vx: 0, vy: 0, vz: 0 };
+  // Ramps UP with distance inside the radius, so motes already close are barely touched and the
+  // gather reads as a sweep inward rather than a collapse.
+  const f = (d / radius) * (1 - d / radius) * 4 * strength;
+  return { vx: (dx / d) * f, vy: (dy / d) * f, vz: (dz / d) * f };
 }
 
 /**
@@ -287,6 +366,7 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
       sx: cx,
       sy: cy,
       sz: cz,
+      slack: 0,
     });
   }
   return out;
@@ -418,6 +498,8 @@ export interface ParticleFieldHandle {
   pulse: (clientX: number, clientY: number, strength?: number) => void;
   /** Throw sparks off the text at a point in VIEWPORT coordinates. */
   emit: (clientX: number, clientY: number, count?: number) => void;
+  /** Draw nearby motes IN toward a point — a bubble condensing gathers the air around it. */
+  gather: (clientX: number, clientY: number, strength?: number, radius?: number) => void;
 }
 
 export function ParticleField({
@@ -435,6 +517,7 @@ export function ParticleField({
   const sparksRef = useRef<Spark[]>([]);
   const pendingRef = useRef<{ x: number; y: number; s: number }[]>([]);
   const emitRef = useRef<{ x: number; y: number; n: number }[]>([]);
+  const pullRef = useRef<{ x: number; y: number; s: number; r: number }[]>([]);
   const cursorRef = useRef<{ x: number; y: number } | null>(null);
 
   /** Deterministic PRNG — a shared one, so nothing here depends on Math.random. */
@@ -465,6 +548,10 @@ export function ParticleField({
         const l = toLocal(clientX, clientY);
         if (l) emitRef.current.push({ ...l, n: count });
       },
+      gather: (clientX, clientY, strength = 3, radius = 340) => {
+        const l = toLocal(clientX, clientY);
+        if (l) pullRef.current.push({ ...l, s: strength, r: radius });
+      },
     };
   });
 
@@ -485,6 +572,7 @@ export function ParticleField({
     let last = 0;
     let w = 0;
     let h = 0;
+    let maxAmbient = 0;
 
     const resize = (): void => {
       const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -499,7 +587,9 @@ export function ParticleField({
         s = (s * 1664525 + 1013904223) % 4294967296;
         return s / 4294967296;
       };
-      partsRef.current = seedParticles(w, h, Math.round(w * h * density), seeded);
+      const n = Math.round(w * h * density);
+      maxAmbient = Math.round(n * 1.6); // headroom for sparks that settle, without unbounded growth
+      partsRef.current = seedParticles(w, h, n, seeded);
     };
 
     const draw = (): void => {
@@ -556,6 +646,8 @@ export function ParticleField({
       pendingRef.current = [];
       const births = emitRef.current;
       emitRef.current = [];
+      const pulls = pullRef.current;
+      pullRef.current = [];
 
       for (const b of births) {
         const room = MAX_SPARKS - sparksRef.current.length;
@@ -576,16 +668,27 @@ export function ParticleField({
         const { ax, ay, az } = driftAcceleration(p, now);
         let vx = p.vx + ax * dt;
         let vy = p.vy + ay * dt;
-        const vz = p.vz + az * dt;
+        let vz = p.vz + az * dt;
         const cur = cursorRef.current;
         if (cur) {
           const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
           vx += cv.vx;
           vy += cv.vy;
         }
+        for (const g of pulls) {
+          const av = attractVelocity(p, g.x, g.y, g.s, g.r);
+          vx += av.vx;
+          vy += av.vy;
+          vz += av.vz;
+          hit += Math.hypot(av.vx, av.vy, av.vz);
+        }
         // Only a real disturbance rearranges the field — ambient drift and the cursor's constant
         // nudge must not, or the volume would slowly migrate wherever the pointer spends its time.
-        if (hit > 0.35) p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
+        if (hit > 0.35) {
+          p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
+          // Release the tether so the mote TRAVELS instead of springing straight back.
+          p = { ...p, slack: Math.min(1, p.slack + Math.min(1, hit / 2)) };
+        }
         parts[i] = stepParticle({ ...p, vx, vy, vz }, dt);
       }
 
@@ -593,6 +696,14 @@ export function ParticleField({
       for (const s of sparksRef.current) {
         const n = stepSpark(s, dt, now);
         if (n) live.push(n);
+        // A spent spark becomes background — typing ADDS to the field rather than decorating it.
+        // Only inside the box: one that flew off the edge would be simulated forever, unseen.
+        else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
+          parts.push(sparkToParticle(s, rnd));
+          // Bounded, and the OLDEST goes: those are the original seeds, so a long conversation
+          // gradually replaces the starting field with one the words themselves built.
+          if (parts.length > maxAmbient) parts.splice(0, parts.length - maxAmbient);
+        }
       }
       sparksRef.current = live;
 

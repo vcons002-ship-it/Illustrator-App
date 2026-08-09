@@ -517,6 +517,24 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     }
   }, [props.messages.length]);
 
+  /**
+   * A BUBBLE CONDENSING GATHERS THE AIR AROUND IT.
+   *
+   * Fired one frame after the message lands, so the element exists and can be measured — on the
+   * same tick the list has only just been told about it. Located by the solidify class rather than
+   * a ref, because the bubble is created by the list rather than owned here.
+   */
+  useEffect(() => {
+    if (props.messages.length === 0) return;
+    const id = requestAnimationFrame(() => {
+      const el = panelRef.current?.querySelector(`.${cx.solidify}`);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      fieldRef.current?.gather(r.left + r.width / 2, r.top + r.height / 2, 3.2, 360);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [props.messages.length]);
+
   const streamingText = props.streamingText;
   useEffect(() => {
     if (!streamingText) return;
