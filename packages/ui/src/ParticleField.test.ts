@@ -555,3 +555,46 @@ describe("a forming bubble gathers the air", () => {
     expect(Number.isFinite(v.vx) && Number.isFinite(v.vy) && Number.isFinite(v.vz)).toBe(true);
   });
 });
+
+/**
+ * A BURST MUST NOT HAVE A PREFERRED DIRECTION ON SCREEN.
+ *
+ * `stepSpark` carried a constant upward acceleration, commented as "a whisper of lift". Against its
+ * drag that is a terminal 0.8px per frame — 57 to 134px of rise over a spark's life — and it
+ * applied to every spark equally. A bias shared by every member of a population is not a whisper,
+ * it is a current: the burst flowed upward, spent sparks became motes where they landed, and the
+ * field grew a clump above the composer.
+ *
+ * Reported as gravity existing in the space above the chat window, which is exactly what an
+ * unintended uniform force looks like from the outside. Nothing in a single particle's motion would
+ * have shown it; only the centroid of many does.
+ */
+describe("a burst has no centre of attraction", () => {
+  const centroid = (ss: readonly { x: number; y: number }[]): { x: number; y: number } => ({
+    x: ss.reduce((a, s) => a + s.x, 0) / ss.length,
+    y: ss.reduce((a, s) => a + s.y, 0) / ss.length,
+  });
+
+  it("does not drift systematically up or down the screen", () => {
+    let ss = emitSparks(0, 0, 400, rndSeq());
+    for (let i = 0; i < 120; i++) {
+      ss = ss.map((s) => stepSpark(s, 1, i * 16.7)).filter((s): s is NonNullable<typeof s> => s !== null);
+    }
+    const c = centroid(ss);
+    const spread = Math.max(...ss.map((s) => Math.hypot(s.x, s.y)));
+    // The centroid should stay near the origin relative to how far the burst has spread. A uniform
+    // force shows up here and nowhere else.
+    expect(Math.abs(c.y) / spread, `burst drifted ${c.y.toFixed(0)}px vertically`).toBeLessThan(0.2);
+    expect(Math.abs(c.x) / spread).toBeLessThan(0.2);
+  });
+
+  it("still recedes into depth, which is the one direction that IS wanted", () => {
+    // Depth is deliberate — the letters throw material into the background. Screen-plane bias is
+    // not. This pins the distinction so removing one does not quietly remove the other.
+    let ss = emitSparks(0, 0, 200, rndSeq());
+    for (let i = 0; i < 120; i++) {
+      ss = ss.map((s) => stepSpark(s, 1, i * 16.7)).filter((s): s is NonNullable<typeof s> => s !== null);
+    }
+    expect(ss.reduce((a, s) => a + s.z, 0) / ss.length).toBeGreaterThan(20);
+  });
+});
