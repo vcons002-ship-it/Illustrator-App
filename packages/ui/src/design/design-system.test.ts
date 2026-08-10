@@ -498,6 +498,50 @@ describe("the interaction classes are actually worn by components", () => {
  * Half a migration looks exactly like a finished one from the test suite's side. This is the half
  * that was missing: the declarations the class now owns have to leave the inline object.
  */
+/**
+ * THE BACKDROP HAS TO BE VISIBLE, AND TWO SEPARATE THINGS CAN HIDE IT.
+ *
+ * The particle field now sits BEHIND the whole app at z-index -1, which only works because the
+ * shell is transparent and the canvas carries the base colour itself. `styles.shell` used to
+ * declare `background` inline — the same cascade trap that made every button's hover invisible —
+ * and an inline value there beats `.vr-app-backdrop` and paints over the entire field.
+ *
+ * And nothing may introduce a stacking context on the shell: `isolation`, a `transform`, a
+ * `filter` or a `z-index` on `.vr-app` all trap the negative z-index inside, where the shell's own
+ * paint order puts it behind everything including the background. That failure is total and silent
+ * — the field simply is not there — so it is asserted rather than remembered.
+ */
+describe("the particle backdrop can actually be seen", () => {
+  const components = readFileSync(join(STYLES, "components.css"), "utf8");
+  const base = readFileSync(join(STYLES, "base.css"), "utf8");
+
+  it("puts the canvas behind the app and gives it the background to carry", () => {
+    const rule = /\.vr-backdrop \{([\s\S]*?)\}/.exec(components)?.[1] ?? "";
+    expect(rule, ".vr-backdrop not found").toBeTruthy();
+    expect(rule, "the canvas is not behind the shell").toMatch(/z-index:\s*-1/);
+    expect(rule, "the canvas paints no background, so the page behind it is bare").toMatch(/background:/);
+    expect(/\.vr-app-backdrop \{([\s\S]*?)\}/.exec(components)?.[1] ?? "").toMatch(
+      /background:\s*transparent/,
+    );
+  });
+
+  it("keeps the shell out of the way, in the sheet and inline", () => {
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    const shell = /\n {2}shell: \{([\s\S]*?)\n {2}\},/.exec(app)?.[1] ?? "";
+    expect(shell, "styles.shell not found").toBeTruthy();
+    expect(shell, "styles.shell sets background inline, which beats .vr-app-backdrop").not.toContain(
+      "background:",
+    );
+
+    const rule = /\.vr-app \{([\s\S]*?)\}/.exec(base)?.[1] ?? "";
+    for (const prop of ["isolation", "transform", "filter", "z-index"]) {
+      expect(rule, `.vr-app sets ${prop}, which traps the backdrop's negative z-index`).not.toContain(
+        prop,
+      );
+    }
+  });
+});
+
 describe("hover can actually reach the app's buttons", () => {
   const components = readFileSync(join(STYLES, "components.css"), "utf8");
 

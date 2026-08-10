@@ -74,8 +74,12 @@ export const cx = {
   chatOpen: "vr-chat-open",
   /** A message bubble as a floating pane: translucent, blurred, legible over the field. */
   msgFloat: "vr-msg-float",
-  /** The particle canvas. */
+  /** The particle canvas, filling its own panel. */
   field: "vr-field",
+  /** The particle canvas as the whole screen, behind the entire app. */
+  backdrop: "vr-backdrop",
+  /** On the shell: this app has a particle backdrop, so the shell must not paint over it. */
+  appBackdrop: "vr-app-backdrop",
   /** Anything that must paint above the field. */
   aboveField: "vr-above-field",
 

@@ -45,6 +45,7 @@ import {
   wrapCaret,
   type ParticleFieldHandle,
 } from "./ParticleField.js";
+import { useSharedParticleField } from "./ParticleBackdrop.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -444,7 +445,28 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   /** The composer, so a send can be felt as well as seen. */
   const composerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fieldRef = useRef<ParticleFieldHandle | null>(null);
+  /**
+   * THE FIELD IS THE SCREEN WHEN THERE IS ONE, AND THIS PANEL WHEN THERE IS NOT.
+   *
+   * A docked chat is roughly 620×320, most of which is header and composer, so a field confined to
+   * it held about 38 motes in a thin strip — which is what "the only particles on screen are above
+   * the chat window" was describing. It was never a physics problem; there was nowhere else for a
+   * mote to be. `ParticleBackdrop` gives the whole viewport, and every emit/pulse/gather here works
+   * unchanged because they all pass VIEWPORT coordinates and the handle localises them itself.
+   *
+   * The local fallback stays for `apps/extension`, which mounts this into other people's pages where
+   * a full-screen canvas would not be ours to paint.
+   */
+  const sharedFieldRef = useRef<ParticleFieldHandle | null>(null);
+  sharedFieldRef.current = useSharedParticleField();
+  const ownFieldRef = useRef<ParticleFieldHandle | null>(null);
+  // A getter rather than a value, so every call site reads whichever field is live at the moment it
+  // fires — the backdrop mounts in an effect, after this component has already rendered once.
+  const fieldRef = useRef({
+    get current(): ParticleFieldHandle | null {
+      return sharedFieldRef.current ?? ownFieldRef.current;
+    },
+  }).current;
   const panelRef = useRef<HTMLDivElement | null>(null);
   /**
    * Every streaming update shoves the field where the caret is.
@@ -616,9 +638,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       className={`${cx.chatOpen} ${cx.aboveField}`}
       style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}
     >
-      {/* The field fills the PANEL, not the scroller — inside the scroll container it would slide
-          away with the messages. Absolute against this root, which .vr-above-field positions. */}
-      <ParticleField className={cx.field} handleRef={fieldRef} />
+      {/* Only when nothing owns the screen. With a backdrop mounted this panel would be running a
+          second simulation behind the first, at panel density, for no visible gain. Absolute against
+          this root rather than the scroller, or it would slide away with the messages. */}
+      {sharedFieldRef.current === null && (
+        <ParticleField className={cx.field} handleRef={ownFieldRef} />
+      )}
       <div style={minimized ? { ...headerStyle, paddingBottom: 0 } : headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>

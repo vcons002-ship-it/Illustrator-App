@@ -16,9 +16,12 @@ import {
   stepSpark,
   wrapCaret,
   PULSE_RADIUS,
+  SCROLL_CLAMP,
+  scrollVelocity,
   type Particle,
   type Spark,
 } from "./ParticleField.js";
+import { BACKDROP_DENSITY } from "./ParticleBackdrop.js";
 
 /**
  * The physics is pure on purpose — no canvas, no DOM, no clock — so the two properties that make
@@ -589,6 +592,77 @@ describe("sparks carry, and then become the background", () => {
       topHalf / parts.length,
       `typing hollowed the field out: bands ${bands.join(",")}`,
     ).toBeGreaterThan(0.2);
+  });
+});
+
+describe("scrolling stirs the room", () => {
+  it("carries the front of the volume further than the back", () => {
+    const front = scrollVelocity({ z: -DEPTH, ph: 0 }, 30);
+    const back = scrollVelocity({ z: DEPTH, ph: 0 }, 30);
+    // A rigid translation would read as the background scrolling too. The gradient is the effect.
+    expect(Math.abs(front.vy)).toBeGreaterThan(Math.abs(back.vy) * 2);
+    expect(front.vy, "the field moved WITH the content instead of against it").toBeLessThan(0);
+  });
+
+  it("ignores the excess on a fling or a jump to a chapter", () => {
+    const fast = scrollVelocity({ z: 0, ph: 0 }, SCROLL_CLAMP * 100);
+    const clamped = scrollVelocity({ z: 0, ph: 0 }, SCROLL_CLAMP);
+    expect(fast.vy).toBeCloseTo(clamped.vy, 6);
+  });
+
+  it("scatters rather than sliding as one sheet", () => {
+    const a = scrollVelocity({ z: 0, ph: 0.3 }, 30);
+    const b = scrollVelocity({ z: 0, ph: 2.9 }, 30);
+    expect(a.vx, "every mote took the same sideways push").not.toBeCloseTo(b.vx, 3);
+  });
+
+  /**
+   * THE GATE FOR A BUG THAT EVERY SETTLING TEST WOULD HAVE PASSED.
+   *
+   * Scroll is the only SUSTAINED force in this field; everything else is a single frame. The first
+   * version fed it into the slack, the way a pulse and a gather do — and slack releases the spring,
+   * so a force arriving every frame had nothing opposing it but drag. Ten seconds of ordinary
+   * scrolling reached 47,000px per frame and four million pixels off screen. It still came home
+   * afterwards, and it still settled to zero velocity, so "the field always settles" was perfectly
+   * true the whole time and the background would have been simply absent while you read.
+   *
+   * The excursion DURING the force is the property that matters, and this is the only test of it.
+   */
+  it("never leaves the screen, however long the scroll goes on", () => {
+    let p: Particle = { ...at(500, 500), z: -DEPTH }; // front plane: carried the most
+    let worst = 0;
+    for (let i = 0; i < 900; i++) {
+      const sv = scrollVelocity(p, SCROLL_CLAMP);
+      p = stepParticle({ ...p, vx: p.vx + sv.vx, vy: p.vy + sv.vy, vz: p.vz + sv.vz }, 1);
+      worst = Math.max(worst, Math.abs(p.y - p.hy));
+    }
+    expect(worst, `fifteen seconds of scrolling threw a mote ${worst.toFixed(0)}px from home`).toBeLessThan(
+      400,
+    );
+    // And it must be a lean, not a nudge: too small and scrolling does visibly nothing.
+    expect(worst, "scrolling barely moved the field").toBeGreaterThan(60);
+  });
+});
+
+describe("the field is the screen, not one panel", () => {
+  /**
+   * THE MEASUREMENT BEHIND MOVING IT. The field used to fill the chat panel with `inset: 0`. A
+   * docked chat is about 620x320, so at panel density the entire volume was ~38 motes — and most of
+   * that box is header and composer. "The only particles on screen are directly above the chat
+   * window, and they hover in a group" was an accurate description of thirty-eight dots in a strip.
+   * No amount of physics could have spread them; there was nowhere else for a mote to be.
+   */
+  it("holds enough motes at viewport scale to read as a room", () => {
+    const n = Math.round(1920 * 1080 * BACKDROP_DENSITY);
+    expect(n, `${n} motes across a 1080p screen is a handful of dots`).toBeGreaterThan(150);
+    expect(n, `${n} motes plus ${MAX_SPARKS} sparks is a screensaver, and two fills each`).toBeLessThan(400);
+  });
+
+  it("covers the whole screen rather than clustering", () => {
+    const ps = seedParticles(1920, 1080, Math.round(1920 * 1080 * BACKDROP_DENSITY), rndSeq(5));
+    const bands = [0, 0, 0, 0, 0];
+    for (const p of ps) bands[Math.min(4, Math.floor((p.y / 1080) * 5))]! += 1;
+    for (const b of bands) expect(b / ps.length, `bands ${bands.join(",")}`).toBeGreaterThan(0.12);
   });
 });
 

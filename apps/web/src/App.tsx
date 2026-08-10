@@ -341,6 +341,7 @@ import {
   type FileActions,
   type FileRef,
   type InstalledModel,
+  ParticleBackdrop,
   type LocalBackendId,
   type ProvidersDiagnostics,
   type ReaderSettings,
@@ -9864,9 +9865,13 @@ export function App() {
     // `vr-app` is the root every global rule hangs off — never <body>, because the browser
     // extension mounts these same components into arbitrary websites with no shadow DOM.
     <div
-      className={`${cx.app}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}`}
+      className={`${cx.app} ${cx.appBackdrop}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}`}
       style={styles.shell}
     >
+      {/* The room the whole app sits in. Must be a CHILD of the shell, not a sibling: the shell
+          paints an opaque background, and `.vr-backdrop`'s negative z-index only lands above that
+          background because `.vr-app` is a stacking context. See ParticleBackdrop.tsx. */}
+      <ParticleBackdrop />
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
           purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that
@@ -13047,7 +13052,9 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: t.surface.base,
+    // NO BACKGROUND. `.vr-app` already declares the identical `var(--vr-bg)`, and an inline value
+    // here would beat `.vr-app-backdrop`, which needs the shell transparent so the particle canvas
+    // behind it can be seen. The same cascade trap that made button hover invisible.
     color: t.text.base,
     // THE UI FONT, not the reading font. This line used to say Georgia serif, and because it sits on
     // the shell every button, pill, menu and message inherited it — the whole app rendered in a book
