@@ -40,6 +40,10 @@ export const cx = {
   readerWide: "vr-reader--wide",
   readerData: "vr-reader--data",
   rail: "vr-rail",
+  railItem: "vr-rail-item",
+  railItemCurrent: "vr-rail-item--current",
+  /** The art column itself — the grid child, not the sticky pane inside it. */
+  artCol: "vr-art-col",
   artPane: "vr-art-pane",
 
   progressFill: "vr-progress-fill",
