@@ -534,8 +534,20 @@ describe("the particle backdrop can actually be seen", () => {
     );
 
     const rule = /\.vr-app \{([\s\S]*?)\}/.exec(base)?.[1] ?? "";
-    for (const prop of ["isolation", "transform", "filter", "z-index"]) {
-      expect(rule, `.vr-app sets ${prop}, which traps the backdrop's negative z-index`).not.toContain(
+    // `isolation` and `z-index` trap the negative z-index. The rest are worse: each one makes the
+    // shell the containing block for `position: fixed`, so the backdrop would stop being pinned to
+    // the viewport and start resizing and scrolling with the app — and a resize used to reseed the
+    // entire field. One property away from the motes resetting every time the page moves.
+    for (const prop of [
+      "isolation",
+      "transform",
+      "filter",
+      "perspective",
+      "contain",
+      "will-change",
+      "z-index",
+    ]) {
+      expect(rule, `.vr-app sets ${prop}, which breaks how the backdrop is positioned`).not.toContain(
         prop,
       );
     }

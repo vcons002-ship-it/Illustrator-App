@@ -562,6 +562,33 @@ export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
   return out;
 }
 
+/**
+ * CARRY THE FIELD THROUGH A RESIZE INSTEAD OF STARTING IT AGAIN.
+ *
+ * The box changes size far more often than it looks like it should — a phone hiding its URL bar as
+ * you scroll resizes a viewport-fixed canvas on almost every frame of the gesture, and a scrollbar
+ * appearing does it on the desktop. Reseeding on any of those threw away the entire simulation, and
+ * because the seeding PRNG was restarted from a constant each time, it threw it away *to the same
+ * arrangement*: every mote snapped back to the exact position it had at startup. Minutes of drift,
+ * every trail a comet left, every mote the typing threw — gone, mid-scroll.
+ *
+ * So the volume is rescaled into the new box, keeping each mote's velocity and its place in the
+ * arrangement, and only the shortfall is seeded. A resize now costs nothing anyone can see.
+ */
+export function refitParticles(
+  parts: readonly Particle[],
+  prev: { w: number; h: number },
+  next: { w: number; h: number },
+  target: number,
+  rnd: () => number,
+): Particle[] {
+  const kx = prev.w > 0 ? next.w / prev.w : 1;
+  const ky = prev.h > 0 ? next.h / prev.h : 1;
+  const out = parts.map((p) => ({ ...p, x: p.x * kx, y: p.y * ky }));
+  if (out.length < target) out.push(...seedParticles(next.w, next.h, target - out.length, rnd));
+  return out;
+}
+
 /** Lay the ambient volume out on a jittered 3D grid: even coverage, no visible rows. */
 export function seedParticles(w: number, h: number, count: number, rnd: () => number): Particle[] {
   const out: Particle[] = [];
@@ -802,20 +829,35 @@ export function ParticleField({
     const resize = (): void => {
       const dpr = Math.min(devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
-      w = rect.width;
-      h = rect.height;
-      canvas.width = Math.max(1, Math.round(w * dpr));
-      canvas.height = Math.max(1, Math.round(h * dpr));
+      const nw = rect.width;
+      const nh = rect.height;
+      const bw = Math.max(1, Math.round(nw * dpr));
+      const bh = Math.max(1, Math.round(nh * dpr));
+      // A ResizeObserver fires for sub-pixel churn too — a scroll gesture on a phone can produce a
+      // notification per frame. Anything that would not change a single pixel is not a resize.
+      // `w === 0` guards the one case where that shortcut would be wrong: a canvas whose CSS box
+      // happens to match the 300x150 default has never actually been measured.
+      if (bw === canvas.width && bh === canvas.height && w > 0 && h > 0) return;
+
+      const prev = { w, h };
+      w = nw;
+      h = nh;
+      canvas.width = bw;
+      canvas.height = bh;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      let s = 1;
-      const seeded = (): number => {
-        s = (s * 1664525 + 1013904223) % 4294967296;
-        return s / 4294967296;
-      };
+
       const n = Math.round(w * h * density);
       maxAmbient = Math.round(n * 1.6); // headroom for sparks that settle, without unbounded growth
-      partsRef.current = seedParticles(w, h, n, seeded);
-      seedCount = partsRef.current.length;
+      const next = refitParticles(partsRef.current, prev, { w, h }, n, rnd);
+      // A shrink can leave more motes than the new box has headroom for. Trim from the retirable
+      // end, never the front — the same rule the spark conversion follows.
+      if (next.length > maxAmbient) next.splice(Math.min(n, next.length), next.length - maxAmbient);
+      partsRef.current = next;
+      seedCount = Math.min(next.length, n);
+      // The comet's track is in world coordinates too, so it has to come along or it would jump.
+      if (comet && prev.w > 0 && prev.h > 0) {
+        comet = { ...comet, x: (comet.x * w) / prev.w, y: (comet.y * h) / prev.h };
+      }
     };
 
     const draw = (): void => {
