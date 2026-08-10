@@ -900,6 +900,20 @@ export function isRetryableError(message: string): boolean {
 
 /** Injection guards (mirrors chat-tools.ts). */
 const MAX_QUERY_CHARS = 200;
+
+/**
+ * HOW MANY STEPS A CHECKLIST MAY HOLD, and a number that was silently 12.
+ *
+ * "Send me the alphabet, one letter per message" is 26 steps. The model planned 26, the parser kept
+ * the first twelve and said nothing, and the reader got a checklist that stopped at L with no
+ * indication that anything had been dropped. A cap is right — a model that plans two hundred steps
+ * has misunderstood the ask, and each step is a turn — but silently discarding half the plan is not,
+ * and 12 is low enough that ordinary requests hit it.
+ *
+ * 32 covers the alphabet and a month, and the truncation now comes back as a NOTE the model sees,
+ * so it can re-plan in fewer steps rather than working a list it does not know is incomplete.
+ */
+export const MAX_PLAN_STEPS = 32;
 const MAX_URL_CHARS = 600;
 const MAX_TITLE_CHARS = 120;
 /** The control_ui verbs. A closed set, checked at parse time, because each one compiles to a DIFFERENT
@@ -3701,7 +3715,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     // A step is either a bare string OR an object {do|text|step, needs|tool, onFail} — the object form
     // lets App-managed-steps mode carry a completion contract (`needs`) the host compiles. Both forms
     // coexist; we flatten to aligned `steps` (text) + `stepDetails` (needs/onFail).
-    const raw = Array.isArray(obj.steps) ? obj.steps.slice(0, 12) : [];
+    const raw = Array.isArray(obj.steps) ? obj.steps.slice(0, MAX_PLAN_STEPS) : [];
     const steps: string[] = [];
     const stepDetails: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[] = [];
     let anyDetail = false;
@@ -4533,6 +4547,9 @@ export interface BuddyOpenedInfo {
 }
 
 export interface BuddyToolResultPayload {
+  /** A caveat about a result that SUCCEEDED — currently only a checklist the parser had to trim.
+   * Not an error: the plan was set, it just is not the plan the model wrote. */
+  note?: string;
   hits?: WebSearchHit[];
   books?: BookSearchHit[];
   imageHits?: ImageSearchHit[];
@@ -4847,7 +4864,11 @@ export function formatBuddyToolResult(
       ? "[⚠ Your input ran past the size limit and was CUT before running — the result below used the trimmed input. " +
         "If detail was lost, resend it shorter or split it (a big file: write_file with append:true; a long task/prompt: tighten it).]\n"
       : "";
-  return warn + formatBuddyToolResultBody(call, result, opts);
+  // A caveat on a SUCCESSFUL result — the checklist was set, it just is not the one that was
+  // written. Prefixed like the truncation warning above and for the same reason: a limit the model
+  // cannot see is a limit it cannot work around.
+  const note = result.note ? `[⚠ ${result.note}]\n` : "";
+  return warn + note + formatBuddyToolResultBody(call, result, opts);
 }
 
 function formatBuddyToolResultBody(
