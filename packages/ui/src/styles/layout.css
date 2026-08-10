@@ -35,6 +35,20 @@
  * The @property registration above is still what makes this work at all — `height: var(…)` with
  * an unregistered custom property does not interpolate either. */
 .vr-dock {
+  /* Owned here rather than inline, so the safe-area inset below can actually apply. */
+  padding: 10px;
+  /**
+   * CLEAR OF THE HOME INDICATOR.
+   *
+   * The dock sits on the bottom edge of the screen, which on a phone without a home button is
+   * exactly where the swipe bar lives — so the input row, the one control that must always be
+   * reachable because it carries the way to reopen a collapsed dock, was underneath it. env() is
+   * 0 everywhere else, so this costs desktop nothing.
+   *
+   * It only reports a real inset when the page is allowed under the bar in the first place, which
+   * is what `viewport-fit=cover` in index.html is for.
+   */
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   height: var(--vr-dock-h);
   /* A floor under every mode, not just bar. Whatever the height token says, the dock may never
    * render shorter than its own input row — that is the one element that must always be reachable,

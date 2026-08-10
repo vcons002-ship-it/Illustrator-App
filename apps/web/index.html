@@ -2,8 +2,41 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover lets the page reach under a notch and the home indicator, which is the
+      whole point of the safe-area padding in layout.css. Without it the browser letterboxes the
+      page inside the safe area and env(safe-area-inset-*) is always 0.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Visual Reader</title>
+
+    <!--
+      INSTALLING ON A PHONE.
+
+      Chrome offers "Install and create shortcut" on every page, whether or not the page supports it
+      — so the menu entry was never the missing part. Without a manifest it makes a bookmark: a
+      Chrome-badged icon that opens in a tab with the address bar still there. With one, the same
+      menu item installs a real app: its own icon, its own window, no address bar.
+
+      This matters for more than tidiness. The browser's address bar hides and shows as you scroll,
+      which resizes a viewport-fixed element on nearly every frame of the gesture, and it costs
+      10-15% of the screen height on a device that has none to spare.
+
+      Installing requires a SECURE ORIGIN, so it only works over the tunnel address (https), never
+      over the LAN link, which is plain http on port 8787.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <!-- Both spellings: `apple-` is what iOS has always read, `mobile-web-app-capable` is the
+         standard one Chrome warns about the absence of. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Visual Reader" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Paints the browser's own chrome to match the app instead of leaving a white bar above a
+         near-black page. This one takes effect WITHOUT installing anything. -->
+    <meta name="theme-color" content="#0a0b0f" />
   </head>
   <body>
     <div id="root"></div>

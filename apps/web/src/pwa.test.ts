@@ -1,0 +1,117 @@
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * INSTALLING THE PHONE CLIENT AS A REAL APP.
+ *
+ * Chrome offers "Install and create shortcut" on every page, regardless of whether the page
+ * supports it — so the presence of that menu entry proved nothing, and the app looked like it
+ * already had this. What it actually produced was a bookmark: a Chrome-badged icon opening in a tab
+ * with the address bar still there. Every assertion here is about the difference between that and a
+ * real installed app, and each one is a single line that silently un-installs the app if it goes.
+ */
+
+const WEB = join(__dirname, "..");
+const html = readFileSync(join(WEB, "index.html"), "utf8");
+const manifestPath = join(WEB, "public", "manifest.webmanifest");
+
+describe("the phone client can be installed", () => {
+  it("declares a manifest at all — without one Chrome makes a bookmark, not an app", () => {
+    expect(html).toMatch(/<link[^>]+rel="manifest"/);
+    expect(existsSync(manifestPath), "the manifest is linked but not shipped").toBe(true);
+  });
+
+  it("asks for its own window, which is the entire point", () => {
+    const m = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+    // Anything other than standalone/fullscreen still shows the browser's address bar — the bar
+    // whose hiding and showing resizes the viewport on every frame of a scroll.
+    expect(["standalone", "fullscreen"]).toContain(m.display);
+    expect(m.name, "an unnamed app installs as the bare hostname").toBeTruthy();
+    expect(m.start_url).toBeTruthy();
+  });
+
+  it("ships every icon it promises, at the sizes Android actually requires", () => {
+    const m = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      icons: { src: string; sizes: string; purpose?: string }[];
+    };
+    for (const icon of m.icons) {
+      expect(existsSync(join(WEB, "public", icon.src.replace(/^\//, ""))), `${icon.src} is missing`).toBe(
+        true,
+      );
+    }
+    const sizes = m.icons.map((i) => i.sizes);
+    // Chrome refuses to install without both, and says so only in a console warning nobody reads.
+    expect(sizes, "no 192px icon — Chrome will not offer to install").toContain("192x192");
+    expect(sizes, "no 512px icon — Chrome will not offer to install").toContain("512x512");
+    // Android crops an icon to a circle or a squircle. Without a maskable variant it crops the
+    // ordinary one and takes the edges of the artwork with it.
+    expect(m.icons.some((i) => i.purpose === "maskable"), "no maskable icon").toBe(true);
+  });
+
+  it("covers the notch, or the safe-area insets are all zero", () => {
+    // env(safe-area-inset-*) only reports anything when the page is allowed under the bars in the
+    // first place. Without this the browser letterboxes the page and the dock's inset does nothing.
+    expect(html).toMatch(/viewport-fit=cover/);
+  });
+
+  it("paints the browser's own chrome, which needs no install", () => {
+    // The one thing here that helps TODAY, on the existing link: without it a white bar sits above
+    // a near-black app.
+    expect(html).toMatch(/<meta[^>]+name="theme-color"/);
+  });
+
+  it("says the iOS words too, which are not the standard ones", () => {
+    expect(html).toMatch(/name="apple-mobile-web-app-capable"/);
+    expect(html).toMatch(/rel="apple-touch-icon"/);
+  });
+});
+
+describe("the installed shortcut carries the pairing", () => {
+  const engine = readFileSync(join(WEB, "src", "useEngineWorker.ts"), "utf8");
+
+  /**
+   * The manifest's start_url is a bare "/", which relies on the phone still having the token in
+   * storage. True on Android, false on iOS (an installed app gets its own jar) and false after site
+   * data is cleared — and the failure is silent: the icon opens a local app with no link, which is
+   * exactly what the token-persistence code goes to such lengths to avoid elsewhere in this file.
+   */
+  it("points the manifest at the token it already holds", () => {
+    expect(engine).toContain("pointManifestAtThisPairing");
+    const fn = /function pointManifestAtThisPairing[\s\S]*?\n}/.exec(engine)?.[0] ?? "";
+    expect(fn, "pointManifestAtThisPairing not found").toBeTruthy();
+    expect(fn, "the manifest link is never rewritten").toMatch(/rel="manifest"/);
+    expect(fn).toMatch(/vrlink/);
+  });
+
+  it("is called with the token, not before it is known", () => {
+    // Above the call, initRemoteMode has already returned early for every path that has no token —
+    // so a desktop visitor, who has no pairing at all, never rewrites anything.
+    const init = /function initRemoteMode\(\)[\s\S]*?\n}/.exec(engine)?.[0] ?? "";
+    expect(init).toContain("pointManifestAtThisPairing(token)");
+    const guardAt = init.indexOf("if (!token || !host) return undefined;");
+    expect(guardAt, "the no-token guard moved").toBeGreaterThan(-1);
+    expect(init.indexOf("pointManifestAtThisPairing(token)")).toBeGreaterThan(guardAt);
+  });
+});
+
+describe("the dock clears the home indicator", () => {
+  it("owns its padding in CSS, so the safe-area inset is not overridden", () => {
+    // The cascade trap, for the fourth time: an inline `padding` beats the class that adds the
+    // inset, and the bar would sit under the swipe indicator with nothing to show for the change.
+    const app = readFileSync(join(WEB, "src", "App.tsx"), "utf8");
+    const dock = /\n {2}chatDock: \{([\s\S]*?)\n {2}\},/.exec(app)?.[1] ?? "";
+    expect(dock, "styles.chatDock not found").toBeTruthy();
+    expect(dock, "styles.chatDock still sets padding inline, which beats .vr-dock").not.toContain(
+      "padding",
+    );
+
+    const layout = readFileSync(
+      join(WEB, "..", "..", "packages", "ui", "src", "styles", "layout.css"),
+      "utf8",
+    );
+    const rule = /\.vr-dock \{([\s\S]*?)\n\}/.exec(layout)?.[1] ?? "";
+    expect(rule).toMatch(/padding:/);
+    expect(rule, "the dock does not clear the home indicator").toMatch(/safe-area-inset-bottom/);
+  });
+});
