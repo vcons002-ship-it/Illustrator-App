@@ -25,6 +25,7 @@ import {
   COMET_RADIUS,
   COMET_MAX_AGE,
   COMET_GAP_MIN_MS,
+  TRAIL_DECAY_MIN,
   type Comet,
   MAX_SPEED,
   WRAP_MARGIN,
@@ -832,8 +833,73 @@ describe("a comet flies by", () => {
       // Slow enough to stay where it fell — an emission-speed spark would fly off the track.
       expect(Math.hypot(s.vx, s.vy, s.vz)).toBeLessThan(Math.hypot(c.vx, c.vy, c.vz) * 0.4);
     }
-    // Long-lived, so the tail is still there after the head has gone.
-    expect(Math.max(...trail.map((s) => s.decay))).toBeLessThan(0.01);
+    // SHORT-lived, and this assertion used to say the exact opposite — "long-lived, so the tail is
+    // still there after the head has gone". That is the bug, written down as a requirement: a spark
+    // becomes a mote only when it dies, so a long life is a long delay before the trail exists.
+    expect(Math.min(...trail.map((s) => s.decay))).toBeGreaterThanOrEqual(TRAIL_DECAY_MIN);
+    expect(
+      1 / Math.min(...trail.map((s) => s.decay)),
+      "a trail spark outlives the comet's own crossing",
+    ).toBeLessThan(90);
+  });
+
+  /**
+   * THE TRAIL HAS TO BE LAID DOWN WHILE THE COMET IS STILL FLYING.
+   *
+   * A trail spark becomes a mote only when it DIES, so its lifetime is the lag between the comet
+   * passing a spot and the trail actually existing there. At the original decay that lag was two to
+   * four seconds: measured over one pass, not one mote had formed by the time the head was a fifth
+   * of the way across, eight by halfway, and two thirds of them landed after the comet had left the
+   * screen entirely. Every static assertion about `cometTrail` passed the whole time — the fault was
+   * only ever visible in WHEN things happened, which is what this measures.
+   */
+  it("lays its trail down behind the head, not after it has gone", () => {
+    const rnd = rndSeq(7);
+    let c: Comet = { x: -COMET_RADIUS, y: H2 / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    let sparks: Spark[] = [];
+    let converted = 0;
+    let convertedByQuarterWay = -1;
+    for (let f = 0; f < 400 && cometAlive(c, W2, H2); f++) {
+      c = stepComet(c, 1);
+      if (sparks.length < MAX_SPARKS * 0.7) sparks.push(...cometTrail(c, 2, rnd));
+      const live: Spark[] = [];
+      for (const s of sparks) {
+        const n = stepSpark(s, 1, f * 16.7);
+        if (n) live.push(n);
+        else converted++;
+      }
+      sparks = live;
+      if (convertedByQuarterWay < 0 && c.x > W2 * 0.25) convertedByQuarterWay = converted;
+    }
+    expect(
+      convertedByQuarterWay,
+      "the comet was a quarter of the way across before its trail began to exist",
+    ).toBeGreaterThan(20);
+  });
+
+  it("keeps the bright tail a tail, not a stripe across the screen", () => {
+    // The same lifetime governs how far the visible tail reaches. Long-lived sparks stretched it to
+    // 1100px on a 1600px screen, at which point the head reads as the tip of a line rather than as
+    // something with a tail behind it.
+    const rnd = rndSeq(8);
+    let c: Comet = { x: -COMET_RADIUS, y: H2 / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    let sparks: Spark[] = [];
+    let reach = 0;
+    for (let f = 0; f < 300; f++) {
+      c = stepComet(c, 1);
+      if (sparks.length < MAX_SPARKS * 0.7) sparks.push(...cometTrail(c, 2, rnd));
+      const live: Spark[] = [];
+      for (const s of sparks) {
+        const n = stepSpark(s, 1, f * 16.7);
+        if (n) live.push(n);
+      }
+      sparks = live;
+      for (const s of sparks) {
+        if (s.life * s.life > 0.05) reach = Math.max(reach, Math.hypot(s.x - c.x, s.y - c.y));
+      }
+    }
+    expect(reach, `the visible tail reached ${reach.toFixed(0)}px behind the head`).toBeLessThan(500);
+    expect(reach, "there is barely a tail at all").toBeGreaterThan(80);
   });
 
   it("stays an occasion rather than the weather", () => {
