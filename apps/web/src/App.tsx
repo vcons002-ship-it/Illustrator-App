@@ -7562,9 +7562,19 @@ export function App() {
           );
           return res.text || undefined;
         }
-        if (adv.count > cap) {
-          appendBuddy({ role: "tool", text: "Paused — say “continue” to keep working the checklist.", turns: [] });
-        }
+        // NEVER STOP A CHECKLIST SILENTLY. The count cap said so; the no-progress halt did not, and
+        // that gap is what a stall looks like from the reader's side — messages arrive, the run ends,
+        // and the list just sits there with steps unticked and nothing saying why. The wording covers
+        // both reasons to be here, because the common no-progress case IS the model waiting on an
+        // answer it already asked for, and telling it to "continue" over that would be wrong.
+        appendBuddy({
+          role: "tool",
+          text:
+            adv.count > cap
+              ? "Paused — say “continue” to keep working the checklist."
+              : "Paused with steps unfinished — answer above if I asked you something, or say “continue”.",
+          turns: [],
+        });
       }
     }
     return res.text || undefined;

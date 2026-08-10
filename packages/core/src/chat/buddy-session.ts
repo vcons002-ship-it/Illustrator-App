@@ -58,6 +58,19 @@ import { allowedInCreativeIdle } from "./tool-approval.js";
  * between passes. */
 const MAX_REPLY_CONTINUATIONS = 8;
 
+/**
+ * How much assistant prose in one round counts as having DONE a step rather than announced one.
+ *
+ * The anti-skip guard needs to tell "I wrote the explanation this step asked for" from "Done, next"
+ * — and prose is all it has to go on, because a step whose deliverable is text calls no tool at all.
+ * 80 characters is about one full sentence: comfortably above every bare hand-off ("Done.", "Now
+ * step 3.", "That's the second one finished."), comfortably below anything that answers a question.
+ *
+ * Erring high would restore the stall this fixes; erring low would let a model tick a whole
+ * checklist off with one-line acknowledgements, which is the abuse the guard exists to stop.
+ */
+export const PROSE_AS_WORK_CHARS = 80;
+
 /** How often to tick a transient "still working" activity heartbeat while waiting for the model's
  * first token. Kept well under the linked phone's silence watchdog (120s) so a slow large model's
  * long time-to-first-token never trips it. */
@@ -735,6 +748,21 @@ export async function runBuddyTurn(opts: {
     // re-issues it next round.
     const feedbacks: string[] = [];
     let deferred = false;
+    /**
+     * WRITING IS WORK, WHEN WRITING IS THE STEP.
+     *
+     * The anti-skip guard below clears on a tool result and on nothing else, because it was built
+     * for a checklist of renders: "do the step's action FIRST (e.g. actually call generate_image)".
+     * That assumption holds for every step whose deliverable is an artifact and fails completely for
+     * one whose deliverable is prose. A checklist like "explain the rigging, then the squall, then
+     * the lantern" does its entire job in assistant text — so the first step ticks, the second is
+     * refused as "checked off too fast", and the run stalls with the work visibly done on screen.
+     *
+     * A round is the unit, deliberately. One reply is one blob of prose and can only be one step's
+     * worth, so two check-offs inside a single round are still refused. It takes a NEW round — the
+     * model writing again — to earn the next tick, which is exactly the property the guard wants.
+     */
+    if (stripToolCallJson(reply).trim().length >= PROSE_AS_WORK_CHARS) lastWasCompleteStep = false;
     for (const call of calls) {
       // THE CREATIVE-RUN GATE. Before any dispatch branch, so nothing — sub-agents, host tools, the
       // auto-run executor — can route around it. Nobody is watching this turn, so the limit is
@@ -840,8 +868,9 @@ export async function runBuddyTurn(opts: {
         opts.onEvent?.({ kind: "toolResult", round, call, result });
         feedbacks.push(
           "[complete_step IGNORED — you just checked off a step with no work in between. Do the ▸ current " +
-            "step's action FIRST (e.g. actually call generate_image and let its image render), THEN check it " +
-            "off. Exactly one step's work per check-off — never tick two steps in a row.]",
+            "step's action FIRST, THEN check it off: call the tool it needs (e.g. generate_image, and let " +
+            "its image render), or — if the step's whole job is to explain or describe something — WRITE " +
+            "that answer out in full. Exactly one step's work per check-off; never tick two in a row.]",
         );
         continue; // leave lastWasCompleteStep true — a 3rd tick in a row is refused too
       }
