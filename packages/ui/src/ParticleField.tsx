@@ -3,7 +3,7 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 /**
  * A 3D PARTICLE FIELD THAT THE CONVERSATION LIVES INSIDE.
  *
- * Two populations, because they answer two different questions:
+ * Three populations, because they answer three different questions:
  *
  *   AMBIENT — a volume of FREE motes filling the screen's depth. Each cruises at its own slow
  *   drift, takes every push in full, coasts, decelerates on drag, and stays wherever it ends up.
@@ -13,6 +13,10 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
  *   a slow orbit while they fade. These are the words themselves scattering the air. The earlier
  *   version only ever shoved ambient motes, which is why it read as "wiggle in place": nothing was
  *   ever born at the text.
+ *
+ *   A COMET — every minute or so, uninvited. Everything else here reacts to something the reader
+ *   did; this one has its own schedule and its own direction. It crosses the volume, drags the room
+ *   into a vortex around its track, and leaves a trail of new motes where it passed.
  *
  * WHY THIS IS 3D WITHOUT WebGL. `packages/ui` ships raw TypeScript into three separate Vite builds,
  * and a WebGL library is several hundred kilobytes for a background. So the physics is genuinely
@@ -408,6 +412,156 @@ export function emitSparks(x: number, y: number, n: number, rnd: () => number): 
   return out;
 }
 
+/**
+ * A COMET: the one thing in this field that has its own agenda.
+ *
+ * Everything else here is a reaction — to a keystroke, a message, the pointer, a scroll. A comet
+ * arrives on its own schedule, crosses the volume in a straight line at ten to twenty times a
+ * mote's cruising speed, drags the room along in a vortex around its track, and leaves a trail of
+ * new motes where it passed. Then it is gone for another minute.
+ */
+export interface Comet {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  /** Frames since it entered. Its own clock, so it cannot outlive its welcome if it grazes an edge. */
+  age: number;
+  /** Handedness of the swirl, +1 or -1. Otherwise every comet would rotate the same way. */
+  spin: 1 | -1;
+}
+
+/** How far from the track a mote feels it. Wider than a keystroke pulse — this is a large event. */
+export const COMET_RADIUS = 220;
+/** Fraction of the comet's own velocity a mote at the centre of the wake takes on per frame. */
+export const COMET_ENTRAIN = 0.02;
+/** Swirl force at the centre, as a fraction of comet speed. This is what makes it a vortex rather
+ * than a plough — without it motes are simply shoved along the track and it reads as a bulldozer. */
+export const COMET_SWIRL = 0.05;
+export const COMET_SPEED_MIN = 4;
+export const COMET_SPEED_MAX = 9;
+/** Hard age cap. A comet aimed nearly along an edge could otherwise loiter for a very long time. */
+export const COMET_MAX_AGE = 900;
+/**
+ * How long between visits. Rare on purpose: the whole appeal is that it is an event, and something
+ * that happens every ten seconds is weather rather than an occasion. Roughly one every 25–75s.
+ */
+export const COMET_GAP_MIN_MS = 25000;
+export const COMET_GAP_SPREAD_MS = 50000;
+
+/**
+ * Launch one from outside the box, aimed at a point inside it.
+ *
+ * Aimed rather than given a random heading: a random direction from a random edge point clips the
+ * corner or misses entirely most of the time, and a comet nobody sees is the same as no comet.
+ */
+export function spawnComet(w: number, h: number, rnd: () => number): Comet {
+  const speed = COMET_SPEED_MIN + rnd() * (COMET_SPEED_MAX - COMET_SPEED_MIN);
+  const m = COMET_RADIUS;
+  const edge = Math.floor(rnd() * 4) % 4;
+  const sx = edge === 0 ? rnd() * w : edge === 1 ? w + m : edge === 2 ? rnd() * w : -m;
+  const sy = edge === 0 ? -m : edge === 1 ? rnd() * h : edge === 2 ? h + m : rnd() * h;
+  // Aim into the middle half of the box, so the track crosses the screen rather than skimming it.
+  const dx = w * 0.25 + rnd() * w * 0.5 - sx;
+  const dy = h * 0.25 + rnd() * h * 0.5 - sy;
+  const len = Math.hypot(dx, dy) || 1;
+  return {
+    x: sx,
+    y: sy,
+    z: (rnd() - 0.5) * 2 * DEPTH * 0.7,
+    vx: (dx / len) * speed,
+    vy: (dy / len) * speed,
+    // A little depth to the track, so it is not a flat streak across one plane.
+    vz: (rnd() - 0.5) * speed * 0.3,
+    age: 0,
+    spin: rnd() < 0.5 ? -1 : 1,
+  };
+}
+
+/** Dead once it has left the box by more than its own reach, or when its clock runs out. */
+export function cometAlive(c: Comet, w: number, h: number): boolean {
+  if (c.age > COMET_MAX_AGE) return false;
+  const m = COMET_RADIUS * 1.5;
+  return c.x > -m && c.x < w + m && c.y > -m && c.y < h + m;
+}
+
+export function stepComet(c: Comet, dt: number): Comet {
+  return {
+    ...c,
+    age: c.age + dt,
+    x: c.x + c.vx * dt,
+    y: c.y + c.vy * dt,
+    z: c.z + c.vz * dt,
+  };
+}
+
+/**
+ * The wake: entrainment along the track plus a vortex about it.
+ *
+ * ENTRAINMENT is what "pulls motes with it" means — a fraction of the comet's own velocity, so a
+ * fast comet drags harder. SWIRL is the cross product of the track direction with the mote's offset
+ * from it, which is a rotation about the axis of travel: motes above the track are carried one way
+ * across it, motes below the other, and the wake turns over on itself instead of shunting forward.
+ *
+ * Depth is flattened by PULSE_Z_WEIGHT the way every other force here is, so the reach is an
+ * ellipsoid around the track rather than a sphere that most of the volume sits outside of.
+ */
+export function cometVelocity(
+  p: Pick<Particle, "x" | "y" | "z">,
+  c: Comet,
+): { vx: number; vy: number; vz: number } {
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  const dz = (p.z - c.z) * PULSE_Z_WEIGHT;
+  const d = Math.hypot(dx, dy, dz);
+  if (d > COMET_RADIUS) return { vx: 0, vy: 0, vz: 0 };
+  const f = (1 - d / COMET_RADIUS) ** 2;
+  const s = Math.hypot(c.vx, c.vy, c.vz);
+  if (s < 0.001) return { vx: 0, vy: 0, vz: 0 };
+  const ux = c.vx / s;
+  const uy = c.vy / s;
+  const uz = c.vz / s;
+  // A mote exactly on the track has no offset to rotate about; it just gets carried.
+  const [rx, ry, rz] = d < 0.001 ? [0, 0, 0] : [dx / d, dy / d, dz / d];
+  const wx = uy * rz - uz * ry;
+  const wy = uz * rx - ux * rz;
+  const wz = ux * ry - uy * rx;
+  const e = COMET_ENTRAIN * f;
+  const sw = COMET_SWIRL * f * s * c.spin;
+  return { vx: c.vx * e + wx * sw, vy: c.vy * e + wy * sw, vz: c.vz * e + wz * sw };
+}
+
+/**
+ * The tail: sparks dropped at the head, barely moving, that become motes where they fall.
+ *
+ * Deliberately slow — a spark thrown at emission speed scatters, and a trail has to MARK the path
+ * rather than spray from it. They inherit a fraction of the comet's velocity so the tail streams
+ * backward off the head instead of hanging in beads, and they are long-lived, so the trail is still
+ * visible after the comet has left. The existing conversion then turns each spent one into a mote,
+ * which is what makes the trail permanent: the comet genuinely leaves the field changed.
+ */
+export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
+  const out: Spark[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      x: c.x + (rnd() - 0.5) * 18,
+      y: c.y + (rnd() - 0.5) * 18,
+      z: c.z + (rnd() - 0.5) * 30,
+      vx: c.vx * 0.12 + (rnd() - 0.5) * 0.5,
+      vy: c.vy * 0.12 + (rnd() - 0.5) * 0.5,
+      vz: c.vz * 0.12 + (rnd() - 0.5) * 0.3,
+      life: 1,
+      decay: 0.004 + rnd() * 0.004,
+      r: 0.7 + rnd() * 1.3,
+      ph: rnd() * Math.PI * 2,
+      spin: 0.01 + rnd() * 0.03,
+    });
+  }
+  return out;
+}
+
 /** Lay the ambient volume out on a jittered 3D grid: even coverage, no visible rows. */
 export function seedParticles(w: number, h: number, count: number, rnd: () => number): Particle[] {
   const out: Particle[] = [];
@@ -641,6 +795,9 @@ export function ParticleField({
     let maxAmbient = 0;
     /** How many motes at the front of the array are original seeds. They are never retired. */
     let seedCount = 0;
+    /** The comet in flight, or null between visits, and when the next one is due. */
+    let comet: Comet | null = null;
+    let nextCometAt = 0;
 
     const resize = (): void => {
       const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -689,15 +846,22 @@ export function ParticleField({
           hot: 1,
         });
       }
+      if (comet) {
+        // The head, sorted into the same depth queue as everything else so motes in front of it
+        // occlude it. A comet that always painted on top would sit ON the field rather than in it.
+        const { sx, sy, scale } = project(comet, midX, midY);
+        all.push({ z: comet.z, sx, sy, rad: Math.max(1, 3.4 * scale), alpha: Math.min(1, 0.95 * scale), hot: 3 });
+      }
       all.sort((a, b) => b.z - a.z);
 
       ctx.clearRect(0, 0, w, h);
       for (const d of all) {
         // Hot particles get a halo — the wake of the typing reads as light rather than as motion.
+        // The comet head comes through at hot 3, which widens its halo into a proper glow.
         if (d.hot > 0.35) {
           ctx.beginPath();
-          ctx.arc(d.sx, d.sy, d.rad * 3.2, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${d.alpha * 0.13 * d.hot})`;
+          ctx.arc(d.sx, d.sy, d.rad * 3.2 * Math.min(d.hot, 3), 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${d.alpha * 0.13 * Math.min(d.hot, 1)})`;
           ctx.fill();
         }
         ctx.beginPath();
@@ -719,6 +883,24 @@ export function ParticleField({
       pullRef.current = [];
       const scrolled = scrollRef.current;
       scrollRef.current = 0;
+
+      // A COMET ON ITS OWN SCHEDULE. Seeded on the first frame rather than at mount, because `now`
+      // is the rAF clock and the effect has no access to it — starting from 0 would launch one
+      // immediately and then never again for a minute, which is backwards.
+      if (nextCometAt === 0) nextCometAt = now + COMET_GAP_MIN_MS + rnd() * COMET_GAP_SPREAD_MS;
+      if (!comet && now >= nextCometAt) comet = spawnComet(w, h, rnd);
+      if (comet) {
+        comet = stepComet(comet, dt);
+        // Kept under 70% so a comet's long tail can never crowd out the sparks from typing, which
+        // are the ones tied to something the reader is actually doing.
+        if (sparksRef.current.length < MAX_SPARKS * 0.7) {
+          sparksRef.current.push(...cometTrail(comet, 1, rnd));
+        }
+        if (!cometAlive(comet, w, h)) {
+          comet = null;
+          nextCometAt = now + COMET_GAP_MIN_MS + rnd() * COMET_GAP_SPREAD_MS;
+        }
+      }
 
       for (const b of births) {
         const room = MAX_SPARKS - sparksRef.current.length;
@@ -757,6 +939,12 @@ export function ParticleField({
           const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
           vx += cv.vx;
           vy += cv.vy;
+        }
+        if (comet) {
+          const wv = cometVelocity(p, comet);
+          vx += wv.vx * dt;
+          vy += wv.vy * dt;
+          vz += wv.vz * dt;
         }
         parts[i] = stepParticle({ ...p, vx, vy, vz }, dt, now, w, h);
       }

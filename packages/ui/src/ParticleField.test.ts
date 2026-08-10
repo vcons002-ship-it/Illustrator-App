@@ -16,6 +16,15 @@ import {
   wrapCaret,
   PULSE_RADIUS,
   SCROLL_CLAMP,
+  cometVelocity,
+  cometTrail,
+  cometAlive,
+  spawnComet,
+  stepComet,
+  COMET_RADIUS,
+  COMET_MAX_AGE,
+  COMET_GAP_MIN_MS,
+  type Comet,
   MAX_SPEED,
   WRAP_MARGIN,
   DRIFT_MIN,
@@ -661,6 +670,116 @@ describe("the field is the screen, not one panel", () => {
     const bands = [0, 0, 0, 0, 0];
     for (const p of ps) bands[Math.min(4, Math.floor((p.y / 1080) * 5))]! += 1;
     for (const b of bands) expect(b / ps.length, `bands ${bands.join(",")}`).toBeGreaterThan(0.12);
+  });
+});
+
+describe("a comet flies by", () => {
+  const W2 = 1200;
+  const H2 = 800;
+  const track = (spin: 1 | -1 = 1): Comet => ({
+    x: 400, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin,
+  });
+
+  it("starts outside the box and is aimed through it, not at a corner", () => {
+    // A random heading from a random edge point clips the corner or misses entirely most of the
+    // time, and a comet nobody sees is the same as no comet.
+    for (let i = 0; i < 60; i++) {
+      let c = spawnComet(W2, H2, rndSeq(i + 1));
+      const outside = c.x < 0 || c.x > W2 || c.y < 0 || c.y > H2;
+      expect(outside, "spawned inside the box, so it pops into existence mid-screen").toBe(true);
+      let crossed = false;
+      for (let f = 0; f < COMET_MAX_AGE && cometAlive(c, W2, H2); f++) {
+        c = stepComet(c, 1);
+        if (c.x > W2 * 0.2 && c.x < W2 * 0.8 && c.y > H2 * 0.2 && c.y < H2 * 0.8) crossed = true;
+      }
+      expect(crossed, `comet ${i} never reached the middle of the screen`).toBe(true);
+    }
+  });
+
+  it("dies once it is gone, so one cannot linger forever", () => {
+    let c = spawnComet(W2, H2, rndSeq(3));
+    let f = 0;
+    while (cometAlive(c, W2, H2) && f < COMET_MAX_AGE * 2) {
+      c = stepComet(c, 1);
+      f++;
+    }
+    expect(f, "still alive after twice its age cap").toBeLessThan(COMET_MAX_AGE * 2);
+  });
+
+  it("does nothing at all outside its reach", () => {
+    const v = cometVelocity({ x: 400, y: 400 + COMET_RADIUS + 1, z: 0 }, track());
+    expect(v).toEqual({ vx: 0, vy: 0, vz: 0 });
+  });
+
+  it("carries a mote along its track — this is the pull", () => {
+    const v = cometVelocity({ x: 400, y: 410, z: 0 }, track());
+    expect(v.vx, "a mote in the wake was not dragged forward").toBeGreaterThan(0);
+  });
+
+  /**
+   * THE SWIRL, AND WHY IT IS A CROSS PRODUCT.
+   *
+   * Entrainment alone is a plough: everything gets shunted forward and the wake reads as a
+   * bulldozer. Rotating about the AXIS OF TRAVEL is what makes it a vortex — which means motes on
+   * opposite sides of the track must be pushed in opposite directions across it. If they are not,
+   * there is no rotation, only a shove.
+   */
+  it("rotates about its track, so opposite sides go opposite ways", () => {
+    const above = cometVelocity({ x: 400, y: 400, z: 90 }, track());
+    const below = cometVelocity({ x: 400, y: 400, z: -90 }, track());
+    expect(above.vy * below.vy, "both sides swept the same way — that is a plough, not a swirl")
+      .toBeLessThan(0);
+  });
+
+  it("swirls the other way round when it spins the other way", () => {
+    const cw = cometVelocity({ x: 400, y: 400, z: 90 }, track(1));
+    const ccw = cometVelocity({ x: 400, y: 400, z: 90 }, track(-1));
+    expect(cw.vy * ccw.vy, "every comet turns the same way").toBeLessThan(0);
+  });
+
+  /**
+   * A comet is a SUSTAINED force, like scroll and the cursor — the two that have already had to be
+   * cut by 3x and 8x since the spring came out. It is self-limiting only because the head moves on,
+   * so this measures the whole pass rather than the force at one instant.
+   */
+  it("catches motes hard, and lets every one of them go", () => {
+    let c = track();
+    c = { ...c, x: -COMET_RADIUS };
+    const offsets = [0, 40, 90, 150];
+    let motes = offsets.map((o) => ({ ...at(400, 400 + o), z: o === 0 ? 0 : 60 }));
+    const peaks = offsets.map(() => 0);
+    for (let f = 0; f < 500; f++) {
+      motes = motes.map((m, i) => {
+        const v = cometVelocity(m, c);
+        const n = stepParticle({ ...m, vx: m.vx + v.vx, vy: m.vy + v.vy, vz: m.vz + v.vz }, 1, f * 16.7, W2, H2);
+        peaks[i] = Math.max(peaks[i]!, Math.hypot(n.vx, n.vy, n.vz));
+        return n;
+      });
+      c = stepComet(c, 1);
+    }
+    expect(Math.max(...peaks), "the wake barely moved anything").toBeGreaterThan(DRIFT_MAX * 4);
+    expect(Math.max(...peaks), "the wake flung motes at terminal velocity").toBeLessThan(MAX_SPEED);
+    for (const m of motes) {
+      expect(Math.hypot(m.vx, m.vy, m.vz), "a mote never let go of the wake").toBeLessThan(DRIFT_MAX * 1.3);
+    }
+  });
+
+  it("drops a trail that marks the path instead of spraying off it", () => {
+    const c = track();
+    const trail = cometTrail(c, 20, rndSeq(9));
+    for (const s of trail) {
+      expect(Math.hypot(s.x - c.x, s.y - c.y), "the trail scattered instead of marking the path")
+        .toBeLessThan(30);
+      // Slow enough to stay where it fell — an emission-speed spark would fly off the track.
+      expect(Math.hypot(s.vx, s.vy, s.vz)).toBeLessThan(Math.hypot(c.vx, c.vy, c.vz) * 0.4);
+    }
+    // Long-lived, so the tail is still there after the head has gone.
+    expect(Math.max(...trail.map((s) => s.decay))).toBeLessThan(0.01);
+  });
+
+  it("stays an occasion rather than the weather", () => {
+    // A comet every few seconds is ambience; the whole appeal is that it is rare.
+    expect(COMET_GAP_MIN_MS).toBeGreaterThan(15000);
   });
 });
 
