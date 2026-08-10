@@ -10,6 +10,7 @@ import {
   pickLastTextNode,
   project,
   seedParticles,
+  refitParticles,
   stepParticle,
   sparkToParticle,
   stepSpark,
@@ -670,6 +671,64 @@ describe("the field is the screen, not one panel", () => {
     const bands = [0, 0, 0, 0, 0];
     for (const p of ps) bands[Math.min(4, Math.floor((p.y / 1080) * 5))]! += 1;
     for (const b of bands) expect(b / ps.length, `bands ${bands.join(",")}`).toBeGreaterThan(0.12);
+  });
+});
+
+/**
+ * THE BUG: SCROLLING THE PAGE PUT EVERY MOTE BACK WHERE IT STARTED.
+ *
+ * The box changes size far more often than it looks like it should — a phone hiding its URL bar
+ * during a scroll resizes a viewport-fixed canvas on nearly every frame of the gesture. `resize`
+ * called `seedParticles` unconditionally, and its PRNG restarted from a constant, so the field was
+ * not merely reset, it was reset to the IDENTICAL arrangement every time: minutes of drift, every
+ * comet trail and every mote the typing had thrown, gone mid-scroll and always to the same picture.
+ */
+describe("a resize carries the field rather than restarting it", () => {
+  const box = { w: 1200, h: 800 };
+
+  it("keeps every mote, and its motion, through a resize", () => {
+    const parts = seedParticles(box.w, box.h, 40, rndSeq(2)).map((p, i) => ({
+      ...p,
+      vx: 1 + i * 0.01,
+      x: 100 + i * 20,
+    }));
+    const out = refitParticles(parts, box, { w: 1200, h: 700 }, 40, rndSeq(3));
+    expect(out.length).toBe(40);
+    for (let i = 0; i < parts.length; i++) {
+      expect(out[i]!.vx, "a resize stopped a mote dead").toBe(parts[i]!.vx);
+      expect(out[i]!.spd).toBe(parts[i]!.spd);
+    }
+  });
+
+  it("rescales into the new box instead of leaving a bare strip", () => {
+    const parts = seedParticles(box.w, box.h, 40, rndSeq(2));
+    const wide = refitParticles(parts, box, { w: 2400, h: 800 }, 40, rndSeq(3));
+    // Doubling the width has to spread the arrangement, or the whole field bunches on the left.
+    const before = Math.max(...parts.map((p) => p.x));
+    const after = Math.max(...wide.map((p) => p.x));
+    expect(after / before).toBeCloseTo(2, 1);
+  });
+
+  it("tops up to the new box's count without touching what is already there", () => {
+    const parts = seedParticles(600, 400, 20, rndSeq(2));
+    const out = refitParticles(parts, { w: 600, h: 400 }, box, 60, rndSeq(3));
+    expect(out.length).toBe(60);
+    for (let i = 0; i < 20; i++) expect(out[i]!.ph).toBe(parts[i]!.ph);
+  });
+
+  it("does not depend on a fixed seed, so two resizes cannot converge on one picture", () => {
+    // The heart of it: the old code reseeded from `s = 1` every time, so a hundred resizes all
+    // produced byte-identical layouts. Successive top-ups have to differ.
+    const rnd = rndSeq(4);
+    const a = refitParticles([], box, box, 30, rnd);
+    const b = refitParticles([], box, box, 30, rnd);
+    expect(a.map((p) => p.ph)).not.toEqual(b.map((p) => p.ph));
+  });
+
+  it("survives a box that has never been measured", () => {
+    const out = refitParticles([], { w: 0, h: 0 }, box, 30, rndSeq(5));
+    expect(out.length).toBe(30);
+    for (const p of out) expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
   });
 });
 
