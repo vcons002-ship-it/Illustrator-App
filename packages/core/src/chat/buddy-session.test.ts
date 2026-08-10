@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
-import { runBuddyTurn, nonEmptyAnswer, type BuddyTurnEvent } from "./buddy-session.js";
+import { runBuddyTurn, nonEmptyAnswer, isBareAcknowledgement, type BuddyTurnEvent } from "./buddy-session.js";
 import { MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
@@ -543,6 +543,40 @@ describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", 
     });
     expect(h.plan!.steps.filter((s) => s.status === "done"), "“Done.” bought a step").toHaveLength(1);
     expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(1);
+  });
+
+  /**
+   * "SEND ME THE ALPHABET, ONE LETTER PER MESSAGE" — where the whole deliverable of a step is one
+   * character. The first version of the prose rule asked for 80 characters, on the theory that a
+   * real answer is longer than a hand-off. It usually is, and here it never is: every step failed
+   * the test that was meant to let text steps through, and the run stopped with 0 of 12 ticked.
+   */
+  it("lets a step whose entire deliverable is one character check itself off", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"alphabet","steps":["Send A","Send B","Send C"]}',
+      'A\n{"tool":"complete_step"}',
+      'B\n{"tool":"complete_step"}',
+      'C\n{"tool":"complete_step"}',
+      "That's the first three.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me the alphabet, one letter per message" }],
+      deps: h.deps,
+    });
+    expect(h.plan!.steps.filter((s) => s.status === "done"), "a one-letter step could not tick").toHaveLength(3);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(0);
+  });
+
+  it("knows a hand-off from an answer, whatever its length", () => {
+    for (const ack of ["Done.", "done", "OK", "Next", "✓ done", "Step 2 is complete", "on to the next step", "Got it!"]) {
+      expect(isBareAcknowledgement(ack), `"${ack}" should not buy a step`).toBe(true);
+    }
+    for (const work of ["A", "B", "42", "The rigging is the standing gear.", "Done — the barn is painted red and the door is open."]) {
+      expect(isBareAcknowledgement(work), `"${work}" is real work`).toBe(false);
+    }
   });
 
   it("still refuses two check-offs inside one reply, however much was written", async () => {

@@ -31,6 +31,7 @@ import {
   toolCallFromShellCommand,
   toolFailureDirective,
   toolLimitNudge,
+  MAX_PLAN_STEPS,
 } from "./buddy-tools.js";
 import { routePendingTool } from "./tool-approval.js";
 
@@ -2672,6 +2673,40 @@ describe("working-checklist queue auto-advance", () => {
     const fb = planQueueResumeFeedback("[tool generate_image: …]", fivePlan(5));
     expect(fb).toContain("5/5 done");
     expect(fb).toMatch(/All steps are done/i);
+  });
+});
+
+/**
+ * "SEND ME THE ALPHABET, ONE LETTER PER MESSAGE" IS 26 STEPS, AND THE PARSER KEPT 12.
+ *
+ * Silently. The model planned the alphabet, the reader got a checklist that stopped at L, and
+ * nothing anywhere said a plan had been trimmed. A cap is right — a model that plans two hundred
+ * steps has misread the ask, and every step is a turn — but 12 is low enough that ordinary requests
+ * hit it, and a limit nobody can see is a limit nobody can work around.
+ */
+describe("a trimmed checklist says so", () => {
+  it("holds enough steps for an ordinary ask", () => {
+    expect(MAX_PLAN_STEPS, "the alphabet does not fit").toBeGreaterThanOrEqual(26);
+  });
+
+  it("keeps the cap — a plan is a turn per step, not an unbounded list", () => {
+    const call = parseBuddyToolCalls(
+      JSON.stringify({ tool: "set_plan", goal: "g", steps: Array.from({ length: 500 }, (_, i) => `step ${i}`) }),
+    )[0];
+    expect(call?.tool).toBe("set_plan");
+    expect(call?.tool === "set_plan" && call.steps.length).toBe(MAX_PLAN_STEPS);
+  });
+
+  it("tells the model when it trimmed, so it can plan the rest", () => {
+    const trimmed = formatBuddyToolResult(
+      { tool: "set_plan", steps: Array.from({ length: MAX_PLAN_STEPS }, (_, i) => `s${i}`) },
+      { plan: { steps: [] }, note: `Only the first ${MAX_PLAN_STEPS} steps were kept — that is the limit.` },
+    );
+    expect(trimmed).toContain("were kept");
+    // …and says nothing at all on a plan that fit, which is every ordinary one.
+    expect(formatBuddyToolResult({ tool: "set_plan", steps: ["a"] }, { plan: { steps: [] } })).not.toContain(
+      "were kept",
+    );
   });
 });
 

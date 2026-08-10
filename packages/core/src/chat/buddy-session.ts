@@ -23,6 +23,7 @@ import {
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  MAX_PLAN_STEPS,
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
@@ -59,17 +60,22 @@ import { allowedInCreativeIdle } from "./tool-approval.js";
 const MAX_REPLY_CONTINUATIONS = 8;
 
 /**
- * How much assistant prose in one round counts as having DONE a step rather than announced one.
+ * Is this reply a hand-off rather than a step's work?
  *
- * The anti-skip guard needs to tell "I wrote the explanation this step asked for" from "Done, next"
- * — and prose is all it has to go on, because a step whose deliverable is text calls no tool at all.
- * 80 characters is about one full sentence: comfortably above every bare hand-off ("Done.", "Now
- * step 3.", "That's the second one finished."), comfortably below anything that answers a question.
+ * The anti-skip guard has to tell "I did the thing" from "I'm moving on", and for a step whose
+ * deliverable is text there is nothing but the text to go on. Length was the first attempt and is
+ * wrong in both directions — it fails "send me the alphabet, one letter per message", where a whole
+ * step is the character A, and it passes any padded acknowledgement.
  *
- * Erring high would restore the stall this fixes; erring low would let a model tick a whole
- * checklist off with one-line acknowledgements, which is the abuse the guard exists to stop.
+ * Bounded to SHORT strings so nothing that actually answers anything can match: a real answer that
+ * happens to open with "Done." is longer than this and is judged on the rest of it.
  */
-export const PROSE_AS_WORK_CHARS = 80;
+export function isBareAcknowledgement(text: string): boolean {
+  const t = text.trim();
+  if (t.length > 40) return false;
+  return /^(?:✓\s*)?(?:ok(?:ay)?|done|next|finished|complete(?:d)?|got it|moving on|(?:step\s*\d+\s*(?:is\s*)?(?:done|complete(?:d)?|finished))|on to (?:the )?next(?: step)?)[\s.!,;:—-]*$/i.test(t);
+}
+
 
 /** How often to tick a transient "still working" activity heartbeat while waiting for the model's
  * first token. Kept well under the linked phone's silence watchdog (120s) so a slow large model's
@@ -548,6 +554,8 @@ export async function runBuddyTurn(opts: {
   // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
   // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
   let lastWasCompleteStep = false;
+  /** The prose of the round that bought the last check-off — what "new writing" is measured against. */
+  let proseAtLastTick = "";
   /** Toolsets loaded so far THIS turn — grows as the model asks (or as it calls something it hasn't
    * asked for). The host seeds it with what the session already loaded, so a coding conversation pays
    * for the coding document once rather than every turn. */
@@ -749,7 +757,7 @@ export async function runBuddyTurn(opts: {
     const feedbacks: string[] = [];
     let deferred = false;
     /**
-     * WRITING IS WORK, WHEN WRITING IS THE STEP.
+     * WRITING IS WORK, WHEN WRITING IS THE STEP — AND IT IS NEW WRITING THAT COUNTS, NOT LONG.
      *
      * The anti-skip guard below clears on a tool result and on nothing else, because it was built
      * for a checklist of renders: "do the step's action FIRST (e.g. actually call generate_image)".
@@ -758,11 +766,21 @@ export async function runBuddyTurn(opts: {
      * the lantern" does its entire job in assistant text — so the first step ticks, the second is
      * refused as "checked off too fast", and the run stalls with the work visibly done on screen.
      *
-     * A round is the unit, deliberately. One reply is one blob of prose and can only be one step's
-     * worth, so two check-offs inside a single round are still refused. It takes a NEW round — the
-     * model writing again — to earn the next tick, which is exactly the property the guard wants.
+     * The first version of this asked for 80 characters, on the theory that a real answer is longer
+     * than a hand-off ("Done.", "Now step 3."). It is, usually — and it fails completely on
+     * "send me the alphabet, one letter per message", where the entire deliverable of a step is the
+     * character A. Length was a proxy for the thing that actually matters, and a bad one.
+     *
+     * So the test is what it was always trying to approximate: prose counts if it is NEW and is not
+     * a bare hand-off. Novelty catches the repeat — two check-offs inside a single reply see
+     * identical prose by construction, so the round remains the unit — and the acknowledgement test
+     * catches the model that writes a real answer, ticks, then says "Done." and ticks again, which
+     * novelty alone would let through. "A" is neither a repeat nor an acknowledgement.
      */
-    if (stripToolCallJson(reply).trim().length >= PROSE_AS_WORK_CHARS) lastWasCompleteStep = false;
+    const roundProse = stripToolCallJson(reply).trim();
+    if (roundProse && roundProse !== proseAtLastTick && !isBareAcknowledgement(roundProse)) {
+      lastWasCompleteStep = false;
+    }
     for (const call of calls) {
       // THE CREATIVE-RUN GATE. Before any dispatch branch, so nothing — sub-agents, host tools, the
       // auto-run executor — can route around it. Nobody is watching this turn, so the limit is
@@ -900,6 +918,7 @@ export async function runBuddyTurn(opts: {
       }
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
+      if (lastWasCompleteStep) proseAtLastTick = roundProse;
     }
     // The tool RESULTS are the durable record of what happened — they belong in the persisted
     // transcript. What gets appended after them is TURN-LOCAL steering: "re-issue the deferred host
@@ -1156,9 +1175,21 @@ export async function runBuddyTool(
       case "recent_actions":
         if (!deps.recentActions) return { error: "the action record isn't available right now" };
         return { actionHistory: await deps.recentActions(call.kind, call.limit ?? 20) };
-      case "set_plan":
+      case "set_plan": {
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
-        return { plan: deps.setPlan(call.goal, call.steps, call.stepDetails) };
+        const plan = deps.setPlan(call.goal, call.steps, call.stepDetails);
+        // A plan longer than the cap is TRIMMED by the parser. Saying so is the whole difference
+        // between a model working a list it knows is partial and one that thinks it planned the
+        // alphabet and is quietly running the first twelve letters.
+        return call.steps.length >= MAX_PLAN_STEPS
+          ? {
+              plan,
+              note:
+                `Only the first ${MAX_PLAN_STEPS} steps were kept — that is the limit. If the job needs more, ` +
+                "do these, then set_plan again for the rest.",
+            }
+          : { plan };
+      }
       case "complete_step": {
         if (deps.appManagedSteps)
           return { error: "the app is running this checklist and ticks steps itself — don't mark progress; just do the current step you were given" };
