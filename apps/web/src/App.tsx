@@ -317,6 +317,7 @@ import {
   LibraryPanel,
   CreationsPanel,
   ToastHost,
+  UpdateBar,
   type ToastItem,
   SettingsPanel,
   useScrollDepth,
@@ -348,6 +349,7 @@ import {
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
 import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
+import { useStaleBuild } from "./useStaleBuild.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useRemoteMirror, type UpdateResult } from "./useRemoteMirror.js";
 import { useLocalEngine } from "./useLocalEngine.js";
@@ -1728,6 +1730,8 @@ export function App() {
   /** The running build, read from /build.json once (see build-stamp.ts). */
   const [buildStampLabel, setBuildStampLabel] = useState("");
   const [checkoutSha, setCheckoutSha] = useState("");
+  /** True once the server is serving a build newer than the one this page is running. */
+  const buildIsStale = useStaleBuild();
   /** When the last creative run started, so Settings can say whether it has EVER run — "nothing has
    * appeared" and "it ran and produced nothing" need different fixes and looked identical. */
   // Seeded from the persisted stamp so Settings still reports the last run after a restart — it was
@@ -9882,6 +9886,9 @@ export function App() {
           paints an opaque background, and `.vr-backdrop`'s negative z-index only lands above that
           background because `.vr-app` is a stacking context. See ParticleBackdrop.tsx. */}
       <ParticleBackdrop />
+      {/* A rebuilt desktop only reaches a page that RELOADS, and an installed phone app is resumed
+          rather than reloaded — see useStaleBuild. This is the only thing that makes it noticeable. */}
+      {buildIsStale && <UpdateBar onReload={() => window.location.reload()} />}
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
           purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that

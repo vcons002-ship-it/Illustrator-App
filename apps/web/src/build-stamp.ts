@@ -26,6 +26,29 @@ export function loadBuildStamp(): Promise<BuildStamp> {
   return cached;
 }
 
+/**
+ * Re-read the stamp from the server, deliberately NOT memoised.
+ *
+ * `loadBuildStamp` caches because the running bundle's identity cannot change while the page is
+ * loaded. This exists for the opposite question — what is the server serving NOW — which is a
+ * different thing the moment the desktop is rebuilt under a page that stays open. An installed app
+ * is the case that makes it matter: it is resumed rather than reloaded, so it can sit on a bundle
+ * from days ago, and standalone display has no address bar and no pull-to-refresh to notice with.
+ *
+ * Returns undefined on any failure — offline, desktop asleep, mid-restart. A build check must never
+ * be the thing that reports a problem; it is the least important request the app makes.
+ */
+export async function refetchBuildSha(): Promise<string | undefined> {
+  try {
+    const r = await fetch("/build.json", { cache: "no-store" });
+    if (!r.ok) return undefined;
+    const s = (await r.json()) as Partial<BuildStamp>;
+    return typeof s.sha === "string" && s.sha ? s.sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** One line for the UI / the model: "abc1234 (branch, built 2026-07-27 19:25Z)". PURE. */
 export function formatBuildStamp(s: BuildStamp): string {
   const detail = [s.branch, s.at ? `built ${s.at}` : ""].filter(Boolean).join(", ");

@@ -29,6 +29,7 @@ export * from "./WorldBible.js";
 export * from "./LibraryPanel.js";
 export * from "./CreationsPanel.js";
 export * from "./Toast.js";
+export * from "./UpdateBar.js";
 export * from "./SettingsPanel.js";
 export * from "./SkillsPanel.js";
 export * from "./MemoriesPanel.js";

@@ -115,3 +115,57 @@ describe("the dock clears the home indicator", () => {
     expect(rule, "the dock does not clear the home indicator").toMatch(/safe-area-inset-bottom/);
   });
 });
+
+/**
+ * A REBUILT DESKTOP ONLY REACHES A PAGE THAT RELOADS.
+ *
+ * The cache headers already make that reload pick up the new build — the HTML shell is
+ * `no-cache, must-revalidate` and only content-hashed assets cache long. What was missing was
+ * anything that makes the reload HAPPEN. A tab reloads whenever you revisit it; an installed app is
+ * resumed, returning you to a page that can be days old, and standalone display has no address bar
+ * and no pull-to-refresh to force one with. `loadBuildStamp` reads once and caches, so nothing
+ * noticed. Installing is exactly what turns this from unlikely into routine.
+ */
+describe("a stale build makes itself known", () => {
+  const hook = readFileSync(join(WEB, "src", "useStaleBuild.ts"), "utf8");
+  const stamp = readFileSync(join(WEB, "src", "build-stamp.ts"), "utf8");
+
+  it("asks the server again, rather than reading the memoised answer", () => {
+    // loadBuildStamp caches for the life of the page — correctly, since the RUNNING build cannot
+    // change. Reusing it here would compare a value against itself and never fire.
+    expect(stamp).toContain("refetchBuildSha");
+    const fn = /export async function refetchBuildSha[\s\S]*?\n}/.exec(stamp)?.[0] ?? "";
+    expect(fn, "refetchBuildSha not found").toBeTruthy();
+    expect(fn, "a cached response would answer the wrong question").toContain('cache: "no-store"');
+    expect(fn, "a failed check must never surface as an error").toContain("catch");
+  });
+
+  it("checks when the app is brought back to the front", () => {
+    // The moment staleness starts to matter and the moment a reload is free. A timer alone would
+    // miss the whole case: an app in the background is not running its intervals.
+    expect(hook).toContain("visibilitychange");
+    expect(hook).toContain('document.visibilityState === "visible"');
+  });
+
+  it("never compares against a stamp it failed to read", () => {
+    // loadBuildStamp falls back to "unstamped" so a missing stamp cannot break a render. Comparing
+    // against that would declare every build stale, forever, on every phone that hiccuped once.
+    expect(hook).toContain('"unstamped"');
+  });
+
+  it("stays stale once stale", () => {
+    // A desktop mid-rebuild can briefly serve the old stamp again. A notice that appeared and then
+    // vanished before it could be tapped is worse than none.
+    expect(hook).toMatch(/staleRef\.current \|\|/);
+  });
+
+  it("offers a tap and does not reload on its own", () => {
+    const bar = readFileSync(join(WEB, "..", "..", "packages", "ui", "src", "UpdateBar.tsx"), "utf8");
+    expect(bar, "the bar reloads by itself, taking a half-typed message with it").not.toMatch(
+      /location\.reload|setTimeout/,
+    );
+    expect(bar).toContain("onReload");
+    const app = readFileSync(join(WEB, "src", "App.tsx"), "utf8");
+    expect(app).toContain("<UpdateBar onReload={() => window.location.reload()} />");
+  });
+});
