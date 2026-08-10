@@ -80,6 +80,9 @@ export interface Spark {
    * obeys its own momentum rather than being teleported onto a circle. */
   ph: number;
   spin: number;
+  /** Dropped by a comet rather than thrown off the text: it marks a place, so the mote it becomes
+   * should stay there. See TRAIL_SETTLE_SPD. */
+  settles?: boolean;
 }
 
 /** Camera distance. Larger = weaker perspective; this is tuned so a mote at the back plane is
@@ -289,7 +292,9 @@ export function sparkToParticle(s: Spark, rnd: () => number): Particle {
     r: 0.7 + rnd() * 1.2,
     a: 0.16 + rnd() * 0.3,
     ph: rnd() * Math.PI * 2,
-    spd: DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
+    // A spark thrown off the text joins the room and drifts with it. One dropped by a comet is
+    // marking where the comet went, so it settles instead — see TRAIL_SETTLE_SPD.
+    spd: s.settles ? TRAIL_SETTLE_SPD : DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
   };
 }
 
@@ -468,6 +473,29 @@ export const TRAIL_DECAY_MIN = 0.014;
 export const TRAIL_DECAY_SPREAD = 0.012;
 /** Two per frame, not one: the tail is now a third as long, and this keeps it as dense as it was. */
 export const TRAIL_PER_FRAME = 2;
+/**
+ * WHAT FRACTION OF SPENT TRAIL SPARKS BECOME PERMANENT MOTES.
+ *
+ * A comet drops two sparks a frame for hundreds of frames — 640 over one pass of a 1080p screen,
+ * against a field with headroom for 149. So retirement ate the trail as fast as it was written:
+ * measured, the surviving motes spanned x 1426–1920 of a 1920px screen. Three quarters of the path
+ * had already been deleted by the time the comet reached the far side, which is why the trail
+ * followed the head around instead of staying where the comet had been.
+ *
+ * Converting one in eight leaves a mote every ~24px along the WHOLE path and still fits inside the
+ * headroom at every comet speed. A dotted line the length of the screen, rather than a dense smear
+ * of which only the last few hundred pixels survive.
+ */
+export const TRAIL_CONVERT_CHANCE = 0.125;
+/**
+ * The cruising speed a settled trail mote gets, against 0.12–0.45 for the rest of the field.
+ *
+ * A free mote wanders — that is the whole point of them, and it is also what would erase a trail
+ * within seconds of it being laid. At 0.02px per frame the line holds its shape for a minute and
+ * then gently dissolves into the room, which is what "remains where the comet passed" has to mean
+ * in a field where nothing else is nailed down.
+ */
+export const TRAIL_SETTLE_SPD = 0.006;
 
 /**
  * Launch one from outside the box, aimed at a point inside it.
@@ -579,7 +607,12 @@ export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
       decay: TRAIL_DECAY_MIN + rnd() * TRAIL_DECAY_SPREAD,
       r: 0.7 + rnd() * 1.3,
       ph: rnd() * Math.PI * 2,
-      spin: 0.01 + rnd() * 0.03,
+      // A TENTH of a typing spark's orbit. The "dance" is what makes a spark thrown off a letter
+      // feel alive, and it is exactly wrong here: measured over a minute it scattered the settled
+      // trail across 142px, more than the settle speed and the birth jitter put together. A trail
+      // spark's job is to fall where it was dropped.
+      spin: 0.002 + rnd() * 0.004,
+      settles: true,
     });
   }
   return out;
@@ -1021,6 +1054,10 @@ export function ParticleField({
         // A spent spark becomes background — typing ADDS to the field rather than decorating it.
         // Only inside the box: one that flew off the edge would be simulated forever, unseen.
         else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
+          // A comet writes far more trail than the field can hold, so only a fraction of it becomes
+          // permanent. Without this the retirement pass eats the trail from behind as fast as the
+          // head writes it, and what is left follows the comet instead of marking its path.
+          if (s.settles && rnd() >= TRAIL_CONVERT_CHANCE) continue;
           parts.push(sparkToParticle(s, rnd));
           /**
            * THE SEEDED VOLUME IS IMMORTAL. Retirement starts at `seedCount`, so it can only ever
