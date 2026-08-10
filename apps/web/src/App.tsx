@@ -343,6 +343,9 @@ import {
   type FileRef,
   type InstalledModel,
   ParticleBackdrop,
+  ReaderRail,
+  READER_CLASS,
+  type ReaderLayout,
   type LocalBackendId,
   type ProvidersDiagnostics,
   type ReaderSettings,
@@ -2000,6 +2003,43 @@ export function App() {
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
   // Phone-sized viewport → single-column reader, auto-collapsed toolbar + chat history.
   const narrow = useNarrow(760);
+  /**
+   * HOW THIS BOOK SPENDS THE WIDTH. Per book, because it is a property of the book and not of the
+   * reader: a picture book wants the art beside the prose, a reference text wants the rail.
+   *
+   * `useNarrow` still exists, but only for what CSS genuinely cannot decide — `inlineImages` below
+   * changes DOM ORDER, and a media query cannot reorder React children. The GRID no longer asks it:
+   * that moved to a media query, which also removes the first-paint flash, since useNarrow seeds
+   * from innerWidth and then re-checks in an effect.
+   */
+  const [readerLayout, setReaderLayout] = useState<ReaderLayout>("side");
+  /** Per BOOK, in the same memo store the chat's plan and workflow use. */
+  const readerLayoutMemoKey = (id: string) => `reader-layout:${id}`;
+  const chooseReaderLayout = useCallback(
+    (next: ReaderLayout) => {
+      setReaderLayout(next);
+      const id = bookRef.current?.id;
+      // Incognito means nothing about this session is written down — including this.
+      if (id && !settings.incognitoRemote) {
+        void libraryStore.putMemo?.(readerLayoutMemoKey(id), next).catch(() => {});
+      }
+    },
+    [libraryStore, settings.incognitoRemote],
+  );
+  /**
+   * Scroll to a page by finding its first paragraph — the same route the story-beat jump already
+   * takes (see the `data-paragraph-id` query below), rather than a second position mechanism that
+   * could disagree with the first.
+   */
+  const jumpToPage = useCallback((page: number) => {
+    const id = bookRef.current?.pages[page]?.paragraphs[0]?.id;
+    if (!id) return;
+    try {
+      document.querySelector(`[data-paragraph-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch {
+      /* CSS.escape unavailable / node gone — non-fatal, same as the beat jump */
+    }
+  }, []);
   // The "Tools" caret is gone: the header is five grouped menus, so there is no longer a wall of
   // buttons to hide. Collapsing it was only ever a workaround for the row being too long.
   // The book's own tools (illustrate, redo, characters, export…) are a fenced-off group with their
@@ -3325,7 +3365,10 @@ export function App() {
   const isTechnical = isNonFiction(book?.contentMode);
   /** Single column → each unit's picture is drawn in the reading flow instead of in the side pane
    * (which, with one column, lands beneath the whole book). See ReaderColumn's `inlineResults`. */
-  const inlineImages = narrow && viewAs === "story" && !isTechnical;
+  // Inline is now BOTH a viewport fact and a choice: a phone has no room for a second column, and
+  // "Inline" asks for the same magazine flow on a wide screen. Kept in JS because it changes the
+  // ORDER of the rendered children, which no media query can do.
+  const inlineImages = (narrow || readerLayout === "inline") && viewAs === "story" && !isTechnical;
   // Load this book's chat history; reset transient chat state on book change.
   // A buddy-initiated open seeds the history with the handed-off landing
   // conversation, then the stored history is PREPENDED when it loads (it's
@@ -6028,6 +6071,27 @@ export function App() {
     setCodeRunning(false);
     setCodePreviewOpen(false); // start a freshly-opened code book on the source, not the render
   }, [book?.id, book?.contentMode]);
+
+  /**
+   * Restore this book's chosen layout when it opens. Falls back to "side" on anything unreadable,
+   * which is also what a book that has never been given a choice gets — and note the reset is
+   * unconditional: without it, opening a second book would silently inherit the first one's layout.
+   */
+  useEffect(() => {
+    const id = book?.id;
+    if (!id) return;
+    let cancelled = false;
+    setReaderLayout("side");
+    void libraryStore
+      .getMemo?.(readerLayoutMemoKey(id))
+      .then((raw) => {
+        if (!cancelled && (raw === "inline" || raw === "rail" || raw === "side")) setReaderLayout(raw);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [book?.id, libraryStore]);
 
   // PHONE: when the desktop mirrors a new version of the OPEN code book — a buddy edit, or a
   // desktop-side edit to the same file — refresh the editor to match. The desktop owns the source and
@@ -9959,6 +10023,22 @@ export function App() {
               {(book.contentMode === "code" || book.code) && <option value="code">⟨⟩ Code</option>}
             </select>
           )}
+          {/* HOW THIS BOOK SPENDS THE WIDTH. Beside "view as", because they are the same kind of
+              decision — what this book should look like — and per book for the same reason.
+              Only offered where it can do anything: a data sheet and a code view have no art
+              column to move, and on a phone there is no spare width to spend. */}
+          {book && viewAs === "story" && !narrow && !book.data && !(book.dataSheets && book.dataSheets.length) && (
+            <select
+              style={styles.viewAsSelect}
+              value={readerLayout}
+              onChange={(e) => chooseReaderLayout(e.target.value as ReaderLayout)}
+              title="Where this book's illustrations go, and what fills the space beside the text. Remembered per book; the reading column stays the same width in all three."
+            >
+              <option value="side">▥ Art beside</option>
+              <option value="inline">▤ Art inline</option>
+              <option value="rail">▦ Art + chapter rail</option>
+            </select>
+          )}
           {/* THE HEADER, GROUPED BY WHAT YOU ARE TRYING TO DO.
               This was ~20 controls in one wrapping row behind a "Tools" caret, in the order they
               were built: Library beside Story beside Skills beside Calendar. On a narrow window it
@@ -10835,7 +10915,33 @@ export function App() {
           <DocumentReader book={book} plain={viewAs === "text"} articleHtml={bookHasHtml && articleLayout} />
         </main>
       ) : book ? (
-        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : narrow ? styles.readerNarrow : wideImageColumn ? styles.readerWide : styles.reader}>
+        <main
+          /**
+           * FOUR near-duplicate inline style objects became one grid and four modifiers, and the
+           * narrow case became a media query. That last part is the point: the layout used to be
+           * chosen from `innerWidth` in JS, which has to seed a state and correct itself in an
+           * effect — a visible flash on first paint, and two sources of truth that can disagree.
+           *
+           * Precedence is deliberate. A data book's sheets need the width whatever else is true; a
+           * phone comes next and is decided in CSS; a comic's panel grid needs a wide art column;
+           * and only then does the reader's own choice for this book apply.
+           */
+          className={`${cx.reader} ${
+            book.data || (book.dataSheets && book.dataSheets.length)
+              ? cx.readerData
+              : wideImageColumn
+                ? cx.readerWide
+                : READER_CLASS[readerLayout]
+          }`}
+        >
+          {/* Rendered for every book and hidden by CSS below 1440px — never behind a condition here,
+              so no code path can lose it. */}
+          <ReaderRail
+            chapters={book.chapters}
+            pages={book.pages}
+            activePage={activePageIndex}
+            onJump={jumpToPage}
+          />
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
@@ -10853,8 +10959,12 @@ export function App() {
           />
 
           {viewAs === "story" && (
-          <aside style={styles.aside}>
-            <div style={styles.panel}>
+          <aside className={cx.artCol} style={styles.aside}>
+            {/* ADDITIVE: every value .vr-art-pane sets is one styles.panel already sets inline, and
+                inline wins — so this can only add the max-height transition that lets the pane glide
+                with the dock instead of stepping frame by frame. The sticky geometry was hard-won
+                (see styles.panel) and is deliberately not moved. */}
+            <div className={cx.artPane} style={styles.panel}>
               {/* The illustration window — Story view only. (A Document/Text/Data/Code view renders
                   full-screen without it; see the document branch above.)
                   SKIPPED in a single column, where every unit's picture is already in the flow next
@@ -13372,39 +13482,12 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.7,
     fontFamily: "system-ui, sans-serif",
   },
-  reader: {
-    display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",
-    gap: 40,
-    padding: "32px 20px 50vh",
-    maxWidth: 1400,
-    margin: "0 auto",
-  },
-  // Wider image column for dense multi-panel views (comic page / panel grid).
-  readerWide: {
-    display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) minmax(440px, 900px)",
-    gap: 40,
-    padding: "32px 20px 50vh",
-    maxWidth: 1700,
-    margin: "0 auto",
-  },
-  // Data/spreadsheet books: a single FULL-WIDTH column (no reserved illustration pane), so the grid
-  // gets the horizontal room a sheet needs instead of squishing into the ~640px reading column.
-  readerData: {
-    display: "block",
-    padding: "32px 20px 50vh",
-    maxWidth: 1200,
-    margin: "0 auto",
-  },
-  // Narrow / phone viewport: a single column. Because the grid becomes `display:block`, the image
-  // `<aside>` (the second child) flows BELOW the text it illustrates instead of beside it.
-  readerNarrow: {
-    display: "block",
-    padding: "24px 16px 40vh",
-    maxWidth: 680,
-    margin: "0 auto",
-  },
+  /**
+   * The reader's grid, its three per-book modes and its phone layout now live in layout.css as
+   * `.vr-reader` and its modifiers. Four near-duplicate objects here — differing only in track
+   * widths and a max-width — became one grid whose modes override CUSTOM PROPERTIES, and the phone
+   * case became a media query rather than a JS branch off `innerWidth`.
+   */
   column: { maxWidth: 640 },
   dataPreview: {
     marginBottom: 24,

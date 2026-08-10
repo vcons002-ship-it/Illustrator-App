@@ -141,10 +141,44 @@
   --vr-art-max: 900px;
   --vr-reader-max: 1700px;
 }
+/* A data book's "prose" track holds a SPREADSHEET, so this is the one mode where the 640px measure
+ * is the wrong answer — a sheet squeezed into a reading column is unusable. It gets the whole width
+ * the mode allows, which is what the old `readerData` block did. */
 .vr-reader--data {
+  --vr-measure: 1200px;
   --vr-art-min: 0px;
   --vr-art-max: 0px;
   --vr-reader-max: 1200px;
+}
+
+/* Where the art track is 0 wide, the column must not merely be narrow — an element in a 0px track
+ * still paints its overflow across the prose beside it. */
+.vr-reader--inline .vr-art-col,
+.vr-reader--data .vr-art-col {
+  display: none;
+}
+
+/* The chapter list. `--current` is the only row at full strength, for the same reason the running
+ * checklist step is: state you can find without reading every row. */
+.vr-rail-item {
+  transition:
+    background-color var(--vr-dur-1) var(--vr-ease),
+    color var(--vr-dur-1) var(--vr-ease);
+}
+@media (hover: hover) {
+  .vr-rail-item:hover:not(:disabled) {
+    background-color: var(--vr-fill);
+    color: var(--vr-text);
+  }
+}
+.vr-rail-item:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.vr-rail-item--current {
+  color: var(--vr-text);
+  background-color: rgb(var(--vr-accent-rgb) / 0.12);
+  box-shadow: inset 2px 0 0 var(--vr-accent);
 }
 
 /* The rail only exists where there is genuinely spare width; below this it is a 0px track and
@@ -175,6 +209,11 @@
   }
   .vr-reader .vr-rail {
     display: none;
+  }
+  /* The art column flows BELOW the text it illustrates rather than beside it — that is what
+   * `display: block` above buys, and it is the whole phone layout. */
+  .vr-reader .vr-art-col {
+    display: block;
   }
 }
 
