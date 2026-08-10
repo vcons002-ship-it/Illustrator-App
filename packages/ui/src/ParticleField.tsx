@@ -312,6 +312,38 @@ export function attractVelocity(
   return { vx: (dx / d) * f, vy: (dy / d) * f, vz: (dz / d) * f };
 }
 
+/** How much of a frame's scroll distance a mote at the very front of the volume takes on. */
+export const SCROLL_DRAG = 0.028;
+/** Scroll faster than this in one frame — a jump to a chapter, a fling on a trackpad — and the
+ * excess is ignored, or the whole field would be thrown off screen by a single wheel event. */
+export const SCROLL_CLAMP = 60;
+
+/**
+ * WHAT SCROLLING DOES TO THE ROOM.
+ *
+ * The field sits behind the page, so moving the page ought to drag the air with it — and unevenly,
+ * because the volume has depth. Motes near the front are carried nearly the full amount, ones at the
+ * back barely notice. That difference is the whole effect: a rigid translation would just look like
+ * the background scrolling too, whereas a parallax gradient makes the volume shear and mix.
+ *
+ * The lateral and depth components come from each mote's own phase, so a burst of scrolling
+ * scatters the field rather than sliding it as one sheet.
+ */
+export function scrollVelocity(
+  p: Pick<Particle, "z" | "ph">,
+  dy: number,
+): { vx: number; vy: number; vz: number } {
+  const d = Math.max(-SCROLL_CLAMP, Math.min(dy, SCROLL_CLAMP));
+  // 1 at the front plane, 0 at the back.
+  const near = 1 - (p.z + DEPTH) / (2 * DEPTH);
+  const push = -d * (0.35 + near) * SCROLL_DRAG;
+  return {
+    vx: Math.cos(p.ph * 3.1) * push * 0.35,
+    vy: push,
+    vz: Math.sin(p.ph * 2.3) * push * 0.2,
+  };
+}
+
 /**
  * Velocity an impulse adds: outward in 3D, falling off quadratically to nothing at the radius.
  * Linear falloff moves the whole disc as a slab, which reads as a UI element sliding rather than
@@ -523,6 +555,8 @@ export interface ParticleFieldHandle {
   emit: (clientX: number, clientY: number, count?: number) => void;
   /** Draw nearby motes IN toward a point — a bubble condensing gathers the air around it. */
   gather: (clientX: number, clientY: number, strength?: number, radius?: number) => void;
+  /** Drag the volume along with a scroll, with parallax by depth so it shears rather than slides. */
+  stir: (deltaY: number) => void;
 }
 
 export function ParticleField({
@@ -542,6 +576,7 @@ export function ParticleField({
   const emitRef = useRef<{ x: number; y: number; n: number }[]>([]);
   const pullRef = useRef<{ x: number; y: number; s: number; r: number }[]>([]);
   const cursorRef = useRef<{ x: number; y: number } | null>(null);
+  const scrollRef = useRef(0);
 
   /** Deterministic PRNG — a shared one, so nothing here depends on Math.random. */
   const rndRef = useRef<() => number>(() => 0);
@@ -574,6 +609,11 @@ export function ParticleField({
       gather: (clientX, clientY, strength = 3, radius = 340) => {
         const l = toLocal(clientX, clientY);
         if (l) pullRef.current.push({ ...l, s: strength, r: radius });
+      },
+      // Accumulated rather than queued: several scroll events commonly land between two frames, and
+      // what matters is the total distance travelled in that frame, not how many events carried it.
+      stir: (deltaY) => {
+        scrollRef.current += deltaY;
       },
     };
   });
@@ -674,6 +714,8 @@ export function ParticleField({
       emitRef.current = [];
       const pulls = pullRef.current;
       pullRef.current = [];
+      const scrolled = scrollRef.current;
+      scrollRef.current = 0;
 
       for (const b of births) {
         const room = MAX_SPARKS - sparksRef.current.length;
@@ -708,6 +750,24 @@ export function ParticleField({
         // dent in the volume at the spot it landed, and the field would slowly become a record of
         // where bubbles have been.
         let pull = 0;
+        if (scrolled !== 0) {
+          const sv = scrollVelocity(p, scrolled);
+          vx += sv.vx;
+          vy += sv.vy;
+          vz += sv.vz;
+          /**
+           * A SCROLL FEEDS NEITHER THE SLACK NOR THE HOMES. This is the one force here that is
+           * SUSTAINED rather than a single frame, and slack is built for the opposite case: it
+           * releases the spring so a one-shot impulse can coast. Combine the two and there is
+           * nothing left to oppose a force that arrives every frame — measured, ten seconds of
+           * ordinary scrolling accelerated a mote to 47,000px per frame and put it four million
+           * pixels off screen. It comes home eventually, which is exactly why no settling test
+           * would have caught it; the field would simply be gone while you were reading.
+           *
+           * With the tether intact the spring balances the drag at a bounded offset, so the volume
+           * leans into the scroll and springs back — which is the shear that was wanted anyway.
+           */
+        }
         for (const g of pulls) {
           const av = attractVelocity(p, g.x, g.y, g.s, g.r);
           vx += av.vx;
@@ -767,7 +827,13 @@ export function ParticleField({
     }
 
     resize();
-    const ro = new ResizeObserver(resize);
+    // Under reduced motion there is no frame loop to repaint after a reseed, so the canvas would
+    // stay blank from the first window resize onward — now that this is the whole screen, that is
+    // every time anyone resizes the window.
+    const ro = new ResizeObserver(() => {
+      resize();
+      if (reduced) draw();
+    });
     ro.observe(canvas);
     if (!reduced) raf = requestAnimationFrame(frame);
     else draw(); // reduced motion means no ANIMATION, not a blank background
