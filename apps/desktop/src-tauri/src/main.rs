@@ -1725,6 +1725,40 @@ async fn run_remote_server(
 /// embedded assets (SPA-fallback to index.html for extension-less routes), and writes the
 /// bytes back. The pairing token rides in the URL `#hash`, which the browser keeps client-side
 /// (never sent here) — so serving a file leaks nothing; the WS handshake still gates control.
+/// The `vrlink` pairing token from a request's query string, if it carries one.
+///
+/// Percent-decoding is limited to what the token alphabet can actually contain once encoded — the
+/// alphabet is `[A-HJ-NP-Za-hj-np-z2-9]` (see generatePairingToken), so nothing in a legitimate
+/// token needs escaping at all. Anything else is rejected rather than decoded, which keeps this
+/// from becoming a general-purpose decoder reachable from the internet.
+fn link_token_in_query(raw_path: &str) -> Option<String> {
+    let query = raw_path.split('?').nth(1)?.split('#').next()?;
+    let value = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("vrlink="))?;
+    if value.is_empty() || value.len() > 128 || !value.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// The bundled manifest with `start_url` (and `scope`'s sibling `id`) rewritten to carry the token.
+///
+/// Returns None if the asset isn't the JSON we expect, so a malformed manifest serves as-is rather
+/// than 500ing the phone's install.
+fn manifest_with_start_url(bytes: &[u8], token: &str) -> Option<Vec<u8>> {
+    let mut doc: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let obj = doc.as_object_mut()?;
+    obj.insert(
+        "start_url".to_string(),
+        serde_json::Value::String(format!("/?vrlink={token}")),
+    );
+    // Without an explicit id, the browser derives the app's identity from start_url — so rotating
+    // the pairing token would look like a DIFFERENT app and install a second icon beside the first.
+    obj.insert("id".to_string(), serde_json::Value::String("/".to_string()));
+    serde_json::to_vec(&doc).ok()
+}
+
 async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Read the FULL request head (request line + ALL headers), not a fixed slice. Through Cloudflare
@@ -1773,7 +1807,28 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
         }
     });
     let (status, mime, body): (&str, String, Vec<u8>) = match asset {
-        Some(a) => ("200 OK", a.mime_type, a.bytes),
+        Some(a) => {
+            // THE INSTALLED SHORTCUT'S START URL.
+            //
+            // An installed web app launches at the manifest's `start_url`, and the bundled manifest
+            // says a bare "/". That relies on the phone still having the pairing token in storage,
+            // which is true on Android and is NOT true on iOS (an installed app gets its own jar) or
+            // after site data is cleared — in which case the icon launches a local app with no link,
+            // silently. So when the page asks for the manifest WITH its token, hand back the same
+            // manifest with the token folded into start_url; the icon then carries the pairing.
+            //
+            // Patched rather than written out here, so there is exactly one manifest and it cannot
+            // drift from the bundled one. And no token is disclosed: the caller has to already know
+            // it to send it, and the bare manifest — the one anybody can fetch — has none.
+            if key == "manifest.webmanifest" {
+                match link_token_in_query(&raw_path).and_then(|t| manifest_with_start_url(&a.bytes, &t)) {
+                    Some(patched) => ("200 OK", a.mime_type, patched),
+                    None => ("200 OK", a.mime_type, a.bytes),
+                }
+            } else {
+                ("200 OK", a.mime_type, a.bytes)
+            }
+        }
         // No embedded asset. In a `tauri dev` build the web UI is served by the Vite dev server
         // (devUrl), not bundled into the binary, so the resolver is empty and every phone request
         // would 404. Proxy the request to the dev server so the phone link still works in
@@ -4060,7 +4115,51 @@ fn main() {
 mod tests {
     use super::{
         ffmpeg_path_operands, guard_fetch_target, is_loopback_host, is_private_host,
+        link_token_in_query, manifest_with_start_url,
     };
+
+    /// The installed shortcut has to carry the pairing token, and NOTHING else may extract one.
+    #[test]
+    fn manifest_token_comes_only_from_a_caller_who_already_has_it() {
+        assert_eq!(
+            link_token_in_query("/manifest.webmanifest?vrlink=Abc123"),
+            Some("Abc123".into())
+        );
+        // The bare manifest — the one anyone on the network can fetch — must yield no token at all.
+        assert_eq!(link_token_in_query("/manifest.webmanifest"), None);
+        assert_eq!(link_token_in_query("/manifest.webmanifest?other=1"), None);
+        // Not a general-purpose decoder reachable from the internet: anything outside the token
+        // alphabet is refused rather than unescaped.
+        assert_eq!(
+            link_token_in_query("/manifest.webmanifest?vrlink=a%2Fb"),
+            None
+        );
+        assert_eq!(link_token_in_query("/manifest.webmanifest?vrlink="), None);
+        assert_eq!(
+            link_token_in_query(&format!("/m?vrlink={}", "a".repeat(129))),
+            None
+        );
+    }
+
+    #[test]
+    fn manifest_is_patched_rather_than_rewritten() {
+        let src = br#"{"name":"Visual Reader","start_url":"/","display":"standalone"}"#;
+        let out = manifest_with_start_url(src, "Tok9").expect("should patch");
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["start_url"], "/?vrlink=Tok9");
+        // Everything else survives — this must never become a second copy of the manifest that can
+        // drift from the bundled one.
+        assert_eq!(v["name"], "Visual Reader");
+        assert_eq!(v["display"], "standalone");
+        // Without an explicit id the browser identifies the app BY start_url, so rotating the token
+        // would install a second icon beside the first instead of updating it.
+        assert_eq!(v["id"], "/");
+    }
+
+    #[test]
+    fn a_malformed_manifest_serves_as_is_rather_than_failing_the_install() {
+        assert!(manifest_with_start_url(b"not json", "t").is_none());
+    }
 
     fn guard(url: &str) -> Result<(), String> {
         guard_fetch_target(&reqwest::Url::parse(url).unwrap())

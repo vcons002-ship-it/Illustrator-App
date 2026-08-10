@@ -155,8 +155,36 @@ function initRemoteMode(): RemoteMode | undefined {
       /* history not available — harmless */
     }
   }
+  pointManifestAtThisPairing(token);
   const scheme = protocol === "https:" ? "wss" : "ws";
   return { wsUrl: `${scheme}://${host}/`, token };
+}
+
+/**
+ * PUT THE PAIRING TOKEN INSIDE THE INSTALLED SHORTCUT.
+ *
+ * An installed app launches at the manifest's `start_url`, and the static one is a bare "/". On
+ * Android that is enough — an installed app shares Chrome's storage for the origin, so it finds the
+ * token this module already saved. It stops being enough the moment site data is cleared, or on iOS,
+ * where an installed app gets a storage jar of its own and would therefore launch UNLINKED: not an
+ * error, just the app quietly behaving as if it were a local one, which is the confusing failure the
+ * token-persistence code above already goes to some length to avoid.
+ *
+ * So the manifest is requested WITH the token, and the desktop echoes it into `start_url` (see
+ * serve_http_asset). The token is never exposed by this: the query is something you have to already
+ * know to send, and the bare manifest — the one anyone can fetch — carries no token at all.
+ */
+function pointManifestAtThisPairing(token: string): void {
+  try {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (!link) return;
+    const url = new URL(link.getAttribute("href") || "/manifest.webmanifest", window.location.href);
+    if (url.searchParams.get("vrlink") === token) return; // already pointed there
+    url.searchParams.set("vrlink", token);
+    link.href = url.pathname + url.search;
+  } catch {
+    /* No DOM, or a hostile CSP — the bare manifest still installs, just without the token. */
+  }
 }
 
 /** Best-effort image mime from a filename extension (for the buddy's open_image bubble). */

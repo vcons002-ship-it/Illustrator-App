@@ -13290,7 +13290,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 6,
-    padding: 10,
+    // NO PADDING. `.vr-dock` owns it, because it has to add the phone's bottom safe-area inset and
+    // an inline value would beat the class — the same cascade trap as the buttons and the shell.
     boxSizing: "border-box",
     background: t.surface.sunken,
     borderTop: `1px solid ${t.border.subtle}`,
