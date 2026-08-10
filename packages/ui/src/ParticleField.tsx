@@ -450,6 +450,24 @@ export const COMET_MAX_AGE = 900;
  */
 export const COMET_GAP_MIN_MS = 25000;
 export const COMET_GAP_SPREAD_MS = 50000;
+/**
+ * HOW FAST A TRAIL SPARK BECOMES A MOTE, and the reason the trail used to turn up late.
+ *
+ * A spark only becomes background when it dies, so its lifetime is the delay between the comet
+ * passing a spot and the trail actually existing there. At the original 0.004–0.008 that was 125 to
+ * 250 frames: measured across one pass, not a single mote had formed by the time the head was a
+ * fifth of the way over, only eight by halfway, and two thirds of them landed after the comet had
+ * already left the screen. The tail was a 1100px stripe of sparks with a scattering of motes
+ * arriving behind it, which is precisely "the trail arrives afterwards".
+ *
+ * At 0.014–0.026 a spark lives 38 to 71 frames, so the trail is laid down under a second behind the
+ * head — and the bright part becomes a tail of a few hundred pixels that tapers, instead of a line
+ * drawn across the whole screen.
+ */
+export const TRAIL_DECAY_MIN = 0.014;
+export const TRAIL_DECAY_SPREAD = 0.012;
+/** Two per frame, not one: the tail is now a third as long, and this keeps it as dense as it was. */
+export const TRAIL_PER_FRAME = 2;
 
 /**
  * Launch one from outside the box, aimed at a point inside it.
@@ -538,9 +556,14 @@ export function cometVelocity(
  *
  * Deliberately slow — a spark thrown at emission speed scatters, and a trail has to MARK the path
  * rather than spray from it. They inherit a fraction of the comet's velocity so the tail streams
- * backward off the head instead of hanging in beads, and they are long-lived, so the trail is still
- * visible after the comet has left. The existing conversion then turns each spent one into a mote,
- * which is what makes the trail permanent: the comet genuinely leaves the field changed.
+ * backward off the head instead of hanging in beads.
+ *
+ * And deliberately SHORT-LIVED, which is the opposite of what this said before. A trail spark
+ * becomes a mote only when it dies, so its lifetime is the lag between the comet passing a spot and
+ * the trail existing there — see TRAIL_DECAY_MIN. Long-lived sparks meant the tail was a stripe of
+ * sparks that turned into motes somewhere behind the reader's attention, mostly after the comet had
+ * gone. Short ones mean the motes are laid down under a second behind the head, while it is still
+ * in flight, which is the only version of this that reads as a comet leaving a trail.
  */
 export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
   const out: Spark[] = [];
@@ -553,7 +576,7 @@ export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
       vy: c.vy * 0.12 + (rnd() - 0.5) * 0.5,
       vz: c.vz * 0.12 + (rnd() - 0.5) * 0.3,
       life: 1,
-      decay: 0.004 + rnd() * 0.004,
+      decay: TRAIL_DECAY_MIN + rnd() * TRAIL_DECAY_SPREAD,
       r: 0.7 + rnd() * 1.3,
       ph: rnd() * Math.PI * 2,
       spin: 0.01 + rnd() * 0.03,
@@ -936,7 +959,7 @@ export function ParticleField({
         // Kept under 70% so a comet's long tail can never crowd out the sparks from typing, which
         // are the ones tied to something the reader is actually doing.
         if (sparksRef.current.length < MAX_SPARKS * 0.7) {
-          sparksRef.current.push(...cometTrail(comet, 1, rnd));
+          sparksRef.current.push(...cometTrail(comet, TRAIL_PER_FRAME, rnd));
         }
         if (!cometAlive(comet, w, h)) {
           comet = null;
