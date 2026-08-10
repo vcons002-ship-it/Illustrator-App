@@ -1540,14 +1540,19 @@ export function buildBuddySystemPrompt(raw: {
   const multiStepGuide = !hasPlan
     ? "MULTI-STEP vs SINGLE: a task with 2+ distinct actions (e.g. several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
-      "just call its tool directly; do NOT make a plan for one step.\n"
+      "just call its tool directly; do NOT make a plan for one step. WRITING something and MAKING something are " +
+      "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
+      "not three — a step that asks for both tends to come back with only the picture.\n"
     : opts.appManagedSteps
       ? // App-managed mid-plan: the YOUR CURRENT STEP block already says do-one-step / no complete_step.
         ""
       : // Legacy mid-plan: terse checklist discipline (no verbose "narrate every step" mandate — that
         // made weak models write prose instead of calling the tool).
         "WORKING THE CHECKLIST: do the ▸ current step now — call its tool (an image step REQUIRES an actual " +
-        "generate_image call THIS turn, not just a described prompt) or give its answer, then complete_step. " +
+        "generate_image call THIS turn, not just a described prompt) and/or give its answer, then complete_step. " +
+        "If the step asks for BOTH writing and a tool (\"write the next part of the story and generate an " +
+        "image\"), WRITE THE PROSE FIRST, in the same reply, ABOVE the tool call — a render ENDS the turn, so " +
+        "anything you meant to say after it never gets written and the step lands with the picture only. " +
         "ONE step's work per reply (never tick two in a row). The app re-runs you while steps remain, so keep " +
         "going on your own — don't wait for the reader to say 'continue'. Stop only when every step is ✓ (a short " +
         "wrap-up) or you're genuinely blocked and need the reader (say what you need; don't tick the step).\n";
@@ -1558,7 +1563,9 @@ export function buildBuddySystemPrompt(raw: {
     ? '- {"tool":"set_plan","goal":"…","steps":[{"do":"Generate image 1 of the sunset","needs":"image"},' +
       '{"do":"Save the recap to recap.md","needs":"file"},{"do":"List 3 follow-ups","needs":"text"}]} — for a ' +
       "MULTI-STEP request, FIRST compile the checklist: phrase EACH step as one clear action/ask that reads like " +
-      'the reader said it, and tag what proves it done with "needs" ("image", "file", "command", "text", "reply", ' +
+      "the reader said it — and WRITING something is a separate action from MAKING something, so \"a story " +
+      "before each of 3 pictures\" is SIX steps, not three — " +
+      'and tag what proves it done with "needs" ("image", "file", "command", "text", "reply", ' +
       "or a tool name). The APP then runs the checklist for you: it gives you ONE step at a time and ticks it off " +
       "ITSELF once it sees the step's effect (a render, a saved file, a reply). There is NO complete_step — never " +
       "try to mark progress; just do the one step you're given each turn. Skip set_plan for a simple one-shot ask. " +

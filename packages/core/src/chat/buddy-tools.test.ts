@@ -2687,6 +2687,40 @@ describe("MULTI-STEP guidance — LEAN with no plan, discipline only mid-checkli
     expect(sys).not.toMatch(/VERY FIRST action is ALWAYS set_plan/);
   });
 
+  /**
+   * "A STORY BEFORE EACH PICTURE" CAME BACK AS PICTURES ONLY.
+   *
+   * The model planned three steps of the shape "write the next part of the story AND generate an
+   * image", and each one produced the image alone. Two lines of prompt caused it, and neither is
+   * about planning ability:
+   *
+   *   1. The mid-checklist line offered "call its tool ... OR give its answer" — an exclusive
+   *      choice. Handed a step that wants both, a model picks one, and the tool is the louder ask.
+   *   2. Nothing said WHERE the prose has to go. A render is a host tool and ENDS the turn, so
+   *      anything the model meant to write after calling it is never written. It has to come first,
+   *      in the same reply, and that was nowhere on the page.
+   *
+   * The reader worked out the fix by hand — "add separate steps for the stories" — which is the
+   * third line: "one step per action" never said that writing and making are two actions.
+   */
+  it("does not offer prose and a tool as an either/or, and says which comes first", () => {
+    const plan = { goal: "story + pics", steps: [{ text: "Write part 1 and draw it", status: "pending" as const }] };
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(sys, "the step's tool and its answer are still an either/or").not.toMatch(
+      /generate_image call THIS turn, not just a described prompt\) or give its answer/,
+    );
+    expect(sys).toMatch(/WRITE THE PROSE FIRST/);
+    expect(sys, "never says why the order matters, so it reads as a style note").toMatch(/ENDS the turn/);
+  });
+
+  it("tells the planner that writing and making are two steps, not one", () => {
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(sys).toMatch(/SIX steps/);
+    // And the same thing in app-managed mode, which compiles the checklist the app then runs.
+    const managed = buildBuddySystemPrompt({ persona: "assistant", library: [], appManagedSteps: true });
+    expect(managed).toMatch(/SIX steps/);
+  });
+
   it("mid-checklist (active plan), gives terse discipline: image steps need a real call, no waiting for 'continue'", () => {
     const plan = { goal: "3 suns", steps: [{ text: "Generate image 1", status: "pending" as const }] };
     const sys = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
