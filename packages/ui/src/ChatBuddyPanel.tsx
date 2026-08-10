@@ -46,6 +46,7 @@ import {
   type ParticleFieldHandle,
 } from "./ParticleField.js";
 import { useSharedParticleField } from "./ParticleBackdrop.js";
+import { StepQueue } from "./StepQueue.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -883,35 +884,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} streaming />
         ) : null}
         {props.plan && props.plan.steps.length > 0 ? (
-          <div style={planBoxStyle}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-              <div style={{ fontSize: props.plan.goal ? 12 : 11, fontWeight: 600, opacity: props.plan.goal ? 1 : 0.7, marginBottom: 4 }}>
-                📋 {props.plan.goal || "Plan"}
-              </div>
-              {props.onDismissPlan ? (
-                <button
-                  type="button"
-                  onClick={() => props.onDismissPlan?.()}
-                  title="Dismiss this checklist"
-                  aria-label="Dismiss this checklist"
-                  style={{ background: "none", border: "none", color: "inherit", opacity: 0.5, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
-                >
-                  ✕
-                </button>
-              ) : null}
-            </div>
-            {props.plan.steps.map((s, i) => {
-              const done = s.status === "done";
-              const current = !done && props.plan!.steps.slice(0, i).every((p) => p.status === "done");
-              return (
-                <div key={i} style={{ fontSize: 12, padding: "1px 0", opacity: done ? 0.55 : current ? 1 : 0.7 }}>
-                  <span style={{ opacity: 0.7 }}>{done ? "✓ " : current ? "▸ " : "○ "}</span>
-                  {s.text}
-                  {done && s.note ? <span style={{ opacity: 0.6 }}> — {s.note}</span> : null}
-                </div>
-              );
-            })}
-          </div>
+          <StepQueue
+            {...(props.plan.goal ? { goal: props.plan.goal } : {})}
+            steps={props.plan.steps}
+            {...(props.onDismissPlan ? { onDismiss: props.onDismissPlan } : {})}
+          />
         ) : null}
         {props.steps && props.steps.length > 0 ? (
           <div style={stepsBoxStyle}>
@@ -1457,15 +1434,7 @@ const stepsBoxStyle = {
   border: `1px solid ${t.accent.fill}`,
 } as const;
 
-// The pinned working-checklist box — slightly stronger than the transient steps trace so it reads as
-// the persistent plan.
-const planBoxStyle = {
-  margin: "2px 8px",
-  padding: "6px 10px",
-  borderRadius: 8,
-  background: t.accent.fill,
-  border: `1px solid ${t.accent.edge}`,
-} as const;
+// The pinned working checklist now lives in StepQueue, which owns its own box.
 
 const sessionSelectStyle = {
   background: t.fill.base,

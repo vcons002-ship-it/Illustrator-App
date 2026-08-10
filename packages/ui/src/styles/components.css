@@ -511,3 +511,86 @@
 .vr-msg--solidify[data-from="user"] {
   animation-name: vr-solidify-user;
 }
+
+/* ---- The checklist as a queue -------------------------------------------------------
+ * Replaces a list of "✓ / ▸ / ○" prefixes on plain lines. That was accurate and nearly
+ * unreadable: a step's state was one character at the head of a sentence, same size and weight as
+ * the sentence, so six steps were one grey paragraph and finding the running one meant reading all
+ * of them. State belongs in something the eye resolves without reading. */
+
+/* The box itself lives here rather than inline, so it is one rule to restyle and the class-existence
+ * gate has something real to find. */
+.vr-queue {
+  margin: 2px 8px;
+  padding: 9px 10px 10px;
+  border-radius: var(--vr-radius-md);
+  background: var(--vr-accent-wash);
+  border: 1px solid var(--vr-accent-edge);
+}
+
+/* A goal is a whole sentence. The old box cut it mid-word with no ellipsis, which reads as a
+ * rendering fault rather than a long title. */
+.vr-queue-goal {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.vr-queue-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--vr-fill);
+  overflow: hidden;
+}
+
+.vr-queue-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--vr-accent);
+  /* Slow on purpose: a step completing should read as progress being made, not as a value being
+   * assigned. It is the only thing on screen that moves when a long step finally lands. */
+  transition: width var(--vr-dur-3) var(--vr-ease);
+}
+
+.vr-step {
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  color: var(--vr-text-dim);
+  /* Staggered by --vr-i, which the component sets per row; capped below so a twenty-step plan does
+   * not spend two seconds arriving. */
+  animation: vr-settle var(--vr-dur-3) var(--vr-spring) both;
+  animation-delay: calc(min(var(--vr-i, 0), 11) * 26ms);
+}
+
+.vr-step-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--vr-fill-strong);
+}
+
+/* The one step happening now: the only row at full text colour, and the only thing moving. */
+.vr-step--active {
+  color: var(--vr-text);
+  background: rgb(var(--vr-accent-rgb) / 0.08);
+  border-color: rgb(var(--vr-accent-rgb) / 0.32);
+}
+
+.vr-step--active .vr-step-dot {
+  background: var(--vr-accent);
+  animation: vr-breathe 1.6s ease-in-out infinite;
+}
+
+.vr-step--done {
+  opacity: 0.55;
+}
+
+.vr-step--done .vr-step-dot {
+  background: var(--vr-good);
+}

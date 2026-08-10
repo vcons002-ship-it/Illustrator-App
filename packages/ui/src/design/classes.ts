@@ -83,6 +83,15 @@ export const cx = {
   /** Anything that must paint above the field. */
   aboveField: "vr-above-field",
 
+  /** The chat's working checklist, as a watchable queue. */
+  queue: "vr-queue",
+  queueGoal: "vr-queue-goal",
+  queueBar: "vr-queue-bar",
+  step: "vr-step",
+  stepActive: "vr-step--active",
+  stepDone: "vr-step--done",
+  stepDot: "vr-step-dot",
+
   /** Sanitized article HTML rendered with dangerouslySetInnerHTML. */
   articleHtml: "vr-article-html",
 } as const;
