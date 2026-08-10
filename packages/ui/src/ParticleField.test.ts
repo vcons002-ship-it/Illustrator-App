@@ -25,8 +25,8 @@ import {
   COMET_RADIUS,
   COMET_MAX_AGE,
   COMET_GAP_MIN_MS,
-  TRAIL_CONVERT_CHANCE,
-  TRAIL_PER_FRAME,
+  TRAIL_SPACING,
+  cometMote,
   TRAIL_DECAY_MIN,
   type Comet,
   MAX_SPEED,
@@ -905,61 +905,123 @@ describe("a comet flies by", () => {
   });
 
   /**
-   * THE TRAIL HAS TO STAY WHERE THE COMET PASSED.
+   * THE TRAIL IS SPRAYED, NOT LEFT BEHIND.
    *
-   * Two separate things were erasing it as fast as it was written, and only measuring a whole pass
-   * showed either. A comet drops 640 trail sparks across a 1080p screen against a field with
-   * headroom for 149, so retirement ate the oldest continuously: the surviving motes spanned
-   * x 1426–1920 of 1920 — three quarters of the path already deleted before the comet reached the
-   * far side, which is why the trail appeared to follow the head around.
+   * It used to be the tail's leftovers: a spark dropped at the head became a mote when it died, 38
+   * to 71 frames later. So the trail arrived LATE — a mote could not exist until its spark had
+   * finished dying — and CROOKED, because the spark spent that whole life moving, inheriting a share
+   * of the comet's velocity and receding into depth. Reported exactly that way: "a bunch of motes
+   * float in after the fact, not even lined up properly."
    */
-  it("leaves a trail down the whole path, not just behind the head", () => {
-    const rnd = rndSeq(12);
-    const w = 1920;
-    const h = 1080;
-    const n = Math.round(w * h * BACKDROP_DENSITY);
-    const parts = seedParticles(w, h, n, rnd);
-    const seedCount = parts.length;
-    const maxAmbient = Math.round(n * 1.6);
-    let c: Comet = { x: -COMET_RADIUS, y: h / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
-    let sparks: Spark[] = [];
-
-    for (let f = 0; f < 420; f++) {
-      c = stepComet(c, 1);
-      if (sparks.length < MAX_SPARKS * 0.7) sparks.push(...cometTrail(c, TRAIL_PER_FRAME, rnd));
-      const live: Spark[] = [];
-      for (const s of sparks) {
-        const nx = stepSpark(s, 1, f * 16.7);
-        if (nx) live.push(nx);
-        else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
-          if (s.settles && rnd() >= TRAIL_CONVERT_CHANCE) continue;
-          parts.push(sparkToParticle(s, rnd));
-          if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
-        }
-      }
-      sparks = live;
-      for (let i = 0; i < parts.length; i++) parts[i] = stepParticle(parts[i]!, 1, f * 16.7, w, h);
+  it("lays a mote on the comet's own position, at the comet's own instant", () => {
+    const c: Comet = { x: 500, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    for (let i = 0; i < 40; i++) {
+      const m = cometMote(c, rndSeq(i + 1));
+      expect(Math.hypot(m.x - c.x, m.y - c.y), "born off the path").toBeLessThan(6);
+      // A whisper of velocity, not a share of the comet's — 6px/frame inherited is how the old
+      // trail wandered off its own line before it had finished being drawn.
+      expect(Math.hypot(m.vx, m.vy, m.vz), "born with enough speed to leave the line").toBeLessThan(0.2);
     }
-
-    const trail = parts.slice(seedCount);
-    expect(trail.length, "the comet left nothing behind").toBeGreaterThan(30);
-    const xs = trail.map((p) => p.x);
-    expect(Math.min(...xs), "the start of the path had already been retired").toBeLessThan(w * 0.15);
-    expect(Math.max(...xs), "nothing survived near the end of the path").toBeGreaterThan(w * 0.85);
   });
 
   it("settles the trail in place instead of letting it wander off", () => {
-    // A free mote wanders — that is the point of them, and it is also what would erase a trail
-    // within seconds. A trail mote gets a tenth of the field's cruising speed so the line holds.
-    const s: Spark = { ...cometTrail({ x: 500, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 }, 1, rndSeq(4))[0]! };
-    expect(s.settles, "a trail spark is not marked as one").toBe(true);
-    const settled = sparkToParticle(s, rndSeq(5));
-    expect(settled.spd, "a trail mote cruises like any other and will drift off the path")
+    const m = cometMote({ x: 500, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 }, rndSeq(4));
+    expect(m.spd, "a trail mote cruises like the rest of the field and will drift off the path")
       .toBeLessThan(DRIFT_MIN / 2);
-
-    // A typing spark must NOT settle — it belongs to the room and should join its drift.
+    // A spark thrown off the TEXT must still join the room and drift with it.
     const thrown = sparkToParticle(emitSparks(500, 400, 1, rndSeq(6))[0]!, rndSeq(7));
     expect(thrown.spd, "a spark thrown off the text was frozen in place").toBeGreaterThanOrEqual(DRIFT_MIN);
+  });
+
+  it("makes the tail pure light, so it cannot become the trail as well", () => {
+    // The tail and the trail are now two populations with one job each. A trail spark that also
+    // converted is what put the permanent motes behind the comet in time and off its line in space.
+    const trail = cometTrail({ x: 0, y: 0, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 }, 5, rndSeq(2));
+    for (const s of trail) expect(s.glowOnly, "a tail spark still converts to a mote").toBe(true);
+    // …and a typing spark must NOT be marked, or typing would stop feeding the background.
+    for (const s of emitSparks(0, 0, 5, rndSeq(3))) expect(s.glowOnly).toBeUndefined();
+  });
+
+  /**
+   * THE PROPERTY THE READER ACTUALLY ASKED FOR: the trail is sprayed AS THE COMET GOES, so its
+   * leading edge never falls behind the head. When the trail was spark leftovers, a mote could not
+   * exist until its spark had died 38–71 frames later, so the front of the trail trailed the head by
+   * hundreds of pixels and the rest arrived after the comet had left the screen.
+   */
+  it("keeps the front of the trail with the head, the whole way across", () => {
+    const rnd = rndSeq(21);
+    let c: Comet = { x: -COMET_RADIUS, y: H2 / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    const trail: Particle[] = [];
+    let since = 0;
+    let worstLag = 0;
+    for (let f = 0; f < 420 && cometAlive(c, W2, H2); f++) {
+      const before = c;
+      c = stepComet(c, 1);
+      since += Math.hypot(c.x - before.x, c.y - before.y, c.z - before.z);
+      const inBox = c.x > 0 && c.x < W2 && c.y > 0 && c.y < H2;
+      while (since >= TRAIL_SPACING) {
+        since -= TRAIL_SPACING;
+        if (inBox) trail.push(cometMote(c, rnd));
+      }
+      for (let i = 0; i < trail.length; i++) trail[i] = stepParticle(trail[i]!, 1, f * 16.7, W2, H2);
+      if (inBox && trail.length > 0) {
+        worstLag = Math.max(worstLag, c.x - Math.max(...trail.map((p) => p.x)));
+      }
+    }
+    // One spacing plus a frame of travel is the whole of the lag — there is no interval in which a
+    // mote is pending, so the front of the trail is always the last spacing mark the head crossed.
+    expect(worstLag, `the trail fell ${worstLag.toFixed(0)}px behind the comet`).toBeLessThan(TRAIL_SPACING + 8);
+    // …and it stays on the line it was drawn on.
+    const ys = trail.map((p) => p.y);
+    expect(Math.max(...ys) - Math.min(...ys), "the trail is not a line").toBeLessThan(40);
+  });
+
+  it("lays nothing while it is still off screen", () => {
+    // A comet enters from COMET_RADIUS outside the box, and a mote laid there is immediately
+    // WRAPPED to the far side: measured, a comet still off the left edge at x=-34 had already
+    // written a line of motes at x≈1977 — a trail on the opposite side of the screen from the
+    // comet drawing it.
+    const c: Comet = { x: -COMET_RADIUS, y: H2 / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    expect(c.x > 0 && c.x < W2, "the spawn point is inside the box, so this guards nothing").toBe(false);
+    const m = cometMote(c, rndSeq(3));
+    const wrapped = stepParticle(m, 1, 0, W2, H2);
+    expect(wrapped.x, "a mote laid off screen does not wrap, so the guard is unnecessary").toBeGreaterThan(W2 / 2);
+  });
+
+  it("spaces the trail by DISTANCE, so speed does not change the line", () => {
+    // Per-frame emission ties the spacing to the comet's speed and to the frame rate: a slow comet
+    // lays down twice as many, a dropped frame leaves a hole.
+    const lay = (speed: number): number[] => {
+      let c: Comet = { x: -COMET_RADIUS, y: 400, z: 0, vx: speed, vy: 0, vz: 0, age: 0, spin: 1 };
+      let since = 0;
+      const at: number[] = [];
+      for (let f = 0; f < 600 && cometAlive(c, 1200, 800); f++) {
+        const before = c;
+        c = stepComet(c, 1);
+        since += Math.hypot(c.x - before.x, c.y - before.y, c.z - before.z);
+        while (since >= TRAIL_SPACING) {
+          since -= TRAIL_SPACING;
+          at.push(c.x);
+        }
+      }
+      return at;
+    };
+    for (const speed of [4, 6, 9]) {
+      const at = lay(speed);
+      const gaps = at.slice(1).map((x, i) => x - at[i]!);
+      // Emission is quantised to frames, so a gap lands within ONE frame of travel of the target —
+      // it alternates around it rather than sitting on it. What must not happen is drift: the
+      // accumulator carries the remainder, so the error never compounds along the track.
+      for (const g of gaps) {
+        expect(Math.abs(g - TRAIL_SPACING), `at ${speed}px/frame a gap was ${g.toFixed(1)}px`).toBeLessThanOrEqual(
+          speed,
+        );
+      }
+      const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      expect(mean, `at ${speed}px/frame the mean spacing drifted`).toBeCloseTo(TRAIL_SPACING, 0);
+    }
+    // Same track, same number of motes, whatever the speed — within the one-frame quantisation.
+    expect(Math.abs(lay(4).length - lay(9).length)).toBeLessThanOrEqual(1);
   });
 
   it("keeps the dropped trail from dancing away before it lands", () => {

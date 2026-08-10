@@ -80,9 +80,16 @@ export interface Spark {
    * obeys its own momentum rather than being teleported onto a circle. */
   ph: number;
   spin: number;
-  /** Dropped by a comet rather than thrown off the text: it marks a place, so the mote it becomes
-   * should stay there. See TRAIL_SETTLE_SPD. */
-  settles?: boolean;
+  /**
+   * Light, and nothing else — this spark never becomes a mote.
+   *
+   * The comet's tail is made of these, and its PERMANENT trail is emitted separately as motes, on
+   * the path, at the instant the head passes. Routing the trail through spark death is what put it
+   * behind the comet in time (a spark lives 38–71 frames before it converts) and off the line in
+   * space (it drifts the whole while) — "a bunch of motes float in after the fact, not even lined
+   * up properly". A spark that is only ever light cannot do either.
+   */
+  glowOnly?: boolean;
 }
 
 /** Camera distance. Larger = weaker perspective; this is tuned so a mote at the back plane is
@@ -292,9 +299,7 @@ export function sparkToParticle(s: Spark, rnd: () => number): Particle {
     r: 0.7 + rnd() * 1.2,
     a: 0.16 + rnd() * 0.3,
     ph: rnd() * Math.PI * 2,
-    // A spark thrown off the text joins the room and drifts with it. One dropped by a comet is
-    // marking where the comet went, so it settles instead — see TRAIL_SETTLE_SPD.
-    spd: s.settles ? TRAIL_SETTLE_SPD : DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
+    spd: DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
   };
 }
 
@@ -474,19 +479,14 @@ export const TRAIL_DECAY_SPREAD = 0.012;
 /** Two per frame, not one: the tail is now a third as long, and this keeps it as dense as it was. */
 export const TRAIL_PER_FRAME = 2;
 /**
- * WHAT FRACTION OF SPENT TRAIL SPARKS BECOME PERMANENT MOTES.
+ * HOW FAR THE COMET TRAVELS BETWEEN MOTES, in world pixels.
  *
- * A comet drops two sparks a frame for hundreds of frames — 640 over one pass of a 1080p screen,
- * against a field with headroom for 149. So retirement ate the trail as fast as it was written:
- * measured, the surviving motes spanned x 1426–1920 of a 1920px screen. Three quarters of the path
- * had already been deleted by the time the comet reached the far side, which is why the trail
- * followed the head around instead of staying where the comet had been.
- *
- * Converting one in eight leaves a mote every ~24px along the WHOLE path and still fits inside the
- * headroom at every comet speed. A dotted line the length of the screen, rather than a dense smear
- * of which only the last few hundred pixels survive.
+ * Distance, not frames — so the spacing of the trail is the same whether the comet is crossing at 4
+ * or at 9, and a slow comet does not lay down twice as many. 22px is close enough to read as a line
+ * and sparse enough that a full 2360px pass leaves ~107 motes, inside the field's headroom at every
+ * speed, so nothing has to be retired mid-pass.
  */
-export const TRAIL_CONVERT_CHANCE = 0.125;
+export const TRAIL_SPACING = 22;
 /**
  * The cruising speed a settled trail mote gets, against 0.12–0.45 for the rest of the field.
  *
@@ -612,7 +612,7 @@ export function cometTrail(c: Comet, n: number, rnd: () => number): Spark[] {
       // trail across 142px, more than the settle speed and the birth jitter put together. A trail
       // spark's job is to fall where it was dropped.
       spin: 0.002 + rnd() * 0.004,
-      settles: true,
+      glowOnly: true,
     });
   }
   return out;
@@ -643,6 +643,39 @@ export function refitParticles(
   const out = parts.map((p) => ({ ...p, x: p.x * kx, y: p.y * ky }));
   if (out.length < target) out.push(...seedParticles(next.w, next.h, target - out.length, rnd));
   return out;
+}
+
+/**
+ * THE TRAIL ITSELF — a mote laid down ON the path, AT the moment the head passes it.
+ *
+ * This used to be the tail's leftovers: a spark was dropped at the head, lived 38 to 71 frames, and
+ * became a mote when it died. Two things follow from that and both were reported. The trail arrived
+ * LATE, because a mote could not exist until its spark had finished dying. And it arrived CROOKED,
+ * because the spark spent its whole life moving — inheriting a share of the comet's velocity, riding
+ * its own orbit, receding into depth — so where it died was never quite where the comet had been.
+ *
+ * Emitting the mote directly removes both. There is no interval in which it can drift, because it is
+ * born at the head's own position at the head's own instant. Its velocity is a whisper rather than a
+ * share of the comet's, so it stays on the line, and its cruising speed is a twentieth of the
+ * field's, so it stays there.
+ *
+ * The bright tail is still made of sparks — they are the LIGHT. They just no longer have a second
+ * job they were doing badly.
+ */
+export function cometMote(c: Comet, rnd: () => number): Particle {
+  return {
+    x: c.x + (rnd() - 0.5) * 6,
+    y: c.y + (rnd() - 0.5) * 6,
+    z: Math.max(-DEPTH, Math.min(c.z + (rnd() - 0.5) * 18, DEPTH)),
+    // Enough that the line has some life in it, far too little to leave it.
+    vx: (rnd() - 0.5) * 0.12,
+    vy: (rnd() - 0.5) * 0.12,
+    vz: (rnd() - 0.5) * 0.08,
+    r: 0.7 + rnd() * 1.1,
+    a: 0.18 + rnd() * 0.3,
+    ph: rnd() * Math.PI * 2,
+    spd: TRAIL_SETTLE_SPD,
+  };
 }
 
 /** Lay the ambient volume out on a jittered 3D grid: even coverage, no visible rows. */
@@ -881,6 +914,8 @@ export function ParticleField({
     /** The comet in flight, or null between visits, and when the next one is due. */
     let comet: Comet | null = null;
     let nextCometAt = 0;
+    /** World pixels travelled since the last trail mote — see TRAIL_SPACING. */
+    let sinceMote = 0;
 
     const resize = (): void => {
       const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -985,17 +1020,43 @@ export function ParticleField({
       // A COMET ON ITS OWN SCHEDULE. Seeded on the first frame rather than at mount, because `now`
       // is the rAF clock and the effect has no access to it — starting from 0 would launch one
       // immediately and then never again for a minute, which is backwards.
+      // Bound here rather than below the comet: the comet sprays motes straight into it as it goes.
+      const parts = partsRef.current;
+
       if (nextCometAt === 0) nextCometAt = now + COMET_GAP_MIN_MS + rnd() * COMET_GAP_SPREAD_MS;
       if (!comet && now >= nextCometAt) comet = spawnComet(w, h, rnd);
       if (comet) {
+        const before = comet;
         comet = stepComet(comet, dt);
         // Kept under 70% so a comet's long tail can never crowd out the sparks from typing, which
         // are the ones tied to something the reader is actually doing.
         if (sparksRef.current.length < MAX_SPARKS * 0.7) {
           sparksRef.current.push(...cometTrail(comet, TRAIL_PER_FRAME, rnd));
         }
+        /**
+         * SPRAY THE TRAIL AS IT GOES, measured in DISTANCE rather than frames.
+         *
+         * Per-frame emission ties the spacing of the trail to the comet's speed and to the frame
+         * rate — a slow comet lays down twice as many, a dropped frame leaves a gap. Accumulating
+         * the distance actually travelled and emitting one mote per TRAIL_SPACING gives the same
+         * line whatever the speed, and it is laid at the head's own position, so it cannot lag
+         * behind the comet or wander off its path.
+         */
+        sinceMote += Math.hypot(comet.x - before.x, comet.y - before.y, comet.z - before.z);
+        // ONLY INSIDE THE BOX. A comet enters from COMET_RADIUS outside it, and a mote laid out
+        // there is immediately WRAPPED to the far side — measured, a comet still off the left edge
+        // at x=-34 had already written a line of motes at x≈1977. A trail on the opposite side of
+        // the screen from the comet drawing it.
+        const inBox = comet.x > 0 && comet.x < w && comet.y > 0 && comet.y < h;
+        while (sinceMote >= TRAIL_SPACING) {
+          sinceMote -= TRAIL_SPACING;
+          if (!inBox) continue;
+          parts.push(cometMote(comet, rnd));
+          if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
+        }
         if (!cometAlive(comet, w, h)) {
           comet = null;
+          sinceMote = 0;
           nextCometAt = now + COMET_GAP_MIN_MS + rnd() * COMET_GAP_SPREAD_MS;
         }
       }
@@ -1005,7 +1066,6 @@ export function ParticleField({
         if (room > 0) sparksRef.current.push(...emitSparks(b.x, b.y, Math.min(b.n, room), rnd));
       }
 
-      const parts = partsRef.current;
       for (let i = 0; i < parts.length; i++) {
         let vx = parts[i]!.vx;
         let vy = parts[i]!.vy;
@@ -1054,10 +1114,10 @@ export function ParticleField({
         // A spent spark becomes background — typing ADDS to the field rather than decorating it.
         // Only inside the box: one that flew off the edge would be simulated forever, unseen.
         else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
-          // A comet writes far more trail than the field can hold, so only a fraction of it becomes
-          // permanent. Without this the retirement pass eats the trail from behind as fast as the
-          // head writes it, and what is left follows the comet instead of marking its path.
-          if (s.settles && rnd() >= TRAIL_CONVERT_CHANCE) continue;
+          // A comet's tail is LIGHT and nothing else — its trail is emitted as motes, on the path,
+          // as the head passes. A spark that also became a mote is what put the trail behind the
+          // comet in time and off its line in space.
+          if (s.glowOnly) continue;
           parts.push(sparkToParticle(s, rnd));
           /**
            * THE SEEDED VOLUME IS IMMORTAL. Retirement starts at `seedCount`, so it can only ever
