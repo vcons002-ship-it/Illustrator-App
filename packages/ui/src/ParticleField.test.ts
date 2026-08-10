@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEPTH,
   MAX_SPARKS,
-  driftAcceleration,
+  baseDrift,
   attractVelocity,
-  displaceHome,
   emitSparks,
   caretXFromWidth,
   impulseVelocity,
@@ -17,6 +16,10 @@ import {
   wrapCaret,
   PULSE_RADIUS,
   SCROLL_CLAMP,
+  MAX_SPEED,
+  WRAP_MARGIN,
+  DRIFT_MIN,
+  DRIFT_MAX,
   scrollVelocity,
   type Particle,
   type Spark,
@@ -34,45 +37,75 @@ import { BACKDROP_DENSITY } from "./ParticleBackdrop.js";
  */
 
 const at = (x: number, y: number, vx = 0, vy = 0, z = 0): Particle => ({
-  x, y, z, vx, vy, vz: 0, hx: x, hy: y, hz: z, r: 1, a: 0.3, ph: 0.4, sx: x, sy: y, sz: z, slack: 0,
+  x, y, z, vx, vy, vz: 0, r: 1, a: 0.3, ph: 0.4, spd: 0.25,
 });
+
+const W = 1200;
+const H = 800;
+/** Advance a mote through the real step, with a clock, in a screen-sized box. */
+const run = (p: Particle, frames: number, dt = 1): Particle => {
+  let q = p;
+  for (let i = 0; i < frames; i++) q = stepParticle(q, dt, i * 16.7, W, H);
+  return q;
+};
+/** Distance travelled without letting a wrap read as a giant jump. */
+const near = (a: number, b: number, size: number): number => {
+  const d = Math.abs(a - b) % size;
+  return Math.min(d, size - d);
+};
 
 const rndSeq = (seed = 7) => () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
 
 describe("the field always settles", () => {
-  it("returns a shoved particle home and stops", () => {
-    let p: Particle = { ...at(100, 100), vx: 9, vy: -7 };
-    for (let i = 0; i < 2000; i++) p = stepParticle(p, 1);
-    expect(Math.hypot(p.x - 100, p.y - 100), "never came home").toBeLessThan(0.5);
-    expect(Math.hypot(p.vx, p.vy), "still moving").toBeLessThan(0.01);
+  /**
+   * "SETTLES" NO LONGER MEANS "COMES HOME". It means the disturbance bleeds off and the mote is
+   * cruising again — from wherever the shove left it. The old version of this test asserted a
+   * pushed mote returned to within half a pixel of its start, which is precisely the property that
+   * was reported, three separate times, as the particles behaving like jello.
+   */
+  it("bleeds a shove off and returns to its own cruising speed", () => {
+    const p = run({ ...at(600, 400), vx: 9, vy: -7 }, 600);
+    expect(Math.hypot(p.vx, p.vy, p.vz), "still carrying the shove").toBeLessThan(DRIFT_MAX * 1.3);
+    expect(Math.hypot(p.vx, p.vy, p.vz), "stopped dead instead of drifting on").toBeGreaterThan(0.01);
+  });
+
+  it("keeps the shove — a settled mote is somewhere new, not back where it started", () => {
+    const start = at(600, 400);
+    const p = run({ ...start, vx: 9, vy: -7 }, 600);
+    const moved = Math.hypot(near(p.x, start.x, W + 2 * WRAP_MARGIN), near(p.y, start.y, H + 2 * WRAP_MARGIN));
+    expect(moved, `sprang back to within ${moved.toFixed(0)}px of home — this is the jello`).toBeGreaterThan(150);
   });
 
   it("cannot accumulate energy, however hard or often it is hit", () => {
-    // The failure this guards: a spring weaker than the damping lets repeated impulses stack, and
-    // the field slowly boils. Hit it every frame for ten seconds, then let it rest.
-    let p: Particle = at(0, 0);
+    // The clamp is the only thing standing between a per-frame force and a mote at escape velocity,
+    // now that there is no spring to balance one. Hit it every frame for ten seconds.
+    let p: Particle = at(600, 400);
     for (let i = 0; i < 600; i++) {
-      const { vx, vy } = impulseVelocity(p, 5, 5, 3);
-      p = stepParticle({ ...p, vx: p.vx + vx, vy: p.vy + vy }, 1);
+      const { vx, vy } = impulseVelocity(p, 605, 405, 3);
+      p = stepParticle({ ...p, vx: p.vx + vx, vy: p.vy + vy }, 1, i * 16.7, W, H);
+      expect(Math.hypot(p.vx, p.vy, p.vz)).toBeLessThanOrEqual(MAX_SPEED + 1e-9);
     }
-    const excursion = Math.hypot(p.x - p.hx, p.y - p.hy);
-    expect(excursion, `drifted ${excursion.toFixed(1)}px from home under sustained impulses`).toBeLessThan(
-      PULSE_RADIUS,
-    );
-    for (let i = 0; i < 2000; i++) p = stepParticle(p, 1);
-    expect(Math.hypot(p.vx, p.vy)).toBeLessThan(0.01);
+    expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
   });
 
   it("survives a backgrounded tab without flinging particles off screen", () => {
     // dt is clamped by the caller, and this is why: an unclamped delta after a tab regains focus
-    // integrates one enormous step. Even at the clamp ceiling the particle must stay sane.
-    let p: Particle = { ...at(50, 50), vx: 4, vy: 4 };
-    for (let i = 0; i < 500; i++) p = stepParticle(p, 3);
+    // integrates one enormous step. Wrapping means it can never leave the box regardless.
+    const p = run({ ...at(50, 50), vx: 4, vy: 4 }, 500, 3);
     expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
-    expect(Math.hypot(p.x - 50, p.y - 50)).toBeLessThan(200);
+    expect(p.x).toBeGreaterThanOrEqual(-WRAP_MARGIN);
+    expect(p.x).toBeLessThanOrEqual(W + WRAP_MARGIN);
+    expect(p.y).toBeGreaterThanOrEqual(-WRAP_MARGIN);
+    expect(p.y).toBeLessThanOrEqual(H + WRAP_MARGIN);
+  });
+
+  it("wraps rather than piling up against an edge", () => {
+    // The spring used to keep the volume together. Wrapping is what replaced it, and a mote that
+    // stuck at the boundary instead would leave a bright rim and an emptying middle.
+    const p = run({ ...at(W - 10, 400), vx: 6 }, 120);
+    expect(p.x, "stalled at the right-hand edge instead of coming back round").toBeLessThan(W / 2);
   });
 });
-
 describe("a pulse stays local", () => {
   it("does nothing at all beyond its radius", () => {
     const far = at(PULSE_RADIUS + 1, 0);
@@ -102,93 +135,71 @@ describe("seeding", () => {
     return () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
   })();
 
-  it("puts every particle inside the box, at its own home", () => {
+  it("puts every particle inside the box, at rest, with a pace of its own", () => {
     const ps = seedParticles(400, 200, 60, rnd);
     expect(ps.length).toBe(60);
     for (const p of ps) {
-      expect(p.x).toBe(p.hx);
-      expect(p.y).toBe(p.hy);
       expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+      expect(p.spd).toBeGreaterThanOrEqual(DRIFT_MIN);
+      expect(p.spd).toBeLessThanOrEqual(DRIFT_MAX);
     }
+    expect(new Set(ps.map((p) => p.spd)).size, "the whole field moves at one pace").toBeGreaterThan(20);
   });
 
   it("does not collapse when the container has no height yet", () => {
-    // First paint hands over a 0-height box more often than not; a divide by it yields NaN homes,
-    // and every particle is then invisible forever with nothing logged.
+    // First paint hands over a 0-height box more often than not; a divide by it yields NaN
+    // positions, and every particle is then invisible forever with nothing logged.
     const ps = seedParticles(300, 0, 20, rnd);
     for (const p of ps) expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
   });
 
   it("stays sparse — this is atmosphere, not a screensaver", () => {
-    // At the shipped density a large desktop chat area should still be well under a few hundred.
     const DENSITY = 0.00007;
     expect(Math.round(1600 * 700 * DENSITY)).toBeLessThan(120);
   });
 });
-
-/**
- * THE FIELD WAS PERFECTLY STATIC AND EVERY TEST ABOVE PASSED.
- *
- * Each particle starts AT its home with zero velocity, and the only forces were a spring pulling
- * it home and an impulse from typing. A particle already home with no velocity therefore never
- * moved — the field drew a fixed pattern of dots and stayed that way until the model typed, which
- * is not what "a drifting particle field" means and was reported as exactly that.
- *
- * The settling tests could not have caught it: a field that never moves settles trivially. This
- * asserts the opposite property — that something is always nudging it.
- */
 describe("ambient drift", () => {
   /**
-   * "> 0.5px" WAS A USELESS BAR AND THIS TEST PASSED WHILE THE EFFECT DID NOT EXIST.
+   * "> 0.5px" WAS A USELESS BAR AND THAT TEST PASSED WHILE THE EFFECT DID NOT EXIST.
    *
-   * The first drift constant produced a measured steady-state wander of 1.3 pixels. Mathematically
-   * moving; visually a still image, and reported as "no particle movement at all" after it shipped.
-   * A threshold that a sub-pixel effect clears is not a test of whether something is visible.
-   *
-   * The bar is now a distance a person can actually see a dot travel.
+   * The first drift constant produced a measured steady-state wander of 1.3 pixels — mathematically
+   * moving, visually a still image, and reported as "no particle movement at all" after it shipped.
+   * The bar has to be a distance a person can actually watch a dot travel.
    */
-  it("wanders far enough to be SEEN, not merely far enough to be non-zero", () => {
-    let p: Particle = at(100, 100);
-    let worst = 0;
-    for (let i = 0; i < 8000; i++) {
-      const { ax, ay } = driftAcceleration(p, i * 16.7);
-      p = stepParticle({ ...p, vx: p.vx + ax, vy: p.vy + ay }, 1);
-      if (i > 2000) worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy));
-    }
-    expect(worst, `wanders only ${worst.toFixed(1)}px — invisible on a 2px dot`).toBeGreaterThan(6);
+  it("actually goes somewhere, rather than wandering around one spot", () => {
+    const start = at(600, 400);
+    const p = run(start, 900); // fifteen seconds
+    const moved = Math.hypot(near(p.x, start.x, W + 2 * WRAP_MARGIN), near(p.y, start.y, H + 2 * WRAP_MARGIN));
+    expect(moved, `travelled ${moved.toFixed(0)}px in fifteen seconds`).toBeGreaterThan(60);
   });
 
-  it("stays gentle — drift must never overpower the spring", () => {
-    // If ambient force can push a particle far from home the field stops reading as atmosphere
-    // and starts reading as snow. Run it long enough for any resonance to show.
-    let p: Particle = at(0, 0);
-    let worst = 0;
-    for (let i = 0; i < 6000; i++) {
-      const { ax, ay } = driftAcceleration(p, i * 16.7);
-      p = stepParticle({ ...p, vx: p.vx + ax, vy: p.vy + ay }, 1);
-      worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy));
+  /**
+   * THE SAFETY PROPERTY OF A HEADING RATHER THAN AN ACCELERATION. An ambient acceleration on top of
+   * this drag would settle at 66x its own value; a heading carries the mote's speed by construction,
+   * so no wander constant can ever make the volume take off.
+   */
+  it("never changes a mote's speed, only its direction", () => {
+    const p = { ph: 1.1, spd: 0.3 };
+    for (let i = 0; i < 4000; i++) {
+      const { dx, dy, dz } = baseDrift(p, i * 16.7);
+      expect(Math.hypot(dx, dy, dz)).toBeLessThanOrEqual(p.spd + 1e-9);
     }
-    expect(worst, `drifted ${worst.toFixed(1)}px from home`).toBeLessThan(30);
-    // Bounded on BOTH sides now: too little is as much a bug as too much, and only one of the two
-    // had a test until the field shipped invisible.
-    expect(worst).toBeGreaterThan(6);
+  });
+
+  it("curves, so the field is not a sheet of straight lines", () => {
+    const early = baseDrift({ ph: 0.7, spd: 0.3 }, 0);
+    const late = baseDrift({ ph: 0.7, spd: 0.3 }, 40000);
+    expect(Math.abs(early.dx - late.dx) + Math.abs(early.dy - late.dy)).toBeGreaterThan(0.05);
   });
 
   it("gives neighbouring particles different phases, so the field does not pulse as one", () => {
-    const a = driftAcceleration({ ph: 0 }, 1000);
-    const b = driftAcceleration({ ph: 2.1 }, 1000);
-    expect(Math.abs(a.ax - b.ax) + Math.abs(a.ay - b.ay)).toBeGreaterThan(0.001);
+    const a = baseDrift({ ph: 0.2, spd: 0.3 }, 5000);
+    const b = baseDrift({ ph: 4.1, spd: 0.3 }, 5000);
+    expect(Math.abs(a.dx - b.dx) + Math.abs(a.dy - b.dy), "the volume breathes as one body").toBeGreaterThan(
+      0.05,
+    );
   });
 });
-
-
-/**
- * THE FIELD IS 3D, AND THE THING THAT MAKES IT LOOK 3D IS THE PROJECTION.
- *
- * Physics in three dimensions is only half of it — flat rendering of 3D positions looks exactly
- * like 2D. The perspective divide is what buys parallax, depth falloff and occlusion order, so
- * that is what is asserted: not "z exists" but "z changes what you see".
- */
 describe("perspective", () => {
   it("makes near things bigger than far things", () => {
     const near = project({ x: 0, y: 0, z: -DEPTH }, 0, 0);
@@ -260,7 +271,7 @@ describe("the volume has depth", () => {
     const ps = seedParticles(400, 300, 80, rndSeq());
     const zs = ps.map((p) => p.z);
     expect(Math.max(...zs) - Math.min(...zs), "the field is flat").toBeGreaterThan(DEPTH);
-    for (const p of ps) expect(p.z).toBe(p.hz);
+    for (const p of ps) expect(Math.abs(p.z)).toBeLessThanOrEqual(DEPTH);
   });
 
   it("pushes in three dimensions, not two", () => {
@@ -331,16 +342,15 @@ describe("a pulse reaches the whole volume, not just the screen plane", () => {
   });
 
   it("pushes hard enough for the movement to be seen", () => {
-    // Measured through the real spring and damping rather than asserted on the impulse alone: an
-    // impulse that produces a sub-pixel excursion is the 1.3px drift bug wearing a different hat.
-    const v = impulseVelocity({ x: 0, y: 0, z: 60 }, 0, 0, 3.4);
-    let p: Particle = { ...at(0, 0), z: 60, hz: 60, vx: v.vx, vy: v.vy, vz: v.vz };
-    let worst = 0;
-    for (let i = 0; i < 600; i++) {
-      p = stepParticle(p, 1);
-      worst = Math.max(worst, Math.hypot(p.x - p.hx, p.y - p.hy, p.z - p.hz));
-    }
-    expect(worst, `peaks at ${worst.toFixed(1)}px — too small to notice`).toBeGreaterThan(5);
+    // Measured through the real step rather than asserted on the impulse alone: an impulse that
+    // produces a sub-pixel excursion is the 1.3px drift bug wearing a different hat.
+    const start = { ...at(600, 400), z: 60 };
+    const v = impulseVelocity({ x: 600, y: 460, z: 60 }, 600, 400, 3.4);
+    const p = run({ ...start, vx: v.vx, vy: v.vy, vz: v.vz }, 600);
+    const moved = Math.hypot(near(p.x, start.x, W + 2 * WRAP_MARGIN), near(p.y, start.y, H + 2 * WRAP_MARGIN));
+    expect(moved, `one keystroke moved a mote ${moved.toFixed(1)}px — too small to notice`).toBeGreaterThan(
+      30,
+    );
   });
 });
 
@@ -385,47 +395,37 @@ describe("placing the composer caret", () => {
  * volume toward wherever the text appears and empties the corners.
  */
 describe("a disturbance rearranges the field", () => {
-  it("carries a mote's home along when it is pushed hard", () => {
-    const p = { ...at(100, 100), x: 160, y: 100 };
-    const moved = displaceHome(p, 1, 400, 300);
-    expect(moved.hx, "the home did not move — the mote will snap back exactly").toBeGreaterThan(p.hx);
-    expect(moved.hx).toBeLessThan(160); // and not all the way; it is a drag, not a teleport
+  /**
+   * THIS USED TO TEST `displaceHome`, WHICH NO LONGER EXISTS.
+   *
+   * Rearranging the field was a whole mechanism — plastic tethers, clamped homes, a slow creep back
+   * to a seed — built to work around the fact that every mote was on a spring. With the spring gone
+   * it is not a mechanism at all: a mote goes where it is pushed and stays there. All three of the
+   * things that machinery existed to guarantee still have to hold, so they are asserted directly on
+   * the outcome instead of on the parts.
+   */
+  it("leaves a hard-pushed mote somewhere genuinely new", () => {
+    const start = at(600, 400);
+    const v = impulseVelocity(start, 600, 440, 11);
+    const p = run({ ...start, vx: v.vx, vy: v.vy, vz: v.vz }, 600);
+    const moved = Math.hypot(near(p.x, start.x, W + 2 * WRAP_MARGIN), near(p.y, start.y, H + 2 * WRAP_MARGIN));
+    expect(moved, `a send moved a mote ${moved.toFixed(0)}px and it did not stay moved`).toBeGreaterThan(200);
   });
 
   it("never strands a mote outside the box", () => {
-    // A mote displaced near an edge would otherwise be pushed out of the field: invisible, still
-    // simulated, and gone from the volume for good.
-    const p = { ...at(390, 290), x: 900, y: 900 };
-    const moved = displaceHome(p, 1, 400, 300);
-    expect(moved.hx).toBeLessThanOrEqual(400);
-    expect(moved.hy).toBeLessThanOrEqual(300);
-    expect(moved.hz).toBeGreaterThanOrEqual(-DEPTH);
+    const p = run({ ...at(10, 10), vx: -40, vy: -40 }, 400);
+    expect(p.x).toBeGreaterThanOrEqual(-WRAP_MARGIN);
+    expect(p.y).toBeGreaterThanOrEqual(-WRAP_MARGIN);
+    expect(p.x).toBeLessThanOrEqual(W + WRAP_MARGIN);
+    expect(p.y).toBeLessThanOrEqual(H + WRAP_MARGIN);
   });
 
   it("does nothing at all for a glancing touch", () => {
-    const p = at(100, 100);
-    expect(displaceHome(p, 0, 400, 300)).toEqual(p);
-  });
-
-  it("creeps back toward where it was seeded, so the volume cannot migrate", () => {
-    // Without recovery, every disturbance is permanent and the field slowly drains toward the
-    // bottom of the panel where the composer is.
-    let p: Particle = { ...at(100, 100), hx: 260, hy: 100 };
-    for (let i = 0; i < 20000; i++) p = stepParticle(p, 1);
-    expect(p.hx, "the home never returned to its seed").toBeLessThan(140);
+    const start = at(600, 400);
+    const v = impulseVelocity(start, 600 + PULSE_RADIUS - 1, 400, 2.6);
+    expect(Math.hypot(v.vx, v.vy, v.vz), "the far edge of a pulse still shoves").toBeLessThan(0.01);
   });
 });
-
-/**
- * A <textarea> WRAPS WITHOUT PUTTING ANYTHING IN ITS VALUE.
- *
- * Splitting on "\n" therefore says a wrapped message is one enormous line: its measured width
- * exceeds the field, the clamp pins it to the right edge, and every spark sticks there from the
- * moment you reach the second line. Reported as exactly that.
- *
- * `measure` is injected, so these run on arithmetic rather than a font: ten pixels a character
- * makes every expectation something you can check by counting.
- */
 describe("finding the caret when the field wraps", () => {
   const measure = (s: string): number => s.length * 10;
 
@@ -475,39 +475,35 @@ describe("finding the caret when the field wraps", () => {
  * spring fades back in as the slack decays. Same push travels ~40px over half a second.
  */
 describe("a push travels instead of springing back", () => {
-  const push = (slack: number): { peak: number; frame: number } => {
-    let p: Particle = { ...at(0, 0), vx: 2.6, slack };
-    let peak = 0;
-    let frame = 0;
-    for (let i = 0; i < 900; i++) {
-      p = stepParticle(p, 1);
-      const d = Math.abs(p.x - p.hx);
-      if (d > peak) {
-        peak = d;
-        frame = i;
-      }
-    }
-    return { peak, frame };
-  };
-
-  it("carries far enough, and long enough, to read as being pushed", () => {
-    const free = push(1);
-    expect(free.peak, `only travelled ${free.peak.toFixed(1)}px`).toBeGreaterThan(30);
-    expect(free.frame, "peaked too fast to see a direction").toBeGreaterThan(18);
+  /**
+   * THE MEASUREMENT THAT ENDED THE SPRING.
+   *
+   * The strongest impulse in the app — sending a message — threw a mote 86px in half a second and
+   * had it back within 12px of its start by frame 60 and 1px by frame 300. Out and straight back,
+   * every time. Two rounds of trying to buy travel back from a tether (plasticity, then released
+   * slack) both failed, because the tether was the problem.
+   */
+  it("carries far enough, and long enough, to read as being thrown", () => {
+    const start = at(600, 400);
+    const v = impulseVelocity(start, 600, 430, 11);
+    let p: Particle = { ...start, vx: v.vx, vy: v.vy, vz: v.vz };
+    const dist = (): number =>
+      Math.hypot(near(p.x, start.x, W + 2 * WRAP_MARGIN), near(p.y, start.y, H + 2 * WRAP_MARGIN));
+    p = run(p, 30);
+    expect(dist(), "barely moved in the first half second").toBeGreaterThan(60);
+    p = run(p, 90);
+    expect(dist(), "did not keep coasting after the force stopped").toBeGreaterThan(180);
   });
 
-  it("travels much further released than gripped — this is the whole difference", () => {
-    expect(push(1).peak).toBeGreaterThan(push(0).peak * 2);
-  });
-
-  it("still comes to rest, so slack cannot leave a mote adrift", () => {
-    let p: Particle = { ...at(0, 0), vx: 2.6, slack: 1 };
-    for (let i = 0; i < 6000; i++) p = stepParticle(p, 1);
-    expect(p.slack).toBeLessThan(0.01);
-    expect(Math.hypot(p.vx, p.vy, p.vz), "never settled").toBeLessThan(0.05);
+  it("decelerates rather than coasting forever", () => {
+    const v0 = 6;
+    const a = run({ ...at(600, 400), vx: v0 }, 60);
+    const b = run(a, 60);
+    const first = Math.abs(a.vx);
+    expect(first, "no deceleration at all").toBeLessThan(v0 * 0.6);
+    expect(Math.abs(b.vx), "still travelling at speed after two seconds").toBeLessThan(first);
   });
 });
-
 describe("sparks carry, and then become the background", () => {
   it("keeps most of its speed rather than stopping on the spot", () => {
     let s = emitSparks(0, 0, 1, rndSeq())[0]!;
@@ -524,42 +520,29 @@ describe("sparks carry, and then become the background", () => {
     expect(s.z, "sparks never travelled into depth").toBeGreaterThan(0);
   });
 
-  it("settles where it landed", () => {
-    const s = { ...emitSparks(40, 60, 1, rndSeq())[0]!, x: 120, y: 90, z: 40 };
-    const p = sparkToParticle(s, rndSeq(), 600, 400);
-    expect(p.hx, "a spent spark should come to rest where it flew to").toBe(120);
-    expect(p.hy).toBe(90);
-    expect(p.slack, "it should coast a moment before the volume claims it").toBeGreaterThan(0);
-  });
-
-  it("is seeded into the room rather than at the caret", () => {
-    // The inverse of this assertion is what emptied the top of the field: seeding a converted spark
-    // where it landed meant HOME_RECOVERY pulled it back to the clump forever, so the clump was
-    // permanent. Its long-term home has to be the volume, not the spot the words were typed.
-    const seeds = Array.from({ length: 40 }, (_, i) => {
-      const s = { ...emitSparks(0, 0, 1, rndSeq(i + 1))[0]!, x: 120, y: 390, z: 0 };
-      return sparkToParticle(s, rndSeq(i + 1), 600, 400).sy;
-    });
-    expect(
-      Math.min(...seeds),
-      "every converted spark seeded down by the caret; the field will pile up there",
-    ).toBeLessThan(150);
-    expect(Math.max(...seeds), "no converted spark seeded in the top of the volume").toBeGreaterThan(250);
+  it("takes over the spark's trajectory, so there is no seam", () => {
+    const s = { ...emitSparks(40, 60, 1, rndSeq())[0]!, x: 120, y: 90, z: 40, vx: 1.4, vy: -0.8 };
+    const p = sparkToParticle(s, rndSeq());
+    expect(p.x, "a spent spark should become a mote where it flew to").toBe(120);
+    expect(p.y).toBe(90);
+    expect(p.vx, "the mote stopped dead where the spark died").toBe(1.4);
+    expect(p.vy).toBe(-0.8);
+    expect(p.spd, "the new mote has no cruising speed and will coast to a halt").toBeGreaterThan(0);
   });
 
   it("clamps a converted spark into the volume's depth", () => {
     const s = { ...emitSparks(0, 0, 1, rndSeq())[0]!, z: DEPTH * 10 };
-    expect(sparkToParticle(s, rndSeq(), 600, 400).z).toBeLessThanOrEqual(DEPTH);
+    expect(sparkToParticle(s, rndSeq()).z).toBeLessThanOrEqual(DEPTH);
   });
 
   it("does not empty the volume it is thrown through", () => {
     /**
-     * THE GATE FOR THE BUG THE OWNER ACTUALLY SAW. Fifteen seconds of typing at the composer used to
-     * leave the top 60% of the field with literally zero motes — measured [0, 0, 0, 31, 69] across
+     * THE GATE FOR A BUG THE OWNER ACTUALLY SAW. Fifteen seconds of typing at the composer once
+     * left the top 60% of the field with literally zero motes — measured [0, 0, 0, 31, 69] across
      * five horizontal bands — because spent sparks were seeded at the caret and the retirement pass
-     * consumed the original seeds oldest-first. Nothing attracts anything here; the clump is simply
-     * all that is left. This asserts on the OUTCOME rather than on any one force, which is the only
-     * form that could have caught it.
+     * consumed the original evenly-spread motes oldest-first. Nothing attracted anything; the clump
+     * was simply all that was left. Free motes disperse on their own now, but the retirement rule
+     * is still there, so the outcome is still worth asserting.
      */
     const w = 620;
     const h = 520;
@@ -572,13 +555,13 @@ describe("sparks carry, and then become the background", () => {
 
     for (let f = 0; f < 900; f++) {
       if (f % 8 === 0) sparks.push(...emitSparks(120 + (f % 300), h - 52, 4, rnd));
-      for (let i = 0; i < parts.length; i++) parts[i] = stepParticle(parts[i]!, 1);
+      for (let i = 0; i < parts.length; i++) parts[i] = stepParticle(parts[i]!, 1, f * 16.667, w, h);
       const live: Spark[] = [];
       for (const s of sparks) {
         const nx = stepSpark(s, 1, f * 16.667);
         if (nx) live.push(nx);
         else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
-          parts.push(sparkToParticle(s, rnd, w, h));
+          parts.push(sparkToParticle(s, rnd));
           if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
         }
       }
@@ -586,12 +569,11 @@ describe("sparks carry, and then become the background", () => {
     }
 
     const bands = [0, 0, 0, 0, 0];
-    for (const p of parts) bands[Math.min(4, Math.floor((p.y / h) * 5))]! += 1;
+    for (const p of parts) bands[Math.max(0, Math.min(4, Math.floor((p.y / h) * 5)))]! += 1;
     const topHalf = bands[0]! + bands[1]!;
-    expect(
-      topHalf / parts.length,
-      `typing hollowed the field out: bands ${bands.join(",")}`,
-    ).toBeGreaterThan(0.2);
+    expect(topHalf / parts.length, `typing hollowed the field out: bands ${bands.join(",")}`).toBeGreaterThan(
+      0.2,
+    );
   });
 });
 
@@ -617,30 +599,46 @@ describe("scrolling stirs the room", () => {
   });
 
   /**
-   * THE GATE FOR A BUG THAT EVERY SETTLING TEST WOULD HAVE PASSED.
+   * THE GATE FOR A BUG THAT EVERY SETTLING TEST WOULD HAVE PASSED, TWICE OVER.
    *
-   * Scroll is the only SUSTAINED force in this field; everything else is a single frame. The first
-   * version fed it into the slack, the way a pulse and a gather do — and slack releases the spring,
-   * so a force arriving every frame had nothing opposing it but drag. Ten seconds of ordinary
-   * scrolling reached 47,000px per frame and four million pixels off screen. It still came home
-   * afterwards, and it still settled to zero velocity, so "the field always settles" was perfectly
-   * true the whole time and the background would have been simply absent while you read.
+   * Scroll is the only SUSTAINED force here; everything else lasts a single frame, so it is the only
+   * one that integrates. Against the old spring, feeding it into the released tether left nothing
+   * opposing a force arriving every frame: ten seconds of ordinary scrolling reached 47,000px per
+   * frame and four million pixels off screen. It still came home afterwards and still settled to
+   * zero, so "the field always settles" was true the whole time and the background would simply have
+   * been absent while you read.
    *
-   * The excursion DURING the force is the property that matters, and this is the only test of it.
+   * With the spring gone the same coefficient failed the other way — every scroll speed, down to a
+   * gentle 8px per frame, pinned the entire field at the MAX_SPEED clamp within two seconds. Not an
+   * escape, a stampede. Both are bugs in what happens DURING the force, which no settling test can
+   * see, and this is the only test of it.
    */
-  it("never leaves the screen, however long the scroll goes on", () => {
-    let p: Particle = { ...at(500, 500), z: -DEPTH }; // front plane: carried the most
-    let worst = 0;
+  it("leans the field without stampeding it", () => {
+    const cruise = (p: Particle): number => Math.hypot(p.vx, p.vy, p.vz);
+    // A realistic reading flick: 25 frames of scrolling, then let go.
+    let p: Particle = { ...at(600, 400), z: -DEPTH }; // front plane: carried the most
+    let peak = 0;
+    for (let f = 0; f < 300; f++) {
+      const sv = f < 25 ? scrollVelocity(p, 15) : { vx: 0, vy: 0, vz: 0 };
+      p = stepParticle({ ...p, vx: p.vx + sv.vx, vy: p.vy + sv.vy, vz: p.vz + sv.vz }, 1, f * 16.7, W, H);
+      peak = Math.max(peak, cruise(p));
+    }
+    expect(peak, `a scroll flick lifted the field to ${peak.toFixed(2)}px/frame — a stampede`).toBeLessThan(
+      MAX_SPEED / 3,
+    );
+    expect(peak, "scrolling barely moved the field").toBeGreaterThan(DRIFT_MAX * 1.5);
+    expect(cruise(p), "the flow never bled off after the scroll stopped").toBeLessThan(DRIFT_MAX * 1.3);
+  });
+
+  it("stays inside the volume even under a fling held down for fifteen seconds", () => {
+    let p: Particle = { ...at(600, 400), z: -DEPTH };
     for (let i = 0; i < 900; i++) {
       const sv = scrollVelocity(p, SCROLL_CLAMP);
-      p = stepParticle({ ...p, vx: p.vx + sv.vx, vy: p.vy + sv.vy, vz: p.vz + sv.vz }, 1);
-      worst = Math.max(worst, Math.abs(p.y - p.hy));
+      p = stepParticle({ ...p, vx: p.vx + sv.vx, vy: p.vy + sv.vy, vz: p.vz + sv.vz }, 1, i * 16.7, W, H);
+      expect(Math.hypot(p.vx, p.vy, p.vz)).toBeLessThanOrEqual(MAX_SPEED + 1e-9);
     }
-    expect(worst, `fifteen seconds of scrolling threw a mote ${worst.toFixed(0)}px from home`).toBeLessThan(
-      400,
-    );
-    // And it must be a lean, not a nudge: too small and scrolling does visibly nothing.
-    expect(worst, "scrolling barely moved the field").toBeGreaterThan(60);
+    expect(p.y).toBeGreaterThanOrEqual(-WRAP_MARGIN);
+    expect(p.y).toBeLessThanOrEqual(H + WRAP_MARGIN);
   });
 });
 

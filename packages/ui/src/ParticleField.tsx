@@ -5,8 +5,9 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
  *
  * Two populations, because they answer two different questions:
  *
- *   AMBIENT — a tethered volume of motes filling the chat's depth. Always drifting, pushed by the
- *   cursor, pulled back by a spring. This is the room the words are spoken in.
+ *   AMBIENT — a volume of FREE motes filling the screen's depth. Each cruises at its own slow
+ *   drift, takes every push in full, coasts, decelerates on drag, and stays wherever it ends up.
+ *   Nothing pulls it back. This is the room the words are spoken in.
  *
  *   SPARKS — emitted AT the caret as letters arrive, thrown outward with real velocity, dancing on
  *   a slow orbit while they fade. These are the words themselves scattering the air. The earlier
@@ -25,7 +26,20 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
  * whole chat — the cost `BloomTransition` already exists to avoid here. React renders this once.
  */
 
-/** A mote of the ambient volume: where it is in space, and the home it is tethered to. */
+/**
+ * A mote of the ambient volume. It has a position, a velocity, and NO HOME.
+ *
+ * THE HOME WAS THE JELLO. Every earlier version tethered each mote to a fixed point with a spring,
+ * and then tried to buy travel back with plasticity, released tethers and decaying slack. It never
+ * worked, and it never could have: the strongest impulse in the app — sending a message — threw a
+ * mote 86px in half a second and had it back within 12px by frame 60 and 1px by frame 300. Out and
+ * straight back to exactly where it started, every time, which is the definition of a wobble. Three
+ * separate rounds of "the particles just wiggle" were all this one decision.
+ *
+ * A mote now travels at its own slow drift, takes a push in full, coasts, decelerates on drag, and
+ * simply stays wherever it ends up. Coverage is kept by WRAPPING at the edges of the volume rather
+ * than by a restoring force, which is the part the spring was really there for.
+ */
 export interface Particle {
   x: number;
   y: number;
@@ -33,29 +47,13 @@ export interface Particle {
   vx: number;
   vy: number;
   vz: number;
-  hx: number;
-  hy: number;
-  hz: number;
   /** World-space radius and base alpha, before perspective scales them. */
   r: number;
   a: number;
-  /** Phase offset for the ambient drift, so no two motes wander in step. */
+  /** Phase offset: seeds this mote's heading and its wander, so no two travel in step. */
   ph: number;
-  /** Where this mote was SEEDED. The home drifts when the field is disturbed; this is what it
-   * eventually creeps back toward, and what keeps the volume evenly covered over hours. */
-  sx: number;
-  sy: number;
-  sz: number;
-  /**
-   * HOW MUCH THE TETHER IS CURRENTLY RELEASED. 1 = free, 0 = fully sprung.
-   *
-   * This is what turns a shove into travel. With the spring always at full grip a pushed mote
-   * peaks 16px away after ten frames and is on its way back before the eye registers it — which is
-   * precisely the "they just wiggle" that kept being reported. Releasing the tether on impact lets
-   * the mote coast and decelerate on drag alone, reaching ~40px over half a second, and the spring
-   * fades back in as the slack decays.
-   */
-  slack: number;
+  /** Its own cruising speed, in px per frame. What it returns to after being disturbed. */
+  spd: number;
 }
 
 /**
@@ -86,29 +84,25 @@ const FOCAL = 520;
 /** How deep the volume is, in world units, either side of the screen plane. */
 export const DEPTH = 260;
 
-const SPRING = 0.018;
-/** 0.97 rather than 0.94: a disturbed mote coasts ~6s instead of ~3s before it settles, which is
- * the difference between being nudged and drifting away. Measured, not chosen by feel. */
-const DAMPING = 0.97;
-
 /**
- * HOW MUCH A DISTURBANCE DRAGS A MOTE'S HOME ALONG WITH IT.
+ * HOW FAST A DISTURBED MOTE BLEEDS BACK TO ITS CRUISING SPEED.
  *
- * A purely elastic tether means every mote returns to exactly where it started, so however hard the
- * field is disturbed it looks identical a few seconds later — "pushed around" for a moment and then
- * unchanged. Making the tether PLASTIC is what lets the field actually be rearranged: a strong shove
- * carries the home with it, and the mote settles somewhere new.
- *
- * It cannot be unbounded. Left alone, plasticity migrates the whole volume toward wherever the text
- * usually appears and the corners empty out, so homes are clamped to the box and creep back toward
- * the seed over a long timescale.
+ * The only thing opposing an impulse now — there is no spring. 0.985 gives a time constant of about
+ * 67 frames, so a shove takes just over a second to fade and carries the mote roughly 66× the
+ * velocity it was given: ~350px for a send, ~100px for a keystroke. That is a mote being thrown
+ * across the screen and coasting to a stop, which is what was asked for four times.
  */
-export const PLASTICITY = 0.55;
-/** Per-frame pull of a displaced home back to where it was seeded. ~40s to undo a full displacement
- * — slow enough to read as permanent, fast enough that the field never permanently thins. */
-export const HOME_RECOVERY = 0.0004;
-/** Per-frame decay of the released tether. 0.995 ≈ half a second of near-free flight. */
-export const SLACK_DECAY = 0.995;
+const DRAG = 0.985;
+/**
+ * Terminal velocity, and not a decoration. Without a spring there is nothing to bound a force that
+ * arrives repeatedly — streaming fires a pulse per token, and a mote sitting near the caret would
+ * otherwise integrate them into the hundreds of px per frame and vanish. 66× amplification is what
+ * makes the field feel alive and is exactly what makes an unbounded sum dangerous.
+ */
+export const MAX_SPEED = 7;
+/** How far outside the box a mote travels before it reappears on the opposite side. Wide enough
+ * that the wrap happens off screen rather than as a dot blinking out mid-air. */
+export const WRAP_MARGIN = 60;
 export const PULSE_RADIUS = 200;
 /**
  * HOW MUCH DEPTH COUNTS TOWARD AN IMPULSE'S DISTANCE, and the reason the background stopped
@@ -124,10 +118,18 @@ export const PULSE_RADIUS = 200;
  * still 178px at the very back.
  */
 export const PULSE_Z_WEIGHT = 0.35;
-/** Measured against this spring and damping: steady-state wander is ~79px per unit of drift. */
-const DRIFT = 0.18;
+/** Cruising speed, in px per frame. 0.25 crosses a 1080p screen in about two minutes — clearly
+ * moving, never busy. Each mote gets its own value in this band so the field has no single pace. */
+export const DRIFT_MIN = 0.12;
+export const DRIFT_MAX = 0.45;
 const CURSOR_RADIUS = 150;
-const CURSOR_PUSH = 0.42;
+/**
+ * 0.05, down from 0.42. The cursor pushes EVERY FRAME it is inside the radius, and with the spring
+ * gone there is nothing to balance it: at the old value a mote parked near the pointer would reach
+ * 0.42 × 66 = 28px per frame and be gone. The clamp would have caught the disaster; it would not
+ * have caught the field quietly evacuating wherever the pointer rests.
+ */
+const CURSOR_PUSH = 0.05;
 
 /** Hard ceiling on live sparks. Emission is per-keystroke and a model can stream for minutes, so
  * without this a long reply would grow the array without bound and take the frame rate with it. */
@@ -150,65 +152,81 @@ export function project(
   return { sx: cx + (p.x - cx) * scale, sy: cy + (p.y - cy) * scale, scale };
 }
 
-/** Ambient wander, on three incommensurate frequencies so the volume breathes in every axis. */
-export function driftAcceleration(
-  p: Pick<Particle, "ph">,
-  t: number,
-): { ax: number; ay: number; az: number } {
-  return {
-    ax: Math.cos(t * 0.00042 + p.ph) * DRIFT,
-    ay: Math.sin(t * 0.00031 + p.ph * 1.7) * DRIFT,
-    az: Math.sin(t * 0.00023 + p.ph * 2.3) * DRIFT * 0.8,
-  };
-}
-
-/** Advance one tethered mote. PURE — the reason the physics is testable with no canvas or clock. */
-export function stepParticle(p: Particle, dt: number): Particle {
-  const d = DAMPING ** dt;
-  // A released tether pulls proportionally less; drag alone slows the mote until it fades back in.
-  const grip = SPRING * (1 - p.slack);
-  const vx = (p.vx + (p.hx - p.x) * grip * dt) * d;
-  const vy = (p.vy + (p.hy - p.y) * grip * dt) * d;
-  const vz = (p.vz + (p.hz - p.z) * grip * dt) * d;
-  // The home creeps back toward where this mote was seeded, undoing accumulated displacement over
-  // roughly forty seconds. Without it the field slowly migrates to wherever the text appears.
-  const k = HOME_RECOVERY * dt;
-  return {
-    ...p,
-    vx,
-    vy,
-    vz,
-    x: p.x + vx * dt,
-    y: p.y + vy * dt,
-    z: p.z + vz * dt,
-    hx: p.hx + (p.sx - p.hx) * k,
-    hy: p.hy + (p.sy - p.hy) * k,
-    hz: p.hz + (p.sz - p.hz) * k,
-    slack: p.slack * SLACK_DECAY ** dt,
-  };
-}
-
 /**
- * Drag a mote's home toward where it currently is, in proportion to how hard it was hit.
+ * The velocity this mote WANTS to be travelling at — its cruising drift.
  *
- * This is what turns a shove into a rearrangement. Clamped to the box so a mote displaced near an
- * edge cannot be pushed out of the field and stranded off screen, invisible but still simulated.
+ * A heading rather than an acceleration, and that distinction is what keeps the field safe. An
+ * ambient acceleration added on top of a drag would settle at `a / (1 - DRAG)`, which at this drag
+ * is 66× whatever looked like a small number; a heading has the mote's own speed by construction,
+ * so no tuning of the wander can ever make the volume take off.
+ *
+ * The heading swings slowly on two incommensurate frequencies, so paths curve and no two motes
+ * travel in step, but the SPEED never changes.
  */
-export function displaceHome(p: Particle, hit: number, w: number, h: number): Particle {
-  const k = Math.min(1, hit) * PLASTICITY;
-  if (k <= 0) return p;
-  const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(v, hi));
-  return {
-    ...p,
-    hx: clamp(p.hx + (p.x - p.hx) * k, 0, Math.max(0, w)),
-    hy: clamp(p.hy + (p.y - p.hy) * k, 0, Math.max(0, h)),
-    hz: clamp(p.hz + (p.z - p.hz) * k, -DEPTH, DEPTH),
-  };
+export function baseDrift(
+  p: Pick<Particle, "ph" | "spd">,
+  t: number,
+): { dx: number; dy: number; dz: number } {
+  const a = p.ph + Math.sin(t * 0.00013 + p.ph) * 1.7;
+  const b = p.ph * 1.7 + Math.cos(t * 0.00011 + p.ph * 2.3) * 1.3;
+  // A proper spherical heading, not an xy unit vector with a z bolted on: that version reached
+  // 1.17x the mote's own speed at the extremes, which is small, invisible, and exactly the kind of
+  // slow leak that only shows up as "the field is faster than it should be" months later.
+  // Elevation is deliberately shallow — the volume drifts ACROSS the screen far more than through it.
+  const el = Math.sin(b) * 0.55;
+  const flat = Math.cos(el) * p.spd;
+  return { dx: Math.cos(a) * flat, dy: Math.sin(a) * flat, dz: Math.sin(el) * p.spd };
 }
 
 /**
- * Advance one spark. No spring — a spark is free — but it drags, drifts back toward the screen
- * plane so the dance stays legible rather than vanishing into depth, and orbits its own axis.
+ * Bring a mote back into the volume by carrying it out the opposite side.
+ *
+ * This is what replaced the spring. Coverage used to be maintained by pulling every mote back to a
+ * fixed home, which is also precisely what made a push impossible to see through. Wrapping keeps
+ * the volume statistically even — a uniform distribution stays uniform under a wrapping flow — and
+ * costs a disturbed mote nothing: it keeps its velocity and simply carries on somewhere else.
+ */
+export function wrapPosition(p: Particle, w: number, h: number): Particle {
+  const span = (v: number, lo: number, hi: number): number => {
+    const size = hi - lo;
+    if (size <= 0) return v;
+    return lo + (((v - lo) % size) + size) % size;
+  };
+  return {
+    ...p,
+    x: span(p.x, -WRAP_MARGIN, Math.max(1, w) + WRAP_MARGIN),
+    y: span(p.y, -WRAP_MARGIN, Math.max(1, h) + WRAP_MARGIN),
+    z: span(p.z, -DEPTH, DEPTH),
+  };
+}
+
+/** Advance one free mote. PURE — the reason the physics is testable with no canvas or clock. */
+export function stepParticle(p: Particle, dt: number, t: number, w: number, h: number): Particle {
+  const d = DRAG ** dt;
+  const { dx, dy, dz } = baseDrift(p, t);
+  // Velocity relaxes toward the DRIFT, not toward zero. A mote that has been thrown decelerates
+  // until it is cruising again — from wherever the throw left it, with nothing pulling it back.
+  let vx = dx + (p.vx - dx) * d;
+  let vy = dy + (p.vy - dy) * d;
+  let vz = dz + (p.vz - dz) * d;
+  const speed = Math.hypot(vx, vy, vz);
+  if (speed > MAX_SPEED) {
+    const k = MAX_SPEED / speed;
+    vx *= k;
+    vy *= k;
+    vz *= k;
+  }
+  return wrapPosition(
+    { ...p, vx, vy, vz, x: p.x + vx * dt, y: p.y + vy * dt, z: p.z + vz * dt },
+    w,
+    h,
+  );
+}
+
+/**
+ * Advance one spark. It drags, recedes into depth, and orbits its own axis. Motes and sparks are
+ * both free now, so the only real difference left is that a spark is mortal — which is what lets
+ * emission run continuously without the field growing without bound.
  *
  * Returns null when it dies, so the caller can filter in one pass.
  */
@@ -248,24 +266,14 @@ export function stepSpark(s: Spark, dt: number, t: number): Spark | null {
  *
  * Sparks used to simply vanish, so the field they were thrown through was never actually changed by
  * the typing — the words scattered some light and the room went back to exactly how it was. Handing
- * the spark's final position to a new mote is what makes typing ADD to the background rather than
- * decorate it.
+ * the spark's final position AND ITS VELOCITY to a new mote is what makes typing add to the
+ * background rather than decorate it: the mote carries on along the spark's last trajectory and
+ * decelerates into the drift, so there is no seam where one becomes the other.
  *
- * HOME AT THE LANDING POINT, SEED SOMEWHERE IN THE ROOM. This is the whole difference between a
- * background that typing feeds and one that typing empties. The first version seeded the new mote
- * where it landed, on the reasoning that it would otherwise "drift back to somewhere it has never
- * been" — which sounds right and is measurably catastrophic: fifteen seconds of typing replaced the
- * entire volume with motes whose homes AND seeds were all in one strip beside the caret. The top 60%
- * of the field ended up completely empty, and `HOME_RECOVERY` reinforced the pile instead of undoing
- * it, because the pile was now what the field considered home. From outside, a clump nobody is
- * attracting is indistinguishable from gravity.
- *
- * So it settles where it landed — you see the words pile material up right there — and only over the
- * next forty seconds does it wander out and join the room. Feeding, then dispersing.
- *
- * It arrives with its tether already slack, so it drifts on for a moment before the volume claims it.
+ * Nothing to seed and nothing to recover any more. A free mote is even coverage by construction —
+ * it wanders, it wraps, and where it happened to be born stops mattering within seconds.
  */
-export function sparkToParticle(s: Spark, rnd: () => number, w: number, h: number): Particle {
+export function sparkToParticle(s: Spark, rnd: () => number): Particle {
   const z = Math.max(-DEPTH, Math.min(s.z, DEPTH));
   return {
     x: s.x,
@@ -274,16 +282,10 @@ export function sparkToParticle(s: Spark, rnd: () => number, w: number, h: numbe
     vx: s.vx,
     vy: s.vy,
     vz: s.vz,
-    hx: s.x,
-    hy: s.y,
-    hz: z,
-    sx: rnd() * w,
-    sy: rnd() * h,
-    sz: (rnd() - 0.5) * 2 * DEPTH,
     r: 0.7 + rnd() * 1.2,
     a: 0.16 + rnd() * 0.3,
     ph: rnd() * Math.PI * 2,
-    slack: 0.85,
+    spd: DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
   };
 }
 
@@ -312,10 +314,20 @@ export function attractVelocity(
   return { vx: (dx / d) * f, vy: (dy / d) * f, vz: (dz / d) * f };
 }
 
-/** How much of a frame's scroll distance a mote at the very front of the volume takes on. */
-export const SCROLL_DRAG = 0.028;
-/** Scroll faster than this in one frame — a jump to a chapter, a fling on a trackpad — and the
- * excess is ignored, or the whole field would be thrown off screen by a single wheel event. */
+/**
+ * HOW MUCH OF A FRAME'S SCROLL A MOTE TAKES ON, and a number that had to be cut to a third when the
+ * spring came out.
+ *
+ * Scroll is the only SUSTAINED force in this field — everything else lasts a single frame — so it
+ * is the only one that integrates. At 0.028, tuned against a spring that used to balance it, even
+ * a gentle 8px-per-frame scroll pinned every mote at the MAX_SPEED clamp within a couple of
+ * seconds: not a room leaning with the page, a stampede. At 0.009 an ordinary reading flick lifts
+ * the field to about 1px per frame over its 0.25 cruise — a visible lean — and only a sustained
+ * fling reaches the clamp, where wrapping turns it into a sweep rather than an escape.
+ */
+export const SCROLL_DRAG = 0.009;
+/** Scroll faster than this in one frame — a fling, a jump to a chapter — and the excess is ignored.
+ * Without it a single wheel event would hand the whole field its terminal velocity. */
 export const SCROLL_CLAMP = 60;
 
 /**
@@ -402,26 +414,17 @@ export function seedParticles(w: number, h: number, count: number, rnd: () => nu
   const cols = Math.max(1, Math.round(Math.sqrt((count * w) / Math.max(h, 1))));
   const rows = Math.max(1, Math.ceil(count / cols));
   for (let i = 0; i < count; i++) {
-    const cx = ((i % cols) + 0.5) * (w / cols) + (rnd() - 0.5) * (w / cols) * 0.9;
-    const cy = (Math.floor(i / cols) + 0.5) * (h / rows) + (rnd() - 0.5) * (h / rows) * 0.9;
-    const cz = (rnd() - 0.5) * 2 * DEPTH;
     out.push({
-      x: cx,
-      y: cy,
-      z: cz,
+      x: ((i % cols) + 0.5) * (w / cols) + (rnd() - 0.5) * (w / cols) * 0.9,
+      y: (Math.floor(i / cols) + 0.5) * (h / rows) + (rnd() - 0.5) * (h / rows) * 0.9,
+      z: (rnd() - 0.5) * 2 * DEPTH,
       vx: 0,
       vy: 0,
       vz: 0,
-      hx: cx,
-      hy: cy,
-      hz: cz,
       r: 0.7 + rnd() * 1.6,
       a: 0.16 + rnd() * 0.36,
       ph: rnd() * Math.PI * 2,
-      sx: cx,
-      sy: cy,
-      sz: cz,
-      slack: 0,
+      spd: DRIFT_MIN + rnd() * (DRIFT_MAX - DRIFT_MIN),
     });
   }
   return out;
@@ -724,65 +727,38 @@ export function ParticleField({
 
       const parts = partsRef.current;
       for (let i = 0; i < parts.length; i++) {
-        let p = parts[i]!;
-        let hit = 0;
+        let vx = parts[i]!.vx;
+        let vy = parts[i]!.vy;
+        let vz = parts[i]!.vz;
+        const p = parts[i]!;
+        // Every force is now just velocity added to a free mote. No slack to release, no home to
+        // drag, no distinction between a disturbance that rearranges the field and one that does
+        // not — a mote goes where it is pushed and stays there, which is the entire point.
         for (const q of pending) {
           const v = impulseVelocity(p, q.x, q.y, q.s);
-          if (v.vx || v.vy || v.vz) {
-            hit += Math.hypot(v.vx, v.vy, v.vz);
-            p = { ...p, vx: p.vx + v.vx, vy: p.vy + v.vy, vz: p.vz + v.vz };
-          }
-        }
-        const { ax, ay, az } = driftAcceleration(p, now);
-        let vx = p.vx + ax * dt;
-        let vy = p.vy + ay * dt;
-        let vz = p.vz + az * dt;
-        const cur = cursorRef.current;
-        if (cur) {
-          const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
-          vx += cv.vx;
-          vy += cv.vy;
-        }
-        // A GATHER RELEASES BUT NEVER RESHAPES. Its force is counted toward the slack — so nearby
-        // motes genuinely sweep in as the bubble condenses — and deliberately NOT toward the home
-        // displacement below. A bubble's pull should last exactly long enough to make the air move
-        // and then let go of it; if it dragged homes along, every message would leave a permanent
-        // dent in the volume at the spot it landed, and the field would slowly become a record of
-        // where bubbles have been.
-        let pull = 0;
-        if (scrolled !== 0) {
-          const sv = scrollVelocity(p, scrolled);
-          vx += sv.vx;
-          vy += sv.vy;
-          vz += sv.vz;
-          /**
-           * A SCROLL FEEDS NEITHER THE SLACK NOR THE HOMES. This is the one force here that is
-           * SUSTAINED rather than a single frame, and slack is built for the opposite case: it
-           * releases the spring so a one-shot impulse can coast. Combine the two and there is
-           * nothing left to oppose a force that arrives every frame — measured, ten seconds of
-           * ordinary scrolling accelerated a mote to 47,000px per frame and put it four million
-           * pixels off screen. It comes home eventually, which is exactly why no settling test
-           * would have caught it; the field would simply be gone while you were reading.
-           *
-           * With the tether intact the spring balances the drag at a bounded offset, so the volume
-           * leans into the scroll and springs back — which is the shear that was wanted anyway.
-           */
+          vx += v.vx;
+          vy += v.vy;
+          vz += v.vz;
         }
         for (const g of pulls) {
           const av = attractVelocity(p, g.x, g.y, g.s, g.r);
           vx += av.vx;
           vy += av.vy;
           vz += av.vz;
-          pull += Math.hypot(av.vx, av.vy, av.vz);
         }
-        // Only a real disturbance rearranges the field — ambient drift and the cursor's constant
-        // nudge must not, or the volume would slowly migrate wherever the pointer spends its time.
-        if (hit > 0.35) p = displaceHome({ ...p, vx, vy, vz }, hit / 3, w, h);
-        // Release the tether so the mote TRAVELS instead of springing straight back.
-        if (hit + pull > 0.35) {
-          p = { ...p, slack: Math.min(1, p.slack + Math.min(1, (hit + pull) / 2)) };
+        if (scrolled !== 0) {
+          const sv = scrollVelocity(p, scrolled);
+          vx += sv.vx;
+          vy += sv.vy;
+          vz += sv.vz;
         }
-        parts[i] = stepParticle({ ...p, vx, vy, vz }, dt);
+        const cur = cursorRef.current;
+        if (cur) {
+          const cv = impulseVelocity(p, cur.x, cur.y, CURSOR_PUSH * dt, CURSOR_RADIUS);
+          vx += cv.vx;
+          vy += cv.vy;
+        }
+        parts[i] = stepParticle({ ...p, vx, vy, vz }, dt, now, w, h);
       }
 
       const live: Spark[] = [];
@@ -792,7 +768,7 @@ export function ParticleField({
         // A spent spark becomes background — typing ADDS to the field rather than decorating it.
         // Only inside the box: one that flew off the edge would be simulated forever, unseen.
         else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
-          parts.push(sparkToParticle(s, rnd, w, h));
+          parts.push(sparkToParticle(s, rnd));
           /**
            * THE SEEDED VOLUME IS IMMORTAL. Retirement starts at `seedCount`, so it can only ever
            * consume spark-born motes — the ones appended after it — in the order they arrived.
