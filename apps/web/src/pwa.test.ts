@@ -49,6 +49,17 @@ describe("the phone client can be installed", () => {
     expect(m.icons.some((i) => i.purpose === "maskable"), "no maskable icon").toBe(true);
   });
 
+  it("does not letterbox a maskable icon inside its own mask", () => {
+    // A maskable icon needs its CONTENT within the safe zone — but the app's icon is a solid fill,
+    // which has no content to lose. Padding it produced a small square floating in a dark circle on
+    // the launcher. This asserts the icon reaches its own corners, which is where a mask cuts.
+    const png = readFileSync(join(WEB, "public", "icon-maskable-512.png"));
+    // IHDR: width and height are the two 4-byte big-endian ints at offset 16.
+    expect(png.readUInt32BE(16), "maskable icon is not 512px").toBe(512);
+    expect(png.readUInt32BE(20)).toBe(512);
+    expect(png.length, "a letterboxed icon carries a second colour and is far larger").toBeLessThan(3000);
+  });
+
   it("covers the notch, or the safe-area insets are all zero", () => {
     // env(safe-area-inset-*) only reports anything when the page is allowed under the bars in the
     // first place. Without this the browser letterboxes the page and the dock's inset does nothing.
