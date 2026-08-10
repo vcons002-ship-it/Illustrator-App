@@ -487,6 +487,85 @@ describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", 
     expect(fedBack).toMatch(/complete_step IGNORED — you just checked off a step with no work in between/);
   });
 
+  /**
+   * THE STALL: A CHECKLIST WHOSE STEPS ARE JUST MESSAGES NEVER GOT PAST THE SECOND ONE.
+   *
+   * The anti-skip guard cleared on a tool result and on nothing else, because it was written for a
+   * checklist of renders — its own advice was "actually call generate_image". A step whose whole
+   * deliverable is prose calls no tool at all, so the first tick armed the guard and every tick
+   * after it was refused as "checked off too fast", with the work sitting finished on screen.
+   */
+  it("works a checklist whose steps are only messages, with no tool to show for them", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"explain the chapter","steps":["Explain the rigging","Explain the squall","Explain the lantern"]}',
+      "The rigging is the standing and running gear that holds the masts and works the sails; black " +
+        "against the sky it is easy to mistake for a figure at the rail.\n" +
+        '{"tool":"complete_step","note":"rigging"}',
+      "A squall is a short violent burst of wind and rain, usually gone within the hour, which is why " +
+        "the boards are still wet while the sky has already cleared.\n" +
+        '{"tool":"complete_step","note":"squall"}',
+      "The lantern was her father's, introduced in chapter two, and has stood in for him in every " +
+        "scene since — which is why she looks at it rather than at the rail.\n" +
+        '{"tool":"complete_step","note":"lantern"}',
+      "That's all three.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "explain the rigging, the squall and the lantern" }],
+      deps: h.deps,
+    });
+    expect(h.plan!.steps.filter((s) => s.status === "done"), "a prose checklist stalled after step one")
+      .toHaveLength(3);
+    expect(
+      outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error),
+      "a check-off earned by writing the answer was refused",
+    ).toHaveLength(0);
+  });
+
+  it("still refuses a tick bought with a bare acknowledgement", async () => {
+    // The other side of the same line: if any prose at all counted, a model could tick a whole
+    // checklist off with "Done." and never do a thing. Only a real answer earns the next check-off.
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"explain","steps":["Explain the rigging","Explain the squall"]}',
+      'The rigging is the standing and running gear that holds the masts and works the sails, and it ' +
+        'is what she actually saw at the rail.\n{"tool":"complete_step"}',
+      'Done.\n{"tool":"complete_step"}',
+      "ok",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "explain them" }],
+      deps: h.deps,
+    });
+    expect(h.plan!.steps.filter((s) => s.status === "done"), "“Done.” bought a step").toHaveLength(1);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(1);
+  });
+
+  it("still refuses two check-offs inside one reply, however much was written", async () => {
+    // A round is the unit on purpose: one reply is one blob of prose and can only ever be one step's
+    // worth of work, so writing more must not buy more than one tick.
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"explain","steps":["Explain the rigging","Explain the squall"]}',
+      "The rigging is the standing and running gear that holds the masts and works the sails. A squall " +
+        "is a short violent burst of wind and rain that is usually gone within the hour.\n" +
+        '{"tool":"complete_step"}\n{"tool":"complete_step"}',
+      "ok",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "explain them" }],
+      deps: h.deps,
+    });
+    expect(h.plan!.steps.filter((s) => s.status === "done")).toHaveLength(1);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(1);
+  });
+
   it("a research → compute chain runs each step's tool in order and ticks each step", async () => {
     const h = planHarness();
     const llm = scriptedLlm([
