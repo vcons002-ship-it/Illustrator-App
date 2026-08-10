@@ -284,3 +284,28 @@
     transform: none;
   }
 }
+
+/* A checklist row arriving. Springy and short — this fires once per row on a stagger, so anything
+ * longer turns a six-step plan into a performance. */
+@keyframes vr-settle {
+  from {
+    opacity: 0;
+    transform: translateY(7px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The running step's dot. Opacity only — a dot that changed SIZE pushed its row's text, and a
+ * checklist that shifts while you read it is worse than one that does not move at all. */
+@keyframes vr-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
