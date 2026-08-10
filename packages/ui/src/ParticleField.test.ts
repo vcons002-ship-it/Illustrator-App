@@ -25,6 +25,8 @@ import {
   COMET_RADIUS,
   COMET_MAX_AGE,
   COMET_GAP_MIN_MS,
+  TRAIL_CONVERT_CHANCE,
+  TRAIL_PER_FRAME,
   TRAIL_DECAY_MIN,
   type Comet,
   MAX_SPEED,
@@ -900,6 +902,77 @@ describe("a comet flies by", () => {
     }
     expect(reach, `the visible tail reached ${reach.toFixed(0)}px behind the head`).toBeLessThan(500);
     expect(reach, "there is barely a tail at all").toBeGreaterThan(80);
+  });
+
+  /**
+   * THE TRAIL HAS TO STAY WHERE THE COMET PASSED.
+   *
+   * Two separate things were erasing it as fast as it was written, and only measuring a whole pass
+   * showed either. A comet drops 640 trail sparks across a 1080p screen against a field with
+   * headroom for 149, so retirement ate the oldest continuously: the surviving motes spanned
+   * x 1426–1920 of 1920 — three quarters of the path already deleted before the comet reached the
+   * far side, which is why the trail appeared to follow the head around.
+   */
+  it("leaves a trail down the whole path, not just behind the head", () => {
+    const rnd = rndSeq(12);
+    const w = 1920;
+    const h = 1080;
+    const n = Math.round(w * h * BACKDROP_DENSITY);
+    const parts = seedParticles(w, h, n, rnd);
+    const seedCount = parts.length;
+    const maxAmbient = Math.round(n * 1.6);
+    let c: Comet = { x: -COMET_RADIUS, y: h / 2, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    let sparks: Spark[] = [];
+
+    for (let f = 0; f < 420; f++) {
+      c = stepComet(c, 1);
+      if (sparks.length < MAX_SPARKS * 0.7) sparks.push(...cometTrail(c, TRAIL_PER_FRAME, rnd));
+      const live: Spark[] = [];
+      for (const s of sparks) {
+        const nx = stepSpark(s, 1, f * 16.7);
+        if (nx) live.push(nx);
+        else if (s.x > 0 && s.x < w && s.y > 0 && s.y < h) {
+          if (s.settles && rnd() >= TRAIL_CONVERT_CHANCE) continue;
+          parts.push(sparkToParticle(s, rnd));
+          if (parts.length > maxAmbient) parts.splice(seedCount, parts.length - maxAmbient);
+        }
+      }
+      sparks = live;
+      for (let i = 0; i < parts.length; i++) parts[i] = stepParticle(parts[i]!, 1, f * 16.7, w, h);
+    }
+
+    const trail = parts.slice(seedCount);
+    expect(trail.length, "the comet left nothing behind").toBeGreaterThan(30);
+    const xs = trail.map((p) => p.x);
+    expect(Math.min(...xs), "the start of the path had already been retired").toBeLessThan(w * 0.15);
+    expect(Math.max(...xs), "nothing survived near the end of the path").toBeGreaterThan(w * 0.85);
+  });
+
+  it("settles the trail in place instead of letting it wander off", () => {
+    // A free mote wanders — that is the point of them, and it is also what would erase a trail
+    // within seconds. A trail mote gets a tenth of the field's cruising speed so the line holds.
+    const s: Spark = { ...cometTrail({ x: 500, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 }, 1, rndSeq(4))[0]! };
+    expect(s.settles, "a trail spark is not marked as one").toBe(true);
+    const settled = sparkToParticle(s, rndSeq(5));
+    expect(settled.spd, "a trail mote cruises like any other and will drift off the path")
+      .toBeLessThan(DRIFT_MIN / 2);
+
+    // A typing spark must NOT settle — it belongs to the room and should join its drift.
+    const thrown = sparkToParticle(emitSparks(500, 400, 1, rndSeq(6))[0]!, rndSeq(7));
+    expect(thrown.spd, "a spark thrown off the text was frozen in place").toBeGreaterThanOrEqual(DRIFT_MIN);
+  });
+
+  it("keeps the dropped trail from dancing away before it lands", () => {
+    // The orbit that makes a typing spark feel alive is exactly wrong on a trail: measured over a
+    // minute it scattered the settled line across 142px, more than the settle drift and the birth
+    // jitter combined. It has to fall where it was dropped.
+    const c: Comet = { x: 500, y: 400, z: 0, vx: 6, vy: 0, vz: 0, age: 0, spin: 1 };
+    const trail = cometTrail(c, 30, rndSeq(13));
+    const thrown = emitSparks(500, 400, 30, rndSeq(14));
+    expect(
+      Math.max(...trail.map((s) => s.spin)),
+      "a trail spark orbits as hard as one thrown off a letter",
+    ).toBeLessThan(Math.min(...thrown.map((s) => s.spin)) / 2);
   });
 
   it("stays an occasion rather than the weather", () => {
