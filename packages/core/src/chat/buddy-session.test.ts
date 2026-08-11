@@ -4,6 +4,7 @@ import {
   runBuddyTurn,
   nonEmptyAnswer,
   isBareAcknowledgement,
+  isStallConfirmation,
   MIN_CONTINUABLE_CHARS,
   type BuddyTurnEvent,
 } from "./buddy-session.js";
@@ -773,6 +774,90 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     const llm = effortLlm(["Paris."]);
     await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "capital?" }], deps: baseDeps });
     expect(llm.efforts, "an effort was invented where the reader set none").toEqual([undefined]);
+  });
+
+  /**
+   * "IT NEVER OUTPUTS Z THOUGH IT THINKS IT DOES" — and it had.
+   *
+   * A series message becomes its own bubble only because the host flushes streamed prose when a TOOL
+   * CALL follows it, and the LAST message of a series has no keep_going after it by definition. So it
+   * arrives as the turn's answer — where the stall check swallowed it and handed the reader the
+   * model's reply to a question they never saw ("yes, that's the whole alphabet"). The model was
+   * telling the truth and the letter was real; it just never reached the screen.
+   */
+  describe("telling a confirmation from a closing line", () => {
+    it("recognises the shapes a model actually confirms with", () => {
+      for (const t of ["Yes.", "Yes, that was the last one.", "That's all", "Done.", "All done!", "No more", "Finished."]) {
+        expect(isStallConfirmation(t), `${t} was not read as a confirmation`).toBe(true);
+      }
+    });
+
+    it("keeps a closing line that merely starts like one", () => {
+      // The first version anchored only the opening and let the rest run to the first full stop, so
+      // this was dropped for beginning with the word "That's".
+      expect(isStallConfirmation("That's the whole alphabet — 26 letters, A through Z.")).toBe(false);
+      expect(isStallConfirmation("Done — the file is saved to notes.md and the tests pass.")).toBe(false);
+    });
+
+    it("never swallows a real message", () => {
+      for (const t of ["Z", "The capital of France is Paris.", "Yesterday I read that book."]) {
+        expect(isStallConfirmation(t), `${t} would have been thrown away`).toBe(false);
+      }
+    });
+  });
+
+  it("returns the last message of a series, not its answer about the last message", async () => {
+    const llm = scriptedLlm([
+      'Y\n{"tool":"keep_going"}',
+      "Z", // the final letter: no keep_going, because there is nothing after it
+      "Yes, that was the last one.", // the reply to a question the reader never sees
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "finish the alphabet, one letter at a time" }],
+      deps: baseDeps,
+    });
+    expect(outcome.text, "the last letter was replaced by the stall check's answer").toBe("Z");
+    expect(outcome.text).not.toMatch(/last one/);
+  });
+
+  it("keeps anything the model added beyond the acknowledgement", async () => {
+    // The drop is only safe for a bare "yes, done". A model that uses the same reply to say something
+    // real must not have it thrown away, so the held message leads and the rest follows.
+    const llm = scriptedLlm(['Y\n{"tool":"keep_going"}', "Z", "That's the whole alphabet — 26 letters, A through Z."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "finish the alphabet" }],
+      deps: baseDeps,
+    });
+    expect(outcome.text).toContain("Z");
+    expect(outcome.text).toContain("26 letters");
+  });
+
+  it("records a held message exactly once when the series carries on", async () => {
+    // The other exit: the stall question is answered by continuing. The held message is a real
+    // message of the run, so it goes to the transcript there — and must not ALSO be merged into the
+    // final answer, which would show it twice.
+    const llm = scriptedLlm([
+      'A\n{"tool":"keep_going"}',
+      "B", // the stall — the model forgot keep_going
+      'C\n{"tool":"keep_going"}', // ...and then carried on anyway
+      "D",
+      "done",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "A to D please" }],
+      deps: baseDeps,
+    });
+    const said = outcome.transcript.filter((m) => m.role === "assistant").map((m) => m.content);
+    expect(said.filter((t) => t.trim() === "B"), "B was recorded twice, or not at all").toHaveLength(1);
+    for (const letter of ["A", "C", "D"]) {
+      expect(said.join(" "), `${letter} went missing`).toContain(letter);
+    }
   });
 
   it("refuses a round bought with nothing written", async () => {

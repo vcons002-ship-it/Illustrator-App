@@ -216,13 +216,13 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/agreeing with yourself/);
     // The escape hatch, so this never reads as "never reconsider anything".
     expect(prompt).toMatch(/Re-open a decision only when something NEW arrives/);
-    expect(prompt).toMatch(/doubt alone is not new/);
+    expect(prompt).toMatch(/doubt is not new/);
   });
 
   it("says the least thinking belongs on the most repetitive work", () => {
     // Without this the rule is easy to read as being about hard problems, which is the opposite of
     // where it bites — a reasoning model spends the most on the tasks that deserve the least.
-    expect(prompt).toMatch(/Repetitive work deserves the LEAST thinking/);
+    expect(prompt).toMatch(/Repetitive work needs the LEAST thinking/);
   });
 
   /**
@@ -255,15 +255,30 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     }
   });
 
+  /**
+   * THE RULE STARTED OVERRIDING THE READER.
+   *
+   * "Make a plan, write the alphabet one letter at a time" — and the model's reasoning went: *
+   * Constraint 1: "Make a plan" (Wait — the system instructions say: "A task that is the SAME small
+   * thing over and over... needs NO checklist"). It then refused to plan. The rule was written to
+   * stop a model wrapping a trivial repetition in a 26-step checklist nobody asked for; it was never
+   * meant to outrank an explicit request, and with the rules hoisted to the top of the prompt it
+   * started winning arguments it should lose.
+   */
+  it("does not let its own no-checklist rule overrule a reader who asks for a plan", () => {
+    expect(prompt).toMatch(/if the reader ASKS for a plan, MAKE ONE/i);
+    expect(prompt).toMatch(/their request wins/i);
+  });
+
   it("says outright that nothing continues on its own", () => {
     expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
-    expect(prompt).toMatch(/no loop is running behind you/);
+    expect(prompt).toMatch(/no loop runs behind you/);
     expect(prompt).toMatch(/the turn is OVER/);
   });
 
   it("refuses 'too simple to need a tool' as a reason to skip keep_going", () => {
     expect(prompt).toMatch(/It is not a real tool/);
-    expect(prompt).toMatch(/runs nothing and costs nothing/);
+    expect(prompt).toMatch(/not a real tool and costs nothing/);
     expect(prompt).toMatch(/"too simple for a tool" is no reason to omit it/);
   });
 
