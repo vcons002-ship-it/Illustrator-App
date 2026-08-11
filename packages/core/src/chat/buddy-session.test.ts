@@ -532,6 +532,58 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     expect(planned, "it still built a checklist for a job that is just more messages").toBe(false);
   });
 
+  /**
+   * THE DIRECTIVE THAT KILLED IT, CAUGHT IN THE MODEL'S OWN WORDS.
+   *
+   * A reply carrying no visible prose triggers a wrap-up directive — routine for a reasoning model,
+   * whose first pass can be all thinking. That directive said "No tool calls", and the reader's
+   * transcript showed exactly what the model did with it: "Since I am explicitly told 'No tool
+   * calls', this instruction about keep_going is overridden for *this* turn. I must stop after
+   * sending 'A'."
+   *
+   * It reasoned correctly. The clause exists to stop the model reaching for ANOTHER tool instead of
+   * answering; keep_going runs nothing and only says the turn is unfinished.
+   */
+  it("does not forbid keep_going when it asks for plain text", async () => {
+    // Round 0 is all thinking and no prose — the state that fires the wrap-up.
+    const llm = scriptedLlm(["", 'A\n{"tool":"keep_going"}', "B"]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me the alphabet, one letter at a time" }],
+      deps: baseDeps,
+    });
+    const wrap = llm.calls
+      .flat()
+      .map((m) => m.content)
+      .find((c) => /Now reply to the reader in plain text/.test(c));
+    expect(wrap, "the wrap-up directive was never sent").toBeTruthy();
+    expect(wrap, "it still tells the model every tool is off, keep_going included").toMatch(
+      /except keep_going/,
+    );
+  });
+
+  /**
+   * This one PASSES against the old code, and says so on purpose. A scripted model does as it is
+   * told by the script, not by the directive, so no test here can show a model obeying "no tool
+   * calls" — only the wording assertion above guards the actual fix. What this pins is the other
+   * half: that a keep_going arriving after a wrap-up round is honoured at all, so the round loop
+   * cannot quietly stop buying rounds once a turn has been through the wrap-up path.
+   */
+  it("honours a keep_going that arrives after a wrap-up round", async () => {
+    const llm = scriptedLlm(["", 'A\n{"tool":"keep_going"}', 'B\n{"tool":"keep_going"}', "C"]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me the alphabet, one letter at a time" }],
+      deps: baseDeps,
+    });
+    expect(
+      outcome.toolResults.filter((r) => r.call.tool === "keep_going" && !r.result.error),
+      "the turn ended on the first letter again",
+    ).toHaveLength(2);
+  });
+
   it("refuses a round bought with nothing written", async () => {
     // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
     // that looks like thinking and produces silence.

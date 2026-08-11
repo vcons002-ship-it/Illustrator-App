@@ -702,10 +702,24 @@ export async function runBuddyTurn(opts: {
         // are internal control flow — persisting them leaked "[Now reply to the reader in plain
         // text…]" into the chat as a user message.
         messages.push({ role: "assistant", content: reply });
+        /**
+         * "NO TOOL CALLS" MEANT keep_going TOO, AND THAT KILLED IT.
+         *
+         * This directive fires whenever a reply carries no visible prose — which for a reasoning
+         * model is routine, since its first pass can be all thinking. The reader's own transcript
+         * caught the consequence in the model's words: "Since I am explicitly told 'No tool calls',
+         * this instruction about keep_going is overridden for *this* turn. I must stop after
+         * sending 'A'."
+         *
+         * It was reasoning correctly. The clause is here to stop the model reaching for ANOTHER
+         * tool instead of answering, and keep_going is not that — it runs nothing, it only says the
+         * turn is not finished. So it is named as the exception rather than left to be inferred.
+         */
         const wrap = opts.storyMode
           ? "[Now write the next beat of the story as plain prose — continue the scene a little, refer to " +
             "characters by their established names, no commentary and no tool calls.]"
-          : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
+          : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls — " +
+            "except keep_going, which you should still add if you have more messages to send.]";
         messages.push({ role: "user", content: wrap });
         continue;
       }
