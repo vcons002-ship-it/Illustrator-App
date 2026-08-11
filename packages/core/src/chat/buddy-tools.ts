@@ -1572,15 +1572,15 @@ export function buildBuddySystemPrompt(raw: {
       'alphabet, one letter per message", a countdown, one line at a time — needs NO checklist: send ' +
       'the first one, call {"tool":"keep_going"} in the same reply, and you get to send the next. ' +
       "Repeat until finished, then just answer without it. A checklist for that is heavier than the " +
-      "request.\n" +
+      "request — but if the reader ASKS for a plan, MAKE ONE: their request wins.\n" +
       // Both sentences below refute one the model actually wrote before stopping on the first letter:
       // "Since I can't count in my head reliably or use a tool for this simple task, I will just keep
       // going until I feel done (which is Z). The system handles the loop via keep_going." Nothing in
       // the system does. It had read the paragraph above and still concluded the loop was automatic,
       // so the correction has to say that outright rather than restate the instruction.
-      "NOTHING CONTINUES ON ITS OWN — no loop is running behind you. End a reply without " +
-      '{"tool":"keep_going"} and the turn is OVER, however much you had left. It is not a real tool: ' +
-      'it runs nothing and costs nothing, so "too simple for a tool" is no reason to omit it.\n' +
+      "NOTHING CONTINUES ON ITS OWN: no loop runs behind you. End a reply without " +
+      '{"tool":"keep_going"} and the turn is OVER. It is not a real tool and costs nothing, so ' +
+      '"too simple for a tool" is no reason to omit it.\n' +
       "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (e.g. several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
       "just call its tool directly; do NOT make a plan for one step. WRITING something and MAKING something are " +
@@ -1752,7 +1752,7 @@ export function buildBuddySystemPrompt(raw: {
   // that shape, rather than asking for "less thinking", which a model cannot act on.
   "WHEN YOU ALREADY KNOW, ACT. Restating a conclusion, agreeing with yourself, or re-checking what " +
   "you just confirmed is not verification — stop and answer. Re-open a decision only when something " +
-  "NEW arrives; doubt alone is not new. Repetitive work deserves the LEAST thinking.\n" +
+  "NEW arrives; doubt is not new. Repetitive work needs the LEAST thinking.\n" +
   multiStepGuide;
 
   return (

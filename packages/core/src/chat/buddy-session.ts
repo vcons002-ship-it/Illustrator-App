@@ -98,6 +98,30 @@ export function isBareAcknowledgement(text: string): boolean {
 }
 
 
+/**
+ * Is this reply nothing but "yes, that was the last one"?
+ *
+ * The stall check asks a question the reader never sees, so the answer to it must never become the
+ * reader's last message of a series — that is how the alphabet ended on "yes, that's the whole
+ * alphabet" with Z sent but never shown. Anything beyond a confirmation is kept, because a model
+ * that used the same reply to say something real must not have it thrown away.
+ *
+ * Separate from `isBareAcknowledgement`, which serves the anti-skip guard and is deliberately
+ * narrow. This one answers a different question and a wrong match costs differently: there it would
+ * let a step be skipped; here it would drop a closing line the reader might have wanted. Hence the
+ * length bound, and a pattern that has to match the WHOLE reply.
+ */
+export function isStallConfirmation(text: string): boolean {
+  const t = text.trim();
+  if (t.length > 80) return false;
+  // The WHOLE reply has to be a confirmation. An earlier version anchored only the opening and let
+  // the rest run to the first full stop, which passed "That's the whole alphabet — 26 letters, A
+  // through Z." — a closing line worth keeping, thrown away for starting with the word "That's".
+  return /^(?:(?:yes|yep|yeah|ok(?:ay)?)[\s,—-]*)?(?:that(?:'s| is| was)?\s*(?:the\s*)?(?:all|it|last(?:\s*one)?)|all done|no more|nothing more|finished|complete(?:d)?|done)?[\s.!,;:—-]*$/i.test(
+    t,
+  );
+}
+
 /** How often to tick a transient "still working" activity heartbeat while waiting for the model's
  * first token. Kept well under the linked phone's silence watchdog (120s) so a slow large model's
  * long time-to-first-token never trips it. */
@@ -581,6 +605,9 @@ export async function runBuddyTurn(opts: {
   let executingSeries = false;
   /** The stall check has already spent its question on the current stall. Cleared by each keep_going. */
   let askedIfDone = false;
+  /** A series message held back by the stall check — published once the turn settles, or handed to the
+   * transcript if the series carries on. Never both, and never neither. */
+  let stalledProse = "";
   // Anti-skip guard (turn-scoped): true right after a complete_step, cleared by any real work (a tool /
   // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
   // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
@@ -766,13 +793,22 @@ export async function runBuddyTurn(opts: {
        * which it got and has been taking the second reading.
        *
        * So it asks, once per stall. This cannot fire on ordinary chat: it requires a keep_going to
-       * have already carried a message THIS turn, which a normal answer never does. The reply is
-       * pushed to the transcript first, because unlike the empty-prose wrap-up above there is real
-       * text here and the reader is owed it whether or not more follows.
+       * have already carried a message THIS turn, which a normal answer never does.
+       *
+       * THE QUESTION MUST NOT EAT THE MESSAGE THAT PROMPTED IT. Reported as: "it never outputs Z
+       * though it thinks it does" — and it had. Each message of a series becomes its own bubble only
+       * because the host flushes streamed prose when a TOOL CALL follows it, and the last message of
+       * a series has no keep_going after it by definition. So the final one arrives as the turn's
+       * answer, this check swallowed it, and what the reader got instead was the model's reply to a
+       * question they never saw: "yes, that's the whole alphabet". The model was right and the letter
+       * was real; it just never reached the screen.
+       *
+       * So the prose is HELD, not published, and it is not put in the transcript here either — it
+       * goes in exactly once, either merged into the answer below or flushed when the series resumes.
        */
       if (clean && keptGoingThisTurn && !askedIfDone && round < effectiveMax) {
         askedIfDone = true;
-        transcript.push({ role: "assistant", content: reply });
+        stalledProse = clean;
         messages.push({ role: "assistant", content: reply });
         messages.push({
           role: "user",
@@ -782,6 +818,14 @@ export async function runBuddyTurn(opts: {
             "finished, say so in one short line.]",
         });
         continue;
+      }
+      // The turn is settling and a message is still being held from the stall check above. It is the
+      // reader's last real message of the series, so it leads. A bare "yes, that was the last one" is
+      // an answer to a question they never saw and is dropped; anything else the model added is kept
+      // after it, so no path can lose text.
+      if (stalledProse) {
+        clean = !clean || isStallConfirmation(clean) ? stalledProse : `${stalledProse}\n\n${clean}`;
+        stalledProse = "";
       }
       // AUTO-CONTINUE: the server CUT THE ANSWER OFF at the token budget. Keep asking it to pick up
       // where it left off and stitch the parts, so a big document (a full worksheet, a long file)
@@ -995,6 +1039,13 @@ export async function runBuddyTurn(opts: {
           keptGoingThisTurn = true;
           askedIfDone = false;
           sentThisTurn.push(roundProse);
+          // The series answered the stall question by carrying on, so the message it was asked about
+          // is a real message of the run rather than the end of it. It goes into the transcript now
+          // — the one place it lands on this path, since the merge below only runs when a turn ends.
+          if (stalledProse) {
+            transcript.push({ role: "assistant", content: stalledProse });
+            stalledProse = "";
+          }
         }
         const result: BuddyToolResultPayload = roundProse
           ? { keptGoing: true }
