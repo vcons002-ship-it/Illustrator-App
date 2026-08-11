@@ -3,7 +3,10 @@ import { producedArtifactFrom } from "./buddy-tools.js";
 import type { BuddyPlan, BuddyToolCall, BuddyToolResultPayload } from "./buddy-tools.js";
 import {
   type StepEvidence,
+  type Workflow,
   type WorkflowStep,
+  type WorkflowStepStatus,
+  activeStep,
   advanceWorkflow,
   attemptedStepWork,
   checklistMetaOnly,
@@ -15,6 +18,7 @@ import {
   isWebSearchStep,
   isToolContract,
   needsToDoneWhen,
+  reactivateWorkflow,
   recompileWorkflow,
   resumeWorkflow,
   stepDirective,
@@ -965,5 +969,60 @@ describe("a search VERB, not the word appearing somewhere in a sentence", () => 
     // would be a contract the right behaviour cannot meet.
     expect(isWebSearchStep("find out whether the shipment arrived")).toBe(false);
     expect(inferDoneWhen("Find out whether the shipment arrived")).toEqual({ kind: "text", min: 1 });
+  });
+});
+
+/**
+ * THE STOP THAT SAID NOTHING.
+ *
+ * Reported as: "it just stopped running the plan and returned the turn back to the user", with the
+ * card still reading 0/26. `activeStep` matches `status === "active"` and nothing else, so a
+ * workflow holding only `pending` steps has no active step, and the executor that asks for one
+ * stops on it — the single ending in the whole run with no message attached, which is what made it
+ * indistinguishable from a finished one.
+ */
+describe("a run with no step holding the baton", () => {
+  const wf = (statuses: WorkflowStepStatus[]): Workflow => ({
+    steps: statuses.map((status, i) => ({
+      id: `s${i}`,
+      instruction: `Send letter ${String.fromCharCode(65 + i)}`,
+      doneWhen: { kind: "text", min: 1 } as const,
+      onFail: "ask_user" as const,
+      maxAttempts: 2,
+      status,
+      attempts: 0,
+    })),
+  });
+
+  it("has no active step to run — which is how the run stalls in the first place", () => {
+    expect(activeStep(wf(["pending", "pending"]))).toBeUndefined();
+  });
+
+  it("hands the baton to the first unfinished step", () => {
+    const back = reactivateWorkflow(wf(["done", "pending", "pending"]));
+    expect(activeStep(back)?.instruction).toBe("Send letter B");
+  });
+
+  it("leaves a healthy run alone, so it is safe on the happy path", () => {
+    const healthy = wf(["done", "active", "pending"]);
+    expect(reactivateWorkflow(healthy)).toBe(healthy);
+  });
+
+  it("never resurrects a finished run", () => {
+    const finished = wf(["done", "done"]);
+    expect(activeStep(reactivateWorkflow(finished))).toBeUndefined();
+  });
+
+  it("does not park a run that is merely waiting on the reader", () => {
+    // A blocked step is `resumeWorkflow`'s business — that run is waiting on an answer and must not
+    // be restarted behind the reader's back. Nothing here is pending, so there is nothing to revive.
+    const parked = wf(["done", "blocked", "pending"]);
+    expect(reactivateWorkflow(parked).steps[1]!.status).toBe("blocked");
+  });
+
+  it("keeps the step's attempts, so a state that recurs still parks instead of looping", () => {
+    const tried = wf(["pending"]);
+    tried.steps[0]!.attempts = 1;
+    expect(reactivateWorkflow(tried).steps[0]!.attempts).toBe(1);
   });
 });
