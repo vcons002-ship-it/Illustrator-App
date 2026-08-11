@@ -202,16 +202,39 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
    * its behalf, and that a simple task is beneath a tool call. So the prompt now contradicts each one
    * in its own words, and these assertions are what keeps that contradiction in the prompt.
    */
+  /**
+   * MINUTES OF THINKING TO SEND ONE LETTER.
+   *
+   * The reader's words: "it says it's confident multiple times, but then continues to check." The
+   * loop always has the same shape — state a conclusion, agree with it, then go looking for a reason
+   * it might be wrong — so the rule names that shape. "Think less" is not something a model can act
+   * on; "you are restating a conclusion you already reached, stop" is.
+   */
+  it("tells it to act once it has decided, instead of re-checking settled reasoning", () => {
+    expect(prompt).toContain("WHEN YOU ALREADY KNOW, ACT");
+    expect(prompt).toMatch(/Restating a conclusion, agreeing with yourself/);
+    expect(prompt).toMatch(/agreeing with yourself/);
+    // The escape hatch, so this never reads as "never reconsider anything".
+    expect(prompt).toMatch(/Re-open a decision only when something NEW arrives/);
+    expect(prompt).toMatch(/doubt alone is not new/);
+  });
+
+  it("says the least thinking belongs on the most repetitive work", () => {
+    // Without this the rule is easy to read as being about hard problems, which is the opposite of
+    // where it bites — a reasoning model spends the most on the tasks that deserve the least.
+    expect(prompt).toMatch(/Repetitive work deserves the LEAST thinking/);
+  });
+
   it("says outright that nothing continues on its own", () => {
     expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
-    expect(prompt).toMatch(/No loop is running behind you/);
-    expect(prompt).toMatch(/the turn is OVER right there/);
+    expect(prompt).toMatch(/no loop is running behind you/);
+    expect(prompt).toMatch(/the turn is OVER/);
   });
 
   it("refuses 'too simple to need a tool' as a reason to skip keep_going", () => {
-    expect(prompt).toMatch(/keep_going is also not a real tool/);
-    expect(prompt).toMatch(/runs nothing, reads nothing and costs nothing/);
-    expect(prompt).toMatch(/Simple and long is exactly what it is for/);
+    expect(prompt).toMatch(/It is not a real tool/);
+    expect(prompt).toMatch(/runs nothing and costs nothing/);
+    expect(prompt).toMatch(/"too simple for a tool" is no reason to omit it/);
   });
 
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
