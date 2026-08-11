@@ -32,6 +32,7 @@ import {
   toolFailureDirective,
   toolLimitNudge,
   MAX_PLAN_STEPS,
+  seriesProgressNote,
 } from "./buddy-tools.js";
 import { routePendingTool } from "./tool-approval.js";
 
@@ -3234,5 +3235,55 @@ describe("launching something that stays up, and driving it", () => {
     expect(routePendingTool("browser_eval", flags)).toBe("ask");
     expect(routePendingTool("browser_eval", { ...flags, autonomousWorkspace: true, liveControl: false })).toBe("host");
     expect(routePendingTool("browser_eval", { ...flags, allowCommands: false, autonomousWorkspace: true, liveControl: false })).toBe("ask");
+  });
+});
+
+/**
+ * A PLAIN SERIES HAS NO IDEA WHERE IT IS.
+ *
+ * A checklist run is told its position on every step ("now do ONLY step 6 of 26"). A plan-free run
+ * is told nothing, and must reconstruct what it already sent by reading its own turns — behind a
+ * system prompt several times the size of the conversation. Asked for the alphabet it starts
+ * repeating letters, which is what the reader reported: "it was just repeating letters".
+ */
+describe("telling a series where it has got to", () => {
+  it("says nothing extra before anything has been sent", () => {
+    expect(seriesProgressNote([])).toBe("[go on]");
+  });
+
+  it("counts what has gone, and reads it back while the messages are short", () => {
+    const note = seriesProgressNote(["A", "B", "C"]);
+    expect(note).toContain("you have sent 3 messages");
+    expect(note).toContain('"A", "B", "C"');
+    // The instruction that the count exists to serve.
+    expect(note).toMatch(/Send the NEXT one/);
+    expect(note).toMatch(/do not repeat/i);
+  });
+
+  it("gets the singular right, because 1 messages reads as a bug", () => {
+    expect(seriesProgressNote(["A"])).toContain("you have sent 1 message so far");
+  });
+
+  it("keeps the count but drops the echo once the messages are real prose", () => {
+    // A series of paragraphs would put its entire history into every round — the exact cost the
+    // "[go on]" note was kept to three words to avoid. Those messages are also distinctive enough to
+    // find in the transcript, which is the argument the one-character case cannot make.
+    const long = ["Once upon a time there was a very long opening paragraph indeed.", "And then another."];
+    const note = seriesProgressNote(long);
+    expect(note).toContain("you have sent 2 messages");
+    expect(note).not.toContain("Once upon a time");
+  });
+
+  it("drops the echo when many short messages add up to a long one", () => {
+    // Each item passes the per-item limit; together they are a wall. The total is what actually
+    // lands in the context, so it is the total that has to be capped.
+    const many = Array.from({ length: 60 }, (_, i) => `item ${i}`);
+    expect(seriesProgressNote(many)).not.toContain('"item 0"');
+    expect(seriesProgressNote(many)).toContain("you have sent 60 messages");
+  });
+
+  it("still echoes a full alphabet, which is the case it was written for", () => {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    expect(seriesProgressNote(letters)).toContain('"Z"');
   });
 });

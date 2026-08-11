@@ -6987,10 +6987,30 @@ export function App() {
    * would replay for ever, which is the failure `stripPersistedDirectives` exists to undo.
    */
   const lastThinkingRef = useRef<string>("");
-  /** Is there unfinished checklist work? Only then is the previous step's reasoning worth carrying —
-   * in ordinary conversation the reply is the record and old reasoning is noise. */
-  const checklistInFlight = (): boolean =>
-    !!activeStep(buddyWorkflowRef.current) || planHasPendingStep(buddyPlanRef.current);
+  /**
+   * Is the previous step's reasoning worth carrying into this one?
+   *
+   * Two conditions, and the second one is newer than this comment's neighbours. There has to be
+   * unfinished checklist work at all — in ordinary conversation the reply is the record and old
+   * reasoning is noise. And the step about to run has to be a TOOL step, which is the only case the
+   * carry was ever built for: a tool step's prose is suppressed by design, so between one and the
+   * next nothing survives of the plan the model had worked out, and it re-derives it every time.
+   *
+   * An ANSWER step loses nothing — its text IS the record, and it is sitting in the history. What
+   * the carry adds there is the tail of the last deliberation, which on a reasoning model is
+   * typically the doubt rather than the decision ("wait — was that E or F?"). Handing that to the
+   * next step seeds the loop the reader has been watching: "got it, ok let's go. WAIT!"
+   *
+   * Same rule as the round-level recap in buddy-session, for the same reason: reasoning is worth
+   * replaying when FACTS arrived that it was about, and not otherwise. When there is no workflow to
+   * ask (the legacy model-driven path has no contracts) this falls back to the old behaviour rather
+   * than guessing.
+   */
+  const checklistInFlight = (): boolean => {
+    const step = activeStep(buddyWorkflowRef.current);
+    if (step) return isToolContract(step.doneWhen.kind);
+    return planHasPendingStep(buddyPlanRef.current);
+  };
   const dispatchBuddyTurn = async (
     history: ChatTurn[],
     userText: string,
