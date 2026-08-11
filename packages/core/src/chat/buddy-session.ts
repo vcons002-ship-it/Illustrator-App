@@ -60,6 +60,26 @@ import { allowedInCreativeIdle } from "./tool-approval.js";
 const MAX_REPLY_CONTINUATIONS = 8;
 
 /**
+ * HOW MUCH VISIBLE ANSWER THERE MUST BE BEFORE "CONTINUE WHERE YOU LEFT OFF" MEANS ANYTHING.
+ *
+ * `truncated` says the TOKEN BUDGET ran out. It does not say the ANSWER was cut off, and on a
+ * reasoning model those are routinely different things: it can spend the whole budget thinking and
+ * emit one visible character. Asked to "pick up at the next character" of a one-character reply, a
+ * model has nothing to continue — the reported case answered "please provide the exact text where
+ * the previous response was cut off", which is the only sensible reply to an impossible request.
+ *
+ * The loop exists for a big document capped at one reply, so the question is whether the model was
+ * still WRITING when the budget ran out. Under a couple of sentences it was not: it had finished,
+ * and the budget went somewhere else. Below this, hand over what there is.
+ *
+ * The errors are not symmetric, which is what sets the number. Refusing to continue something that
+ * really was cut off costs the reader one "continue" — they can see the answer stopped. Continuing
+ * something that was not costs a nonsensical reply, up to eight wasted model calls, and a context
+ * window filled with the loop's own directives. 200 leans toward the cheap mistake.
+ */
+export const MIN_CONTINUABLE_CHARS = 200;
+
+/**
  * Is this reply a hand-off rather than a step's work?
  *
  * The anti-skip guard has to tell "I did the thing" from "I'm moving on", and for a step whose
@@ -693,7 +713,12 @@ export async function runBuddyTurn(opts: {
       // where it left off and stitch the parts, so a big document (a full worksheet, a long file)
       // isn't capped at one reply — the reader sees each part stream in with a "part N" status.
       let rawSoFar = reply;
-      for (let part = 0; lastTruncated && part < MAX_REPLY_CONTINUATIONS; part++) {
+      // A budget spent on REASONING is not an answer cut off mid-sentence — see
+      // MIN_CONTINUABLE_CHARS. Entering the loop on a one-character reply asks the model to continue
+      // something that was never started, and every pass pushes its own reply and the directive back
+      // into the context: eight rounds of that is how a two-message chat reached 100% of the window.
+      const worthContinuing = clean.length >= MIN_CONTINUABLE_CHARS;
+      for (let part = 0; worthContinuing && lastTruncated && part < MAX_REPLY_CONTINUATIONS; part++) {
         opts.onEvent?.({ kind: "activity", text: `Writing the answer… (part ${part + 2})` });
         messages.push({ role: "assistant", content: rawSoFar });
         messages.push({
@@ -705,11 +730,17 @@ export async function runBuddyTurn(opts: {
         });
         rawSoFar = await chatOnce();
         const more = stripToolCallJson(rawSoFar).trim();
-        if (more) clean = clean ? `${clean}\n${more}` : more;
+        // A pass that adds nothing will not add anything next time either, and each one costs a
+        // model call and two more messages of context. The old loop ran all eight regardless.
+        if (!more) break;
+        clean = clean ? `${clean}\n${more}` : more;
       }
       // If we stopped only because of the per-turn safety cap (still truncated), say so plainly so a
       // genuinely huge document is never SILENTLY cut — the reader can just ask for the rest.
-      if (lastTruncated) {
+      // Only when a LONG answer really was cut short. A short reply that merely exhausted the budget
+      // thinking is complete as far as the reader is concerned, and telling them it was paused
+      // mid-thought would be inviting them to ask for a continuation that does not exist.
+      if (lastTruncated && worthContinuing) {
         clean += '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up exactly where I left off.)_';
       }
       transcript.push({ role: "assistant", content: clean });

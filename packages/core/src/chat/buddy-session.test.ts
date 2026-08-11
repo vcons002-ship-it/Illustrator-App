@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
-import { runBuddyTurn, nonEmptyAnswer, isBareAcknowledgement, type BuddyTurnEvent } from "./buddy-session.js";
+import {
+  runBuddyTurn,
+  nonEmptyAnswer,
+  isBareAcknowledgement,
+  MIN_CONTINUABLE_CHARS,
+  type BuddyTurnEvent,
+} from "./buddy-session.js";
 import { MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
@@ -422,6 +428,73 @@ describe("runBuddyTurn — write-capable sub-agent (runHostTool)", () => {
  * Nothing else was missing. A turn already allows fifty rounds, and prose written before a tool call
  * already becomes its own chat message. All that was absent was a way to say "not finished".
  */
+/**
+ * "TRUNCATED" MEANS THE TOKEN BUDGET RAN OUT — NOT THAT THE ANSWER WAS CUT OFF.
+ *
+ * On a reasoning model those are routinely different things: it can spend the whole budget thinking
+ * and emit one visible character. The auto-continue loop believed the flag, told a model that had
+ * written "A" to "pick up at the next character", and got back the only sensible reply to an
+ * impossible request — "please provide the exact text where the previous response was cut off".
+ * Then it did that eight more times, pushing its own reply and the directive into the context each
+ * pass, until a two-message chat was at 100% of the window and being compacted.
+ */
+describe("runBuddyTurn — a budget spent thinking is not an answer cut short", () => {
+  /** A scripted model that always reports it hit the token budget. */
+  function truncatedLlm(replies: string[]): ChatCapable & { calls: ChatTurn[][] } {
+    const calls: ChatTurn[][] = [];
+    return {
+      calls,
+      async chat(messages, opts) {
+        calls.push([...messages]);
+        opts?.onComplete?.({ truncated: true });
+        return replies[Math.min(calls.length - 1, replies.length - 1)]!;
+      },
+    };
+  }
+
+  it("does not ask a one-character reply to continue itself", async () => {
+    const llm = truncatedLlm(["A", "Please provide the exact text where the previous response was cut off."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me the alphabet, one letter per message" }],
+      deps: baseDeps,
+    });
+    expect(llm.calls, "it went back for a continuation of a single character").toHaveLength(1);
+    expect(outcome.text).toBe("A");
+    // …and does not tell the reader it paused mid-thought, which would invite them to ask for a
+    // continuation that does not exist.
+    expect(outcome.text, "offered to continue something that was never started").not.toMatch(/paused here/);
+  });
+
+  it("still continues a long answer that really was cut short", async () => {
+    const long = "x".repeat(MIN_CONTINUABLE_CHARS + 10);
+    const llm = truncatedLlm([long, "…and the rest of it."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write the whole thing" }],
+      deps: baseDeps,
+    });
+    expect(llm.calls.length, "a genuinely truncated document was not continued").toBeGreaterThan(1);
+    expect(outcome.text).toContain("and the rest of it");
+  });
+
+  it("stops the moment a continuation adds nothing", async () => {
+    // A pass that adds nothing will not add anything next time either, and each one costs a model
+    // call and two more messages of context. The old loop ran all eight regardless.
+    const long = "y".repeat(MIN_CONTINUABLE_CHARS + 10);
+    const llm = truncatedLlm([long, "   "]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write it" }],
+      deps: baseDeps,
+    });
+    expect(llm.calls.length, "it kept asking a model that had nothing more to give").toBeLessThanOrEqual(2);
+  });
+});
+
 describe("runBuddyTurn — a turn that is many messages, without a checklist", () => {
   it("keeps sending until the model stops asking for another round", async () => {
     const llm = scriptedLlm([
@@ -779,7 +852,15 @@ describe("runBuddyTurn", () => {
   it("auto-continues a CUT-OFF answer and stitches the parts into one", async () => {
     // A scripted model that reports finish_reason "length" (truncated) for its first two replies,
     // then finishes — exactly the long-document case. Each chunk is a worksheet section.
-    const chunks = ["## Algebra 1 — part A\n1) 2x+3=7", "2) x^2-9=0", "3) factor x^2+5x+6\nThat's the set!"];
+    // Realistically sized: a chunk the server cut at the token budget is a section of a document,
+    // not a fragment. A reply too short to have been mid-sentence is one whose budget went
+    // elsewhere — see MIN_CONTINUABLE_CHARS — and is deliberately NOT continued.
+    const pad = (body: string): string => body + "\n" + "Show your working for each. ".repeat(9);
+    const chunks = [
+      pad("## Algebra 1 — part A\n1) 2x+3=7"),
+      pad("2) x^2-9=0"),
+      pad("3) factor x^2+5x+6\nThat's the set!"),
+    ];
     let n = 0;
     const llm: ChatCapable = {
       async chat(_messages, opts) {
@@ -831,7 +912,9 @@ describe("runBuddyTurn", () => {
       async chat(_messages, opts) {
         n++;
         opts?.onComplete?.({ truncated: true }); // a model that never finishes
-        return `chunk${n} `;
+        // Long enough to be a document still being written — a short reply that merely exhausted
+        // the budget is not continued at all, which is a different test above.
+        return `chunk${n} ` + "and it keeps going and going. ".repeat(9);
       },
     };
     const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "write forever" }], deps: baseDeps });
