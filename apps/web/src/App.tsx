@@ -351,6 +351,8 @@ import {
   type LocalBackendId,
   type ProvidersDiagnostics,
   type ReaderSettings,
+  pushActivityStep,
+  sentStepLabel,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
 import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
@@ -7207,9 +7209,17 @@ export function App() {
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
           : c.tool === "set_plan" ? "Planning the steps…"
           : c.tool === "complete_step" ? "Checking off a step…"
+          // keep_going was missing from this list, so every message of a series fell to the default
+          // and the trace became a column of identical "Working" rows — twenty-six of them for the
+          // alphabet, none saying what was worked on. The message itself is the fact worth showing
+          // and it is already in hand: `said` is the prose flushed a few lines above.
+          : c.tool === "keep_going" ? `${sentStepLabel(said)}…`
           : "Working…";
         setBuddyActivity(label);
-        setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
+        // A trace, not a tally: repeats fold into one row with a count, so a turn that does the same
+        // thing many times says so in a line instead of filling the screen. Distinct steps stay
+        // distinct, and each message of a series is distinct because it echoes the message.
+        setBuddySteps((prev) => pushActivityStep(prev, label.replace(/…$/, "")));
       } else if (e.kind === "settings") {
         // set_visual_style fields + a generic update_setting patch both land here; App
         // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
