@@ -180,3 +180,39 @@ describe("a stale build makes itself known", () => {
     expect(app).toContain("<UpdateBar onReload={() => window.location.reload()} />");
   });
 });
+
+/**
+ * A CHECKLIST WHOSE STEPS ARE MESSAGES USED TO STOP AFTER TWO.
+ *
+ * The chain's definition of progress was "a step ticked", and that stalls the case it most needs to
+ * serve. Asked for the alphabet a letter at a time, a model writes "A" and returns it as its ANSWER
+ * — a complete reply to the step it was given — without reaching for complete_step at all. Nothing
+ * ticks, exactly one no-progress turn is tolerated, and the run halts with 25 steps open and two
+ * letters delivered. No amount of fixing the check-off guard reaches that, because the guard was
+ * never consulted: the model never tried to tick anything.
+ */
+describe("a checklist chain keeps going while messages keep arriving", () => {
+  const app = readFileSync(join(WEB, "src", "App.tsx"), "utf8");
+
+  it("counts a new message as progress, not only a ticked step", () => {
+    expect(app).toMatch(/countDonePlanSteps\(plan\) > doneAtStart \|\|/);
+    expect(app, "presence alone would let a repeating model run to the cap").toContain("said !== adv.lastText");
+  });
+
+  it("still stops on a model repeating itself", () => {
+    // Novelty rather than mere presence, for the same reason it is the test one level down: a model
+    // saying the same thing again is exactly what a stuck run looks like.
+    expect(app).toMatch(/adv\.noProgress = moved \? 0 : adv\.noProgress \+ 1;/);
+  });
+
+  it("keeps the chain cap, which is what bounds the whole thing", () => {
+    expect(app).toMatch(/const cap = Math\.max\(20, plan!\.steps\.length \* 2 \+ 5\);/);
+    expect(app).toMatch(/adv\.count <= cap && adv\.noProgress <= 1/);
+  });
+
+  it("resets the chain on a fresh reader turn, including what was last said", () => {
+    // Without lastText resetting, a reader who asks the same thing twice would have their second
+    // request judged against the first one's answer and halt immediately.
+    expect(app).toContain('{ count: 0, noProgress: 0, lastText: "" }');
+  });
+});
