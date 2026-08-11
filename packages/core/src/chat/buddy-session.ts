@@ -570,6 +570,10 @@ export async function runBuddyTurn(opts: {
   /** Fingerprints of each round's calls — the stuck-on-repeat detector's only state. */
   const roundSignatures: string[] = [];
   let pausedForBudget = false; // hit the budget with tools still pending → a resumable checkpoint, not a finish
+  /** A keep_going has already carried a message this turn — so a series is running. */
+  let keptGoingThisTurn = false;
+  /** The stall check has already spent its question on the current stall. Cleared by each keep_going. */
+  let askedIfDone = false;
   // Anti-skip guard (turn-scoped): true right after a complete_step, cleared by any real work (a tool /
   // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
   // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
@@ -721,6 +725,33 @@ export async function runBuddyTurn(opts: {
           : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls — " +
             "except keep_going, which you should still add if you have more messages to send.]";
         messages.push({ role: "user", content: wrap });
+        continue;
+      }
+      /**
+       * A SERIES THAT STALLS LOOKS EXACTLY LIKE A SERIES THAT FINISHED.
+       *
+       * Without a checklist, a run of messages survives only as long as the model attaches
+       * keep_going to EVERY reply — twenty-six consecutive correct emissions for the alphabet, where
+       * a single miss ends the turn and there is no way back into it. Nothing distinguishes "F, and
+       * I forgot to ask for another round" from "F, and F was the last one", so the turn cannot tell
+       * which it got and has been taking the second reading.
+       *
+       * So it asks, once per stall. This cannot fire on ordinary chat: it requires a keep_going to
+       * have already carried a message THIS turn, which a normal answer never does. The reply is
+       * pushed to the transcript first, because unlike the empty-prose wrap-up above there is real
+       * text here and the reader is owed it whether or not more follows.
+       */
+      if (clean && keptGoingThisTurn && !askedIfDone && round < effectiveMax) {
+        askedIfDone = true;
+        transcript.push({ role: "assistant", content: reply });
+        messages.push({ role: "assistant", content: reply });
+        messages.push({
+          role: "user",
+          content:
+            "[Was that the last one? If you have more to send, send the NEXT one now with " +
+            '{"tool":"keep_going"} in the same reply — nothing continues on its own. If you are ' +
+            "finished, say so in one short line.]",
+        });
         continue;
       }
       // AUTO-CONTINUE: the server CUT THE ANSWER OFF at the token budget. Keep asking it to pick up
@@ -928,6 +959,13 @@ export async function runBuddyTurn(opts: {
        */
       if (call.tool === "keep_going") {
         opts.onEvent?.({ kind: "tool", round, call });
+        if (roundProse) {
+          // A series is running. Both flags feed the stall check in the no-calls branch — and
+          // clearing askedIfDone here is what gives EVERY later stall its own nudge, rather than
+          // spending the only one on the first stall of a twenty-six message run.
+          keptGoingThisTurn = true;
+          askedIfDone = false;
+        }
         const result: BuddyToolResultPayload = roundProse
           ? { keptGoing: true }
           : { error: "nothing was sent — write the message FIRST, then keep_going in the same reply" };
