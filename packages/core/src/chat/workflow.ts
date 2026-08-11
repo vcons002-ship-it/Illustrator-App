@@ -770,6 +770,30 @@ export function resumeWorkflow(wf: Workflow): Workflow {
   return { ...wf, steps };
 }
 
+/**
+ * NO STEP IS ACTIVE BUT THE RUN ISN'T OVER — put one back in the chair.
+ *
+ * `activeStep` matches `status === "active"` and nothing else, so a workflow carrying nothing but
+ * `pending` steps has no active step at all, and the executor that asks for one stops dead on it.
+ * That exit was SILENT: the plan card froze at 0/N, the turn came back to the reader, and nothing
+ * anywhere said why — the one stopping condition in the run with no message attached to it.
+ *
+ * Deliberately separate from `resumeWorkflow`, which un-blocks a PARKED step. A parked run is
+ * waiting on the reader and should not move until they answer; this one is waiting on nobody, and
+ * the only thing wrong with it is that no step is holding the baton. Returns the workflow unchanged
+ * when a step IS active (so it is safe to call on the happy path) or when nothing is left to do (so
+ * a finished run is never resurrected). PURE.
+ */
+export function reactivateWorkflow(wf: Workflow): Workflow {
+  if (wf.steps.some((s) => s.status === "active")) return wf;
+  const idx = wf.steps.findIndex((s) => s.status === "pending");
+  if (idx === -1) return wf;
+  // `attempts` is NOT reset: whatever put the run here, the step keeps its history, so a state that
+  // recurs still walks the step toward its maxAttempts and parks instead of reviving for ever.
+  const steps = wf.steps.map((s, i) => (i === idx ? { ...s, status: "active" as WorkflowStepStatus } : s));
+  return { ...wf, steps };
+}
+
 /** Whether the run is waiting on the reader (a step is `blocked`). */
 export function workflowParked(wf: Workflow | undefined): boolean {
   return !!wf && wf.steps.some((s) => s.status === "blocked");

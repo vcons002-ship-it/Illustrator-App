@@ -224,6 +224,8 @@ import {
   workflowToPlan,
   workflowParked,
   resumeWorkflow,
+  reactivateWorkflow,
+  workflowFinished,
   boundChatHistoryForMirror,
   fitsOneRelayFrame,
   externalizeChatImages,
@@ -6862,6 +6864,23 @@ export function App() {
     if (!wf) return false;
     const step = activeStep(wf);
     if (!step) {
+      // THE ONE EXIT THAT SAID NOTHING. Reported exactly that way: "it just stopped running the plan
+      // and returned the turn back to the user", with the card still showing 0/26. Every other way a
+      // run ends writes a line (✓ all done, ⚠ stopped, ⏸ stuck); this one returned in silence, so
+      // there was no way to tell a finished run from a broken one — from the outside they look the same.
+      //
+      // It is NOT resumed automatically. Whatever leaves a workflow with no active step is not yet
+      // understood, and a self-restarting run that hits the same state re-dispatches for ever. A
+      // Continue tap is recovery the reader controls, and the message is the diagnosis next time.
+      if (!workflowFinished(wf)) {
+        const left = wf.steps.filter((s) => s.status !== "done").length;
+        appendBuddy({
+          role: "tool",
+          text: `⚠ The checklist stopped with ${left} of ${wf.steps.length} steps unfinished and none of them running. Tap Continue to pick it back up.`,
+          actions: [{ label: "▶ Continue", send: "continue" }],
+          turns: [],
+        });
+      }
       setBuddyBusy(false);
       return true;
     }
@@ -7036,6 +7055,13 @@ export function App() {
         } else {
           applyWorkflow(resumeWorkflow(wf));
         }
+        buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+      } else if (appManagedActive && buddyWorkflowRef.current && !activeStep(buddyWorkflowRef.current)) {
+        // The other way a run can be stalled: unfinished, unparked, and with no step holding the
+        // baton — the state behind the silent stop in advanceWorkflowAfterTurn. Nothing is waiting on
+        // the reader here, so their next message (or the Continue that notice offers) is exactly the
+        // moment to hand the baton back.
+        applyWorkflow(reactivateWorkflow(buddyWorkflowRef.current));
         buddyStepEvidenceRef.current = { toolResults: [], text: "" };
       }
     }
