@@ -2460,6 +2460,35 @@ export function thinkingTail(thinking: string | undefined, maxChars: number): st
   return tail;
 }
 
+/** Longest single message still worth echoing back to the model, and the cap on all of them together.
+ * Sized for the series that actually loses its place — letters, numbers, single words. */
+export const SERIES_ECHO_MAX_ITEM = 24;
+export const SERIES_ECHO_MAX_TOTAL = 400;
+
+/**
+ * WHERE THE SERIES HAS GOT TO, handed back with each "go on".
+ *
+ * A checklist run is told its position on every step — "now do ONLY step 6 of 26" — and that is the
+ * single biggest difference between the two ways this app runs a long job. A plain series has no
+ * checklist and so no position at all: the model has to work out what it already sent by reading
+ * back through its own turns, behind a system prompt several times the size of the conversation.
+ * Asked for the alphabet, it starts repeating letters, which is exactly what the reader saw.
+ *
+ * The COUNT is always worth sending — it is a handful of tokens and it is the fact most likely to be
+ * lost. The messages themselves are echoed only while they stay short, which is precisely the shape
+ * of series that loses its place; a series of paragraphs would flood every round with its own
+ * history, and its messages are distinctive enough to find in the transcript anyway. PURE.
+ */
+export function seriesProgressNote(sent: readonly string[]): string {
+  if (sent.length === 0) return "[go on]";
+  const count = `you have sent ${sent.length} message${sent.length === 1 ? "" : "s"} so far this turn`;
+  const echoable =
+    sent.every((s) => s.length <= SERIES_ECHO_MAX_ITEM) && sent.join(", ").length <= SERIES_ECHO_MAX_TOTAL;
+  return echoable
+    ? `[go on — ${count}, in order: ${sent.map((s) => JSON.stringify(s)).join(", ")}. Send the NEXT one; do not repeat any of these.]`
+    : `[go on — ${count}. Send the NEXT one; do not repeat one you have already sent.]`;
+}
+
 /** How much reasoning rides from one ROUND to the next inside a turn. Shorter than the between-step
  * carry: a tool loop can run many rounds, so this is paid repeatedly within a single turn. */
 export const ROUND_THINKING_MAX_CHARS = 400;
@@ -4927,7 +4956,8 @@ function formatBuddyToolResultBody(
   }
   if (call.tool === "keep_going") {
     // Terse on purpose: this is a turn-taking signal, not information. Anything longer would be
-    // repeated in the context once per message of a long run.
+    // repeated in the context once per message of a long run. `seriesProgressNote` is the one
+    // exception and it earns it — see there.
     return "[go on]";
   }
   if (call.tool === "set_plan" || call.tool === "complete_step") {

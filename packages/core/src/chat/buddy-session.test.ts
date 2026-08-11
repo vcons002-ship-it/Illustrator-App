@@ -713,6 +713,68 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     ).toBeGreaterThan(0);
   });
 
+  /**
+   * A BUDGET, BECAUSE FOUR INSTRUCTIONS DIDN'T TAKE.
+   *
+   * The reader watching the reasoning: "got it, ok let's go. WAIT!" — and another minute of circling
+   * before sending "A". Four prompt rules have told this model to stop deliberating over settled
+   * work and it has argued its way out of every one. A round that follows a pure keep_going has
+   * nothing left to decide (the previous round chose the task, sent a message, and asked for another
+   * turn), so it is given no thinking budget at all. A flag cannot be reasoned with.
+   */
+  function effortLlm(replies: string[]): ChatCapable & { efforts: (string | undefined)[] } {
+    let n = 0;
+    const efforts: (string | undefined)[] = [];
+    return {
+      efforts,
+      async chat(_messages, opts) {
+        efforts.push(opts?.reasoningEffort);
+        return replies[Math.min(n++, replies.length - 1)]!;
+      },
+    };
+  }
+
+  it("spends no thinking on a round that is only executing an agreed series", async () => {
+    const llm = effortLlm(['A\n{"tool":"keep_going"}', 'B\n{"tool":"keep_going"}', "C"]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me A to C, one letter at a time" }],
+      deps: baseDeps,
+      reasoningEffort: "high",
+    });
+    // Round 0 decides what the task even is, and keeps the reader's setting.
+    expect(llm.efforts[0], "the deciding round lost its thinking budget").toBe("high");
+    // Everything after a pure keep_going is executing, not deciding — including the last round here,
+    // which is the "was that the last one?" stall check. That one is a yes/no about a series already
+    // under way, so it has nothing to deliberate over either.
+    expect(llm.efforts.slice(1), "the executing rounds still paid for full reasoning").toEqual([
+      "none",
+      "none",
+      "none",
+    ]);
+  });
+
+  it("gives the budget back the moment real results arrive", async () => {
+    // A search result is new information, which is exactly when thinking earns its keep. Without this
+    // the fix would quietly de-tune every round after any series, including ones with work to judge.
+    const llm = effortLlm(['{"tool":"search_web","query":"X"}', "Found it."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "look up X" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+      reasoningEffort: "high",
+    });
+    expect(llm.efforts, "a round reading tool results was told not to think").toEqual(["high", "high"]);
+  });
+
+  it("leaves the reader's setting alone when they haven't chosen one", async () => {
+    const llm = effortLlm(["Paris."]);
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "capital?" }], deps: baseDeps });
+    expect(llm.efforts, "an effort was invented where the reader set none").toEqual([undefined]);
+  });
+
   it("refuses a round bought with nothing written", async () => {
     // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
     // that looks like thinking and produces silence.
