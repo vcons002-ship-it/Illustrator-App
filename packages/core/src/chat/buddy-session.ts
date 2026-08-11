@@ -1,6 +1,6 @@
 import { rememberRouteFor } from "./souls.js";
 import { dateMath } from "./date-math.js";
-import type { ChatCapable, ChatOptions, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
+import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
@@ -600,9 +600,6 @@ export async function runBuddyTurn(opts: {
   /** Each message a keep_going has carried this turn, in order — the series' position, which nothing
    * else in a plan-free run keeps. Feeds seriesProgressNote. */
   const sentThisTurn: string[] = [];
-  /** The round just gone was ONLY "I have more to send" — so this round has nothing left to decide.
-   * Set at the end of each round from that round's calls; drives the per-round reasoning budget. */
-  let executingSeries = false;
   /** The stall check has already spent its question on the current stall. Cleared by each keep_going. */
   let askedIfDone = false;
   /** A series message held back by the stall check — published once the turn settles, or handed to the
@@ -625,9 +622,8 @@ export async function runBuddyTurn(opts: {
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
   // continued in another pass and stitched together.
-  const chatOnce = (effort?: ChatOptions["reasoningEffort"]): Promise<string> => {
+  const chatOnce = (): Promise<string> => {
     lastTruncated = false;
-    const roundEffort = effort ?? opts.reasoningEffort;
     // First-token heartbeat: a big local model (e.g. a 27B over the phone tunnel) can take a long
     // time to load/process the prompt before the FIRST token arrives. The linked phone's silence
     // watchdog only resets on a stream event, so a long time-to-first-token used to trip it ("the
@@ -669,10 +665,22 @@ export async function runBuddyTurn(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
-      // Per-ROUND, not per-turn. The setting says how hard to think about the reader's request; it
-      // does not follow that every round of the turn that answers it needs the same budget. A round
-      // that is executing an already-decided series has nothing left to decide, and `effort` says so.
-      ...(roundEffort ? { reasoningEffort: roundEffort } : {}),
+      /**
+       * ONE VALUE FOR THE TURN, AND IT HAS TO STAY THAT WAY ON THIS PROVIDER.
+       *
+       * A per-round budget was tried here: a round executing an already-decided series has nothing
+       * left to decide, so it was sent `reasoningEffort: "none"`. The idea was sound and the
+       * mechanism is not available. "none" reaches Ollama as `think: false`, and a thinking model
+       * told not to think does not stop reasoning — it stops EMITTING <think> tags. `stripThink`
+       * then finds nothing to strip and the monologue lands in the chat as an ordinary message:
+       * "The user is asking me to continue, but I've already completed the task... I don't need
+       * another keep_going." That is a reply the reader read.
+       *
+       * `ollamaThink` is binary besides — there is no "low" — so on a local model this knob offers
+       * exactly two settings: think, or think in public. Neither is a smaller budget. Anything that
+       * wants to cut deliberation here has to do it some other way.
+       */
+      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
       ...(opts.tools?.length ? { tools: opts.tools } : {}),
@@ -700,25 +708,7 @@ export async function runBuddyTurn(opts: {
     // round's thoughts back as if they were about the call just made — stale intent attached to
     // fresh results, which is worse than none.
     const thinkingBefore = lastThinking;
-    /**
-     * THE ROUND THAT DECIDES GETS THE THINKING. THE ROUNDS THAT EXECUTE DO NOT.
-     *
-     * Four prompt rules have now told this model to stop deliberating over settled work, and it has
-     * talked itself out of every one — most memorably by concluding, correctly, that a different
-     * instruction overrode them. A budget is not an instruction. It cannot be reasoned with.
-     *
-     * The reader watched it happen: "got it, ok let's go. WAIT!" and then another minute of circling
-     * before "A". By that round there was nothing left to decide — the previous round had already
-     * chosen the task, sent a message and asked for another turn — so the thinking had no decision to
-     * serve and went into re-auditing one it had already made.
-     *
-     * NARROW ON PURPOSE. Only a round that follows a pure keep_going round qualifies: the model has
-     * committed to a series and is mid-way through it. The first round of every turn keeps its full
-     * budget (that is the round that works out what is being asked), and any round following real
-     * tool results keeps it too (results are new information, which is exactly when thinking earns
-     * its keep). The reader's reasoning-effort setting still governs everything else.
-     */
-    const reply = await chatOnce(executingSeries ? "none" : undefined);
+    const reply = await chatOnce();
     const roundThinking = lastThinking === thinkingBefore ? "" : lastThinking;
     const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
     // Every finished outcome funnels through here, so it is also where the turn reports which
@@ -1155,9 +1145,6 @@ export async function runBuddyTurn(opts: {
      * The turn then spent its whole budget on forensics and returned the empty-answer fallback, so
      * the series died at F.
      */
-    // The same fact drives the next round's thinking budget: a round that only asked for another turn
-    // leaves nothing to decide, so the round after it is executing rather than deciding.
-    executingSeries = seriesOnly;
     const recap = seriesOnly ? "" : roundThinkingRecap(roundThinking);
     if (results.trim()) transcript.push({ role: "user", content: results });
     if (results || steering || recap)

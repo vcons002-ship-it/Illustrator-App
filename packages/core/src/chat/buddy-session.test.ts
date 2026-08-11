@@ -715,13 +715,20 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
   });
 
   /**
-   * A BUDGET, BECAUSE FOUR INSTRUCTIONS DIDN'T TAKE.
+   * THE THINKING BUDGET IS ONE VALUE FOR THE TURN, AND HAS TO STAY THAT WAY.
    *
-   * The reader watching the reasoning: "got it, ok let's go. WAIT!" — and another minute of circling
-   * before sending "A". Four prompt rules have told this model to stop deliberating over settled
-   * work and it has argued its way out of every one. A round that follows a pure keep_going has
-   * nothing left to decide (the previous round chose the task, sent a message, and asked for another
-   * turn), so it is given no thinking budget at all. A flag cannot be reasoned with.
+   * A per-round budget was built here and then reverted, and these tests exist so it is not built
+   * again the same way. The idea was fine: a round executing an already-decided series has nothing
+   * left to decide, so send it `reasoningEffort: "none"`. The mechanism is what fails.
+   *
+   * "none" reaches Ollama as `think: false`, and a thinking model told not to think does not stop
+   * reasoning — it stops emitting <think> tags. `stripThink` then has nothing to strip, and the
+   * monologue is delivered to the reader as an ordinary message. Asked to count to 20, they got a
+   * chat bubble reading "The user is asking me to continue, but I've already completed the task...
+   * I don't need another keep_going." The knob does not shrink the deliberation; it publishes it.
+   *
+   * `ollamaThink` is binary as well — there is no "low" — so on a local model this setting offers
+   * think, or think in public. Cutting deliberation has to be done some other way.
    */
   function effortLlm(replies: string[]): ChatCapable & { efforts: (string | undefined)[] } {
     let n = 0;
@@ -735,7 +742,7 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     };
   }
 
-  it("spends no thinking on a round that is only executing an agreed series", async () => {
+  it("sends the reader's setting on every round of a series, unchanged", async () => {
     const llm = effortLlm(['A\n{"tool":"keep_going"}', 'B\n{"tool":"keep_going"}', "C"]);
     await runBuddyTurn({
       llm,
@@ -744,30 +751,23 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
       deps: baseDeps,
       reasoningEffort: "high",
     });
-    // Round 0 decides what the task even is, and keeps the reader's setting.
-    expect(llm.efforts[0], "the deciding round lost its thinking budget").toBe("high");
-    // Everything after a pure keep_going is executing, not deciding — including the last round here,
-    // which is the "was that the last one?" stall check. That one is a yes/no about a series already
-    // under way, so it has nothing to deliberate over either.
-    expect(llm.efforts.slice(1), "the executing rounds still paid for full reasoning").toEqual([
-      "none",
-      "none",
-      "none",
-    ]);
+    expect(llm.efforts.length, "the series did not run").toBeGreaterThan(2);
+    expect(
+      llm.efforts.filter((e) => e !== "high"),
+      "a round was quietly given a different thinking budget — see the note above",
+    ).toEqual([]);
   });
 
-  it("gives the budget back the moment real results arrive", async () => {
-    // A search result is new information, which is exactly when thinking earns its keep. Without this
-    // the fix would quietly de-tune every round after any series, including ones with work to judge.
-    const llm = effortLlm(['{"tool":"search_web","query":"X"}', "Found it."]);
+  it("never sends none, which is the value that leaks reasoning into the chat", async () => {
+    const llm = effortLlm(['A\n{"tool":"keep_going"}', "B", "done"]);
     await runBuddyTurn({
       llm,
       system: "sys",
-      history: [{ role: "user", content: "look up X" }],
-      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
-      reasoningEffort: "high",
+      history: [{ role: "user", content: "A then B" }],
+      deps: baseDeps,
+      reasoningEffort: "medium",
     });
-    expect(llm.efforts, "a round reading tool results was told not to think").toEqual(["high", "high"]);
+    expect(llm.efforts).not.toContain("none");
   });
 
   it("leaves the reader's setting alone when they haven't chosen one", async () => {
