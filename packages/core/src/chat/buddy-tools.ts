@@ -584,7 +584,21 @@ export type BuddyToolCall =
    * live, NOT a TaskPlan. */
   | { tool: "set_plan"; goal?: string; steps: string[]; stepDetails?: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[] }
   /** Tick the FIRST unfinished checklist step done and advance (no index — the app tracks "current"). */
-  | { tool: "complete_step"; note?: string };
+  | { tool: "complete_step"; note?: string }
+  /**
+   * "I HAVE MORE TO SEND." The only tool that does nothing.
+   *
+   * A turn ends when the model stops calling tools, which makes "send me the alphabet, one letter
+   * per message" impossible to answer: it writes A, the turn is over, and the reader has to ask
+   * twenty-five more times. The workaround was a checklist — and a 26-step checklist for the
+   * alphabet is heavier than the request, hit the step cap, and filled the screen with a list
+   * nobody wanted.
+   *
+   * Nothing else was missing. A turn already allows fifty rounds, and prose written before a tool
+   * call already becomes its own chat message. All that was absent was a way to say "not finished",
+   * so this tool does exactly that and nothing more.
+   */
+  | { tool: "keep_going" };
 
 /**
  * The runtime roster of EVERY real tool name (the `BuddyToolCall` union is a compile-time type; this is
@@ -646,7 +660,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "mark_step_done", "complete_task", "save_task_context", "update_task_step", "update_task", "update_task_doc",
   "add_task_steps", "list_task_plans",
   "get_task_plan", "use_image_reference", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
-  "complete_step",
+  "complete_step", "keep_going",
 ]);
 
 /**
@@ -883,6 +897,8 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return "Planning the steps…";
     case "complete_step":
       return "Checking off a step…";
+    case "keep_going":
+      return "Continuing…";
     default:
       return "Working on it…";
   }
@@ -1552,7 +1568,11 @@ export function buildBuddySystemPrompt(raw: {
   // just calling the tool. So with no plan we give a one-line single-vs-multi hint; the full discipline
   // appears only once a checklist is actually running.
   const multiStepGuide = !hasPlan
-    ? "MULTI-STEP vs SINGLE: a task with 2+ distinct actions (e.g. several images, or research → write-up) → " +
+    ? 'MANY MESSAGES vs MANY ACTIONS. A task that is the SAME small thing over and over — "the ' +
+      'alphabet, one letter per message", a countdown, one line at a time — needs NO checklist: send ' +
+      'the first one, call {"tool":"keep_going"} in the same reply, and you get to send the next. ' +
+      "Repeat until finished, then just answer without it. A checklist for that is heavier than the " +
+      "request.\nMULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (e.g. several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
       "just call its tool directly; do NOT make a plan for one step. WRITING something and MAKING something are " +
       "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
@@ -3751,6 +3771,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const goal = strArg(obj.goal, MAX_TITLE_CHARS);
     return { tool, ...(goal ? { goal } : {}), steps, ...(anyDetail ? { stepDetails } : {}) };
   }
+  if (tool === "keep_going") return { tool };
   if (tool === "complete_step") {
     // No required args — the app ticks the first unfinished step.
     const note = strArg(obj.note, MAX_QUERY_CHARS);
@@ -4547,6 +4568,8 @@ export interface BuddyOpenedInfo {
 }
 
 export interface BuddyToolResultPayload {
+  /** The model asked for another round rather than ending the turn. See the `keep_going` tool. */
+  keptGoing?: boolean;
   /** A caveat about a result that SUCCEEDED — currently only a checklist the parser had to trim.
    * Not an error: the plan was set, it just is not the plan the model wrote. */
   note?: string;
@@ -4884,6 +4907,11 @@ function formatBuddyToolResultBody(
     return retry
       ? `${doc}\n\n[You called ${retry} before loading these — no harm done. Re-issue that call now, with the arguments above.]`
       : `${doc}\n\n[Loaded. Use these now; they stay available for the rest of this conversation.]`;
+  }
+  if (call.tool === "keep_going") {
+    // Terse on purpose: this is a turn-taking signal, not information. Anything longer would be
+    // repeated in the context once per message of a long run.
+    return "[go on]";
   }
   if (call.tool === "set_plan" || call.tool === "complete_step") {
     if (!result.plan) return "[plan: nothing to update]";
