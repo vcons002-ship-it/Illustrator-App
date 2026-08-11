@@ -651,6 +651,68 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     expect(llm.calls, "a one-line answer was interrogated about a series it never started").toHaveLength(1);
   });
 
+  /**
+   * THE THING THAT ACTUALLY KILLED THE ALPHABET AT F.
+   *
+   * Each round's reasoning tail is fed back on the next round so a tool loop doesn't re-derive its
+   * plan. It goes in as a `user` message — bracketed and addressed to the model as its own, but role
+   * beats prose. On a tool round that is a fair trade. On a message series it is one narration of the
+   * model's inner monologue per letter, and by the tenth the model stopped believing the transcript:
+   *
+   *   Wait, looking at the previous turn in the prompt (Turn 10/11):
+   *   User: "... I need to send E next..." -> Model sent E.
+   *   Is it possible that "E" was actually F?
+   *   ... The simulation in Turn 12 claims history is up to F.
+   *
+   * It audited the history against itself, called it a simulation, spent the turn's whole budget
+   * there and answered with the empty-answer fallback.
+   */
+  function thinkingLlm(replies: string[]): ChatCapable & { seen: string[] } {
+    let n = 0;
+    const seen: string[] = [];
+    return {
+      seen,
+      async chat(messages, opts) {
+        for (const m of messages) seen.push(m.content);
+        opts?.onThinking?.(`I need to send letter number ${n + 1} next, then keep going.`);
+        return replies[Math.min(n++, replies.length - 1)]!;
+      },
+    };
+  }
+
+  it("does not narrate the model's own reasoning back at it between messages", async () => {
+    const llm = thinkingLlm(['A\n{"tool":"keep_going"}', 'B\n{"tool":"keep_going"}', "C"]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me A to C, one letter at a time" }],
+      deps: baseDeps,
+      onEvent: () => {},
+    });
+    expect(
+      llm.seen.filter((c) => /Your own reasoning just before that call/.test(c)),
+      "the series still replays its own thinking as a reader turn, once per message",
+    ).toHaveLength(0);
+  });
+
+  it("still carries reasoning across a round where facts actually arrived", async () => {
+    // The narrow half of the fix. A search result is exactly the case the recap was built for — the
+    // facts are in front of the model and the intent it had for them is not — so dropping it there
+    // would trade one bug for the one it was written to prevent.
+    const llm = thinkingLlm(['{"tool":"search_web","query":"X facts"}', "Found it."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "look up X" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+      onEvent: () => {},
+    });
+    expect(
+      llm.seen.filter((c) => /Your own reasoning just before that call/.test(c)).length,
+      "a tool round lost the intent that asked for its results",
+    ).toBeGreaterThan(0);
+  });
+
   it("refuses a round bought with nothing written", async () => {
     // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
     // that looks like thinking and produces silence.

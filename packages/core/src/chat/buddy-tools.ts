@@ -1578,11 +1578,9 @@ export function buildBuddySystemPrompt(raw: {
       // going until I feel done (which is Z). The system handles the loop via keep_going." Nothing in
       // the system does. It had read the paragraph above and still concluded the loop was automatic,
       // so the correction has to say that outright rather than restate the instruction.
-      "NOTHING CONTINUES ON ITS OWN. No loop is running behind you and nothing repeats your turn for " +
-      'you. End a reply without {"tool":"keep_going"} and the turn is OVER right there, however much ' +
-      "you had left to send, and the reader has to ask again. keep_going is also not a real tool — it " +
-      'runs nothing, reads nothing and costs nothing — so "this is too simple to need a tool" is never ' +
-      "a reason to leave it out. Simple and long is exactly what it is for.\n" +
+      "NOTHING CONTINUES ON ITS OWN — no loop is running behind you. End a reply without " +
+      '{"tool":"keep_going"} and the turn is OVER, however much you had left. It is not a real tool: ' +
+      'it runs nothing and costs nothing, so "too simple for a tool" is no reason to omit it.\n' +
       "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (e.g. several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
       "just call its tool directly; do NOT make a plan for one step. WRITING something and MAKING something are " +
@@ -2339,6 +2337,14 @@ export function buildBuddySystemPrompt(raw: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
+    // A reasoning model re-checking a decision it has already reached is the failure the reader sees
+    // most: minutes of thinking to send one letter, and sometimes a turn that spends its whole
+    // budget on the check and answers with nothing. The loop is always the same shape — state a
+    // conclusion, agree with it, then go looking for a reason it might be wrong. So the rule names
+    // that shape, rather than asking for "less thinking", which a model cannot act on.
+    "WHEN YOU ALREADY KNOW, ACT. Restating a conclusion, agreeing with yourself, or re-checking what " +
+    "you just confirmed is not verification — stop and answer. Re-open a decision only when something " +
+    "NEW arrives; doubt alone is not new. Repetitive work deserves the LEAST thinking.\n" +
     multiStepGuide +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")

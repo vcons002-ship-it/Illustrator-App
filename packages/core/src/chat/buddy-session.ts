@@ -1036,7 +1036,31 @@ export async function runBuddyTurn(opts: {
     // The recap rides `messages` beside `steering` and NOT the transcript — context for the loop it
     // belongs to, gone when the turn settles. That split is why carrying reasoning here is safe: in
     // the transcript it would be a thought replayed on every future turn.
-    const recap = roundThinkingRecap(roundThinking);
+    /**
+     * NOT ON A ROUND THAT WAS ONLY "I HAVE MORE TO SEND".
+     *
+     * The recap exists to reunite an intent with the FACTS that arrived after it — a search came
+     * back, a file was read, and the reasoning that asked for them is gone. A keep_going round
+     * returns no facts; its whole result is "[go on]". So there is nothing to reconcile, and what
+     * gets pushed instead is a user-role message narrating the model's own inner monologue, once per
+     * message of the series.
+     *
+     * Twenty-six of those and the model stops trusting the conversation. Its reasoning, sending the
+     * alphabet, read back verbatim:
+     *
+     *   Wait, looking at the previous turn in the prompt (Turn 10/11):
+     *   User: "... I need to send E next..." -> Model sent E.
+     *   Is it possible that "E" was actually F?
+     *   ... The simulation in Turn 12 claims history is up to F.
+     *
+     * It is auditing the transcript against itself, and calling it a simulation, because the
+     * transcript contains what look like the READER stating what the model was thinking. The text is
+     * bracketed and addressed to the model as its own, but role beats prose: these arrive as `user`.
+     * The turn then spent its whole budget on forensics and returned the empty-answer fallback, so
+     * the series died at F.
+     */
+    const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "keep_going");
+    const recap = seriesOnly ? "" : roundThinkingRecap(roundThinking);
     if (results.trim()) transcript.push({ role: "user", content: results });
     if (results || steering || recap)
       messages.push({ role: "user", content: [recap, results].filter(Boolean).join("\n\n") + steering });
