@@ -11,6 +11,7 @@ export * from "./ImagePanel.js";
 export * from "./PanelGrid.js";
 export * from "./imageObjectUrl.js";
 export * from "./imageStatus.js";
+export * from "./activitySteps.js";
 export * from "./ChatPanel.js";
 export * from "./ChatBuddyPanel.js";
 export * from "./model-menu.js";
