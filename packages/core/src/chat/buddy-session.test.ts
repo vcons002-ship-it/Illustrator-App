@@ -411,6 +411,84 @@ describe("runBuddyTurn — write-capable sub-agent (runHostTool)", () => {
   });
 });
 
+/**
+ * "SEND ME THE ALPHABET, ONE LETTER PER MESSAGE."
+ *
+ * A turn ends when the model stops calling tools, so this was unanswerable: it wrote A, the turn was
+ * over, and the reader had to ask twenty-five more times. The only workaround was a checklist — and
+ * a 26-step checklist for the alphabet is heavier than the request, hit the step cap, and filled the
+ * screen with a list nobody wanted.
+ *
+ * Nothing else was missing. A turn already allows fifty rounds, and prose written before a tool call
+ * already becomes its own chat message. All that was absent was a way to say "not finished".
+ */
+describe("runBuddyTurn — a turn that is many messages, without a checklist", () => {
+  it("keeps sending until the model stops asking for another round", async () => {
+    const llm = scriptedLlm([
+      'A\n{"tool":"keep_going"}',
+      'B\n{"tool":"keep_going"}',
+      'C\n{"tool":"keep_going"}',
+      "That's the first three.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me the alphabet, one letter per message" }],
+      deps: baseDeps,
+    });
+    expect(outcome.toolResults.filter((r) => r.call.tool === "keep_going")).toHaveLength(3);
+    expect(outcome.toolResults.every((r) => !r.result.error), "a keep_going was refused").toBe(true);
+    // Each round's message survives in the transcript, in order — that is what the reader sees as
+    // separate bubbles, via the prose-before-a-tool handling in App.
+    const said = outcome.transcript.map((t) => t.content).join("\n");
+    expect(said).toContain("A");
+    expect(said).toContain("B");
+    expect(said).toContain("C");
+    expect(outcome.text).toContain("first three");
+  });
+
+  it("makes NO checklist for it — the plan is the thing this replaces", async () => {
+    let planned = false;
+    const llm = scriptedLlm(['A\n{"tool":"keep_going"}', "B"]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "count to two, one per message" }],
+      deps: { ...baseDeps, setPlan: () => { planned = true; return { steps: [] }; } },
+    });
+    expect(planned, "it still built a checklist for a job that is just more messages").toBe(false);
+  });
+
+  it("refuses a round bought with nothing written", async () => {
+    // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
+    // that looks like thinking and produces silence.
+    const llm = scriptedLlm(['{"tool":"keep_going"}', "Sorry — here it is: A"]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go" }],
+      deps: baseDeps,
+    });
+    const kg = outcome.toolResults.filter((r) => r.call.tool === "keep_going");
+    expect(kg).toHaveLength(1);
+    expect(kg[0]!.result.error, "an empty keep_going was granted").toMatch(/nothing was sent/);
+  });
+
+  it("cannot run away — the turn's round budget still bounds it", async () => {
+    // The model asks forever; the existing per-turn cap is what stops it, and nothing here may
+    // extend that.
+    const llm = scriptedLlm(['x\n{"tool":"keep_going"}']);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go" }],
+      deps: baseDeps,
+    });
+    expect(outcome.toolResults.length).toBeLessThanOrEqual(MAX_BUDDY_TOOL_ROUNDS);
+    expect(llm.calls.length).toBeLessThanOrEqual(MAX_BUDDY_TOOL_ROUNDS + 2);
+  });
+});
+
 describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", () => {
   // A stateful working checklist, exactly like the host's set_plan/complete_step, so a full plan can
   // be driven through the loop and we can assert every step's tool actually fired.

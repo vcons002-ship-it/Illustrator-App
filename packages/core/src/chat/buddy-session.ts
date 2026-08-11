@@ -875,6 +875,22 @@ export async function runBuddyTurn(opts: {
         deferred = true;
         break;
       }
+      /**
+       * "I HAVE MORE TO SEND." The tool that does nothing, handled here rather than in the dispatch
+       * table because the one thing it has to check is only visible from here: whether anything was
+       * actually written this round. A keep_going with no message buys a round and sends nothing,
+       * and fifty of those is a turn that looks like thinking and produces silence.
+       */
+      if (call.tool === "keep_going") {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const result: BuddyToolResultPayload = roundProse
+          ? { keptGoing: true }
+          : { error: "nothing was sent — write the message FIRST, then keep_going in the same reply" };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result, { readFileChars: readFileWindow(opts.contextChars) }));
+        continue;
+      }
       // Anti-skip: a complete_step right after another check-off, with no real work in between, is the
       // model jumping ahead — ticking a step it never did. Refuse it (the step stays unfinished) and tell
       // it to do that step's action first. The FIRST check-off of a turn is always fine (the work was the
@@ -1175,6 +1191,11 @@ export async function runBuddyTool(
       case "recent_actions":
         if (!deps.recentActions) return { error: "the action record isn't available right now" };
         return { actionHistory: await deps.recentActions(call.kind, call.limit ?? 20) };
+      // Unreachable from a turn — the round loop intercepts keep_going before dispatch, because the
+      // one thing it must check (did this round write anything?) is only visible from there. It is
+      // here so the switch stays exhaustive for the slash-command path, which shares this table.
+      case "keep_going":
+        return { error: "keep_going only means anything inside a turn" };
       case "set_plan": {
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
         const plan = deps.setPlan(call.goal, call.steps, call.stepDetails);
