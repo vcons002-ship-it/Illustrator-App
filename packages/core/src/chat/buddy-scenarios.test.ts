@@ -225,6 +225,36 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/Repetitive work deserves the LEAST thinking/);
   });
 
+  /**
+   * THE RULES CAME LAST, WHICH IS WHERE THEY WERE MEASURED TO BE FAILING.
+   *
+   * Before this, the prompt read: identity, then two thirds of tool catalogue, then — at 84% to 94%
+   * — every rule governing how to conduct a turn, with the conversation itself after all of it. For a
+   * 3B-active local model that is the worst place for the rules it needs on every single reply.
+   *
+   * Reordering costs nothing: the prompt is the same size to the byte. These assertions are on
+   * POSITION rather than presence, because the way this regresses is not a deletion — it is the next
+   * person appending "one more rule" to the end, which is how it got this way.
+   */
+  it("puts how-to-behave before what-tools-exist", () => {
+    const conduct = prompt.indexOf("CONVERSATION RULES");
+    const catalogue = prompt.indexOf("TOOLS — use one by replying");
+    expect(conduct, "CONVERSATION RULES is gone").toBeGreaterThan(-1);
+    expect(catalogue, "the tool catalogue is gone").toBeGreaterThan(-1);
+    expect(conduct, "the conduct rules are back behind the tool catalogue").toBeLessThan(catalogue);
+    for (const rule of ["FOLLOW THROUGH", "WHEN YOU ALREADY KNOW, ACT", "MANY MESSAGES vs MANY ACTIONS"]) {
+      expect(prompt.indexOf(rule), `${rule} sits after the tool catalogue`).toBeLessThan(catalogue);
+    }
+  });
+
+  it("keeps the turn rules in the first quarter of the prompt", () => {
+    // The catalogue grows with every tool added, so "before the catalogue" alone would let the rules
+    // drift arbitrarily deep as the app gains abilities. This pins them near the top in absolute terms.
+    for (const rule of ["CONVERSATION RULES", "NOTHING CONTINUES ON ITS OWN"]) {
+      expect(prompt.indexOf(rule) / prompt.length, `${rule} has drifted deep into the prompt`).toBeLessThan(0.25);
+    }
+  });
+
   it("says outright that nothing continues on its own", () => {
     expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
     expect(prompt).toMatch(/no loop is running behind you/);
