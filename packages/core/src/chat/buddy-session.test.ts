@@ -584,6 +584,73 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     ).toHaveLength(2);
   });
 
+  /**
+   * ONE FORGOTTEN keep_going USED TO END THE WHOLE RUN.
+   *
+   * The alphabet needs twenty-six consecutive correct emissions, and a miss on any one of them ends
+   * the turn silently — "F" with no keep_going is byte-for-byte what "F was the last one" looks
+   * like. Asking costs one model call per stall and converts an unrecoverable run into a recoverable
+   * one.
+   */
+  it("asks rather than assumes when a running series stops asking for rounds", async () => {
+    const llm = scriptedLlm([
+      'A\n{"tool":"keep_going"}',
+      "B", // the miss — under the old code the turn ended here, on B
+      'C\n{"tool":"keep_going"}',
+      "D",
+      "that's all",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me A to D, one letter at a time" }],
+      deps: baseDeps,
+    });
+    const said = outcome.transcript
+      .filter((m) => m.role === "assistant")
+      .map((m) => m.content)
+      .join(" ");
+    for (const letter of ["A", "B", "C", "D"]) {
+      expect(said, `the run stopped before ${letter}`).toContain(letter);
+    }
+  });
+
+  it("asks again on a later stall, instead of spending its one question on the first", async () => {
+    // B stalls, C revives it, D stalls again. If the question were once-per-turn rather than
+    // once-per-stall, a long run would get exactly one rescue and then end at the next miss.
+    const llm = scriptedLlm([
+      'A\n{"tool":"keep_going"}',
+      "B",
+      'C\n{"tool":"keep_going"}',
+      "D",
+      "that's all",
+    ]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send me A to D, one letter at a time" }],
+      deps: baseDeps,
+    });
+    const asks = llm.calls
+      .flat()
+      .map((m) => m.content)
+      .filter((c) => /Was that the last one\?/.test(c));
+    expect(asks.length, "the second stall was never questioned").toBeGreaterThanOrEqual(2);
+  });
+
+  it("never questions a turn that was only ever one answer", async () => {
+    // The guard that keeps this off ordinary chat: no keep_going has carried a message, so there is
+    // no series to be in the middle of, and a plain reply must cost exactly one model call.
+    const llm = scriptedLlm(["Paris."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "what is the capital of France?" }],
+      deps: baseDeps,
+    });
+    expect(llm.calls, "a one-line answer was interrogated about a series it never started").toHaveLength(1);
+  });
+
   it("refuses a round bought with nothing written", async () => {
     // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
     // that looks like thinking and produces silence.

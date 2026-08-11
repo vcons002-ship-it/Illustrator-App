@@ -190,6 +190,30 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/find_files, whose result approves the folder/);
     expect(prompt).toMatch(/say plainly what failed and what you'd need — do not invent the fix/);
   });
+  /**
+   * "SEND ME THE ALPHABET, ONE LETTER AT A TIME" KEPT ENDING ON A.
+   *
+   * The paragraph above this one already told the model to attach keep_going, and the model read it
+   * — its reasoning quoted the line back — and then concluded: "Since I can't count in my head
+   * reliably or use a tool for this simple task, I will just keep going until I feel done (which is
+   * Z). The system handles the loop via keep_going."
+   *
+   * Two beliefs, both wrong, neither addressed by restating the instruction: that something loops on
+   * its behalf, and that a simple task is beneath a tool call. So the prompt now contradicts each one
+   * in its own words, and these assertions are what keeps that contradiction in the prompt.
+   */
+  it("says outright that nothing continues on its own", () => {
+    expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
+    expect(prompt).toMatch(/No loop is running behind you/);
+    expect(prompt).toMatch(/the turn is OVER right there/);
+  });
+
+  it("refuses 'too simple to need a tool' as a reason to skip keep_going", () => {
+    expect(prompt).toMatch(/keep_going is also not a real tool/);
+    expect(prompt).toMatch(/runs nothing, reads nothing and costs nothing/);
+    expect(prompt).toMatch(/Simple and long is exactly what it is for/);
+  });
+
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
     expect(prompt).toContain("use calculate for pure math");
   });

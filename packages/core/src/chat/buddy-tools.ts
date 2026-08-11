@@ -1572,7 +1572,18 @@ export function buildBuddySystemPrompt(raw: {
       'alphabet, one letter per message", a countdown, one line at a time — needs NO checklist: send ' +
       'the first one, call {"tool":"keep_going"} in the same reply, and you get to send the next. ' +
       "Repeat until finished, then just answer without it. A checklist for that is heavier than the " +
-      "request.\nMULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (e.g. several images, or research → write-up) → " +
+      "request.\n" +
+      // Both sentences below refute one the model actually wrote before stopping on the first letter:
+      // "Since I can't count in my head reliably or use a tool for this simple task, I will just keep
+      // going until I feel done (which is Z). The system handles the loop via keep_going." Nothing in
+      // the system does. It had read the paragraph above and still concluded the loop was automatic,
+      // so the correction has to say that outright rather than restate the instruction.
+      "NOTHING CONTINUES ON ITS OWN. No loop is running behind you and nothing repeats your turn for " +
+      'you. End a reply without {"tool":"keep_going"} and the turn is OVER right there, however much ' +
+      "you had left to send, and the reader has to ask again. keep_going is also not a real tool — it " +
+      'runs nothing, reads nothing and costs nothing — so "this is too simple to need a tool" is never ' +
+      "a reason to leave it out. Simple and long is exactly what it is for.\n" +
+      "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (e.g. several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
       "just call its tool directly; do NOT make a plan for one step. WRITING something and MAKING something are " +
       "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
