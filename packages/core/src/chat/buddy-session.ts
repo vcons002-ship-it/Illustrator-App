@@ -1117,9 +1117,17 @@ export async function runBuddyTurn(opts: {
     // from calling tools in a conversation where no limit was in play. Context-ONLY, exactly like the
     // re-issue and wrap-up nudges above.
     const results = feedbacks.join("\n\n");
+    // Whether this round was ONLY "I have more to send". Three separate decisions below turn on it,
+    // and it has to be known before the steering line is built.
+    const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "keep_going");
     const steering =
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
-      progressNudge(round) +
+      // NOT DURING A SERIES. Every six rounds the model is asked to write a progress line before its
+      // next tool call, so a long silent tool loop doesn't leave the reader watching nothing. A
+      // message series is the opposite of silent — every round of it IS a message to the reader — so
+      // the nudge buys nothing and costs the thing they asked for: "Just finished R, now sending S."
+      // landed in the same bubble as S, which is not one letter per message.
+      (seriesOnly ? "" : progressNudge(round)) +
       toolLimitNudge(round, effectiveMax);
     // The recap rides `messages` beside `steering` and NOT the transcript — context for the loop it
     // belongs to, gone when the turn settles. That split is why carrying reasoning here is safe: in
@@ -1147,7 +1155,6 @@ export async function runBuddyTurn(opts: {
      * The turn then spent its whole budget on forensics and returned the empty-answer fallback, so
      * the series died at F.
      */
-    const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "keep_going");
     // The same fact drives the next round's thinking budget: a round that only asked for another turn
     // leaves nothing to decide, so the round after it is executing rather than deciding.
     executingSeries = seriesOnly;

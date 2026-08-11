@@ -860,6 +860,47 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     }
   });
 
+  /**
+   * "EVERY 6TH MESSAGE IT ADDED A LITTLE BLURB."
+   *
+   * TOOL_PROGRESS_EVERY: once every six rounds the model is told to write a line of progress before
+   * its next tool call, so a long silent tool loop doesn't leave the reader watching nothing happen.
+   * A message series is the opposite of silent — every round of it IS a message to the reader — so
+   * the nudge buys nothing there and costs the thing they asked for: "Just finished R, now sending
+   * S." arrived in the same bubble as S, which is not one letter per message.
+   */
+  it("does not ask a series to narrate progress it is already showing", async () => {
+    // Long enough to cross the six-round mark twice over.
+    const llm = scriptedLlm([...Array.from({ length: 14 }, (_, i) => `${i}\n{"tool":"keep_going"}`), "done"]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "count to 14, one number per message" }],
+      deps: baseDeps,
+    });
+    const nudged = llm.calls
+      .flat()
+      .filter((m) => /short plain-text line of progress/.test(m.content));
+    expect(nudged, "the series was asked to narrate progress it was already making").toHaveLength(0);
+  });
+
+  it("still nudges a silent tool loop, which is what the nudge is for", async () => {
+    // Seven search rounds: nothing reaches the reader until the turn settles, so the periodic
+    // progress line is the only thing keeping them in the loop. Removing it there would trade this
+    // bug for the one it was written to prevent.
+    const llm = scriptedLlm([...Array.from({ length: 7 }, () => '{"tool":"search_web","query":"X"}'), "Found it."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research X thoroughly" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+    });
+    const nudged = llm.calls
+      .flat()
+      .filter((m) => /short plain-text line of progress/.test(m.content));
+    expect(nudged.length, "a silent tool loop lost its progress line").toBeGreaterThan(0);
+  });
+
   it("refuses a round bought with nothing written", async () => {
     // A keep_going with no message buys a round and sends nothing, and fifty of those is a turn
     // that looks like thinking and produces silence.
