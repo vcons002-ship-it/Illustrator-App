@@ -1985,7 +1985,7 @@ export function App() {
   // model another turn so it works straight down the list without the reader typing "continue".
   // Reset on each fresh user turn; `count` caps a runaway chain, `noProgress` stops a stalled one
   // (a step that's actually a question to the reader ticks nothing → halts after one tolerated turn).
-  const buddyQueueAdvanceRef = useRef({ count: 0, noProgress: 0 });
+  const buddyQueueAdvanceRef = useRef({ count: 0, noProgress: 0, lastText: "" });
   // Session grant for buddy-initiated filesystem search: once the reader picks
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
@@ -7023,7 +7023,7 @@ export function App() {
     }
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
-      buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
+      buddyQueueAdvanceRef.current = { count: 0, noProgress: 0, lastText: "" }; // fresh user turn → reset the chain budget
       // App-managed steps: a fresh reader message resumes a PARKED workflow. If it was waiting on the
       // reader (a user_reply step), their answer satisfies that step → advance past it; otherwise just
       // re-activate the blocked step to retry it with their new input.
@@ -7617,7 +7617,25 @@ export function App() {
       if (!res.paused && planHasPendingStep(plan)) {
         const adv = buddyQueueAdvanceRef.current;
         adv.count += 1;
-        adv.noProgress = countDonePlanSteps(plan) > doneAtStart ? 0 : adv.noProgress + 1;
+        /**
+         * PROGRESS IS SOMETHING HAPPENING, not only a step being ticked.
+         *
+         * A ticked step was the whole definition, and it stalls the case it most needs to serve.
+         * Asked for the alphabet a letter at a time, a model writes "A" and returns it as its
+         * ANSWER — a complete reply to the step it was given — without reaching for complete_step at
+         * all. Nothing ticks, one no-progress turn is tolerated, and the run halts with 25 steps
+         * open and two letters delivered. No amount of fixing the check-off guard reaches that,
+         * because the guard was never consulted.
+         *
+         * A turn that produced a NEW message did something the reader can see, and that is enough to
+         * earn another. Novelty rather than mere presence, for the same reason it is the test one
+         * level down: a model repeating itself is exactly what a stuck run looks like. The chain cap
+         * still bounds the whole thing.
+         */
+        const said = (res.text ?? "").trim();
+        const moved = countDonePlanSteps(plan) > doneAtStart || (said !== "" && said !== adv.lastText);
+        adv.lastText = said;
+        adv.noProgress = moved ? 0 : adv.noProgress + 1;
         const cap = Math.max(20, plan!.steps.length * 2 + 5);
         // Stop if the chain has run long (cap) or stalled: a step that's really a question to the
         // reader ticks nothing, so after one tolerated no-progress turn we halt and let them answer.
