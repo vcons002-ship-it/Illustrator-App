@@ -2,7 +2,7 @@ import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { BibleEntityKind, Creature, Environment, VisualBible } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
-import { SUCCESS_GREEN } from "./tokens.js";
+import { SUCCESS_GREEN } from "./design/recipes.js";
 import { cx } from "./design/classes.js";
 import { ModalShell } from "./ModalShell.js";
 

@@ -2,7 +2,7 @@ import { t } from "./design/tokens.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
-import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN, smallButtonStyle } from "./tokens.js";
+import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN, smallButtonStyle } from "./design/recipes.js";
 import { DEFAULT_SCHWAB_CALLBACK, schwabCallbackIssue } from "@visual-reader/core";
 import { loadNaturalVoice, naturalVoiceReady } from "./natural-voice.js";
 import {

@@ -1,7 +1,7 @@
 import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { ModalShell } from "./ModalShell.js";
-import { modalHeaderRowStyle as headerRow, modalInputStyle as input } from "./tokens.js";
+import { modalHeaderRowStyle as headerRow, modalInputStyle as input } from "./design/recipes.js";
 
 /**
  * Set up a "story as you go" before it starts: the opening scene, the workflow (Roleplay vs Direct

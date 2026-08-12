@@ -3,7 +3,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
 import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
-import { SUCCESS_GREEN } from "./tokens.js";
+import { SUCCESS_GREEN } from "./design/recipes.js";
 import { cx } from "./design/classes.js";
 import { ModalShell } from "./ModalShell.js";
 

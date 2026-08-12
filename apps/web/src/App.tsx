@@ -331,7 +331,6 @@ import {
   AnchoredMenu,
   DOCK_CLASS,
   type DockMode,
-  ARTICLE_HTML_STYLE,
   InlineFigure,
   SupportRow,
   type DisplayResult,
@@ -12028,7 +12027,6 @@ const DocumentReader = memo(function DocumentReader({
   if (articleHtml) {
     return (
       <div style={styles.readerDocInner}>
-        <style>{ARTICLE_HTML_STYLE}</style>
         {book.pages
           .flatMap((p) => p.paragraphs)
           .map((par) =>
@@ -12099,7 +12097,6 @@ const ReaderColumn = memo(function ReaderColumn({
   const dataChart = useMemo(() => (activeTable ? autoChartDataset(activeTable) : undefined), [activeTable]);
   return (
     <article style={activeTable ? { ...styles.column, maxWidth: "100%" } : styles.column}>
-      {layoutHtml && <style>{ARTICLE_HTML_STYLE}</style>}
       {/* An uploaded spreadsheet/CSV/tabular-JSON: show the REAL grid as an aligned
           table up top (the flattened "a | b | c" pipe-text below is what the
           illustration/extraction pipeline reads, but it's no way to look at a sheet).
@@ -13465,7 +13462,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
   },
   status: { padding: "10px 20px", color: t.state.warn },
-  bibleStatus: { padding: "4px 20px 0", fontSize: 12, opacity: 0.75, fontFamily: "system-ui, sans-serif" },
   // The status row is ambient information, not content — it sat above the chat taking a band of the
   // screen roughly as tall as a message. Tightened rather than hidden: the pills still say what they
   // said, in less room, which matters most on a phone where they wrapped onto three lines.
@@ -13654,15 +13650,6 @@ const styles: Record<string, React.CSSProperties> = {
     tabSize: 2,
   },
   // A small pill in the header that names the kind of document you're in (Story / Technical / Code).
-  modeBadge: {
-    fontSize: 12,
-    padding: "3px 10px",
-    borderRadius: 999,
-    border: `1px solid ${t.border.button}`,
-    color: t.fill.strong,
-    whiteSpace: "nowrap" as const,
-    fontFamily: "system-ui, sans-serif",
-  },
   // Full-screen code workspace (code books): a toolbar, an editable monospace area that fills the
   // screen, and the run output below it.
   codeWorkspace: {

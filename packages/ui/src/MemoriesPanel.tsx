@@ -11,7 +11,7 @@ import {
   modalHeaderRowStyle as header,
   modalInputStyle as input,
   modalNoteRowStyle as noteRow,
-} from "./tokens.js";
+} from "./design/recipes.js";
 
 /**
  * Manage the chat's READER MEMORY — the durable notes the assistant keeps about you across every

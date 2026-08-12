@@ -22,7 +22,7 @@ import {
   modalHeaderRowStyle as headerRow,
   modalInputStyle as input,
   modalNoteRowStyle as noteRow,
-} from "./tokens.js";
+} from "./design/recipes.js";
 import {
   deleteSoulNoteAt,
   editSoulNoteAt,
