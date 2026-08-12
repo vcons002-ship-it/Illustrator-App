@@ -740,3 +740,61 @@ describe("every generated picture arrives the same way", () => {
     expect(wrap, "an unclipped sheen sweeps across the whole message").toMatch(/overflow:\s*hidden/);
   });
 });
+
+/**
+ * THE CLASSES WERE WRITTEN AND NOTHING WORE THEM — the fourth time, and the last one to be closed.
+ *
+ * components.css has had hover, press and focus rules for `.vr-btn` and `.vr-input` since P0, and
+ * the pointer handler that drives the touch path since P3. None of it reached the panels: TasksPanel,
+ * SoulPanel, CalendarPanel and MemoriesPanel carried ZERO classNames between them, so every button
+ * in them was as inert after the redesign as before it. The rules existed, the handler ran, and the
+ * elements were not wearing anything for either to find.
+ *
+ * This asserts the elements themselves, not the sheet and not the handler — the one link that was
+ * missing while both of those were green.
+ */
+describe("every interactive element in the panels can actually be interacted with", () => {
+  const PANELS = [
+    "TasksPanel",
+    "SoulPanel",
+    "CalendarPanel",
+    "MemoriesPanel",
+    "ScheduledTasksPanel",
+    "StockChartPanel",
+    "ChatPanel",
+    "ChatBuddyPanel",
+    "SettingsPanel",
+  ];
+
+  /** End of the opening tag that starts at `i`, tracking braces and strings so a `>` inside an
+   * expression (`onClick={() => …}`) is not mistaken for the end of the tag. */
+  function tagEnd(s: string, i: number): number {
+    let depth = 0;
+    for (let j = i + 1; j < s.length; j++) {
+      const c = s[j]!;
+      if (c === '"' || c === "'" || c === "`") {
+        const q = c;
+        for (j++; j < s.length && s[j] !== q; j++) if (s[j] === "\\") j++;
+      } else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) return j;
+    }
+    return -1;
+  }
+
+  it.each(PANELS)("%s dresses every button, field and select", (panel) => {
+    const src = readFileSync(join(__dirname, "..", `${panel}.tsx`), "utf8");
+    const bare: string[] = [];
+    for (const m of src.matchAll(/<(button|input|textarea|select)(?=[\s/>])/g)) {
+      const end = tagEnd(src, m.index);
+      if (end === -1) continue;
+      const tag = src.slice(m.index, end);
+      if (!tag.includes("className")) {
+        bare.push(`${panel}:${src.slice(0, m.index).split("\n").length} <${m[1]}>`);
+      }
+    }
+    expect(bare, `these have no class, so no hover, press or focus ring reaches them:\n${bare.join("\n")}`).toEqual(
+      [],
+    );
+  });
+});

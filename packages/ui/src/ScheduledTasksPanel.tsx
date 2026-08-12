@@ -127,7 +127,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
         >
           <strong style={{ fontSize: 15 }}>⏰ Scheduled tasks</strong>
           <span style={{ fontSize: 12, opacity: 0.6 }}>· {tasks.length}</span>
-          <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
+          <button className={cx.btn} style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
             Close
           </button>
         </div>
@@ -185,7 +185,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                         style={{ marginLeft: "auto", display: "flex", gap: 6 }}
                       >
                         {onPlanSteps && !t.steps?.length ? (
-                          <button
+                          <button className={cx.btn}
                             style={btn}
                             onClick={() => onPlanSteps(t.id)}
                             title="Have the assistant write this task's checklist, so every run does all of the job"
@@ -194,7 +194,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           </button>
                         ) : null}
                         {onEdit ? (
-                          <button
+                          <button className={cx.btn}
                             style={btn}
                             onClick={() => {
                               if (editing === t.id) {
@@ -213,7 +213,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           </button>
                         ) : null}
                         {onOpenWorkspace ? (
-                          <button
+                          <button className={cx.btn}
                             style={btn}
                             onClick={() => onOpenWorkspace(t.id)}
                             title="Open this task's own workspace — see what its runs did, or work in it yourself"
@@ -222,7 +222,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           </button>
                         ) : null}
                         {onRunNow && t.enabled ? (
-                          <button
+                          <button className={cx.btn}
                             style={btn}
                             onClick={() => onRunNow(t.id)}
                             title="Run this now, as well as on its schedule"
@@ -230,13 +230,13 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                             ▶ Run now
                           </button>
                         ) : null}
-                        <button
+                        <button className={cx.btn}
                           style={btn}
                           onClick={() => onToggle(t.id, !t.enabled)}
                         >
                           {t.enabled ? "Pause" : "Resume"}
                         </button>
-                        <button
+                        <button className={cx.btn}
                           style={{ ...btn, color: vr.state.danger }}
                           onClick={() => onDelete(t.id)}
                         >
@@ -270,14 +270,14 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           placeholder="Title"
                           aria-label="Task title"
                         />
-                        <textarea
+                        <textarea className={cx.input}
                           style={{ ...inputStyle, minHeight: 48, resize: "vertical" }}
                           value={draft.prompt}
                           onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
                           placeholder="What the job is, as a whole"
                           aria-label="What the job is"
                         />
-                        <textarea
+                        <textarea className={cx.input}
                           style={{ ...inputStyle, minHeight: 72, resize: "vertical", fontFamily: "ui-monospace, monospace" }}
                           value={draft.stepText}
                           onChange={(e) => setDraft((d) => ({ ...d, stepText: e.target.value }))}
@@ -291,7 +291,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           Leave this empty to run the job as a single instruction.
                         </span>
                         <span style={{ display: "flex", gap: 6 }}>
-                          <button
+                          <button className={cx.btn}
                             style={btn}
                             onClick={() => {
                               onEdit(t.id, draft);
@@ -324,7 +324,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     >
                       Runs on:
                       {onBindTask && (taskOptions?.length ?? 0) > 0 ? (
-                        <select
+                        <select className={cx.input}
                           value={t.planId ?? ""}
                           onChange={(e) =>
                             onBindTask(t.id, e.target.value || undefined)
@@ -371,7 +371,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     {onReschedule ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 11, opacity: 0.5 }}>Runs</span>
-                        <select
+                        <select className={cx.input}
                           value={t.rule}
                           onChange={(e) => onReschedule(t.id, { rule: e.target.value as ScheduledTask["rule"] })}
                           style={editStyle}
@@ -382,7 +382,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           <option value="once">Once</option>
                         </select>
                         {t.rule === "weekly" ? (
-                          <select
+                          <select className={cx.input}
                             value={String(weekdayOf(t) ?? 1)}
                             onChange={(e) => onReschedule(t.id, { weekday: Number(e.target.value) })}
                             style={editStyle}
@@ -395,7 +395,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                           </select>
                         ) : null}
                         {t.rule === "monthly" ? (
-                          <select
+                          <select className={cx.input}
                             value={String(t.dayOfMonth ?? 1)}
                             onChange={(e) => onReschedule(t.id, { dayOfMonth: Number(e.target.value) })}
                             style={editStyle}
@@ -407,7 +407,7 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                             ))}
                           </select>
                         ) : null}
-                        <input
+                        <input className={cx.input}
                           type="time"
                           value={t.time}
                           onChange={(e) => onReschedule(t.id, { time: e.target.value })}
