@@ -22,6 +22,8 @@ import {
   formatToolResult,
   formatBuddyToolResult,
   planHasPendingStep,
+  planIdentity,
+  renderStepNumber,
   planQueueResumeFeedback,
   stripToolCallJson,
   toolFailureDirective,
@@ -1793,6 +1795,9 @@ export function App() {
   // worker's toolResult events) + host-tool outcomes (pushed by the approve* handlers) + the settle
   // text. Reset when a step advances. The "collar" (evaluateStep) judges the step from THIS, never the
   // model's claim.
+  /** Successful renders produced for the checklist named by `key`. Keyed rather than reset, so a new
+   * checklist starts its own tally without every plan-install site having to remember to clear it. */
+  const planRenderTally = useRef<{ key: string; count: number }>({ key: "", count: 0 });
   const buddyStepEvidenceRef = useRef<{ toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }>({
     toolResults: [],
     text: "",
@@ -6373,8 +6378,28 @@ export function App() {
     let taggedImageFeedback = imageFeedback;
     let tagCaption = ""; // a VISIBLE label on the render so the reader sees which checklist/step it's from
     if (!out.error && plan && plan.steps.length > 0) {
-      const idx = plan.steps.findIndex((s) => s.status !== "done");
-      const stepNo = idx >= 0 ? idx + 1 : plan.steps.length;
+      /**
+       * COUNT THE PICTURES, DON'T ONLY READ THE TICKS.
+       *
+       * This number came from the first unfinished step alone, and the second picture of three came
+       * out labelled "Step 1 of 3" — the same as the first. The label was honest: the model had
+       * narrated "Image 1 is done. Now generating the second image" instead of calling
+       * complete_step, so step 1 genuinely was still open.
+       *
+       * The app knows better than that. It made the picture, so it can count it, and the reader can
+       * count them on the screen. `renderStepNumber` takes whichever of the two is further along —
+       * the ticks lead on a mixed checklist, the renders lead on a run of pictures.
+       *
+       * The tally keys off the checklist's identity rather than being reset where a plan is
+       * installed: there are eleven such places, and every one is a chance to miss one.
+       */
+      const key = planIdentity(plan);
+      const tally = planRenderTally.current;
+      planRenderTally.current = { key, count: tally.key === key ? tally.count + 1 : 1 };
+      const stepNo = renderStepNumber(
+        plan.steps.map((s) => s.status),
+        planRenderTally.current.count,
+      );
       const where = plan.goal ? `the checklist “${plan.goal}”` : "the checklist";
       taggedImageFeedback = `${imageFeedback} — this is step ${stepNo} of ${plan.steps.length} of ${where}.`;
       const goalLabel = plan.goal ? ` · ${plan.goal.length > 50 ? `${plan.goal.slice(0, 50).trim()}…` : plan.goal}` : "";
