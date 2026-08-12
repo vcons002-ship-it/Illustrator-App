@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { cx, DOCK_CLASS, READER_CLASS } from "./classes.js";
-import { NARROW_PX } from "./breakpoints.js";
+import { ART_COLUMN_PX, NARROW_PX } from "./breakpoints.js";
 import { t } from "./tokens.js";
 
 /**
@@ -17,6 +17,9 @@ const STYLES = join(__dirname, "..", "styles");
 const sheets = readdirSync(STYLES).filter((f) => f.endsWith(".css"));
 const css = sheets.map((f) => readFileSync(join(STYLES, f), "utf8")).join("\n");
 const tokensTs = readFileSync(join(__dirname, "tokens.ts"), "utf8");
+/** The token DEFAULTS only. `css` is every sheet concatenated, so a regex over it finds whichever
+ * override happens to sort first — which is how this test first read --vr-art-min as 0. */
+const tokensCss = readFileSync(join(STYLES, "tokens.css"), "utf8");
 
 describe("token parity", () => {
   /** Written from JavaScript at runtime rather than declared in a sheet. --vr-view-h is
@@ -111,6 +114,46 @@ describe("class existence", () => {
 });
 
 describe("breakpoint parity", () => {
+  /**
+   * THE BAND WHERE UNFOLDING A PHONE MADE THE COLUMN NARROWER.
+   *
+   * The grid needs 640 prose + 320 art minimum + 120 of gaps + 40 of padding = 1120px before the
+   * prose reaches its measure. Below that the art track holds its floor and the prose track, which
+   * is minmax(0, …) and can shrink to nothing, gives way silently. A foldable at ~840px cleared the
+   * phone breakpoint, engaged the art column, and read at roughly 360px.
+   *
+   * Both halves are asserted, and the arithmetic with them: a later change to the measure or to the
+   * art minimum has to move this number too, and the sum is the only thing that says by how much.
+   */
+  it("collapses the art column below the width its own tracks require", () => {
+    const layout = readFileSync(join(STYLES, "layout.css"), "utf8");
+    const measure = Number(/--vr-measure:\s*(\d+)px/.exec(tokensCss)?.[1] ?? 0);
+    const artMin = Number(/--vr-art-min:\s*(\d+)px/.exec(tokensCss)?.[1] ?? 0);
+    const gap = Number(/column-gap:\s*(\d+)px/.exec(layout)?.[1] ?? 0);
+    expect(measure && artMin && gap, "the grid's own numbers could not be read").toBeTruthy();
+    // Three gaps between four tracks, and the reader's 20px of padding on each side.
+    expect(ART_COLUMN_PX, "the breakpoint no longer matches the grid it exists for").toBe(
+      measure + artMin + gap * 3 + 40,
+    );
+    const band = /@media \(max-width: (\d+)px\) \{([\s\S]*?)\n\}/g;
+    const blocks = [...layout.matchAll(band)];
+    const collapse = blocks.find((m) => (m[2] ?? "").includes("--vr-art-min"));
+    expect(collapse, "nothing collapses the art column at any width").toBeTruthy();
+    expect(Number(collapse![1]), "the CSS band and ART_COLUMN_PX disagree").toBe(ART_COLUMN_PX - 1);
+    expect(collapse![2]).toMatch(/--vr-art-min:\s*0px/);
+    expect(collapse![2], "the column is zero-width but still rendered").toMatch(/\.vr-art-col \{\s*display: none/);
+  });
+
+  it("moves the images into the text over the same band, or they lose their column", () => {
+    // CSS hides the art column; React decides DOM ORDER, which no media query can do. Disagree and
+    // the pictures have nowhere to be.
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(app).toMatch(/const noArtColumn = useNarrow\(ART_COLUMN_PX\)/);
+    expect(app, "inlineImages does not consult the art-column band").toMatch(
+      /const inlineImages = \(narrow \|\| noArtColumn \|\|/,
+    );
+  });
+
   it("NARROW_PX matches the media query in layout.css", () => {
     // The breakpoint has to exist twice — CSS decides layout, React decides DOM order
     // (inlineImages). A silent divergence gives a phone one layout in each dimension.

@@ -123,8 +123,12 @@ describe("the app wears the grid instead of describing it inline", () => {
     // sources of truth that can disagree. It survives only for what CSS cannot do — reordering.
     expect(app).toContain("READER_CLASS[readerLayout]");
     expect(app, "the grid is still branching on `narrow`").not.toMatch(/narrow \? styles\.reader/);
+    // The band was widened: `noArtColumn` joined it when an unfolded foldable turned out to clear
+    // the phone breakpoint, engage the art column, and read at ~360px. What this still pins is that
+    // the decision lives in JS at all — CSS cannot reorder React children, so the pictures would
+    // lose their column without moving into the text.
     expect(app, "inlineImages must still be JS — it changes DOM order").toMatch(
-      /inlineImages = \(narrow \|\| readerLayout === "inline"\)/,
+      /inlineImages = \(narrow \|\| noArtColumn \|\| readerLayout === "inline"\)/,
     );
   });
 
