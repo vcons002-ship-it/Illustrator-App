@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import { modalCardStyle, modalOverlayStyle } from "./tokens.js";
+import { modalCardStyle, modalOverlayStyle } from "./design/recipes.js";
 import { cx } from "./design/classes.js";
 
 /**

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { cx, DOCK_CLASS, READER_CLASS } from "./classes.js";
@@ -852,5 +852,78 @@ describe("the workflow strip has somewhere to be at every width", () => {
     expect(app, "railLayout is not derived from the grid's own mode — the two can disagree").toMatch(
       /const railLayout = readerModeClass === cx\.readerRail/,
     );
+  });
+});
+
+/**
+ * P6 — WHAT THE SWEEP DELETED, AND WHY IT HAD TO GO.
+ *
+ * `ARTICLE_HTML_STYLE` was a template literal injected into a `<style>` at two call sites, holding
+ * a second copy of the article rules that `article.css` already owns. The copy was not merely
+ * redundant — it was BROKEN, and silently. Two of its values lost their `${}` during the tokenising
+ * sweep and shipped as the literal text `t.accent.text` and `t.fill.subtle`, so every link in an
+ * imported article and the background of every code block in one resolved to nothing. Nobody could
+ * see it because the class name was identical, which is exactly what a duplicate buys you.
+ *
+ * The `tokens.ts` shim was the other planned deletion: a re-export kept for one migration so ten
+ * components would not churn in the same diff as the sweep. That migration is over, and a shim left
+ * in place is just a second name for the same thing waiting to disagree with the first.
+ */
+describe("the sweep stays swept", () => {
+  const ui = join(__dirname, "..");
+
+  it("has no second copy of the article rules", () => {
+    expect(existsSync(join(STYLES, "article.css")), "article.css is the one copy and it is gone").toBe(true);
+    const html = readFileSync(join(ui, "HtmlParagraph.tsx"), "utf8");
+    expect(html, "the <style> template is back — it will drift from article.css again").not.toContain(
+      "ARTICLE_HTML_STYLE",
+    );
+    const app = readFileSync(join(ui, "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(app, "App.tsx is injecting article CSS again").not.toContain("ARTICLE_HTML_STYLE");
+  });
+
+  it("still dresses the article container, or article.css matches nothing", () => {
+    // The rules are all `.vr-article-html …`, so deleting the template is only safe while the
+    // element still carries the class. Losing both would look identical to losing neither.
+    const html = readFileSync(join(ui, "HtmlParagraph.tsx"), "utf8");
+    expect(html).toMatch(/className=\{cx\.articleHtml\}/);
+    expect(readFileSync(join(STYLES, "article.css"), "utf8")).toMatch(/\.vr-article-html\s*\{/);
+  });
+
+  it("never interpolates a token by writing its path as text", () => {
+    // The exact failure above: `color: t.accent.text;` inside a template literal is a string, not a
+    // value, and CSS drops the declaration without a word. Cheap to check across every sheet and
+    // every remaining template.
+    for (const f of ["tokens.css", "base.css", "motion.css", "components.css", "layout.css", "article.css"]) {
+      const css = readFileSync(join(STYLES, f), "utf8");
+      expect(css, `${f} contains a literal token path where a value belongs`).not.toMatch(/:\s*t\.[a-z]+\.[a-zA-Z]+/);
+    }
+  });
+
+  it("has retired the tokens.ts shim rather than leaving a second name for design/", () => {
+    expect(existsSync(join(ui, "tokens.ts")), "the shim is back — two names for one token surface").toBe(false);
+  });
+});
+
+/**
+ * NOTHING SHOULD BE CARRYING A STYLE NOBODY WEARS.
+ *
+ * `noUnusedLocals` gives this for free on a standalone `const fooStyle`, and it caught the orphan
+ * left behind when ARTICLE_HTML_STYLE went. It gives NOTHING on an entry inside a record: `styles`
+ * in App.tsx is one object with seventy-odd keys, and an unreferenced key is just data. Two were
+ * sitting in it, describing elements that no longer exist.
+ */
+describe("the app's style record has no orphans", () => {
+  it("references every entry it declares", () => {
+    const app = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"),
+      "utf8",
+    );
+    const body = /\nconst styles: Record<string, React\.CSSProperties> = \{\n([\s\S]*?)\n\};/.exec(app)?.[1] ?? "";
+    expect(body, "the styles record moved — this test is asserting nothing").toBeTruthy();
+    const keys = [...body.matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_]*):/gm)].map((m) => m[1]!);
+    expect(keys.length, "no keys parsed out of the styles record").toBeGreaterThan(20);
+    const orphans = keys.filter((k) => !new RegExp(`styles\\.${k}\\b`).test(app));
+    expect(orphans, `declared in \`styles\` and never used: ${orphans.join(", ")}`).toEqual([]);
   });
 });

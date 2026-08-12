@@ -25,7 +25,7 @@ import {
   chatScrollStyle as scrollStyle,
   chatTextareaStyle as textareaStyle,
   smallButtonStyle,
-} from "./tokens.js";
+} from "./design/recipes.js";
 import { cx } from "./design/classes.js";
 import { ModalShell } from "./ModalShell.js";
 import { ArrivingImage } from "./ArrivingImage.js";

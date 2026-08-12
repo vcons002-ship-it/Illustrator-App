@@ -3,7 +3,7 @@ import { useState } from "react";
 import { getProvider } from "@visual-reader/core";
 import type { ReaderSettings } from "./SettingsPanel.js";
 import { ModalShell } from "./ModalShell.js";
-import { ACCENT_BLUE } from "./tokens.js";
+import { ACCENT_BLUE } from "./design/recipes.js";
 
 /**
  * First-run experience. Visual Reader is an AI assistant that also illustrates
