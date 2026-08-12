@@ -247,6 +247,31 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     }
   });
 
+  /**
+   * THE SECOND QUESTION WAS BEING ASKED FIRST.
+   *
+   * FOLLOW THROUGH tells the model that "make / draw / generate an image of …" means CALL
+   * generate_image, in those exact words. Read before the rule that decides how many actions the
+   * request contains, it answers "generate 3 images of yourself" on the spot — one picture, no
+   * checklist behind it, which is what the reader saw across several attempts.
+   *
+   * FOLLOW THROUGH is not wrong; it was being asked the second question first. How many distinct
+   * actions is this? decides the shape. What do I do about it? follows from the answer.
+   *
+   * This only started to matter when the conduct rules moved from the bottom of the prompt to the
+   * top: crammed together at 88–94% none of them dominated, spread across 8–15% the first one wins.
+   * So the ORDER is the assertion — presence was never in question, and both rules were present and
+   * correct the whole time the requests were coming back with one image.
+   */
+  it("asks what shape the job is before telling the model to get on with it", () => {
+    const shape = prompt.indexOf("MULTI-STEP vs SINGLE");
+    const act = prompt.indexOf('"make / draw / generate an image of');
+    expect(shape, "the planning rule is gone").toBeGreaterThan(-1);
+    expect(act, "the draw-it instruction is gone").toBeGreaterThan(-1);
+    expect(shape, "generate_image is answered before anything counts the actions").toBeLessThan(act);
+    expect(prompt.indexOf("FOLLOW THROUGH"), "FOLLOW THROUGH still comes first").toBeGreaterThan(shape);
+  });
+
   it("keeps the turn rules in the first quarter of the prompt", () => {
     // The catalogue grows with every tool added, so "before the catalogue" alone would let the rules
     // drift arbitrarily deep as the app gains abilities. This pins them near the top in absolute terms.
