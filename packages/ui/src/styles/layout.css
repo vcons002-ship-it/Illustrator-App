@@ -223,8 +223,31 @@
   }
 }
 
-/* Single column on a phone. This is the one breakpoint the app has; NARROW_PX in
- * design/breakpoints.ts must match it, and a test asserts that it does. */
+/* ---- Not enough room for an art column ---------------------------------------------
+ * The grid needs 1120px before the prose reaches its full measure: 640 prose + 320 art minimum
+ * + 120 (three 40px gaps) + 40 padding. Below that the art track holds its floor and the prose
+ * track — minmax(0, 640px), which can shrink to nothing — gives way, silently.
+ *
+ * Reported from an unfolded foldable at roughly 840px: folded it sits below NARROW_PX and gets
+ * the full-width single column, unfolded it clears 760, the art column engages and the reading
+ * measure drops to about 360px. Opening the phone made the column narrower.
+ *
+ * So between the phone breakpoint and here the art goes BELOW the text instead of beside it —
+ * the same arrangement the phone layout already uses. ART_COLUMN_PX in design/breakpoints.ts
+ * must match this number: React decides DOM order for the same band and the two cannot disagree
+ * without putting the images in one place and the space for them in another. */
+@media (max-width: 1119px) {
+  .vr-reader {
+    --vr-art-min: 0px;
+    --vr-art-max: 0px;
+  }
+  .vr-reader .vr-art-col {
+    display: none;
+  }
+}
+
+/* Single column on a phone. NARROW_PX in design/breakpoints.ts must match it, and a test
+ * asserts that it does. */
 @media (max-width: 760px) {
   .vr-reader {
     display: block;

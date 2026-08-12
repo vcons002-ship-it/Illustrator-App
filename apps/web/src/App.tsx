@@ -324,6 +324,8 @@ import {
   SettingsPanel,
   useScrollDepth,
   useNarrow,
+  NARROW_PX,
+  ART_COLUMN_PX,
   ConceptCard,
   ConceptText,
   DocBlocksView,
@@ -2005,7 +2007,18 @@ export function App() {
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
   // Phone-sized viewport → single-column reader, auto-collapsed toolbar + chat history.
-  const narrow = useNarrow(760);
+  const narrow = useNarrow(NARROW_PX);
+  /**
+   * TOO NARROW FOR AN ART COLUMN, which is a wider threshold than "phone" and a separate question.
+   *
+   * The grid needs 1120px before the prose reaches its full measure — 640 prose + 320 art minimum
+   * + 120 of gaps + 40 of padding — and below that the art track holds its floor while the prose
+   * track, which can shrink to nothing, gives way. An unfolded foldable at ~840px cleared the phone
+   * breakpoint, engaged the art column, and read at about 360px: opening the phone made the column
+   * NARROWER. CSS collapses the column for this band; this is React's half, and it has to agree,
+   * or the images lose their column without moving into the text.
+   */
+  const noArtColumn = useNarrow(ART_COLUMN_PX);
   /**
    * HOW THIS BOOK SPENDS THE WIDTH. Per book, because it is a property of the book and not of the
    * reader: a picture book wants the art beside the prose, a reference text wants the rail.
@@ -3371,7 +3384,7 @@ export function App() {
   // Inline is now BOTH a viewport fact and a choice: a phone has no room for a second column, and
   // "Inline" asks for the same magazine flow on a wide screen. Kept in JS because it changes the
   // ORDER of the rendered children, which no media query can do.
-  const inlineImages = (narrow || readerLayout === "inline") && viewAs === "story" && !isTechnical;
+  const inlineImages = (narrow || noArtColumn || readerLayout === "inline") && viewAs === "story" && !isTechnical;
   // Load this book's chat history; reset transient chat state on book change.
   // A buddy-initiated open seeds the history with the handed-off landing
   // conversation, then the stored history is PREPENDED when it loads (it's
