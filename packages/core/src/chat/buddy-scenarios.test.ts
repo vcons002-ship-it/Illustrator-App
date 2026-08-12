@@ -838,3 +838,67 @@ describe("scenario: a large file is built in append chunks", () => {
     expect(prompt).toContain("paste a giant file into the chat");
   });
 });
+
+/**
+ * THE MODEL DERIVED THE TURN SHAPE FROM FIRST PRINCIPLES, AT LENGTH.
+ *
+ * Asked for three images behind a checklist, it spent several paragraphs on questions the app can
+ * answer outright:
+ *
+ *   "if I just output the tool call, the system will execute it and give me the result. Then I'll
+ *    have to send another message with complete_step and the next tool call? Or can I chain them?"
+ *   "looking at the provided context: The previous model turn was set_plan... Wait, the user
+ *    repeated the prompt?"
+ *
+ * It reached the right answer both times, slowly. Both facts were already in the checklist block —
+ * as subordinate clauses inside a sentence about writing prose first — and one was in no prompt at
+ * all: that the ▸ marker is its position, so the conversation never has to be re-read to find it.
+ *
+ * These assert the mid-plan prompt, which is a different build from the always-on one and is not
+ * bound by its token budget.
+ */
+describe("a running checklist says what happens after each kind of call", () => {
+  const plan: BuddyPlan = {
+    goal: "three portraits",
+    steps: [
+      { text: "Generate the first portrait", status: "pending" },
+      { text: "Generate the second portrait", status: "pending" },
+    ],
+  };
+  const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+
+  it("says a render ends the turn, as its own statement", () => {
+    expect(prompt).toMatch(/ENDS this turn/);
+    expect(prompt, "nothing says the app comes back with the result").toMatch(/starts you again with the result/);
+  });
+
+  it("says not to tick the step in the same reply as the render", () => {
+    // The question it actually asked itself, answered before it is asked.
+    expect(prompt).toMatch(/do NOT complete_step in the same reply/);
+  });
+
+  it("distinguishes the tools that come straight back", () => {
+    // Without this the rule above reads as "never chain anything", which would undo FOLLOW THROUGH.
+    expect(prompt).toMatch(/search, a read or a calculation comes straight back to you inside THIS turn/);
+  });
+
+  it("tells it the marker is its position, so it stops re-reading the history", () => {
+    expect(prompt).toMatch(/▸ is your position/);
+    expect(prompt).toMatch(/never need to reconstruct it from the conversation/);
+  });
+
+  it("says the same thing on the set_plan result, which is the first thing it reads", () => {
+    // The prompt block above arrives with the NEXT turn. This is what comes back in the reply that
+    // created the checklist — the moment the model in the transcript started deriving turn shape.
+    const feedback = formatBuddyToolResult(
+      { tool: "set_plan", goal: "three portraits", steps: ["Generate the first portrait", "Generate the second"] },
+      { plan },
+      { readFileChars: 4000 },
+    );
+    expect(feedback).toMatch(/▸ is your position/);
+    expect(feedback).toMatch(/ENDS this turn/);
+    expect(feedback, "nothing warns against ticking the step in the render's own reply").toMatch(
+      /don't tick the step in that same reply/,
+    );
+  });
+});

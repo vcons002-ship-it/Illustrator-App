@@ -1593,6 +1593,17 @@ export function buildBuddySystemPrompt(raw: {
         // made weak models write prose instead of calling the tool).
         "WORKING THE CHECKLIST: do the ▸ current step now — call its tool (an image step REQUIRES an actual " +
         "generate_image call THIS turn, not just a described prompt) and/or give its answer, then complete_step. " +
+        // A reader watched a model spend several paragraphs deriving this from first principles —
+        // "if I just output the tool call, the system will execute it and give me the result. Then
+        // I'll have to send another message with complete_step? Or can I chain them?" — and reach
+        // the right answer the slow way. Both facts WERE in this block already, as subordinate
+        // clauses inside a sentence about writing prose first. Stated plainly they cost the same
+        // and remove the whole deliberation.
+        "WHAT HAPPENS AFTER YOUR CALL, so you never have to work it out: a picture, file, document or " +
+        "command ENDS this turn — the app runs it and starts you again with the result, so do NOT plan " +
+        "past it and do NOT complete_step in the same reply. A search, a read or a calculation comes " +
+        "straight back to you inside THIS turn, so carry on using it. The ▸ is your position; you never " +
+        "need to reconstruct it from the conversation. " +
         "If the step asks for BOTH writing and a tool (\"write the next part of the story and generate an " +
         "image\"), WRITE THE PROSE FIRST, in the same reply, ABOVE the tool call — a render ENDS the turn, so " +
         "anything you meant to say after it never gets written and the step lands with the picture only. " +
@@ -4985,7 +4996,10 @@ function formatBuddyToolResultBody(
       renderPlanLines(result.plan) +
       (done === total && total > 0
         ? "\n\nAll steps are done — give the reader the final result."
-        : "\n\nDo the ▸ current step next, then call complete_step once it's ACTUALLY finished.")
+        : "\n\nDo the ▸ current step next — the ▸ is your position, not something to work out from the " +
+          "conversation. A picture, file or command ENDS this turn (the app runs it and starts you again " +
+          "with the result, so don't tick the step in that same reply); a search or calculation comes " +
+          "back to you inside this turn. Call complete_step once the step is ACTUALLY finished.")
     );
   }
   if (call.tool === "spawn_agents") {
