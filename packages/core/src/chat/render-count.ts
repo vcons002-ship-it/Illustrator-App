@@ -77,3 +77,40 @@ export function requestedRendersNote(text: string, hasPlan: boolean): string {
     "after it never happens."
   );
 }
+
+/**
+ * WHICH STEP IS THIS PICTURE, when the model's own bookkeeping is behind.
+ *
+ * The label on a render read "Step 1 of 3" for the second picture as well as the first. It was not
+ * lying: the number came from the first UNFINISHED step, and the model had narrated its progress —
+ * "Image 1 is done. Now generating the second image" — instead of calling complete_step. So step 1
+ * genuinely was still open when the second render landed, and the label said so.
+ *
+ * The app does not have to take the model's word for it. It knows how many pictures it has produced
+ * for this checklist, and the reader can count them on the screen.
+ *
+ * The HIGHER of the two wins, which is what makes one rule serve both shapes. On a mixed checklist
+ * ("write, draw, write, draw") the first render belongs to step 2, and the tick count knows that
+ * while the render count does not; on a run of three pictures with no ticks at all the render count
+ * knows and the ticks do not. Taking the larger is right in both, and can only move a label FORWARD
+ * — it never relabels a picture as earlier than the checklist itself believes. PURE.
+ */
+export function renderStepNumber(statuses: readonly string[], rendersSoFar: number): number {
+  const total = statuses.length;
+  if (total === 0) return 0;
+  const firstOpen = statuses.findIndex((s) => s !== "done");
+  const byTicks = firstOpen >= 0 ? firstOpen + 1 : total;
+  return Math.min(total, Math.max(byTicks, rendersSoFar));
+}
+
+/**
+ * A checklist's identity, ignoring how far through it is.
+ *
+ * Lets the render tally notice it has moved to a DIFFERENT checklist and reset itself, rather than
+ * needing a reset at each of the eleven places a plan is installed — every one of which would be a
+ * chance to miss one. Status is deliberately excluded: it changes on every tick, and a key that
+ * moved with it would reset the tally constantly. PURE.
+ */
+export function planIdentity(plan: { goal?: string; steps: readonly { text: string }[] }): string {
+  return [plan.goal ?? "", ...plan.steps.map((s) => s.text)].join(" ");
+}

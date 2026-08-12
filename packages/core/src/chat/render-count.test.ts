@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MAX_REQUESTED_RENDERS, requestedRenderCount, requestedRendersNote } from "./render-count.js";
+import {
+  MAX_REQUESTED_RENDERS,
+  planIdentity,
+  renderStepNumber,
+  requestedRenderCount,
+  requestedRendersNote,
+} from "./render-count.js";
 
 /**
  * "Generate 3 images of yourself" came back as one picture, with no checklist, across three separate
@@ -97,5 +103,71 @@ describe("the count actually reaches the turn", () => {
     const line = /const volatile = \[([^\]]*)\]/.exec(worker)?.[1] ?? "";
     expect(line, "the volatile assembly moved").toBeTruthy();
     expect(line, "the note is not in the volatile block").toContain("rendersBlock");
+  });
+});
+
+/**
+ * The second picture was labelled "Step 1 of 3", the same as the first. The label was honest: it
+ * read the first UNFINISHED step, and the model had narrated "Image 1 is done. Now generating the
+ * second image" rather than calling complete_step, so step 1 really was still open. The app does not
+ * have to take the model's word for it — it knows how many pictures it has made.
+ */
+describe("labelling a render when the ticks are behind", () => {
+  const open3 = ["pending", "pending", "pending"];
+
+  it("counts the pictures when nothing has been ticked", () => {
+    expect(renderStepNumber(open3, 1)).toBe(1);
+    expect(renderStepNumber(open3, 2), "the second picture was labelled step 1").toBe(2);
+    expect(renderStepNumber(open3, 3)).toBe(3);
+  });
+
+  it("still follows the ticks when the model IS keeping up", () => {
+    expect(renderStepNumber(["done", "pending", "pending"], 2)).toBe(2);
+    expect(renderStepNumber(["done", "done", "pending"], 3)).toBe(3);
+  });
+
+  it("trusts the ticks when they are AHEAD, which a mixed checklist needs", () => {
+    // "write, draw, write, draw": the first render belongs to step 2, and only the tick count knows
+    // that. Taking the higher of the two is what lets one rule serve both shapes.
+    expect(renderStepNumber(["done", "pending", "pending", "pending"], 1)).toBe(2);
+  });
+
+  it("never runs past the end of the checklist", () => {
+    expect(renderStepNumber(open3, 9)).toBe(3);
+    expect(renderStepNumber(["done", "done", "done"], 5)).toBe(3);
+  });
+
+  it("says nothing for an empty checklist rather than inventing a step", () => {
+    expect(renderStepNumber([], 3)).toBe(0);
+  });
+});
+
+describe("knowing when the tally belongs to a different checklist", () => {
+  const plan = { goal: "turtles", steps: [{ text: "one" }, { text: "two" }] };
+
+  it("is unchanged by progress, so the tally is not reset on every tick", () => {
+    expect(planIdentity(plan)).toBe(planIdentity({ ...plan, steps: [{ text: "one" }, { text: "two" }] }));
+  });
+
+  it("changes when the checklist does", () => {
+    expect(planIdentity(plan)).not.toBe(planIdentity({ goal: "otters", steps: plan.steps }));
+    expect(planIdentity(plan)).not.toBe(planIdentity({ goal: "turtles", steps: [{ text: "one" }] }));
+  });
+
+  it("does not let step text run together into a false match", () => {
+    // "a" + "bc" and "ab" + "c" are different checklists and must not share a key.
+    expect(planIdentity({ steps: [{ text: "a" }, { text: "bc" }] })).not.toBe(
+      planIdentity({ steps: [{ text: "ab" }, { text: "c" }] }),
+    );
+  });
+
+  it("is what the render label actually uses", () => {
+    // Same reason the note's wiring is asserted above: a rule nothing calls is this migration's
+    // signature failure, and it leaves the suite green.
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(app).toMatch(/const key = planIdentity\(plan\)/);
+    expect(app, "the label still reads only the first unfinished step").toMatch(
+      /const stepNo = renderStepNumber\(/,
+    );
   });
 });
