@@ -617,7 +617,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // into an actionable plan before building; off → the general assistant just chats and acts.
   const planActive = props.persona === "planning";
   const planToggle = (
-    <button
+    <button className={cx.btn}
       style={{ ...personaButtonStyle, ...(planActive ? personaActiveStyle : {}) }}
       onClick={() => props.onPersonaChange(planActive ? "assistant" : "planning")}
       title="Plan mode — turn a fuzzy goal (a coding project or a complex deliverable) into a clear, actionable plan before building it. Toggle off to just chat and act."
@@ -648,7 +648,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       <div style={minimized ? { ...headerStyle, paddingBottom: 0 } : headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <select
+            <select className={cx.input}
               value={props.activeSessionId}
               onChange={(e) => {
                 const picked = props.sessions?.find((x) => x.id === e.target.value);
@@ -682,7 +682,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 hiding it is what left Delete looking like the only exit. CLOSE ≠ DELETE: this drops
                 the chat from the picker and keeps everything; 🗑 below destroys the history. */}
             {props.onCloseSession && !minimized && (
-              <button
+              <button className={cx.btn}
                 style={smallButtonStyle}
                 title="Close this chat — its history is kept, and it reopens from the list above (or by opening its task)"
                 aria-label="Close this chat"
@@ -692,12 +692,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               </button>
             )}
             {showTools && props.onNewSession && (
-              <button style={smallButtonStyle} title="New chat session" aria-label="New chat session" onClick={props.onNewSession}>
+              <button className={cx.btn} style={smallButtonStyle} title="New chat session" aria-label="New chat session" onClick={props.onNewSession}>
                 ＋
               </button>
             )}
             {showTools && props.onRenameSession && props.activeSessionId && (
-              <button
+              <button className={cx.btn}
                 style={smallButtonStyle}
                 title="Rename this chat"
                 aria-label="Rename this chat"
@@ -711,7 +711,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               </button>
             )}
             {showTools && props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
-              <button
+              <button className={cx.btn}
                 style={smallButtonStyle}
                 title="Delete this session (its history is removed)"
                 aria-label="Delete this session"
@@ -735,7 +735,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           {showTools && <span style={personaGroupStyle}>{planToggle}</span>}
           {showTools && props.onLoadModel && (
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => {
                 props.onLoadModel!();
@@ -750,7 +750,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           )}
           {showTools && props.onCompact && props.messages.length > 4 && (
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={props.onCompact}
               disabled={props.busy}
@@ -760,7 +760,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           )}
           {showTools && (
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => setShowHelp((h) => !h)}
               title="What can this chat do? (commands & tools)"
@@ -770,7 +770,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           )}
           {showTools && props.messages.length > 0 && (
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => {
                 if (window.confirm("Clear this conversation? All its messages are removed permanently.")) props.onClearHistory();
@@ -783,7 +783,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           {/* Small ⋯ toggle that reveals/hides the secondary controls above — saves header space.
               Gone while minimized: the controls it reveals are hidden anyway, so it would do nothing. */}
           {!minimized && (
-          <button
+          <button className={cx.btn}
             style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: t.accent.text } : smallButtonStyle}
             onClick={() => setToolsOpen((v) => !v)}
             title={toolsOpen ? "Hide chat tools" : "More chat tools (new, rename, clear, …)"}
@@ -794,7 +794,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </button>
           )}
           {props.onToggleHistory && (
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={props.onToggleHistory}
               title={props.historyCollapsed ? "Show chat history" : "Hide chat history (keep the input bar)"}
@@ -942,10 +942,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   Runs in this agent's isolated worktree. Other agents keep working while this waits.
                 </span>
               </div>
-              <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={() => props.onApproveAgentTool?.(a.id)}>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={() => props.onApproveAgentTool?.(a.id)}>
                 Approve
               </button>
-              <button style={smallButtonStyle} onClick={() => props.onDenyAgentTool?.(a.id)}>
+              <button className={cx.btn} style={smallButtonStyle} onClick={() => props.onDenyAgentTool?.(a.id)}>
                 Deny
               </button>
             </div>
@@ -962,10 +962,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 {props.pendingTool.style ? ` · style: ${props.pendingTool.style}` : ""}
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Run
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Dismiss
             </button>
           </div>
@@ -980,10 +980,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 {props.pendingTool.frames ? ` · ${props.pendingTool.frames} frames` : ""}
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Run
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Dismiss
             </button>
           </div>
@@ -998,10 +998,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Run
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Dismiss
             </button>
           </div>
@@ -1014,11 +1014,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 “{props.pendingTool.query}” — it reads file names only, and opens nothing without your click.
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Allow once
             </button>
             {props.onApprovePendingToolAlways && (
-              <button
+              <button className={cx.btn}
                 style={{ ...smallButtonStyle, marginRight: 6 }}
                 onClick={props.onApprovePendingToolAlways}
                 title="Don't ask again for file searches this session"
@@ -1026,7 +1026,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 Allow this session
               </button>
             )}
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Deny
             </button>
           </div>
@@ -1058,10 +1058,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               </span>
             </div>
             <span style={{ display: "flex", gap: 6 }}>
-              <button style={smallButtonStyle} onClick={props.onApprovePendingTool}>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onApprovePendingTool}>
                 Run it
               </button>
-              <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
                 No
               </button>
             </span>
@@ -1090,10 +1090,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 Runs in your VisualReader/workspace folder, with your permissions. Read it before approving.
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Run
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Deny
             </button>
           </div>
@@ -1127,10 +1127,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 Sends immediately from your connected Google account. To keep it as a draft instead, ask the assistant to draft it.
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Send
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Cancel
             </button>
           </div>
@@ -1153,10 +1153,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 (Autonomous workspace). Review the merged changes afterward.
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Run agents
             </button>
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Cancel
             </button>
           </div>
@@ -1176,11 +1176,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   : "Captures your whole primary screen and sends it to your chat model — close anything private first."}
               </span>
             </div>
-            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Capture
             </button>
             {props.onApprovePendingToolAlways && (
-              <button
+              <button className={cx.btn}
                 style={{ ...smallButtonStyle, marginRight: 6 }}
                 onClick={props.onApprovePendingToolAlways}
                 title="Don't ask again for screen captures this session (e.g. while testing a running game)"
@@ -1188,7 +1188,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 Allow this session
               </button>
             )}
-            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Deny
             </button>
           </div>
@@ -1203,7 +1203,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <div style={{ ...approvalStyle, margin: "0 10px 6px", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 12 }}>⚠ Waiting for your approval.</span>
           {props.onToggleHistory && (
-            <button style={smallButtonStyle} onClick={props.onToggleHistory}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onToggleHistory}>
               Show it
             </button>
           )}
@@ -1246,7 +1246,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 {a.status === "reading" ? "…" : a.status === "error" ? "⚠" : ""}
               </span>
               {props.onRemoveAttachment && (
-                <button
+                <button className={cx.btn}
                   onClick={() => props.onRemoveAttachment!(a.id)}
                   style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, opacity: 0.7 }}
                   title="Remove"
@@ -1262,7 +1262,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       <div style={utilityRowStyle}>
         {props.onAttachFile && (
           <>
-            <input
+            <input className={cx.input}
               ref={fileInputRef}
               type="file"
               multiple
@@ -1270,7 +1270,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               style={{ display: "none" }}
               onChange={pickFile}
             />
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => fileInputRef.current?.click()}
               title="Attach a file (PDF, Word, Excel, CSV, text, or image) for me to read"
@@ -1280,7 +1280,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </>
         )}
-        <button
+        <button className={cx.btn}
           style={smallButtonStyle}
           onClick={() => {
             // Story "as you go" is started by a click, not a chat tool. The host opens a setup modal
@@ -1299,7 +1299,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           ✍️ Story
         </button>
         {props.modelMenu && props.modelMenu.groups.length > 0 && (
-          <button
+          <button className={cx.btn}
             ref={modelBtnRef}
             style={modelsOpen ? { ...smallButtonStyle, ...personaActiveStyle } : smallButtonStyle}
             onClick={() => setModelsOpen((o) => !o)}
@@ -1310,7 +1310,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </button>
         )}
         {props.liveControl && (
-          <button
+          <button className={cx.btn}
             style={
               props.liveControl.on
                 ? { ...smallButtonStyle, ...liveActiveStyle }
@@ -1341,7 +1341,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           if (e.animationName === "vr-send-burst") e.currentTarget.classList.remove(cx.sent);
         }}
       >
-        <textarea
+        <textarea className={cx.input}
           ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -1368,7 +1368,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           style={textareaStyle}
         />
         {speechApi ? (
-          <button
+          <button className={cx.btn}
             style={listening ? { ...smallButtonStyle, borderColor: t.state.danger, color: t.state.danger } : smallButtonStyle}
             onClick={toggleMic}
             title={listening ? "Stop dictation" : "Dictate with your microphone"}
@@ -1379,7 +1379,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </button>
         ) : null}
         {ttsSupported ? (
-          <button
+          <button className={cx.btn}
             style={speakOn ? { ...smallButtonStyle, borderColor: t.state.good, color: t.state.good } : smallButtonStyle}
             onClick={toggleSpeak}
             title={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
@@ -1390,11 +1390,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </button>
         ) : null}
         {props.busy ? (
-          <button style={smallButtonStyle} onClick={props.onCancel}>
+          <button className={cx.btn} style={smallButtonStyle} onClick={props.onCancel}>
             Stop
           </button>
         ) : (
-          <button style={smallButtonStyle} onClick={send} disabled={!draft.trim() && !hasReadyAttachment}>
+          <button className={cx.btn} style={smallButtonStyle} onClick={send} disabled={!draft.trim() && !hasReadyAttachment}>
             Send
           </button>
         )}
@@ -1471,7 +1471,7 @@ function WorkingFolderBar({
       <span title="Where the assistant's commands and file search run">📁</span>
       {editing ? (
         <>
-          <input
+          <input className={cx.input}
             style={folderInputStyle}
             value={draft}
             placeholder="Absolute path to a project folder (blank = default workspace)"
@@ -1484,8 +1484,8 @@ function WorkingFolderBar({
             }}
             autoFocus
           />
-          <button style={tinyBtn} onClick={() => { onSet(draft.trim()); setEditing(false); }}>Set</button>
-          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(false); }}>Cancel</button>
+          <button className={cx.btn} style={tinyBtn} onClick={() => { onSet(draft.trim()); setEditing(false); }}>Set</button>
+          <button className={cx.btn} style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(false); }}>Cancel</button>
         </>
       ) : (
         <>
@@ -1495,12 +1495,12 @@ function WorkingFolderBar({
           >
             {label}
           </span>
-          {onPick ? <button style={tinyBtn} onClick={() => void browse()}>Browse…</button> : null}
-          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(true); }}>
+          {onPick ? <button className={cx.btn} style={tinyBtn} onClick={() => void browse()}>Browse…</button> : null}
+          <button className={cx.btn} style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(true); }}>
             {onPick ? "Type" : "Change"}
           </button>
           {workingDir ? (
-            <button style={tinyBtn} title="Use the default workspace" onClick={() => onSet("")}>Reset</button>
+            <button className={cx.btn} style={tinyBtn} title="Use the default workspace" onClick={() => onSet("")}>Reset</button>
           ) : null}
         </>
       )}
@@ -1650,7 +1650,7 @@ function ModelMenuPopover({
           const active = g.key === group.key;
           const summary = activeModelLabel(g);
           return (
-            <button
+            <button className={cx.btn}
               key={g.key}
               role="tab"
               aria-selected={active}
@@ -1668,7 +1668,7 @@ function ModelMenuPopover({
         })}
       </div>
       {showFilter && (
-        <input
+        <input className={cx.input}
           style={modelFilterStyle}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -1692,7 +1692,7 @@ function ModelMenuPopover({
                     applies until a checkpoint row is clicked. */}
                 <div style={modelBackendRowStyle} role="group" aria-label="Local image backend">
                   {backends.map((b) => (
-                    <button
+                    <button className={cx.btn}
                       key={b.id}
                       style={b.id === backendId ? { ...modelBackendBtnStyle, ...personaActiveStyle } : modelBackendBtnStyle}
                       aria-pressed={b.id === backendId}

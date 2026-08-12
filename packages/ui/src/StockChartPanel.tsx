@@ -1,3 +1,4 @@
+import { cx } from "./design/classes.js";
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PriceAlert, StockQuote } from "@visual-reader/core";
@@ -125,17 +126,17 @@ export const StockChartPanel = memo(function StockChartPanel({
     >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <strong style={{ fontSize: 15 }}>📈 Markets</strong>
-          <input
+          <input className={cx.input}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
             placeholder="Ticker (e.g. AAPL)"
             style={tickerInput}
           />
-          <button style={btn} onClick={submit}>
+          <button className={cx.btn} style={btn} onClick={submit}>
             Show
           </button>
-          <button style={btn} onClick={() => onAnalyze(symbol)} title="Ask the assistant for analysis + ideas on this ticker">
+          <button className={cx.btn} style={btn} onClick={() => onAnalyze(symbol)} title="Ask the assistant for analysis + ideas on this ticker">
             🤖 Analyse {symbol}
           </button>
           <a style={{ ...btn, textDecoration: "none" }} href={`https://www.tradingview.com/symbols/${encodeURIComponent(symbol)}/`} target="_blank" rel="noreferrer">
@@ -145,7 +146,7 @@ export const StockChartPanel = memo(function StockChartPanel({
             schwabConnected ? (
               <span style={{ ...btn, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" }}>✓ Schwab</span>
             ) : canConnectSchwab ? (
-              <button style={btn} onClick={onConnectSchwab} title="Connect your Schwab account for real quotes, option chains + Greeks, and positions">
+              <button className={cx.btn} style={btn} onClick={onConnectSchwab} title="Connect your Schwab account for real quotes, option chains + Greeks, and positions">
                 Connect Schwab
               </button>
             ) : (
@@ -157,7 +158,7 @@ export const StockChartPanel = memo(function StockChartPanel({
               </span>
             )
           ) : null}
-          <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
+          <button className={cx.btn} style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
             Close
           </button>
         </div>
@@ -192,17 +193,17 @@ export const StockChartPanel = memo(function StockChartPanel({
           <div style={{ marginTop: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, fontWeight: 600 }}>⏿ Alerts</span>
-              <button style={miniBtn} onClick={() => onAddAlert(symbol, "cross_vwap")} title={`Notify when ${symbol} crosses VWAP`}>
+              <button className={cx.btn} style={miniBtn} onClick={() => onAddAlert(symbol, "cross_vwap")} title={`Notify when ${symbol} crosses VWAP`}>
                 {symbol} crosses VWAP
               </button>
-              <input
+              <input className={cx.input}
                 value={levelDraft}
                 onChange={(e) => setLevelDraft(e.target.value)}
                 placeholder="level"
                 inputMode="decimal"
                 style={{ ...tickerInput, width: 70, textTransform: "none" }}
               />
-              <button
+              <button className={cx.btn}
                 style={miniBtn}
                 onClick={() => {
                   const v = Number(levelDraft);
@@ -214,7 +215,7 @@ export const StockChartPanel = memo(function StockChartPanel({
               >
                 above
               </button>
-              <button
+              <button className={cx.btn}
                 style={miniBtn}
                 onClick={() => {
                   const v = Number(levelDraft);
@@ -235,7 +236,7 @@ export const StockChartPanel = memo(function StockChartPanel({
                     <span>🔔 {describeAlert ? describeAlert(a) : a.symbol}</span>
                     {a.enabled ? null : <span style={{ fontSize: 10, color: t.state.warn }}>triggered</span>}
                     {onRemoveAlert ? (
-                      <button style={{ ...miniBtn, marginLeft: "auto", color: "#ff9c9c" }} onClick={() => onRemoveAlert(a.id)}>
+                      <button className={cx.btn} style={{ ...miniBtn, marginLeft: "auto", color: "#ff9c9c" }} onClick={() => onRemoveAlert(a.id)}>
                         ✕
                       </button>
                     ) : null}
@@ -255,18 +256,18 @@ export const StockChartPanel = memo(function StockChartPanel({
               </span>
               {/* Launch does the step the setup doc used to ask readers to do by hand: find the
                   install path, retype it with --remote-debugging-port, and keep a shortcut. */}
-              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onLaunch} title="Start TradingView Desktop with its debug port on (or report why it can't)">
+              <button className={cx.btn} style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onLaunch} title="Start TradingView Desktop with its debug port on (or report why it can't)">
                 {tvBridge.busy ? "Starting…" : "Launch TradingView"}
               </button>
-              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onTest}>
+              <button className={cx.btn} style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onTest}>
                 Test bridge
               </button>
               {/* Probe answers "can it read my chart's data?" — which nothing could say before. */}
-              <button style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onProbe} title="Ask this TradingView build what it actually exposes (read-only)">
+              <button className={cx.btn} style={miniBtn} disabled={tvBridge.busy} onClick={tvBridge.onProbe} title="Ask this TradingView build what it actually exposes (read-only)">
                 Probe
               </button>
               {tvBridge.missing && tvBridge.onGetApp ? (
-                <button style={miniBtn} onClick={tvBridge.onGetApp} title="Open TradingView's download page in your browser">
+                <button className={cx.btn} style={miniBtn} onClick={tvBridge.onGetApp} title="Open TradingView's download page in your browser">
                   Get TradingView Desktop ↗
                 </button>
               ) : null}

@@ -1,3 +1,4 @@
+import { cx } from "./design/classes.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { MemoryNote } from "@visual-reader/core";
 import { ModalShell } from "./ModalShell.js";
@@ -87,7 +88,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
     <ModalShell title="Memory — what the assistant remembers about you" onClose={onClose}>
         <div style={header}>
           <strong>💭 Memory — what the assistant remembers about you</strong>
-          <button style={btn} onClick={onClose}>
+          <button className={cx.btn} style={btn} onClick={onClose}>
             Close
           </button>
         </div>
@@ -98,7 +99,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
         </p>
 
         <div style={addRow}>
-          <input
+          <input className={cx.input}
             style={{ ...input, flex: 1 }}
             value={draft}
             maxLength={limits.note}
@@ -112,7 +113,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
               if (e.key === "Enter") void add();
             }}
           />
-          <button style={btnPrimary} onClick={() => void add()} disabled={busy || full || !draft.trim()}>
+          <button className={cx.btn} style={btnPrimary} onClick={() => void add()} disabled={busy || full || !draft.trim()}>
             + Add
           </button>
         </div>
@@ -127,7 +128,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
             {sorted.map((n) =>
               editingAt === n.at ? (
                 <div key={n.at} style={editRow}>
-                  <input
+                  <input className={cx.input}
                     style={{ ...input, flex: 1 }}
                     value={editText}
                     maxLength={limits.note}
@@ -145,10 +146,10 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
                       }
                     }}
                   />
-                  <button style={btn} onClick={() => void saveEdit()} disabled={busy}>
+                  <button className={cx.btn} style={btn} onClick={() => void saveEdit()} disabled={busy}>
                     Save
                   </button>
-                  <button
+                  <button className={cx.btn}
                     style={btn}
                     onClick={() => {
                       setEditingAt(undefined);
@@ -162,7 +163,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
                 <div key={n.at} style={noteRow}>
                   <span style={{ minWidth: 0, wordBreak: "break-word" }}>{n.text}</span>
                   <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <button
+                    <button className={cx.btn}
                       style={btn}
                       onClick={() => {
                         setError("");
@@ -172,7 +173,7 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
                     >
                       Edit
                     </button>
-                    <button style={btn} onClick={() => remove(n.at)} disabled={busy}>
+                    <button className={cx.btn} style={btn} onClick={() => remove(n.at)} disabled={busy}>
                       Delete
                     </button>
                   </span>

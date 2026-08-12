@@ -451,7 +451,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
           <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             {!props.technical && (
               <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11, opacity: 0.8 }}>
-                <input
+                <input className={cx.input}
                   type="checkbox"
                   checked={props.allowSpoilers}
                   onChange={(e) => props.onToggleSpoilers(e.target.checked)}
@@ -460,7 +460,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               </label>
             )}
             {props.onCompact && props.messages.length > 4 && (
-              <button
+              <button className={cx.btn}
                 style={smallButtonStyle}
                 onClick={props.onCompact}
                 disabled={props.busy}
@@ -469,7 +469,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
                 Compact
               </button>
             )}
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => setShowHelp((h) => !h)}
               title="What can this chat do? (commands & tools)"
@@ -477,7 +477,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             >
               ?
             </button>
-            <button
+            <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => {
                 // Confirm before wiping — the buddy chat's Clear already does; book chat didn't (U5).
@@ -487,7 +487,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             >
               Clear
             </button>
-            <button style={smallButtonStyle} onClick={props.onClose}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onClose}>
               Close
             </button>
           </span>
@@ -560,10 +560,10 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
                   {props.pendingTool.style ? ` · style: ${props.pendingTool.style}` : ""}
                 </span>
               </div>
-              <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
                 Run
               </button>
-              <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
                 Dismiss
               </button>
             </div>
@@ -572,7 +572,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
 
         <SlashMenu draft={draft} commands={CHAT_SLASH_COMMANDS} onPick={setDraft} />
         <div style={inputRowStyle}>
-          <textarea
+          <textarea className={cx.input}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -592,11 +592,11 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             style={textareaStyle}
           />
           {props.busy ? (
-            <button style={smallButtonStyle} onClick={props.onCancel}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={props.onCancel}>
               Stop
             </button>
           ) : (
-            <button style={smallButtonStyle} onClick={send} disabled={!draft.trim()}>
+            <button className={cx.btn} style={smallButtonStyle} onClick={send} disabled={!draft.trim()}>
               Send
             </button>
           )}
@@ -852,7 +852,7 @@ export const MessageBubble = memo(function MessageBubble({
       }}
     >
       {onDelete !== undefined && index !== undefined && (
-        <button
+        <button className={cx.btn}
           style={deleteButtonStyle}
           title="Delete this message (it leaves the conversation the model sees too)"
           aria-label="Delete message"
@@ -989,7 +989,7 @@ export const MessageBubble = memo(function MessageBubble({
                 {...(desktop ? { desktop } : {})}
               />
             ) : (
-              <button
+              <button className={cx.btn}
                 key={i}
                 style={fileChipStyle}
                 title={`Open ${f.path}`}
@@ -1004,7 +1004,7 @@ export const MessageBubble = memo(function MessageBubble({
       {message.actions?.length ? (
         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
           {message.actions.map((a, i) => (
-            <button key={i} style={fileChipStyle} onClick={() => onAction?.(a.send)}>
+            <button className={cx.btn} key={i} style={fileChipStyle} onClick={() => onAction?.(a.send)}>
               {a.label}
             </button>
           ))}
@@ -1215,11 +1215,11 @@ export function FileActionBar({
     <div>
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
       {label ? <span style={{ opacity: 0.7, fontSize: 11, marginRight: 2 }}>📎 {file.name}</span> : null}
-      <button style={fileChipStyle} title={primary.title} disabled={busy === primary.key} onClick={() => void fire(primary)}>
+      <button className={cx.btn} style={fileChipStyle} title={primary.title} disabled={busy === primary.key} onClick={() => void fire(primary)}>
         {busy === primary.key ? "…" : primary.label}
       </button>
       {canReadInline ? (
-        <button
+        <button className={cx.btn}
           style={readOpen ? { ...fileChipStyle, borderColor: t.accent.edge, color: t.accent.text } : fileChipStyle}
           title="Read this document right here in the chat (no need to open the reader)"
           disabled={reading}
@@ -1233,7 +1233,7 @@ export function FileActionBar({
           <summary style={{ ...fileChipStyle, listStyle: "none", cursor: "pointer" }}>⋯ More</summary>
           <div style={fileMenuStyle}>
             {rest.map((it) => (
-              <button
+              <button className={cx.btn}
                 key={it.key}
                 style={fileMenuItemStyle}
                 title={it.title}
@@ -1250,7 +1250,7 @@ export function FileActionBar({
               <>
                 <div style={{ opacity: 0.5, fontSize: 10, padding: "4px 8px 2px" }}>Open as…</div>
                 {OPEN_AS_CHOICES.map((c) => (
-                  <button
+                  <button className={cx.btn}
                     key={c.as}
                     style={fileMenuItemStyle}
                     onClick={() => {
@@ -1358,7 +1358,7 @@ function ImageGallery({
           about one specific result, and a row of buttons under a twelve-hit grid invites the misclick
           this whole path is meant to avoid. */}
       {open && onUseAsReference ? (
-        <button
+        <button className={cx.btn}
           style={{
             marginTop: 6,
             fontSize: 12,
@@ -1502,10 +1502,10 @@ function AnalysisBlock({
       {chart ? <AnalysisChart table={table} chart={chart} /> : null}
       {onDownloadData ? (
         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <button style={dataDownloadBtn} title="Download this result as a real Excel workbook" onClick={() => onDownloadData(table, "analysis", "xlsx")}>
+          <button className={cx.btn} style={dataDownloadBtn} title="Download this result as a real Excel workbook" onClick={() => onDownloadData(table, "analysis", "xlsx")}>
             ⬇ Excel
           </button>
-          <button style={dataDownloadBtn} title="Download this result as CSV" onClick={() => onDownloadData(table, "analysis", "csv")}>
+          <button className={cx.btn} style={dataDownloadBtn} title="Download this result as CSV" onClick={() => onDownloadData(table, "analysis", "csv")}>
             ⬇ CSV
           </button>
         </div>
@@ -1568,7 +1568,7 @@ function InlineCode({ lang, code }: { lang: string; code: string }) {
     <div style={{ position: "relative", margin: "6px 0" }}>
       <div style={{ ...codeHeaderStyle, opacity: 0.7 }}>
         <span>{lang || "code"}</span>
-        <button
+        <button className={cx.btn}
           style={codeBtnStyle}
           onClick={() => {
             void navigator.clipboard?.writeText(code);
@@ -1662,22 +1662,22 @@ function CodeCard({
         <span style={{ opacity: 0.7 }} title={filename}>{lang || "text"} · {filename}</span>
         <span style={{ display: "flex", gap: 6 }}>
           {onSaveFile && (
-            <button style={codeBtnStyle} onClick={() => void save()}>
+            <button className={cx.btn} style={codeBtnStyle} onClick={() => void save()}>
               💾 Save
             </button>
           )}
           {runnable && (
-            <button style={codeBtnStyle} onClick={() => void run()} disabled={running} title="Run this code on the desktop and show its output here">
+            <button className={cx.btn} style={codeBtnStyle} onClick={() => void run()} disabled={running} title="Run this code on the desktop and show its output here">
               {running ? "Running…" : "▶ Run"}
             </button>
           )}
           {previewable && (
-            <button style={codeBtnStyle} onClick={() => setPreviewOpen((o) => !o)} title="Render it right here in the chat">
+            <button className={cx.btn} style={codeBtnStyle} onClick={() => setPreviewOpen((o) => !o)} title="Render it right here in the chat">
               {previewOpen ? "▾ Hide preview" : "▶ Preview"}
             </button>
           )}
           {previewable && (
-            <button
+            <button className={cx.btn}
               style={codeBtnStyle}
               onClick={openInTab}
               title="Open the rendered page in a new browser tab"
@@ -1686,7 +1686,7 @@ function CodeCard({
               ↗ Tab
             </button>
           )}
-          <button
+          <button className={cx.btn}
             style={codeBtnStyle}
             onClick={() => {
               void navigator.clipboard?.writeText(code);
@@ -1767,7 +1767,7 @@ function ProjectSaveBar({
   };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-      <button style={codeBtnStyle} onClick={() => void save()} disabled={busy} title={files.map((f) => f.name).join(", ")}>
+      <button className={cx.btn} style={codeBtnStyle} onClick={() => void save()} disabled={busy} title={files.map((f) => f.name).join(", ")}>
         📦 {busy ? "Zipping…" : `Save all ${files.length} files as project (.zip)`}
       </button>
       {saved ? (
@@ -1846,17 +1846,17 @@ function DocumentCard({
         </span>
         <span style={{ display: "flex", gap: 6 }}>
           {!built && (
-            <button style={codeBtnStyle} onClick={() => void build()} disabled={building}>
+            <button className={cx.btn} style={codeBtnStyle} onClick={() => void build()} disabled={building}>
               {building
                 ? `🎨 Generating ${progress ? `${progress.done}/${progress.total}` : ""}…`
                 : `🎨 Generate ${imageCount} image${imageCount === 1 ? "" : "s"} & build`}
             </button>
           )}
-          <button style={codeBtnStyle} onClick={preview} disabled={building}>
+          <button className={cx.btn} style={codeBtnStyle} onClick={preview} disabled={building}>
             ▶ Preview
           </button>
           {onSaveFile && built && (
-            <button style={codeBtnStyle} onClick={() => void save()}>
+            <button className={cx.btn} style={codeBtnStyle} onClick={() => void save()}>
               💾 Save
             </button>
           )}

@@ -1,3 +1,4 @@
+import { cx } from "./design/classes.js";
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -414,7 +415,7 @@ export const SoulPanel = memo(function SoulPanel({
     <ModalShell title={copy.title} onClose={onClose}>
         <div style={headerRow}>
           <strong>{copy.title}</strong>
-          <button style={btn} onClick={onClose}>
+          <button className={cx.btn} style={btn} onClick={onClose}>
             Close
           </button>
         </div>
@@ -423,7 +424,7 @@ export const SoulPanel = memo(function SoulPanel({
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, opacity: 0.85 }}>
           Name
           <span style={addRow}>
-            <input
+            <input className={cx.input}
               style={{ ...input, flex: 1 }}
               value={nameDraft}
               maxLength={limits.name}
@@ -458,7 +459,7 @@ export const SoulPanel = memo(function SoulPanel({
             </strong>
             {onRefreshEssence ? (
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <button
+                <button className={cx.btn}
                   type="button"
                   style={btn}
                   disabled={operationBusy || list.length === 0}
@@ -472,7 +473,7 @@ export const SoulPanel = memo(function SoulPanel({
                   {essenceBusy ? "Generating\u2026" : shownEssence ? "Refresh" : "Generate"}
                 </button>
                 {essenceBusy && progressPhase !== "saving" && onCancelEssence ? (
-                  <button
+                  <button className={cx.btn}
                     type="button"
                     style={btn}
                     disabled={cancellingEssence}
@@ -662,7 +663,7 @@ export const SoulPanel = memo(function SoulPanel({
         </div>
 
         <div style={addRow}>
-          <input
+          <input className={cx.input}
             style={{ ...input, flex: 1 }}
             value={draft}
             maxLength={limits.note}
@@ -676,7 +677,7 @@ export const SoulPanel = memo(function SoulPanel({
               if (e.key === "Enter") void add();
             }}
           />
-          <button
+          <button className={cx.btn}
             style={btnPrimary}
             onClick={() => void add()}
             disabled={operationBusy || full || !draft.trim()}
@@ -695,7 +696,7 @@ export const SoulPanel = memo(function SoulPanel({
             {sorted.map(({ note: n, sourceIndex, key }) =>
               editingIndex === sourceIndex ? (
                 <div key={key} style={editRow}>
-                  <input
+                  <input className={cx.input}
                     style={{ ...input, flex: 1 }}
                     value={editText}
                     maxLength={limits.note}
@@ -713,10 +714,10 @@ export const SoulPanel = memo(function SoulPanel({
                       }
                     }}
                   />
-                  <button style={btn} onClick={() => void saveEdit()} disabled={operationBusy}>
+                  <button className={cx.btn} style={btn} onClick={() => void saveEdit()} disabled={operationBusy}>
                     Save
                   </button>
-                  <button
+                  <button className={cx.btn}
                     style={btn}
                     onClick={() => {
                       setEditingIndex(undefined);
@@ -730,7 +731,7 @@ export const SoulPanel = memo(function SoulPanel({
                 <div key={key} style={noteRow}>
                   <span style={{ minWidth: 0, wordBreak: "break-word" }}>{n.text}</span>
                   <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <button
+                    <button className={cx.btn}
                       style={btn}
                       onClick={() => {
                         setError("");
@@ -740,7 +741,7 @@ export const SoulPanel = memo(function SoulPanel({
                     >
                       Edit
                     </button>
-                    <button style={btn} onClick={() => remove(sourceIndex)} disabled={operationBusy}>
+                    <button className={cx.btn} style={btn} onClick={() => remove(sourceIndex)} disabled={operationBusy}>
                       Delete
                     </button>
                   </span>
@@ -779,7 +780,7 @@ export const SoulPanel = memo(function SoulPanel({
                     style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: `1px solid ${t.border.input}` }}
                   />
                   {onSaveImages ? (
-                    <button style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
+                    <button className={cx.btn} style={removeBadge} onClick={() => removeImage(i)} disabled={operationBusy} title="Remove" aria-label="Remove reference photo">
                       ×
                     </button>
                   ) : null}
@@ -798,12 +799,12 @@ export const SoulPanel = memo(function SoulPanel({
               ),
             )}
             {pics.length < MAX_SOUL_IMAGES ? (
-              <button style={addThumb} onClick={() => fileInput.current?.click()} disabled={operationBusy}>
+              <button className={cx.btn} style={addThumb} onClick={() => fileInput.current?.click()} disabled={operationBusy}>
                 + Photo
               </button>
             ) : null}
           </div>
-          <input
+          <input className={cx.input}
             ref={fileInput}
             type="file"
             accept="image/*"
@@ -873,7 +874,7 @@ function EssenceFactRemove({ onRemove, label }: { onRemove?: () => Promise<void>
   if (!onRemove) return null;
   const short = label.length > 60 ? `${label.slice(0, 60).trim()}…` : label;
   return (
-    <button
+    <button className={cx.btn}
       type="button"
       disabled={busy}
       title={`Remove “${short}” from the generated Soul`}

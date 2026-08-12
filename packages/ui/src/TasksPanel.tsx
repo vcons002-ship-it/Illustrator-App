@@ -1,3 +1,4 @@
+import { cx } from "./design/classes.js";
 import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import { dayToIso, isoDay, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
@@ -87,7 +88,7 @@ function StepRow({
         opacity: s.status === "done" ? 0.55 : 1,
       }}
     >
-      <button onClick={() => onToggleStep(s.id, s.status !== "done")} title={s.status === "done" ? "Mark not done" : "Mark done"} style={checkBtn}>
+      <button className={cx.btn} onClick={() => onToggleStep(s.id, s.status !== "done")} title={s.status === "done" ? "Mark not done" : "Mark done"} style={checkBtn}>
         {statusDot(s.status)}
       </button>
       <span style={{ textDecoration: s.status === "done" ? "line-through" : "none" }}>{s.title}</span>
@@ -193,7 +194,7 @@ function PlanCard({
       ) : null}
       {onAddDetails && !noSteps ? (
         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <input
+          <input className={cx.input}
             value={detailDraft}
             onChange={(e) => setDetailDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -205,7 +206,7 @@ function PlanCard({
             placeholder={plan.clarifyingQuestions?.length ? "Answer / add details — refines the plan" : "Add a detail or new info — refines the plan"}
             style={{ flex: 1, fontSize: 12, padding: "4px 8px`, borderRadius: 6, border: `1px solid ${t.fill.strong}`, background: t.fill.subtle, color: `inherit" }}
           />
-          <button
+          <button className={cx.btn}
             style={{ ...btn, fontSize: 12 }}
             disabled={!detailDraft.trim()}
             onClick={() => {
@@ -257,28 +258,28 @@ function PlanCard({
           ))
         : null}
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        <button style={noSteps ? btnPrimary : btn} onClick={onPlan} title={noSteps ? "Research it and break it into steps" : "Re-plan from scratch"}>
+        <button className={cx.btn} style={noSteps ? btnPrimary : btn} onClick={onPlan} title={noSteps ? "Research it and break it into steps" : "Re-plan from scratch"}>
           {noSteps ? "⚡ Plan it" : "↻ Refresh plan"}
         </button>
-        <button style={btnPrimary} onClick={onOpen}>
+        <button className={cx.btn} style={btnPrimary} onClick={onOpen}>
           Open &amp; work it →
         </button>
         {current ? (
-          <button style={btn} onClick={() => onAdvance(current.id)} title={`Mark "${current.title}" done`}>
+          <button className={cx.btn} style={btn} onClick={() => onAdvance(current.id)} title={`Mark "${current.title}" done`}>
             ✓ Mark step done
           </button>
         ) : null}
         {plan.status === "completed" ? (
-          <button style={btn} onClick={() => onComplete(false)} title="Reopen this task — mark it not done">
+          <button className={cx.btn} style={btn} onClick={() => onComplete(false)} title="Reopen this task — mark it not done">
             ↺ Reopen
           </button>
         ) : (
-          <button style={btnPrimary} onClick={() => onComplete(true)} title="Mark this whole task complete">
+          <button className={cx.btn} style={btnPrimary} onClick={() => onComplete(true)} title="Mark this whole task complete">
             ✓ Complete task
           </button>
         )}
         {onIgnoreTask ? (
-          <button
+          <button className={cx.btn}
             style={btn}
             onClick={onIgnoreTask}
             title="Ignore this task — archives it and stops it coming back (a recurring task won't repeat; scans/imports skip it). Undo from the Removed list."
@@ -407,7 +408,7 @@ export const TasksPanel = memo(function TasksPanel({
           <strong>📋 Tasks — your to-do timeline</strong>
           <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
             {(["timeline", "list"] as const).map((v) => (
-              <button
+              <button className={cx.btn}
                 key={v}
                 onClick={() => {
                   setView(v);
@@ -418,7 +419,7 @@ export const TasksPanel = memo(function TasksPanel({
                 {v === "timeline" ? "📊 Timeline" : "☰ List"}
               </button>
             ))}
-            <button style={btn} onClick={onClose}>
+            <button className={cx.btn} style={btn} onClick={onClose}>
               Close
             </button>
           </span>
@@ -427,7 +428,7 @@ export const TasksPanel = memo(function TasksPanel({
         {/* Add a task → the assistant plans it into a Gantt. */}
         {adding ? (
           <div style={addBox}>
-            <input
+            <input className={cx.input}
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -437,39 +438,39 @@ export const TasksPanel = memo(function TasksPanel({
             />
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.85 }}>
               Due
-              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} style={dateInput} />
+              <input className={cx.input} type="date" value={due} onChange={(e) => setDue(e.target.value)} style={dateInput} />
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.85 }} title="A repeating task rolls forward to the next occurrence when you complete it">
               Repeat
-              <select value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)} style={dateInput}>
+              <select className={cx.input} value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)} style={dateInput}>
                 <option value="">No</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
               </select>
             </label>
-            <button style={btn} onClick={() => submit(false)} disabled={!title.trim()} title="Add a plain to-do now — no planning (you can hit ⚡ Plan it later)">
+            <button className={cx.btn} style={btn} onClick={() => submit(false)} disabled={!title.trim()} title="Add a plain to-do now — no planning (you can hit ⚡ Plan it later)">
               + Add as-is
             </button>
-            <button style={btnPrimary} onClick={() => submit(true)} disabled={!title.trim()} title="Research it and build a step-by-step plan">
+            <button className={cx.btn} style={btnPrimary} onClick={() => submit(true)} disabled={!title.trim()} title="Research it and build a step-by-step plan">
               Plan it →
             </button>
-            <button style={btn} onClick={() => setAdding(false)}>
+            <button className={cx.btn} style={btn} onClick={() => setAdding(false)}>
               Cancel
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <button style={btnPrimary} onClick={() => setAdding(true)}>
+            <button className={cx.btn} style={btnPrimary} onClick={() => setAdding(true)}>
               + Add task
             </button>
             {onScanNow ? (
-              <button style={btn} onClick={onScanNow} disabled={scanning} title="Scan recent email + your calendar for tasks now">
+              <button className={cx.btn} style={btn} onClick={onScanNow} disabled={scanning} title="Scan recent email + your calendar for tasks now">
                 {scanning ? "🔄 Scanning…" : "🔄 Scan email & calendar"}
               </button>
             ) : null}
             {onPlanPending && pendingCount > 0 ? (
-              <button
+              <button className={cx.btn}
                 style={btn}
                 onClick={onPlanPending}
                 disabled={planningPending}
@@ -479,7 +480,7 @@ export const TasksPanel = memo(function TasksPanel({
               </button>
             ) : null}
             {completedCount > 0 ? (
-              <button
+              <button className={cx.btn}
                 style={hideCompleted ? btn : toggleOn}
                 onClick={() => setHideCompleted((v) => !v)}
                 title={hideCompleted ? "Show completed tasks on the timeline" : "Hide completed tasks"}
@@ -516,7 +517,7 @@ export const TasksPanel = memo(function TasksPanel({
         {selected ? (
           // Individual task view — the one task's sub-tasks on their own Gantt + the detail card.
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <button style={btn} onClick={() => setSelectedId(undefined)}>
+            <button className={cx.btn} style={btn} onClick={() => setSelectedId(undefined)}>
               ← Back to all tasks
             </button>
             {view === "timeline" ? (
@@ -552,10 +553,10 @@ export const TasksPanel = memo(function TasksPanel({
         ) : view === "timeline" ? (
           <div>
             <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-              <button style={btn} onClick={expandAll} title="Show every task's sub-tasks">
+              <button className={cx.btn} style={btn} onClick={expandAll} title="Show every task's sub-tasks">
                 ▾ Expand all
               </button>
-              <button style={btn} onClick={collapseAll} title="Show only the main tasks">
+              <button className={cx.btn} style={btn} onClick={collapseAll} title="Show only the main tasks">
                 ▸ Collapse all
               </button>
             </div>
@@ -584,7 +585,7 @@ export const TasksPanel = memo(function TasksPanel({
             Delete forever drops it for good. */}
         {removed.length > 0 ? (
           <div style={{ marginTop: 14, borderTop: `1px solid ${t.border.faint}`, paddingTop: 8 }}>
-            <button style={{ ...btn, fontSize: 12 }} onClick={() => setShowRemoved((v) => !v)}>
+            <button className={cx.btn} style={{ ...btn, fontSize: 12 }} onClick={() => setShowRemoved((v) => !v)}>
               🗑 Removed ({removed.length}) {showRemoved ? "▾" : "▸"}
             </button>
             {showRemoved ? (
@@ -597,7 +598,7 @@ export const TasksPanel = memo(function TasksPanel({
                       <span style={{ opacity: 0.5 }}> · {p.archivedReason === "ignored" ? "ignored" : "removed"}</span>
                     </span>
                     {onRestore ? (
-                      <button style={btn} onClick={() => onRestore(p.id)} title="Bring this task back (and un-ignore it)">
+                      <button className={cx.btn} style={btn} onClick={() => onRestore(p.id)} title="Bring this task back (and un-ignore it)">
                         ↩ Restore
                       </button>
                     ) : null}

@@ -468,7 +468,7 @@ function BackupRow({
         <button className={cx.btn} style={buttonStyle} disabled={busy} onClick={() => fileRef.current?.click()}>
           Restore from file…
         </button>
-        <input
+        <input className={cx.input}
           ref={fileRef}
           type="file"
           accept=".json,application/json"
@@ -861,7 +861,7 @@ export function SettingsPanel({
                 reopen it (desktop.bat).
               </div>
             ) : null}
-            <input
+            <input className={cx.input}
               type="search"
               placeholder="Find a setting… (style, key, context, chat, quality)"
               value={query}
@@ -949,7 +949,7 @@ export function SettingsPanel({
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
-                  <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
+                  <select className={cx.input} value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
                     {VIDEO_MODELS.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}
@@ -957,7 +957,7 @@ export function SettingsPanel({
                     ))}
                   </select>
                   {onDownloadVideoModel ? (
-                    <button type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
+                    <button className={cx.btn} type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
                       Download (~{videoModelById(value.videoModel)?.sizeGB ?? VIDEO_MODELS[0]?.sizeGB ?? 0} GB)
                     </button>
                   ) : null}
@@ -1045,7 +1045,7 @@ export function SettingsPanel({
                         <span style={{ opacity: 0.7 }}>{label}</span>
                         <span style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0 }}>
                           {list.length ? (
-                            <select value={cur} onChange={(e) => setFile(k, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0, maxWidth: "100%" }}>
+                            <select className={cx.input} value={cur} onChange={(e) => setFile(k, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0, maxWidth: "100%" }}>
                               <option value="">{optional ? "(none)" : defFiles[k] ? `Default — ${defFiles[k]}` : "Default"}</option>
                               {list.map((n) => (
                                 <option key={n} value={n}>
@@ -1055,7 +1055,7 @@ export function SettingsPanel({
                               {cur !== "" && !list.includes(cur) ? <option value={cur}>{cur} — not in folder</option> : null}
                             </select>
                           ) : (
-                            <input
+                            <input className={cx.input}
                               value={cur}
                               placeholder={optional ? "(none)" : defFiles[k] ?? ""}
                               onChange={(e) => setFile(k, e.target.value)}
@@ -1063,7 +1063,7 @@ export function SettingsPanel({
                             />
                           )}
                           {cur !== "" ? (
-                            <button
+                            <button className={cx.btn}
                               type="button"
                               title={optional ? "Remove this LoRA" : "Reset to default"}
                               aria-label={optional ? "Remove this LoRA" : "Reset to default"}
@@ -1080,7 +1080,7 @@ export function SettingsPanel({
                   const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
                     <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
                       <span style={{ opacity: 0.7 }}>{label}</span>
-                      <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
+                      <input className={cx.input} type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
                     </label>
                   );
                   const effFrames = vp.frames ?? dflt.frames;
@@ -1117,7 +1117,7 @@ export function SettingsPanel({
                           {ltxLoras.map((l, i) => (
                             <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4, minWidth: 0 }}>
                               {installedLoras.length ? (
-                                <select
+                                <select className={cx.input}
                                   value={l.name}
                                   onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
                                   style={{ fontSize: 11, flex: 1, minWidth: 0 }}
@@ -1131,14 +1131,14 @@ export function SettingsPanel({
                                   {l.name !== "" && !installedLoras.includes(l.name) ? <option value={l.name}>{l.name} — not in folder</option> : null}
                                 </select>
                               ) : (
-                                <input
+                                <input className={cx.input}
                                   value={l.name}
                                   placeholder="lora filename"
                                   onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
                                   style={{ fontSize: 11, flex: 1, minWidth: 0 }}
                                 />
                               )}
-                              <input
+                              <input className={cx.input}
                                 type="number"
                                 step="0.05"
                                 value={l.strength ?? 1}
@@ -1148,7 +1148,7 @@ export function SettingsPanel({
                                 }
                                 style={{ fontSize: 11, width: 60 }}
                               />
-                              <button
+                              <button className={cx.btn}
                                 type="button"
                                 title="Remove this LoRA"
                                 aria-label="Remove this LoRA"
@@ -1159,7 +1159,7 @@ export function SettingsPanel({
                               </button>
                             </div>
                           ))}
-                          <button
+                          <button className={cx.btn}
                             type="button"
                             onClick={() => setLtxLoras([...ltxLoras, { name: "", strength: 1 }])}
                             style={{ marginTop: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer" }}
@@ -1171,14 +1171,14 @@ export function SettingsPanel({
                       {kind === "ltx2-i2v" ? (
                         <>
                           <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 8 }}>
-                            <input type="checkbox" checked={highRes} onChange={(e) => setHighRes(e.target.checked)} />
+                            <input className={cx.input} type="checkbox" checked={highRes} onChange={(e) => setHighRes(e.target.checked)} />
                             <span>
                               High resolution (2× upscale) —{" "}
                               <span style={{ opacity: 0.6 }}>two-stage render; off is a single faster pass at the target size.</span>
                             </span>
                           </label>
                           <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 4 }}>
-                            <input type="checkbox" checked={audioOn} onChange={(e) => setAudio(e.target.checked)} />
+                            <input className={cx.input} type="checkbox" checked={audioOn} onChange={(e) => setAudio(e.target.checked)} />
                             <span>
                               Generate audio —{" "}
                               <span style={{ opacity: 0.6 }}>LTX-2 makes a synced soundtrack (saved as mp4); off is silent video.</span>
@@ -1202,7 +1202,7 @@ export function SettingsPanel({
                         {SUGGESTED.map((f, i) => (
                           <span key={f}>
                             {i > 0 ? ", " : ""}
-                            <button
+                            <button className={cx.btn}
                               type="button"
                               onClick={() => setParam("frames", String(f))}
                               style={{ fontSize: 11, padding: "0 4px", cursor: "pointer", background: "none", border: "1px solid currentColor", borderRadius: 4, opacity: 0.8 }}
@@ -1238,7 +1238,7 @@ export function SettingsPanel({
           >
           <label style={rowStyle}>
             <span>Text (story understanding)</span>
-            <select
+            <select className={cx.input}
               value={value.textProvider}
               onChange={(e) => set({ textProvider: e.target.value as TextProviderId })}
             >
@@ -1253,7 +1253,7 @@ export function SettingsPanel({
           {value.textProvider === "local" && (
             <div style={rowStyle}>
               <span>How to run it</span>
-              <select
+              <select className={cx.input}
                 value={textBackend}
                 onChange={(e) =>
                   set({ localTextBackend: e.target.value as "webgpu" | "server" | "bundled" })
@@ -1274,7 +1274,7 @@ export function SettingsPanel({
               ) : textBackend === "webgpu" ? (
                 <label style={rowStyle}>
                   <span>On-device text model</span>
-                  <select
+                  <select className={cx.input}
                     value={value.localTextModel ?? LOCAL_TEXT_MODELS[0]!.id}
                     onChange={(e) => set({ localTextModel: e.target.value })}
                   >
@@ -1334,7 +1334,7 @@ export function SettingsPanel({
                     <span>
                       Load <b>{model}</b> at (num_ctx) — <b>sets VRAM</b>
                     </span>
-                    <input
+                    <input className={cx.input}
                       type="number"
                       min={1024}
                       step={1024}
@@ -1366,7 +1366,7 @@ export function SettingsPanel({
               })()}
               <label style={rowStyle}>
                 <span>Context window (tokens) — how much we SEND</span>
-                <input
+                <input className={cx.input}
                   type="number"
                   min={1024}
                   step={1024}
@@ -1459,7 +1459,7 @@ export function SettingsPanel({
           >
           <label style={rowStyle}>
             <span>Illustrate after</span>
-            <select
+            <select className={cx.input}
               value={value.illustrateAfter ?? "book"}
               onChange={(e) =>
                 set({ illustrateAfter: e.target.value as "book" | "chapter" })
@@ -1482,7 +1482,7 @@ export function SettingsPanel({
           >
           <label style={rowStyle}>
             <span>Images</span>
-            <select
+            <select className={cx.input}
               value={value.imageProvider}
               onChange={(e) => set({ imageProvider: e.target.value as ImageProviderId })}
             >
@@ -1504,7 +1504,7 @@ export function SettingsPanel({
           >
           <label style={rowStyle}>
             <span>Art style</span>
-            <select value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
+            <select className={cx.input} value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
               {IMAGE_STYLES.map((s) => (
                 <option key={s.id} value={s.id} title={s.description}>
                   {s.label}
@@ -1519,7 +1519,7 @@ export function SettingsPanel({
           {value.imageProvider === "local" && (
             <label style={rowStyle}>
               <span>Model family (local)</span>
-              <select
+              <select className={cx.input}
                 value={value.imageModelFamily ?? "auto"}
                 onChange={(e) =>
                   set({
@@ -1551,7 +1551,7 @@ export function SettingsPanel({
           <div style={rowStyle}>
             <span>Pages per image</span>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
+              <input className={cx.input}
                 type="number"
                 min={1}
                 step={1}
@@ -1565,7 +1565,7 @@ export function SettingsPanel({
                 title="How many pages share one illustration. Fewer = frequent/draftier; more = rarer/higher quality. Never crosses a chapter (a bigger number than the chapter just makes one image for it)."
               />
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input
+                <input className={cx.input}
                   type="checkbox"
                   checked={value.pagesPerImage === "chapter"}
                   onChange={(e) => set({ pagesPerImage: e.target.checked ? "chapter" : 3 })}
@@ -1577,7 +1577,7 @@ export function SettingsPanel({
 
           <label style={rowStyle}>
             <span>Image quality</span>
-            <select
+            <select className={cx.input}
               value={value.imageQuality ?? "auto"}
               onChange={(e) =>
                 set({
@@ -1604,7 +1604,7 @@ export function SettingsPanel({
 
           <label style={rowStyle}>
             <span>Aspect ratio</span>
-            <select
+            <select className={cx.input}
               value={value.aspectRatio ?? "square"}
               onChange={(e) =>
                 set({ aspectRatio: e.target.value as "square" | "portrait" | "landscape" })
@@ -1619,7 +1619,7 @@ export function SettingsPanel({
 
           <label style={rowStyle}>
             <span>Comic panels per view</span>
-            <select
+            <select className={cx.input}
               value={String(value.panelsPerView ?? 1)}
               onChange={(e) =>
                 set({ panelsPerView: Number(e.target.value) as 1 | 4 | 6 | 9 })
@@ -1638,7 +1638,7 @@ export function SettingsPanel({
           </label>
 
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.perCharacterRegions ?? false}
               onChange={(e) => set({ perCharacterRegions: e.target.checked })}
@@ -1657,7 +1657,7 @@ export function SettingsPanel({
 
           <label style={rowStyle}>
             <span>How character descriptions reach the image model</span>
-            <select
+            <select className={cx.input}
               value={value.promptNameStyle ?? "auto"}
               onChange={(e) => {
                 // "Automatic" REMOVES the key rather than storing undefined — the per-family
@@ -1689,7 +1689,7 @@ export function SettingsPanel({
 
           {(value.imageStyle === "comic" || value.imageStyle === "manga") && (
             <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <input
+              <input className={cx.input}
                 type="checkbox"
                 checked={value.drawAsComicPage ?? false}
                 onChange={(e) => set({ drawAsComicPage: e.target.checked })}
@@ -1712,7 +1712,7 @@ export function SettingsPanel({
             keywords="mature adult explicit nsfw content filter safety moderation uncensored"
           >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.allowMature ?? false}
               onChange={(e) => set({ allowMature: e.target.checked })}
@@ -1737,7 +1737,7 @@ export function SettingsPanel({
           >
           <label style={rowStyle}>
             <span>Reading voice</span>
-            <select
+            <select className={cx.input}
               value={value.voiceGender ?? "feminine"}
               onChange={(e) => set({ voiceGender: e.target.value as "feminine" | "masculine" | "system" })}
             >
@@ -1748,7 +1748,7 @@ export function SettingsPanel({
           </label>
           <label style={rowStyle}>
             <span>Voice quality</span>
-            <select
+            <select className={cx.input}
               value={value.voiceEngine ?? "system"}
               onChange={(e) => set({ voiceEngine: e.target.value as "system" | "natural" })}
             >
@@ -1765,7 +1765,7 @@ export function SettingsPanel({
                 ) : voiceDl.state === "loading" ? (
                   <span style={{ fontSize: 12, opacity: 0.75 }}>Downloading… {Math.round(voiceDl.pct)}%</span>
                 ) : (
-                  <button style={smallButtonStyle} onClick={downloadNaturalVoice}>
+                  <button className={cx.btn} style={smallButtonStyle} onClick={downloadNaturalVoice}>
                     Download now (~80MB)
                   </button>
                 )}
@@ -1794,7 +1794,7 @@ export function SettingsPanel({
             keywords="autonomy autonomous learn skills pull files search full medium-risk approve permission"
           >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.autoLearnSkills ?? false}
               onChange={(e) => set({ autoLearnSkills: e.target.checked })}
@@ -1811,7 +1811,7 @@ export function SettingsPanel({
             </span>
           </label>
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.autoPullFiles ?? true}
               onChange={(e) => set({ autoPullFiles: e.target.checked })}
@@ -1826,7 +1826,7 @@ export function SettingsPanel({
             </span>
           </label>
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.autonomousFileSearch ?? false}
               onChange={(e) => set({ autonomousFileSearch: e.target.checked })}
@@ -1841,7 +1841,7 @@ export function SettingsPanel({
             </span>
           </label>
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.fullAutonomy ?? false}
               onChange={(e) => set({ fullAutonomy: e.target.checked })}
@@ -1865,7 +1865,7 @@ export function SettingsPanel({
             keywords="remote bus google tasks phone run commands VR"
           >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.remoteBus ?? false}
               onChange={(e) => set({ remoteBus: e.target.checked })}
@@ -1890,7 +1890,7 @@ export function SettingsPanel({
             keywords="privacy incognito phone link hidden curtain not saved"
           >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-            <input
+            <input className={cx.input}
               type="checkbox"
               checked={value.incognitoRemote ?? false}
               onChange={(e) => set({ incognitoRemote: e.target.checked })}
@@ -1915,7 +1915,7 @@ export function SettingsPanel({
           >
           <label style={{ ...rowStyle, marginTop: 8 }}>
             <span>MCP servers (optional)</span>
-            <textarea
+            <textarea className={cx.input}
               value={value.mcpServers ?? ""}
               onChange={(e) => set({ mcpServers: e.target.value })}
               placeholder={"one per line — an HTTP URL or a local command:\nweather https://my-mcp.example/mcp\nfiles npx -y @modelcontextprotocol/server-filesystem /home/me"}
@@ -1933,7 +1933,7 @@ export function SettingsPanel({
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
               <span style={{ opacity: 0.55, fontSize: 11 }}>Add an example:</span>
               {MCP_PRESETS.map((p) => (
-                <button
+                <button className={cx.btn}
                   key={p.label}
                   type="button"
                   title={`${p.hint}${p.desktopOnly ? " (desktop only)" : ""}\n${p.line}`}
@@ -1984,7 +1984,7 @@ export function SettingsPanel({
             </p>
             <label style={rowStyle}>
               <span>Custom Search API key</span>
-              <input
+              <input className={cx.input}
                 type="password"
                 value={value.keys.search ?? ""}
                 placeholder="AIza… (blank = reuse the Gemini key, if Custom Search API is enabled on it)"
@@ -1993,14 +1993,14 @@ export function SettingsPanel({
             </label>
             <label style={rowStyle}>
               <span>Search engine ID (cx)</span>
-              <input
+              <input className={cx.input}
                 value={value.searchEngineId ?? ""}
                 placeholder="e.g. a1b2c3d4e5f6g7h8i"
                 onChange={(e) => set({ searchEngineId: e.target.value.trim() })}
               />
             </label>
             <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
-              <input
+              <input className={cx.input}
                 type="checkbox"
                 checked={value.groundFacts ?? false}
                 onChange={(e) => set({ groundFacts: e.target.checked })}
@@ -2014,7 +2014,7 @@ export function SettingsPanel({
             </label>
             <label style={rowStyle}>
               <span>Wolfram|Alpha AppID (optional)</span>
-              <input
+              <input className={cx.input}
                 type="password"
                 value={value.keys.wolfram ?? ""}
                 placeholder="blank = use the built-in calculator (mathjs) for math"
@@ -2046,7 +2046,7 @@ export function SettingsPanel({
             </p>
             <label style={rowStyle}>
               <span>Chat model</span>
-              <select
+              <select className={cx.input}
                 value={value.chatTextProvider ?? "local"}
                 onChange={(e) =>
                   set({ chatTextProvider: e.target.value as "default" | TextProviderId })
@@ -2070,7 +2070,7 @@ export function SettingsPanel({
             {(value.chatTextProvider ?? "local") === "local" && (
               <label style={rowStyle}>
                 <span>Chat local model</span>
-                <select
+                <select className={cx.input}
                   value={value.chatLocalModel ?? ""}
                   onChange={(e) => set({ chatLocalModel: e.target.value })}
                 >
@@ -2093,7 +2093,7 @@ export function SettingsPanel({
             {(value.chatTextProvider ?? "local") === "local" && (
               <label style={rowStyle}>
                 <span>Thinking (reasoning models)</span>
-                <select
+                <select className={cx.input}
                   value={value.localThinkingEffort ?? "auto"}
                   onChange={(e) =>
                     set({ localThinkingEffort: e.target.value as "auto" | "off" | "low" | "medium" | "high" })
@@ -2121,7 +2121,7 @@ export function SettingsPanel({
           >
             <label style={rowStyle}>
               <span>Chat image generation</span>
-              <select
+              <select className={cx.input}
                 value={value.chatImageProvider ?? "local"}
                 onChange={(e) =>
                   set({ chatImageProvider: e.target.value as "default" | ImageProviderId })
@@ -2147,7 +2147,7 @@ export function SettingsPanel({
             >
               <>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 12 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.appManagedSteps ?? false}
                     onChange={(e) => set({ appManagedSteps: e.target.checked })}
@@ -2175,7 +2175,7 @@ export function SettingsPanel({
                   {remote && !isDesktop ? <span style={{ opacity: 0.6 }}> — these run on your desktop</span> : " (desktop)"}
                 </div>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.allowCommands ?? false}
                     onChange={(e) => set({ allowCommands: e.target.checked })}
@@ -2196,7 +2196,7 @@ export function SettingsPanel({
                 </label>
                 {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.autonomousWorkspace ?? false}
                       onChange={(e) => set({ autonomousWorkspace: e.target.checked })}
@@ -2216,7 +2216,7 @@ export function SettingsPanel({
                 )}
                 {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.liveControl ?? false}
                       onChange={(e) => set({ liveControl: e.target.checked })}
@@ -2238,7 +2238,7 @@ export function SettingsPanel({
                 )}
                 {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.delegateCoding ?? false}
                       onChange={(e) => set({ delegateCoding: e.target.checked })}
@@ -2258,7 +2258,7 @@ export function SettingsPanel({
                 {(value.allowCommands ?? false) && (value.delegateCoding ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
                     <span style={{ fontSize: 13 }}>Coding agent</span>
-                    <select
+                    <select className={cx.input}
                       value={value.codingAgentBackend ?? "aider"}
                       onChange={(e) => set({ codingAgentBackend: e.target.value === "codex" ? "codex" : "aider" })}
                     >
@@ -2274,7 +2274,7 @@ export function SettingsPanel({
                 {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
                     <span style={{ fontSize: 13 }}>Windows shell</span>
-                    <select
+                    <select className={cx.input}
                       value={value.commandShell ?? "cmd"}
                       onChange={(e) => set({ commandShell: e.target.value === "powershell" ? "powershell" : "cmd" })}
                     >
@@ -2289,7 +2289,7 @@ export function SettingsPanel({
                 )}
                 {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.autoResolveConflicts ?? true}
                       onChange={(e) => set({ autoResolveConflicts: e.target.checked })}
@@ -2318,7 +2318,7 @@ export function SettingsPanel({
             >
               <>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.allowMarkets ?? false}
                     onChange={(e) => set({ allowMarkets: e.target.checked })}
@@ -2333,7 +2333,7 @@ export function SettingsPanel({
                   </span>
                 </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.allowTradingViewBridge ?? false}
                     onChange={(e) => set({ allowTradingViewBridge: e.target.checked })}
@@ -2351,7 +2351,7 @@ export function SettingsPanel({
                 </label>
                 <label style={{ ...rowStyle, marginTop: 8 }}>
                   <span>GitHub token (optional)</span>
-                  <input
+                  <input className={cx.input}
                     type="password"
                     value={value.keys.github ?? ""}
                     placeholder="ghp_… — lets the assistant work with your repos"
@@ -2369,7 +2369,7 @@ export function SettingsPanel({
                   </span>
                 </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.githubLocalAuth ?? false}
                     onChange={(e) => set({ githubLocalAuth: e.target.checked })}
@@ -2395,7 +2395,7 @@ export function SettingsPanel({
                 )}
                 {onConnectGoogle && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.autoTaskScan ?? true}
                       onChange={(e) => set({ autoTaskScan: e.target.checked })}
@@ -2414,7 +2414,7 @@ export function SettingsPanel({
                 {onConnectGoogle && (value.autoTaskScan ?? true) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
                     <span>Plan per background sweep</span>
-                    <select
+                    <select className={cx.input}
                       value={value.backgroundPlanRate ?? 2}
                       onChange={(e) => set({ backgroundPlanRate: Number(e.target.value) })}
                       style={{
@@ -2449,7 +2449,7 @@ export function SettingsPanel({
                       <b>keyword</b> (matched in the subject or sender). The scan searches these too and flags anything
                       actionable from them.
                     </span>
-                    <textarea
+                    <textarea className={cx.input}
                       value={value.scanFocus ?? ""}
                       placeholder={"boss@company.com\nsubject:invoice\nlandlord\nfrom:school.edu"}
                       onChange={(e) => set({ scanFocus: e.target.value })}
@@ -2480,7 +2480,7 @@ export function SettingsPanel({
             >
               <>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.allowSubAgents ?? false}
                     onChange={(e) => set({ allowSubAgents: e.target.checked })}
@@ -2495,7 +2495,7 @@ export function SettingsPanel({
                 </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
                   <span>Parallel sub-agents</span>
-                  <select
+                  <select className={cx.input}
                     value={value.agentConcurrency ?? 2}
                     onChange={(e) => set({ agentConcurrency: Number(e.target.value) })}
                     style={{
@@ -2530,13 +2530,13 @@ export function SettingsPanel({
                     <b>"walk me through vLLM setup"</b> and it'll guide you step by step.
                   </span>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <input
+                    <input className={cx.input}
                       style={{ flex: "2 1 220px", minWidth: 180 }}
                       placeholder="http://localhost:8000/v1"
                       value={value.subAgentServerUrl ?? ""}
                       onChange={(e) => set({ subAgentServerUrl: e.target.value })}
                     />
-                    <input
+                    <input className={cx.input}
                       style={{ flex: "1 1 140px", minWidth: 120 }}
                       placeholder="model id (e.g. Qwen/Qwen3-4B)"
                       value={value.subAgentModel ?? ""}
@@ -2545,7 +2545,7 @@ export function SettingsPanel({
                   </div>
                   {onTestSubAgentEndpoint && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                      <button
+                      <button className={cx.btn}
                         type="button"
                         disabled={subTest.state === "testing"}
                         onClick={async () => {
@@ -2647,7 +2647,7 @@ export function SettingsPanel({
               <>
                 {onConnectGoogle && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                    <input
+                    <input className={cx.input}
                       type="checkbox"
                       checked={value.allowTaskAutomation ?? false}
                       onChange={(e) => set({ allowTaskAutomation: e.target.checked })}
@@ -2666,7 +2666,7 @@ export function SettingsPanel({
                   </label>
                 )}
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-                  <input
+                  <input className={cx.input}
                     type="checkbox"
                     checked={value.allowCreativeIdle ?? false}
                     onChange={(e) => set({ allowCreativeIdle: e.target.checked })}
@@ -2728,7 +2728,7 @@ export function SettingsPanel({
                   </p>
                   <label style={rowStyle}>
                     <span>Schwab app key</span>
-                    <input
+                    <input className={cx.input}
                       type="password"
                       value={value.keys.schwabClientId ?? ""}
                       onChange={(e) => setKey("schwabClientId", e.target.value.trim())}
@@ -2736,7 +2736,7 @@ export function SettingsPanel({
                   </label>
                   <label style={rowStyle}>
                     <span>Schwab app secret</span>
-                    <input
+                    <input className={cx.input}
                       type="password"
                       value={value.keys.schwabClientSecret ?? ""}
                       onChange={(e) => setKey("schwabClientSecret", e.target.value.trim())}
@@ -2744,7 +2744,7 @@ export function SettingsPanel({
                   </label>
                   <label style={rowStyle}>
                     <span>Callback URL</span>
-                    <input
+                    <input className={cx.input}
                       value={value.keys.schwabCallbackUrl ?? ""}
                       placeholder={DEFAULT_SCHWAB_CALLBACK}
                       onChange={(e) => setKey("schwabCallbackUrl", e.target.value.trim())}
@@ -2778,7 +2778,7 @@ export function SettingsPanel({
                         <span style={{ opacity: 0.55, fontSize: 11 }}>Add the app key and secret above, then sign in.</span>
                       ) : (
                         <>
-                          <button style={smallButtonStyle} onClick={onConnectSchwab}>
+                          <button className={cx.btn} style={smallButtonStyle} onClick={onConnectSchwab}>
                             Sign in to Schwab
                           </button>
                           <span style={{ opacity: 0.55, fontSize: 11, display: "block", marginTop: 4 }}>
@@ -2808,7 +2808,7 @@ export function SettingsPanel({
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Character reference photos (IP-Adapter)</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
                   {onInstallIpAdapter ? (
-                    <button type="button" onClick={() => onInstallIpAdapter()}>
+                    <button className={cx.btn} type="button" onClick={() => onInstallIpAdapter()}>
                       Set up reference photos (~{ipAdapterDownloadSizeGB()} GB)
                     </button>
                   ) : null}
@@ -2878,7 +2878,7 @@ export function SettingsPanel({
               return (
                 <label style={rowStyle}>
                   <span>Style LoRA (override)</span>
-                  <select
+                  <select className={cx.input}
                     value={value.styleLoraOverride ?? ""}
                     onChange={(e) => set({ styleLoraOverride: e.target.value })}
                     title="Pick any LoRA installed in the engine's loras folder to use with the current style, or turn LoRAs off. Overrides the style's automatic pack. The tag shows each LoRA's detected base model."
@@ -2976,7 +2976,7 @@ export function SettingsPanel({
             })()}
             <label style={{ ...rowStyle, alignItems: "flex-start" }}>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input
+                <input className={cx.input}
                   type="checkbox"
                   checked={value.lowVram ?? false}
                   onChange={(e) => set({ lowVram: e.target.checked })}
@@ -3019,7 +3019,7 @@ export function SettingsPanel({
                   {rec.noneFit ? (
                     <span style={{ opacity: 0.85 }}>
                       ⚠ No installed chat model fits alongside this image model.{" "}
-                      <button style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => set({ lowVram: true })}>
+                      <button className={cx.btn} style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => set({ lowVram: true })}>
                         Turn on Low-VRAM mode
                       </button>{" "}
                       (frees the chat model for each render), or skip the LLM entirely and use the freeform image
@@ -3035,7 +3035,7 @@ export function SettingsPanel({
                           {value.textProvider === "local" && value.localServerTextModel === f.model ? (
                             <span style={{ color: SUCCESS_GREEN }}>✓ In use</span>
                           ) : (
-                            <button style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => useModel(f.model, f.suggestedNumCtx)}>
+                            <button className={cx.btn} style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => useModel(f.model, f.suggestedNumCtx)}>
                               Use
                             </button>
                           )}
@@ -3056,7 +3056,7 @@ export function SettingsPanel({
           {value.imageProvider === "local" && (
             <label style={{ ...rowStyle, alignItems: "flex-start" }}>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input
+                <input className={cx.input}
                   type="checkbox"
                   checked={value.hires ?? false}
                   onChange={(e) => set({ hires: e.target.checked })}
@@ -3117,7 +3117,7 @@ export function SettingsPanel({
                 ) : (
                   <label style={rowStyle}>
                     <span>Text encoder file</span>
-                    <input
+                    <input className={cx.input}
                       value={value.localTextEncoder ?? ""}
                       placeholder={`auto${componentHint.recommendedEncoder ? ` — e.g. ${componentHint.recommendedEncoder}` : " — e.g. qwen_3_8b_fp8mixed.safetensors"}`}
                       onChange={(e) => setComponent({ textEncoder: e.target.value.trim() })}
@@ -3143,7 +3143,7 @@ export function SettingsPanel({
                 ) : (
                   <label style={rowStyle}>
                     <span>VAE file</span>
-                    <input
+                    <input className={cx.input}
                       value={value.localVae ?? ""}
                       placeholder={`auto${componentHint.recommendedVae ? ` — e.g. ${componentHint.recommendedVae}` : " — e.g. ae.safetensors"}`}
                       onChange={(e) => setComponent({ vae: e.target.value.trim() })}
@@ -3152,7 +3152,7 @@ export function SettingsPanel({
                 ))}
               <label style={rowStyle}>
                 <span>Sampler steps</span>
-                <input
+                <input className={cx.input}
                   type="number"
                   min={1}
                   step={1}
@@ -3169,7 +3169,7 @@ export function SettingsPanel({
               </label>
               <label style={rowStyle}>
                 <span>CFG / guidance</span>
-                <input
+                <input className={cx.input}
                   type="number"
                   min={0}
                   step={0.5}
@@ -3185,7 +3185,7 @@ export function SettingsPanel({
               </label>
               <label style={rowStyle}>
                 <span>Sampler</span>
-                <select
+                <select className={cx.input}
                   value={value.localSampler ?? ""}
                   onChange={(e) => set({ localSampler: e.target.value })}
                   title="The denoising algorithm. Blank uses the per-model default. dpmpp_2m / dpmpp_2m_sde are strong all-rounders; euler is the safe baseline."
@@ -3200,7 +3200,7 @@ export function SettingsPanel({
               </label>
               <label style={rowStyle}>
                 <span>Scheduler</span>
-                <select
+                <select className={cx.input}
                   value={value.localScheduler ?? ""}
                   onChange={(e) => set({ localScheduler: e.target.value })}
                   title="How the noise level steps down. Blank uses the per-model default. karras is a common choice for SD; flux/turbo models prefer simple."
@@ -3291,7 +3291,7 @@ function GoogleConnectBlock({
       </p>
       <label style={rowStyle}>
         <span>Google client ID</span>
-        <input
+        <input className={cx.input}
           type="password"
           value={value.keys.googleClientId ?? ""}
           placeholder="…apps.googleusercontent.com"
@@ -3300,7 +3300,7 @@ function GoogleConnectBlock({
       </label>
       <label style={rowStyle}>
         <span>Google client secret</span>
-        <input
+        <input className={cx.input}
           type="password"
           value={value.keys.googleClientSecret ?? ""}
           onChange={(e) => setKey("googleClientSecret", e.target.value.trim())}
@@ -3311,7 +3311,7 @@ function GoogleConnectBlock({
           <>
             <span style={{ fontSize: 12, color: SUCCESS_GREEN }}>✓ Connected{email ? ` as ${email}` : ""}</span>
             {onDisconnect && (
-              <button
+              <button className={cx.btn}
                 type="button"
                 onClick={() => {
                   if (window.confirm("Disconnect Google? The saved sign-in is forgotten — you'll need to approve access again to reconnect.")) onDisconnect();
@@ -3323,7 +3323,7 @@ function GoogleConnectBlock({
             )}
           </>
         ) : (
-          <button type="button" disabled={busy || !ready} onClick={() => void connect()} style={btn}>
+          <button className={cx.btn} type="button" disabled={busy || !ready} onClick={() => void connect()} style={btn}>
             {busy ? "Connecting… (approve in your browser)" : "Connect Google"}
           </button>
         )}
@@ -3371,7 +3371,7 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
           </a>
         )}
       </span>
-      <input
+      <input className={cx.input}
         type="password"
         value={draft}
         placeholder={info.keyHint ? `Paste your key (${info.keyHint})` : "Paste your key"}
@@ -3398,7 +3398,7 @@ function PasteUrl({ placeholder, onSubmit }: { placeholder: string; onSubmit: (u
   };
   return (
     <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-      <input
+      <input className={cx.input}
         style={{ flex: 1 }}
         value={url}
         placeholder={placeholder}
@@ -3461,7 +3461,7 @@ function NativeModeRow({
   return (
     <div style={rowStyle}>
       <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-        <input
+        <input className={cx.input}
           type="checkbox"
           checked={value.nativeIllustration === true}
           onChange={(e) => set({ nativeIllustration: e.target.checked })}
@@ -3477,7 +3477,7 @@ function NativeModeRow({
       </label>
       {value.nativeIllustration === true && (
         <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginLeft: 24 }}>
-          <input
+          <input className={cx.input}
             type="checkbox"
             checked={value.nativeOneShot === true}
             onChange={(e) => set({ nativeOneShot: e.target.checked })}
@@ -3648,7 +3648,7 @@ function LocalEngine({
                 {isActive ? <span style={{ marginLeft: 6, opacity: 0.7, fontWeight: 400 }}>✓ active for images</span> : null}
               </span>
               <div style={{ display: "flex", gap: 6 }}>
-                <input
+                <input className={cx.input}
                   style={{ flex: 1, minWidth: 0 }}
                   value={url}
                   placeholder={LOCAL_ENGINE_DEFAULT_URL[id]}
@@ -3673,7 +3673,7 @@ function LocalEngine({
               {id === "a1111" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
                   <span style={{ fontSize: 11, opacity: 0.8 }}>AUTOMATIC1111 install folder (auto-start)</span>
-                  <input
+                  <input className={cx.input}
                     style={{ flex: 1, minWidth: 0 }}
                     value={a1111Path}
                     placeholder="e.g. C:\\stable-diffusion-webui"
@@ -3696,7 +3696,7 @@ function LocalEngine({
 
       {isDesktop && (
         <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 12 }}>
-          <input
+          <input className={cx.input}
             type="checkbox"
             checked={showEngineConsole}
             onChange={(e) => onSet({ showEngineConsole: e.target.checked })}
@@ -3837,7 +3837,7 @@ function LocalTextServer({
   return (
     <div style={rowStyle}>
       <span>Local LLM server</span>
-      <select value={server} onChange={(e) => onSet({ localTextServer: e.target.value as LocalTextServerId })}>
+      <select className={cx.input} value={server} onChange={(e) => onSet({ localTextServer: e.target.value as LocalTextServerId })}>
         {(Object.keys(LOCAL_TEXT_SERVER_LABEL) as LocalTextServerId[]).map((id) => (
           <option key={id} value={id}>
             {LOCAL_TEXT_SERVER_LABEL[id]}
@@ -3845,7 +3845,7 @@ function LocalTextServer({
         ))}
       </select>
       <div style={{ display: "flex", gap: 6 }}>
-        <input
+        <input className={cx.input}
           style={{ flex: 1 }}
           value={url}
           placeholder={placeholder}
@@ -3946,7 +3946,7 @@ function ModelSelect({
     return <span style={{ opacity: 0.6, fontSize: 12 }}>Connect to load the available models.</span>;
   }
   return (
-    <select value={selected ?? ""} onChange={(e) => onSelect(e.target.value)}>
+    <select className={cx.input} value={selected ?? ""} onChange={(e) => onSelect(e.target.value)}>
       <option value="" disabled>
         Choose a model…
       </option>
@@ -4181,7 +4181,7 @@ function ComponentSelect({
   return (
     <label style={rowStyle}>
       <span>{label}</span>
-      <select value={valueId} onChange={(e) => onPick(e.target.value)}>
+      <select className={cx.input} value={valueId} onChange={(e) => onPick(e.target.value)}>
         <option value="">{recommended ? `Auto — recommended: ${recommended}` : "Auto (best match)"}</option>
         {options.map((o) => (
           <option key={o} value={o}>

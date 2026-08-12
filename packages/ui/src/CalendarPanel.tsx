@@ -1,3 +1,4 @@
+import { cx } from "./design/classes.js";
 import { t } from "./design/tokens.js";
 import { memo, useMemo, useState } from "react";
 import type { CalendarEvent } from "@visual-reader/core";
@@ -104,7 +105,7 @@ function timeLabel(ev: CalendarEvent): string {
   return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/** Local "HH:MM" for an ISO datetime — what an `<input type="time">` wants. Empty when unparseable
+/** Local "HH:MM" for an ISO datetime — what an `<input className={cx.input} type="time">` wants. Empty when unparseable
  * (or for a bare all-day date, which carries no clock time). */
 function clockOf(iso: string): string {
   const t = Date.parse(iso);
@@ -303,16 +304,16 @@ export const CalendarPanel = memo(function CalendarPanel({
             </span>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button style={btn} onClick={onPrev} title="Previous month">
+            <button className={cx.btn} style={btn} onClick={onPrev} title="Previous month">
               ‹
             </button>
-            <button style={btn} onClick={onToday} title="Jump to this month">
+            <button className={cx.btn} style={btn} onClick={onToday} title="Jump to this month">
               Today
             </button>
-            <button style={btn} onClick={onNext} title="Next month">
+            <button className={cx.btn} style={btn} onClick={onNext} title="Next month">
               ›
             </button>
-            <button style={btn} onClick={onClose}>
+            <button className={cx.btn} style={btn} onClick={onClose}>
               Close
             </button>
           </div>
@@ -342,7 +343,7 @@ export const CalendarPanel = memo(function CalendarPanel({
             const dayEvents = eventsByDay.get(k) ?? [];
             const dayDeadlines = deadlinesByDay.get(k) ?? [];
             return (
-              <button
+              <button className={cx.btn}
                 key={k}
                 onClick={() => setSelected(k === selected ? null : k)}
                 style={{
@@ -396,30 +397,30 @@ export const CalendarPanel = memo(function CalendarPanel({
                 {selectedEvents.map((ev, i) =>
                   editId && ev.id === editId ? (
                     <div key={`se-${i}`} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", padding: "4px 0" }}>
-                      <input autoFocus value={edSummary} onChange={(e) => setEdSummary(e.target.value)} placeholder="Event title" style={evInput} />
+                      <input className={cx.input} autoFocus value={edSummary} onChange={(e) => setEdSummary(e.target.value)} placeholder="Event title" style={evInput} />
                       <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, opacity: 0.85, cursor: "pointer" }} title="Switch between an all-day event and one with a set time">
-                        <input type="checkbox" checked={edAllDay} onChange={(e) => setEdAllDay(e.target.checked)} />
+                        <input className={cx.input} type="checkbox" checked={edAllDay} onChange={(e) => setEdAllDay(e.target.checked)} />
                         All day
                       </label>
                       {edAllDay ? null : (
                         <>
-                          <input type="time" value={edStart} onChange={(e) => setEdStart(e.target.value)} style={evTime} title="Start" />
+                          <input className={cx.input} type="time" value={edStart} onChange={(e) => setEdStart(e.target.value)} style={evTime} title="Start" />
                           <span style={{ opacity: 0.5 }}>→</span>
-                          <input type="time" value={edEnd} onChange={(e) => setEdEnd(e.target.value)} style={evTime} title="End" />
+                          <input className={cx.input} type="time" value={edEnd} onChange={(e) => setEdEnd(e.target.value)} style={evTime} title="End" />
                         </>
                       )}
-                      <input value={edLocation} onChange={(e) => setEdLocation(e.target.value)} placeholder="Location" style={evInput} />
-                      <textarea
+                      <input className={cx.input} value={edLocation} onChange={(e) => setEdLocation(e.target.value)} placeholder="Location" style={evInput} />
+                      <textarea className={cx.input}
                         value={edDescription}
                         onChange={(e) => setEdDescription(e.target.value)}
                         placeholder="Details (notes, confirmation numbers…)"
                         rows={2}
                         style={{ ...evInput, width: "100%", resize: "vertical", fontFamily: "inherit" }}
                       />
-                      <button style={btn} onClick={() => void submitEdit(ev)} disabled={edBusy}>
+                      <button className={cx.btn} style={btn} onClick={() => void submitEdit(ev)} disabled={edBusy}>
                         {edBusy ? "Saving…" : "Save"}
                       </button>
-                      <button style={btn} onClick={() => { setEditId(null); setEdError(null); }} disabled={edBusy}>
+                      <button className={cx.btn} style={btn} onClick={() => { setEditId(null); setEdError(null); }} disabled={edBusy}>
                         Cancel
                       </button>
                       {edError ? <span style={{ fontSize: 11, color: t.state.danger, width: "100%" }}>⚠ {edError}</span> : null}
@@ -438,7 +439,7 @@ export const CalendarPanel = memo(function CalendarPanel({
                         ) : null}
                       </span>
                       {onUpdateEvent && ev.id ? (
-                        <button style={{ ...btn, padding: "1px 6px", fontSize: 11, flexShrink: 0 }} onClick={() => beginEdit(ev)} title="Edit this event in Google Calendar">
+                        <button className={cx.btn} style={{ ...btn, padding: "1px 6px", fontSize: 11, flexShrink: 0 }} onClick={() => beginEdit(ev)} title="Edit this event in Google Calendar">
                           Edit
                         </button>
                       ) : null}
@@ -450,27 +451,27 @@ export const CalendarPanel = memo(function CalendarPanel({
             {onCreateEvent ? (
               adding ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
-                  <input autoFocus value={evSummary} onChange={(e) => setEvSummary(e.target.value)} placeholder="Event title" style={evInput} />
+                  <input className={cx.input} autoFocus value={evSummary} onChange={(e) => setEvSummary(e.target.value)} placeholder="Event title" style={evInput} />
                   <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, opacity: 0.85, cursor: "pointer" }} title="An event with no set time, shown across the whole day">
-                    <input type="checkbox" checked={evAllDay} onChange={(e) => setEvAllDay(e.target.checked)} />
+                    <input className={cx.input} type="checkbox" checked={evAllDay} onChange={(e) => setEvAllDay(e.target.checked)} />
                     All day
                   </label>
                   {evAllDay ? null : (
                     <>
-                      <input type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} style={evTime} title="Start" />
+                      <input className={cx.input} type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} style={evTime} title="Start" />
                       <span style={{ opacity: 0.5 }}>→</span>
-                      <input type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} style={evTime} title="End" />
+                      <input className={cx.input} type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} style={evTime} title="End" />
                     </>
                   )}
-                  <input value={evLocation} onChange={(e) => setEvLocation(e.target.value)} placeholder="Location (optional)" style={evInput} />
-                  <button style={btn} onClick={() => void submitEvent()} disabled={evBusy || !evSummary.trim()}>
+                  <input className={cx.input} value={evLocation} onChange={(e) => setEvLocation(e.target.value)} placeholder="Location (optional)" style={evInput} />
+                  <button className={cx.btn} style={btn} onClick={() => void submitEvent()} disabled={evBusy || !evSummary.trim()}>
                     {evBusy ? "Adding…" : "Add"}
                   </button>
-                  <button style={btn} onClick={() => { setAdding(false); setEvError(null); }}>Cancel</button>
+                  <button className={cx.btn} style={btn} onClick={() => { setAdding(false); setEvError(null); }}>Cancel</button>
                   {evError ? <span style={{ fontSize: 11, color: t.state.danger, width: "100%" }}>⚠ {evError}</span> : null}
                 </div>
               ) : (
-                <button style={{ ...btn, marginTop: 8 }} onClick={() => setAdding(true)} title={`Add an event on ${selected}`}>
+                <button className={cx.btn} style={{ ...btn, marginTop: 8 }} onClick={() => setAdding(true)} title={`Add an event on ${selected}`}>
                   ＋ Add event
                 </button>
               )
