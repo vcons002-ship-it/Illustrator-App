@@ -6,6 +6,7 @@ export * from "./charts/index.js";
 export * from "./infographics/infographic-geometry.js";
 export * from "./infographics/gantt-geometry.js";
 export * from "./data/index.js";
+export * from "./chat/render-count.js";
 export * from "./chat/index.js";
 export * from "./pipeline/index.js";
 export * from "./reader-support/technical-support.js";
