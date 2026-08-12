@@ -1582,16 +1582,7 @@ export function buildBuddySystemPrompt(raw: {
       "NOTHING CONTINUES ON ITS OWN: no loop runs behind you. End a reply without " +
       '{"tool":"keep_going"} and the turn is OVER. It is not a real tool and costs nothing, so ' +
       '"too simple" is no reason to omit it.\n' +
-      // "Generate 3 images" began reading as the SAME SMALL THING over and over once that rule moved
-      // to the top of the prompt: one picture, a keep_going the render immediately killed, nothing
-      // else. The line between the two rules is mechanical, not taste, so it is stated as mechanism
-      // and it is stated HERE, where the choice is actually made.
-      "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (several images, or research → write-up) → " +
-      "call set_plan FIRST, one step per action — keep_going CANNOT do this: a render ENDS the turn, so its " +
-      "round never comes. A SINGLE action (one image, one search) → call its tool directly; do NOT make a " +
-      "plan for one step. WRITING something and MAKING something are " +
-      "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
-      "not three — a step asking for both comes back with only the picture.\n"
+""
     : opts.appManagedSteps
       ? // App-managed mid-plan: the YOUR CURRENT STEP block already says do-one-step / no complete_step.
         ""
@@ -1741,6 +1732,27 @@ export function buildBuddySystemPrompt(raw: {
    * reads first. Asserted by position in buddy-scenarios, because a later edit appending "one more
    * rule" to the end of the prompt is exactly how this regresses.
    */
+  /**
+   * WHAT SHAPE IS THE JOB — asked BEFORE the rule that says to get on with it.
+   *
+   * FOLLOW THROUGH tells the model that "make / draw / generate an image of …" means CALL
+   * generate_image, in those words. Read first, it answers "generate 3 images of yourself" on the
+   * spot and one picture comes back with no checklist behind it. That is not FOLLOW THROUGH being
+   * wrong — it is being asked the second question before the first. How many distinct actions is
+   * this? decides the shape; what do I do about it? follows from the answer.
+   *
+   * The order only started to matter when these rules moved from the bottom of the prompt to the
+   * top. Crammed together at 88–94% none of them dominated; spread across 9–15% the first one wins.
+   */
+  const planningRule = !hasPlan
+    ? "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (several images, or research → write-up) → " +
+      "call set_plan FIRST, one step per action — keep_going CANNOT do this: a render ENDS the turn, so its " +
+      "round never comes. A SINGLE action (one image, one search) → call its tool directly; do NOT make a " +
+      "plan for one step. WRITING something and MAKING something are " +
+      "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
+      "not three — a step asking for both comes back with only the picture.\n"
+    : "";
+
   const conductRules =
   "CONVERSATION RULES: use a tool only when the reader's request actually calls for one — most messages deserve a " +
   "plain conversational reply. NEVER steer the chat toward opening, illustrating, or finding books unless the " +
@@ -1749,6 +1761,7 @@ export function buildBuddySystemPrompt(raw: {
   "WHEN A REQUEST IS AMBIGUOUS — it could mean several things, you'd have to guess which book/file/window/style/" +
   "format, or you're unsure it's safe or what they want — ASK one short clarifying question or offer 2–3 concrete " +
   "options instead of guessing. A quick check beats doing the wrong thing.\n" +
+  planningRule +
   "FOLLOW THROUGH — once it's clear the reader wants something DONE (not just discussed), carry it out END-TO-END " +
   "in THIS reply by CHAINING tools: take the next step yourself instead of stopping to describe what you'd do or " +
   "handing them steps to run. " +
