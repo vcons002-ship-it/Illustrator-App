@@ -270,6 +270,36 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/their request wins/i);
   });
 
+  /**
+   * "GENERATE 3 IMAGES" STOPPED MAKING A PLAN.
+   *
+   * Hoisting the conduct rules to the top of the prompt put MANY MESSAGES vs MANY ACTIONS ahead of
+   * MULTI-STEP vs SINGLE, and strengthening the keep_going path added two more sentences to it. A
+   * request for three pictures then read as "the SAME small thing over and over" — one picture, a
+   * keep_going the render immediately killed, and nothing else.
+   *
+   * The line between the two rules is not a matter of taste, it is the turn loop: a render SUSPENDS
+   * the turn, so the round keep_going asks for never arrives. Stated as the mechanism, at the point
+   * where the choice is made, rather than as a category the model has to sort the request into.
+   */
+  it("says why keep_going cannot serve a run of renders", () => {
+    expect(prompt).toMatch(/keep_going CANNOT do this/);
+    expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/a render ENDS the turn/);
+  });
+
+  it("still sends several images to a checklist", () => {
+    const multi = /MULTI-STEP vs SINGLE:[^\n]*/.exec(prompt)?.[0] ?? "";
+    expect(multi, "the MULTI-STEP rule is gone").toBeTruthy();
+    expect(multi, "several images no longer names the case that regressed").toMatch(/several images/);
+    expect(multi).toMatch(/call set_plan FIRST/);
+  });
+
+  it("scopes the no-checklist rule to MESSAGES, which is what keep_going carries", () => {
+    // Without this the rule reads as "anything repetitive", which is exactly how three renders got
+    // sorted into it.
+    expect(prompt).toMatch(/MESSAGES means text you type/);
+  });
+
   it("says outright that nothing continues on its own", () => {
     expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
     expect(prompt).toMatch(/no loop runs behind you/);
@@ -279,7 +309,7 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("refuses 'too simple to need a tool' as a reason to skip keep_going", () => {
     expect(prompt).toMatch(/It is not a real tool/);
     expect(prompt).toMatch(/not a real tool and costs nothing/);
-    expect(prompt).toMatch(/"too simple for a tool" is no reason to omit it/);
+    expect(prompt).toMatch(/"too simple" is no reason to omit it/);
   });
 
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
