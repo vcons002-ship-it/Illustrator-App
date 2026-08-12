@@ -798,3 +798,59 @@ describe("every interactive element in the panels can actually be interacted wit
     );
   });
 });
+
+/**
+ * THE WORKFLOW STRIP LIVES IN TWO PLACES AND SHOWS IN ONE.
+ *
+ * It sat in the sticky header, costing a band of vertical space on every screen, while on a wide
+ * one the rail gutter sat empty beside the prose. Moving it answers both complaints at once — but a
+ * strip that MOVES is a strip that can go missing, so both copies always render and CSS picks.
+ *
+ * The two conditions live in different languages and both are required. The rail must be the
+ * layout in play, which only JS knows (it is the reader's per-book choice) and which reaches the
+ * shell as `.vr-rail-layout`; and the window must be wide enough for the rail to exist, which only
+ * CSS knows. Drop either and the strip moves into a gutter that is not there.
+ */
+describe("the workflow strip has somewhere to be at every width", () => {
+  const layout = readFileSync(join(STYLES, "layout.css"), "utf8");
+  const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+
+  it("builds the strip once, so the two copies cannot drift apart", () => {
+    expect(app).toMatch(/const workflowStrip =/);
+    expect(
+      (app.match(/<WorkflowBar\b/g) ?? []).length,
+      "a second <WorkflowBar> was written out by hand — the copies will diverge",
+    ).toBe(1);
+  });
+
+  it("renders BOTH copies unconditionally on the strip's own existence", () => {
+    // `workflowStrip &&` is the only guard either copy may carry: it is null when there is no book
+    // to report on. A guard on width or layout here is the failure this whole shape avoids.
+    expect(app).toMatch(/\{workflowStrip && <div className=\{cx\.workflowHeader\}>/);
+    expect(app).toMatch(/\{workflowStrip && <div className=\{cx\.workflowRail\}>/);
+  });
+
+  it("hides the rail copy by default, so a narrow window shows the header one", () => {
+    const base = /\.vr-workflow--rail \{([^}]*)\}/.exec(layout)?.[1] ?? "";
+    expect(base, ".vr-workflow--rail rule not found").toBeTruthy();
+    expect(base, "the rail copy shows before the rail exists").toMatch(/display:\s*none/);
+  });
+
+  it("swaps them only when BOTH the layout and the width agree", () => {
+    // Read out of the 1440px block specifically: the same two selectors outside it would swap the
+    // copies at every width, which is the bug this is shaped to prevent.
+    const wide = /@media \(min-width: 1440px\) \{([\s\S]*?)\n\}/g;
+    const blocks = [...layout.matchAll(wide)].map((m) => m[1] ?? "");
+    const swap = blocks.find((b) => b.includes(".vr-workflow--rail"));
+    expect(swap, "the swap is not inside a 1440px query").toBeTruthy();
+    expect(swap).toMatch(/\.vr-rail-layout \.vr-workflow--rail \{\s*display:\s*block/);
+    expect(swap).toMatch(/\.vr-rail-layout \.vr-workflow--header \{\s*display:\s*none/);
+  });
+
+  it("carries the layout fact to the shell, which is outside the reader grid", () => {
+    expect(app).toMatch(/railLayout \? ` \$\{cx\.railLayout\}` : ""/);
+    expect(app, "railLayout is not derived from the grid's own mode — the two can disagree").toMatch(
+      /const railLayout = readerModeClass === cx\.readerRail/,
+    );
+  });
+});

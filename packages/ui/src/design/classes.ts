@@ -42,6 +42,13 @@ export const cx = {
   rail: "vr-rail",
   railItem: "vr-rail-item",
   railItemCurrent: "vr-rail-item--current",
+  /** On the shell while the rail layout is in play, so the header can know what the reader grid is
+   * doing without being inside it. The rail ALSO needs the width; that half stays in CSS. */
+  railLayout: "vr-rail-layout",
+  /** The two copies of the workflow strip. Both always render; CSS shows exactly one. */
+  workflowHeader: "vr-workflow--header",
+  workflowRail: "vr-workflow--rail",
+
   /** The art column itself — the grid child, not the sticky pane inside it. */
   artCol: "vr-art-col",
   artPane: "vr-art-pane",

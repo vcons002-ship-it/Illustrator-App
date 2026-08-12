@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cx } from "./design/classes.js";
 import { t } from "./design/tokens.js";
 
@@ -73,11 +74,16 @@ export function ReaderRail({
   pages,
   activePage,
   onJump,
+  children,
 }: {
   chapters: readonly RailChapter[];
   pages: readonly RailPage[];
   activePage: number;
   onJump: (page: number) => void;
+  /** Anything else that belongs in the gutter — today, the workflow strip moved out of the sticky
+   * header. Rendered LAST so the outline, which is what the rail is for, stays at the top where the
+   * eye lands; the strip is glanceable status, not navigation. */
+  children?: ReactNode;
 }) {
   const outline = chapterOutline(chapters, pages, activePage);
   const pct = readingProgress(activePage, pages.length);
@@ -109,6 +115,7 @@ export function ReaderRail({
           </ol>
         </>
       ) : null}
+      {children}
     </nav>
   );
 }
