@@ -199,6 +199,30 @@
   }
 }
 
+/* ---- The workflow strip, in one of two places -------------------------------------
+ * It lived in the sticky header, costing a band of vertical space on every screen, while on a wide
+ * one the rail gutter sat empty beside the prose. Both copies are ALWAYS rendered and exactly one
+ * is shown, so there is no code path on which the strip disappears — the worst a wrong breakpoint
+ * can do is show it twice.
+ *
+ * Two conditions have to agree, and they live in different places: the rail must be the layout in
+ * play (JS knows that — it is the reader's per-book choice, and `.vr-rail-layout` carries it to the
+ * shell) and the window must be wide enough for the rail to exist at all (CSS knows that). Both, or
+ * the strip moves into a gutter that is not there. */
+.vr-workflow--rail {
+  display: none;
+  margin-top: 18px;
+}
+
+@media (min-width: 1440px) {
+  .vr-rail-layout .vr-workflow--rail {
+    display: block;
+  }
+  .vr-rail-layout .vr-workflow--header {
+    display: none;
+  }
+}
+
 /* Single column on a phone. This is the one breakpoint the app has; NARROW_PX in
  * design/breakpoints.ts must match it, and a test asserts that it does. */
 @media (max-width: 760px) {

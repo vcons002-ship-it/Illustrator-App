@@ -10013,11 +10013,61 @@ export function App() {
     </div>
   );
 
+  /**
+   * WHICH WAY THE READER SPENDS ITS WIDTH — decided once, read in two places.
+   *
+   * Precedence is deliberate. A data book's sheets need the width whatever else is true; a phone
+   * comes next and is decided in CSS; a comic's panel grid needs a wide art column; and only then
+   * does the reader's own choice for this book apply.
+   *
+   * It is computed HERE, above the shell, rather than inline on the grid, because the shell needs
+   * the same answer: the workflow strip renders in the header AND in the rail, and which copy shows
+   * depends on whether the rail is the layout in play — a fact the header has no other way to know,
+   * sitting outside the reader grid entirely.
+   */
+  const readerModeClass =
+    book?.data || (book?.dataSheets && book.dataSheets.length)
+      ? cx.readerData
+      : wideImageColumn
+        ? cx.readerWide
+        : READER_CLASS[readerLayout];
+  /** The rail is the layout in play. The rail ALSO needs ≥1440px, which is CSS's half of it. */
+  const railLayout = readerModeClass === cx.readerRail;
+
+  /**
+   * THE WORKFLOW STRIP, BUILT ONCE AND RENDERED TWICE.
+   *
+   * It has lived in the sticky header, which costs the reader a band of vertical space on every
+   * screen — while on a wide one the rail gutter sits empty beside the prose. Moving it into the
+   * rail answers both complaints with one change.
+   *
+   * Built as a single element and rendered in both places rather than conditionally placed, so
+   * there is no code path on which the strip is absent: CSS decides which copy is visible, and the
+   * worst a wrong breakpoint can do is show it twice rather than not at all.
+   */
+  const workflowStrip =
+    book && viewAs === "story" ? (
+      <WorkflowBar
+        stage={stage}
+        paused={paused}
+        workflow={workflow}
+        readingChapter={readingChapter}
+        painting={painting}
+        paintingWhere={paintingWhere}
+        settledCount={settledCount}
+        totalUnits={totalUnits}
+        actionNote={actionNote}
+        detail={localError || status || bibleStatus}
+      />
+    ) : null;
+
   return (
     // `vr-app` is the root every global rule hangs off — never <body>, because the browser
     // extension mounts these same components into arbitrary websites with no shadow DOM.
     <div
-      className={`${cx.app} ${cx.appBackdrop}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}`}
+      className={`${cx.app} ${cx.appBackdrop}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}${
+        railLayout ? ` ${cx.railLayout}` : ""
+      }`}
       style={styles.shell}
     >
       {/* The room the whole app sits in. Must be a CHILD of the shell, not a sibling: the shell
@@ -10764,20 +10814,9 @@ export function App() {
             )}
           </div>
         )}
-        {book && viewAs === "story" && (
-          <WorkflowBar
-            stage={stage}
-            paused={paused}
-            workflow={workflow}
-            readingChapter={readingChapter}
-            painting={painting}
-            paintingWhere={paintingWhere}
-            settledCount={settledCount}
-            totalUnits={totalUnits}
-            actionNote={actionNote}
-            detail={localError || status || bibleStatus}
-          />
-        )}
+        {/* One of TWO copies — the other is in the rail. Both are always rendered and CSS shows
+            exactly one, so no code path can lose the strip. See `workflowStrip`. */}
+        {workflowStrip && <div className={cx.workflowHeader}>{workflowStrip}</div>}
       </header>
 
       {/* Everything between the (fixed-height) header and the bottom chat dock scrolls here. */}
@@ -11000,13 +11039,7 @@ export function App() {
            * phone comes next and is decided in CSS; a comic's panel grid needs a wide art column;
            * and only then does the reader's own choice for this book apply.
            */
-          className={`${cx.reader} ${
-            book.data || (book.dataSheets && book.dataSheets.length)
-              ? cx.readerData
-              : wideImageColumn
-                ? cx.readerWide
-                : READER_CLASS[readerLayout]
-          }`}
+          className={`${cx.reader} ${readerModeClass}`}
         >
           {/* Rendered for every book and hidden by CSS below 1440px — never behind a condition here,
               so no code path can lose it. */}
@@ -11015,7 +11048,9 @@ export function App() {
             pages={book.pages}
             activePage={activePageIndex}
             onJump={jumpToPage}
-          />
+          >
+            {workflowStrip && <div className={cx.workflowRail}>{workflowStrip}</div>}
+          </ReaderRail>
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
