@@ -51,6 +51,7 @@ import {
   buildFileLedgerBlock,
   buildImageReferenceBlock,
   recentThinkingBlock,
+  requestedRendersNote,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
   buildActiveDraftBlock,
@@ -5995,7 +5996,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // round-trip now.
     const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
     const draftBlock = buildActiveDraftBlock(lastDraft);
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock].filter(Boolean).join("\n\n");
+    /**
+     * "GENERATE 3 IMAGES" CAME BACK AS ONE PICTURE, THREE PROMPT FIXES RUNNING.
+     *
+     * The standing rule that several pictures means a checklist was present, correct and read every
+     * time; it lost to whichever neighbouring rule the model reached first. A fourth wording would
+     * have been a fourth guess, so the app counts instead — a number sitting directly in front of a
+     * picture word is not a matter of interpretation.
+     *
+     * Volatile like the rest of these: rebuilt from THIS turn's message, never stored. That is the
+     * whole point — it arrives WITH the request that needs it, specific and unmissable, instead of
+     * sitting in a standing instruction competing with forty others.
+     */
+    const rendersBlock = requestedRendersNote(msg.userText ?? "", !!msg.plan);
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
