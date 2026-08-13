@@ -970,3 +970,90 @@ describe("the app's style record has no orphans", () => {
     expect(orphans, `declared in \`styles\` and never used: ${orphans.join(", ")}`).toEqual([]);
   });
 });
+
+/**
+ * THE GATE THE PLAN ASKED FOR AND NOBODY BUILT.
+ *
+ * The gate above catches a QUOTED HEX and has a documented escape hatch for the justified ones. It
+ * does not catch `rgb()` or `rgba()`, and that is the hole two colours walked through in
+ * SettingsPanel — a NEAR-MISS of the app accent, rgb 120 160 255 against the token's 122 162 255.
+ * Close enough to look deliberate, and unable to follow a palette change, which is exactly how one
+ * surface drifts away from the rest.
+ *
+ * Counting both forms across the tree turns up 120 raw colour values in 28 files.
+ *
+ * A gate that failed on all 28 would have to be switched off, and an allowlist of 28 files is not a
+ * rule. So this is a RATCHET instead, and an honest one: the debt is written down, a file that is
+ * clean must stay clean, and no file may gain a colour it did not have. Paying it down is a
+ * separate pass; letting it grow is now a test failure.
+ *
+ * Some of these are legitimate — a chart's series palette is data, not theme — and they are left in
+ * the table rather than exempted by name, because "this file is allowed colours" is how the other 24
+ * would eventually justify themselves too.
+ */
+const RAW_COLOUR_DEBT: Record<string, number> = {
+  "App.tsx": 18,
+  "ActivityCenter.tsx": 2,
+  "CalendarPanel.tsx": 5,
+  "CharacterBible.tsx": 2,
+  "ChatBuddyPanel.tsx": 9,
+  "ChatPanel.tsx": 4,
+  "ContextUsageDonut.tsx": 6,
+  "CreationsPanel.tsx": 4,
+  "DataChart.tsx": 1,
+  "DataTablePreview.tsx": 1,
+  "DownloadStatus.tsx": 2,
+  "GanttChart.tsx": 11,
+  "ImagePanel.tsx": 2,
+  "Infographic.tsx": 9,
+  "JsonTreeView.tsx": 5,
+  "LibraryPanel.tsx": 1,
+  "OrderReviewModal.tsx": 1,
+  "PanelGrid.tsx": 3,
+  "ParticleField.tsx": 2,
+  "RenameExportModal.tsx": 1,
+  "ScheduledTasksPanel.tsx": 2,
+  "SoulPanel.tsx": 6,
+  "SpoilerGate.tsx": 1,
+  "StockChartPanel.tsx": 7,
+  "TasksPanel.tsx": 8,
+  "TechnicalSupport.tsx": 4,
+  "Toast.tsx": 2,
+  "WorldBible.tsx": 1,
+};
+
+describe("raw colour literals cannot spread", () => {
+  /** Colour values a theme change would leave behind. Comments are stripped: the before/after
+   * examples in the docs are worth more than the strictness of the count. */
+  function rawColours(src: string): number {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    return (code.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).length + (code.match(/\brgba?\(/g) ?? []).length;
+  }
+
+  const files = [
+    ...readdirSync(join(__dirname, "..")).filter((f) => f.endsWith(".tsx")).map((f) => [f, join(__dirname, "..", f)] as const),
+    ["App.tsx", join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx")] as const,
+  ];
+
+  it.each(files)("%s carries no more raw colour than it is owed", (name, path) => {
+    const n = rawColours(readFileSync(path, "utf8"));
+    const owed = RAW_COLOUR_DEBT[name] ?? 0;
+    expect(
+      n,
+      owed === 0
+        ? `${name} is tokenised and must stay that way — ${n} raw colour value(s) appeared`
+        : `${name} owes ${owed} raw colour value(s) and now has ${n}; the debt may shrink, never grow`,
+    ).toBeLessThanOrEqual(owed);
+  });
+
+  it("has a debt that only ever gets smaller", () => {
+    const total = files.reduce((sum, [, p]) => sum + rawColours(readFileSync(p, "utf8")), 0);
+    expect(total, "the tail of P1 grew").toBeLessThanOrEqual(
+      Object.values(RAW_COLOUR_DEBT).reduce((a, b) => a + b, 0),
+    );
+  });
+
+  it("keeps SettingsPanel out of the table, which is the point of this pass", () => {
+    expect(RAW_COLOUR_DEBT["SettingsPanel.tsx"], "SettingsPanel is back in debt").toBeUndefined();
+  });
+});

@@ -31,9 +31,21 @@ describe("the settings card is self-sufficient", () => {
    * Deliberately not deleted when tokenising broke it — a style contract that gets removed the
    * moment it fails is not a contract.
    */
-  it("has readable contrast — light text on a dark card, not the UA's black on black", () => {
+  it("has readable contrast — light text on a dark ground, not the UA's black on black", () => {
     expect(panelStyle.color).toBe(t.text.base);
-    expect(panelStyle.background).toBe(t.surface.card);
+    // `sunken`, not `card`, and changed deliberately. At modal size a card surface reads correctly;
+    // at full height the panel becomes the whole right-hand side of the screen, and a card-bright
+    // slab against a near-black shell reads as a different colour scheme — which is how it was
+    // reported. `sunken` is the deepest chrome, what the dock uses, and a settings panel is the same
+    // kind of thing: a ground its own contents sit on. Its inner sections keep their lighter fills,
+    // so the hierarchy inside now matches the hierarchy outside.
+    expect(panelStyle.background).toBe(t.surface.sunken);
+  });
+
+  it("is darker than the cards it contains, or the hierarchy inverts", () => {
+    // The actual defect, stated as a relationship rather than a value: a panel must not be the same
+    // brightness as the things sitting on it, whatever the palette does next.
+    expect(panelStyle.background).not.toBe(t.surface.card);
   });
 
   it("reads those from tokens that actually exist", () => {
