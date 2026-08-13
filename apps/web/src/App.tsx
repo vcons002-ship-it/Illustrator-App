@@ -344,6 +344,7 @@ import {
   cx,
   t,
   usePointerFeedback,
+  ModalShell,
   type FileActions,
   type FileRef,
   type InstalledModel,
@@ -11858,14 +11859,12 @@ export function App() {
       )}
 
       {showRemoteLink && remoteLink && (
-        <div
-          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: t.surface.overlay, backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
-          onClick={() => setShowRemoteLink(false)}
+        <ModalShell
+          title="Link a phone"
+          onClose={() => setShowRemoteLink(false)}
+          overlayStyle={{ background: t.surface.overlay, backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
+          cardStyle={{ width: `min(460px, 100%)`, background: t.surface.card, color: t.text.base, border: `1px solid ${t.fill.strong}`, borderRadius: 12, padding: 18, fontFamily: `system-ui, sans-serif` }}
         >
-          <div
-            style={{ width: `min(460px, 100%)`, background: t.surface.card, color: t.text.base, border: `1px solid ${t.fill.strong}`, borderRadius: 12, padding: 18, fontFamily: `system-ui, sans-serif` }}
-            onClick={(e) => e.stopPropagation()}
-          >
             <strong style={{ fontSize: 15 }}>🔗 Link a phone</strong>
             {remoteLink.running ? (
               <>
@@ -11933,8 +11932,8 @@ export function App() {
                 Close
               </button>
             </div>
-          </div>
-        </div>
+
+        </ModalShell>
       )}
 
       {orderReview && (
@@ -12576,8 +12575,13 @@ function DataModal({
     return [...groups.entries()].sort((a, b) => a[0] - b[0]);
   }, [datasets]);
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Data — every extracted dataset"
+      onClose={onClose}
+      overlayStyle={styles.modalOverlay}
+      cardStyle={styles.modalPanel}
+    >
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>📊 Data — every extracted dataset ({datasets.length})</strong>
           <button className={cx.btn} style={styles.button} onClick={onClose}>
@@ -12605,8 +12609,8 @@ function DataModal({
             ))}
           </section>
         ))}
-      </div>
-    </div>
+
+    </ModalShell>
   );
 }
 
@@ -12631,8 +12635,13 @@ function ImportBibleModal({
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Import a Visual Bible"
+      onClose={onClose}
+      overlayStyle={styles.modalOverlay}
+      cardStyle={styles.modalPanel}
+    >
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Import Visual Bible</strong>
           <button className={cx.btn} style={styles.button} onClick={onClose}>
@@ -12681,8 +12690,8 @@ function ImportBibleModal({
             Import &amp; merge
           </button>
         </div>
-      </div>
-    </div>
+
+    </ModalShell>
   );
 }
 
@@ -12712,8 +12721,13 @@ function PasteTextModal({
   const [mode, setMode] = useState<ContentMode>(initial?.mode ?? "fiction");
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Open pasted text"
+      onClose={onClose}
+      overlayStyle={styles.modalOverlay}
+      cardStyle={styles.modalPanel}
+    >
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Read pasted text</strong>
           <button className={cx.btn} style={styles.button} onClick={onClose}>
@@ -12785,8 +12799,8 @@ function PasteTextModal({
             </button>
           </span>
         </div>
-      </div>
-    </div>
+
+    </ModalShell>
   );
 }
 
@@ -12830,8 +12844,12 @@ function TestImageModal({
   };
 
   return (
-    <div style={styles.modalOverlay}>
-      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Test image generation"
+      overlayStyle={styles.modalOverlay}
+      cardStyle={styles.modalPanel}
+    >
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Test an image</strong>
           <button className={cx.btn} style={styles.button} onClick={onClose}>
@@ -12900,8 +12918,8 @@ function TestImageModal({
             )}
           </>
         )}
-      </div>
-    </div>
+
+    </ModalShell>
   );
 }
 
@@ -13014,8 +13032,12 @@ function PhotoTransformModal({
   };
 
   return (
-    <div style={styles.modalOverlay}>
-      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell
+      title="Transform a photo"
+      overlayStyle={styles.modalOverlay}
+      cardStyle={styles.modalPanel}
+    >
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Transform a photo</strong>
           <button className={cx.btn} style={styles.button} onClick={onClose}>
@@ -13138,8 +13160,8 @@ function PhotoTransformModal({
             {note && <div style={{ opacity: 0.75, fontSize: 12, marginTop: 6 }}>{note}</div>}
           </>
         )}
-      </div>
-    </div>
+
+    </ModalShell>
   );
 }
 

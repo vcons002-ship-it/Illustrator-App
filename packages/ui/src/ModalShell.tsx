@@ -43,7 +43,8 @@ export function nextTrapFocus<T>(focusables: readonly T[], active: T | null, shi
  * and returned to the opener on unmount, and backdrop-click close. The default
  * look is MemoriesPanel's overlay/card (the shared pattern); panels that predate
  * the shell pass width/style overrides so their rendered look doesn't shift.
- * Internal to packages/ui — imported by relative path, NOT exported from index.ts.
+ * Exported from index.ts: apps/web had six hand-rolled overlays with none of this, and could not
+ * reach the shell to fix them while it stayed internal.
  */
 export interface ModalShellProps {
   /** Accessible dialog name (becomes aria-label). */
