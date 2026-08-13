@@ -103,6 +103,39 @@ export function renderStepNumber(statuses: readonly string[], rendersSoFar: numb
   return Math.min(total, Math.max(byTicks, rendersSoFar));
 }
 
+/** Phrases that mean "not all in one reply". A count alone is not enough: "count to 10" answered in
+ * a single line is a perfectly good reply, and only these turn it into a series. */
+const PER_MESSAGE =
+  /\b(?:one|1)\s+(?:\w+\s+)?(?:at a time|per (?:message|reply|turn))\b|\b(?:individual|separate|its own|their own)\s+(?:messages?|replies|turns?)\b|\bone\s+by\s+one\b|\bmessage at a time\b/i;
+
+/** How many messages a series may run to. Same reasoning as MAX_REQUESTED_RENDERS: a bound on what a
+ * misread costs, not a technical limit. Messages are cheap next to renders, so this is higher. */
+export const MAX_REQUESTED_MESSAGES = 40;
+
+/**
+ * HOW MANY SEPARATE MESSAGES THE READER ASKED FOR.
+ *
+ * "Count to 10 in individual messages" works mechanically — keep_going does exactly this — but the
+ * model does not reliably emit it. Its own reasoning says it will: "Plan: 1. Send 'A' 2. Call
+ * keep_going 3. The system will feed me back". Then it sends the letter and stops. Knowing, intending
+ * and emitting are three different things, and only the third one keeps the turn.
+ *
+ * So the app reads the count and drives the series itself, and the model no longer has to emit
+ * anything to continue. BOTH conditions are required — a number AND a phrase that means "not all in
+ * one reply" — because "count to 10" answered as a single line is a perfectly good reply and turning
+ * that into ten messages would be worse than the bug. PURE.
+ */
+export function requestedMessageCount(text: string): number | undefined {
+  if (!PER_MESSAGE.test(text)) return undefined;
+  const m = /\b(?:to|through|until|\bnumbers?\b[^\d]{0,12})\s*(\d{1,3})\b|\b(\d{1,3})\s+(?:separate\s+)?(?:messages?|items?|lines?|steps?)\b/i.exec(
+    text,
+  );
+  const raw = m?.[1] ?? m?.[2];
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 2 && n <= MAX_REQUESTED_MESSAGES ? n : undefined;
+}
+
 /**
  * A checklist's identity, ignoring how far through it is.
  *
