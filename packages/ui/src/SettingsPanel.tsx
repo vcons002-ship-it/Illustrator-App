@@ -3091,8 +3091,8 @@ export function SettingsPanel({
                   margin: "0 0 8px",
                   padding: "6px 8px",
                   borderRadius: 6,
-                  background: "rgba(120,160,255,0.08)",
-                  border: "1px solid rgba(120,160,255,0.18)",
+                  background: t.accent.wash,
+                  border: `1px solid ${t.accent.edge}`,
                 }}
               >
                 <b>For “{value.localModel || "your model"}”:</b> {componentHint.note}
@@ -4075,7 +4075,9 @@ const closeRowStyle = {
   flexDirection: "column",
   margin: "-12px -16px 4px -12px", // span the panel's padding so the bar is flush
   padding: "10px 12px",
-  background: t.surface.card,
+  // Flush with the panel behind it — this bar spans the padding, so a different surface would draw
+  // a band across the top.
+  background: t.surface.sunken,
   borderBottom: `1px solid ${t.border.subtle}`,
 } as const;
 
@@ -4110,7 +4112,20 @@ export const panelStyle = {
   border: `1px solid ${t.border.button}`,
   borderRadius: 8,
   width: "min(340px, calc(100vw - 16px))",
-  background: t.surface.card,
+  /**
+   * THE PANEL IS A GROUND, NOT A CARD.
+   *
+   * This was `surface.card` — the token for a raised thing sitting ON something. At the size of a
+   * modal that reads correctly; at full height it becomes the whole right-hand side of the screen,
+   * and a card-bright slab against a near-black shell reads as a different colour scheme rather
+   * than as part of the app. Reported exactly that way.
+   *
+   * `sunken` is the deepest chrome — what the dock uses — and a settings panel is the same kind of
+   * thing: a persistent surface the app's own content sits over. Its inner sections keep their
+   * lighter fills, so the hierarchy inside it now matches the hierarchy outside it: dark ground,
+   * raised cards.
+   */
+  background: t.surface.sunken,
   // Its OWN typography and text colour, not the app shell's.
   //
   // These used to be inherited: the panel rendered inside the header, which sits inside the app
@@ -4137,7 +4152,7 @@ export const panelStyle = {
    * for its date picker — same reason.)
    */
   colorScheme: "dark" as const,
-  boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+  boxShadow: t.elev[3],
   // Own scrollbar instead of overflowing the screen. `dvh` (dynamic viewport height) tracks the
   // visible area on phones where the browser's address bar shows/hides — `vh` is taller than what's
   // on screen there, which left the bottom of the panel unreachable. Touch momentum + overscroll
