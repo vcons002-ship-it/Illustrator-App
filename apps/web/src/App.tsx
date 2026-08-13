@@ -6377,7 +6377,12 @@ export function App() {
     // already done. At render time the image is for the ▸ current (first unfinished) step.
     let taggedImageFeedback = imageFeedback;
     let tagCaption = ""; // a VISIBLE label on the render so the reader sees which checklist/step it's from
-    if (!out.error && plan && plan.steps.length > 0) {
+    // A FINISHED checklist does not get to claim the next picture. It stayed installed after its
+    // last step ticked, so an elephant drawn for a brand-new request came out captioned "Step 3 of 3
+    // · Generate 3 separate images of birds". Without a live checklist this falls through to the
+    // one-shot caption below, which names what the picture actually depicts — the right label for a
+    // render that belongs to no plan.
+    if (!out.error && plan && planHasPendingStep(plan)) {
       /**
        * COUNT THE PICTURES, DON'T ONLY READ THE TICKS.
        *

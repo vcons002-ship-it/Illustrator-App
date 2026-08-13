@@ -94,7 +94,8 @@ describe("the count actually reaches the turn", () => {
   const worker = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"), "utf8");
 
   it("is computed from THIS turn's message", () => {
-    expect(worker).toMatch(/const rendersBlock = requestedRendersNote\(msg\.userText \?\? "", !!msg\.plan\)/);
+    // The message it reads. Which plans silence it is asserted separately, below.
+    expect(worker).toMatch(/const rendersBlock = requestedRendersNote\(msg\.userText \?\? ""/);
   });
 
   it("rides the volatile block, so it is never stored", () => {
@@ -158,6 +159,48 @@ describe("knowing when the tally belongs to a different checklist", () => {
     // "a" + "bc" and "ab" + "c" are different checklists and must not share a key.
     expect(planIdentity({ steps: [{ text: "a" }, { text: "bc" }] })).not.toBe(
       planIdentity({ steps: [{ text: "ab" }, { text: "c" }] }),
+    );
+  });
+
+  /**
+   * A FINISHED CHECKLIST WAS STILL THE ACTIVE ONE.
+   *
+   * Straight after a three-bird run completed, "I want to generate 3 images. Create 3 prompts for
+   * images of elephants" produced ONE elephant, captioned "Step 3 of 3 · Generate 3 separate images
+   * of birds". Three symptoms, one cause: the finished plan never stopped being installed.
+   *
+   *   - `hasPlan` stayed true, so the prompt swapped MULTI-STEP vs SINGLE for mid-checklist
+   *     discipline, and the new request never met the rule that would have planned it;
+   *   - the render note was suppressed, because it goes quiet while a checklist is running;
+   *   - the new picture was tagged with the old checklist's goal.
+   *
+   * All three now ask the same question — has this checklist got work left? — instead of merely
+   * whether one exists.
+   */
+  it("the render note fires again once the previous checklist is finished", () => {
+    // The gate is a plan with work LEFT, not any plan. A finished one must not silence the counter,
+    // which is exactly how the elephants came back as a single picture.
+    expect(requestedRendersNote("generate 3 images of elephants", false)).toContain("3 SEPARATE PICTURES");
+    expect(requestedRendersNote("generate 3 images of elephants", true)).toBe("");
+  });
+
+  it("asks whether the checklist has work left, not whether one exists", () => {
+    const worker = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"),
+      "utf8",
+    );
+    expect(worker, "a finished checklist still claims the prompt's mid-plan branch").toMatch(
+      /\.\.\.\(planHasPendingStep\(msg\.plan\) \? \{ activePlan: msg\.plan \} : \{\}\)/,
+    );
+    expect(worker, "a finished checklist still silences the render note").toMatch(
+      /requestedRendersNote\(msg\.userText \?\? "", planHasPendingStep\(msg\.plan\)\)/,
+    );
+  });
+
+  it("does not let a finished checklist caption a new picture", () => {
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(app, "an elephant can still be captioned with a bird checklist").toMatch(
+      /if \(!out\.error && plan && planHasPendingStep\(plan\)\) \{/,
     );
   });
 
