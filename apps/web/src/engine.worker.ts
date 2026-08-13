@@ -60,8 +60,6 @@ import {
   stepDirective,
   workflowToPlan,
   requestedRendersNote,
-  requestedMessageCount,
-  seriesProgressNote,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
   buildActiveDraftBlock,
@@ -6047,34 +6045,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * on the next one — that boundary is real, because the host genuinely has to run it.
      */
     let wf = msg.appManagedSteps && planHasPendingStep(msg.plan) ? compileWorkflow(msg.plan!) : undefined;
-    /**
-     * A PLAIN SERIES, DRIVEN THE SAME WAY A CHECKLIST NOW IS.
-     *
-     * keep_going works; the model does not reliably emit it. Its reasoning says it will — "Plan: 1.
-     * Send 'A' 2. Call keep_going 3. The system will feed me back" — and then it sends the letter and
-     * stops. Knowing, intending and emitting are three different things, and only the third keeps the
-     * turn. A reader who has to say "continue" ten times is doing the app's job.
-     *
-     * So when the request names a count AND says one-per-message, the app drives the series itself
-     * through the same in-turn continuation a checklist uses, and the model no longer has to emit
-     * anything. If it DOES emit keep_going the tick is never consulted — that round has a tool call
-     * and never reaches here — so the two compose rather than fight.
-     */
-    const seriesTarget = !planHasPendingStep(msg.plan) ? requestedMessageCount(msg.userText ?? "") : undefined;
-    const seriesSent: string[] = [];
-    const seriesTick = seriesTarget
-      ? (evidence: { text: string }) => {
-          // Nothing written means nothing was sent; buying another round on silence is how a turn
-          // becomes fifty rounds of producing nothing.
-          const said = evidence.text.trim();
-          if (!said) return { kind: "stop" as const };
-          seriesSent.push(said);
-          if (seriesSent.length >= seriesTarget) return { kind: "stop" as const };
-          // The same note keep_going gets, and for the same reason: a plain series has no checklist,
-          // so its position is the one fact it cannot recover for itself.
-          return { kind: "continue" as const, directive: seriesProgressNote(seriesSent) };
-        }
-      : undefined;
     const appManagedTick = wf
       ? (evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }) => {
           const step = activeStep(wf);
@@ -6120,7 +6090,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       maxTokens: budgets.reply,
       contextChars: budgets.input,
       loadedToolsets,
-      ...(appManagedTick ?? seriesTick ? { appManagedTick: appManagedTick ?? seriesTick! } : {}),
+      ...(appManagedTick ? { appManagedTick } : {}),
       // The document is DERIVED from the same prompt options, so what the model loads is exactly the
       // text the prompt would have carried — there is no second copy to fall out of date.
       toolsetDoc: (id: string) => toolsetDoc(id, { ...promptOpts, loadedToolsets }),
