@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_REQUESTED_MESSAGES,
   MAX_REQUESTED_RENDERS,
+  requestedMessageCount,
   planIdentity,
   renderStepNumber,
   requestedRenderCount,
@@ -228,7 +230,8 @@ describe("the checklist tick reaches the turn", () => {
   );
 
   it("is handed to runBuddyTurn", () => {
-    expect(worker).toMatch(/\.\.\.\(appManagedTick \? \{ appManagedTick \} : \{\}\)/);
+    // Either tick reaches the same hook: a checklist's, or a plain series'.
+    expect(worker).toMatch(/appManagedTick: appManagedTick \?\? seriesTick!/);
   });
 
   it("rebuilds the contracts from the plan the host already mirrors", () => {
@@ -254,5 +257,60 @@ describe("the checklist tick reaches the turn", () => {
     const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
     expect(worker, "the worker never forwards the boundary").toMatch(/type: "buddyStepDone"/);
     expect(app, "the app never renders the step's message").toMatch(/e\.kind === "stepDone"/);
+  });
+});
+
+/**
+ * "keep_going WORKS, BUT THE AI ISN'T CALLING IT PROPERLY."
+ *
+ * The reader again: it works mechanically, the model knows it needs it, its reasoning says it will
+ * use it — "Plan: 1. Send 'A' 2. Call keep_going 3. The system will feed me back" — and then it
+ * sends the letter and stops. Knowing, intending and emitting are three different things, and only
+ * the third keeps the turn. Even a memory about the mistake did not fix it.
+ *
+ * So the app reads the count and drives the series, and the model no longer has to emit anything.
+ */
+describe("counting the messages a series asks for", () => {
+  it("reads a count that is spelled out with a per-message phrase", () => {
+    for (const [text, n] of [
+      ["count to 10 in individual messages", 10],
+      ["count to 10, one at a time", 10],
+      ["send me the numbers to 20, one per message", 20],
+      ["list 5 items one by one", 5],
+    ] as const) {
+      expect(requestedMessageCount(text), text).toBe(n);
+    }
+  });
+
+  it("needs BOTH the count and the phrase", () => {
+    // "count to 10" answered as a single line is a perfectly good reply. Turning that into ten
+    // messages would be worse than the bug this fixes.
+    expect(requestedMessageCount("count to 10")).toBeUndefined();
+    expect(requestedMessageCount("send them one at a time")).toBeUndefined();
+  });
+
+  it("is not fooled by a number that is part of the subject", () => {
+    expect(requestedMessageCount("write a 10 message story")).toBeUndefined();
+    expect(requestedMessageCount("tell me about the 10 best books")).toBeUndefined();
+  });
+
+  it("bounds what a misread can cost", () => {
+    expect(requestedMessageCount(`count to ${MAX_REQUESTED_MESSAGES + 1}, one at a time`)).toBeUndefined();
+    expect(requestedMessageCount("count to 1, one at a time")).toBeUndefined();
+  });
+
+  it("drives the series from the worker, without needing keep_going", () => {
+    const worker = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"),
+      "utf8",
+    );
+    expect(worker).toMatch(/const seriesTarget = !planHasPendingStep\(msg\.plan\)/);
+    expect(worker, "the series tick never reaches the turn").toMatch(
+      /appManagedTick: appManagedTick \?\? seriesTick!/,
+    );
+    const tick = /const seriesTick = seriesTarget[\s\S]*?\n {6}: undefined;/.exec(worker)?.[0] ?? "";
+    expect(tick, "the series tick moved").toBeTruthy();
+    expect(tick, "a silent round would buy another one").toMatch(/if \(!said\) return \{ kind: "stop"/);
+    expect(tick, "the series is never told where it has got to").toMatch(/seriesProgressNote\(seriesSent\)/);
   });
 });
