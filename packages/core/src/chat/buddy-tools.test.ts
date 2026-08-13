@@ -33,6 +33,7 @@ import {
   toolLimitNudge,
   MAX_PLAN_STEPS,
   seriesProgressNote,
+  MAX_STEP_CHARS,
 } from "./buddy-tools.js";
 import { routePendingTool } from "./tool-approval.js";
 
@@ -3285,5 +3286,58 @@ describe("telling a series where it has got to", () => {
   it("still echoes a full alphabet, which is the case it was written for", () => {
     const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
     expect(seriesProgressNote(letters)).toContain('"Z"');
+  });
+});
+
+/**
+ * "THE DESCRIPTIONS ARE CUT OFF — is that the panel or the prompts?"
+ *
+ * The prompts. Steps were measured with MAX_QUERY_CHARS, the ruler for "search the web for X", and
+ * a step that CARRIES an image prompt is a different thing entirely. `strArg` truncates silently
+ * and without an ellipsis, so a sentence just stopped at "wearing a s" in the checklist the model
+ * re-reads every turn — and nothing anywhere said it had been shortened.
+ */
+describe("a checklist step is not a search query", () => {
+  /** The real step from the report, prefix and all: ~220 characters. */
+  const realStep =
+    "Generate image of cute portrait: A cute, pretty portrait of a petite young woman with an auburn " +
+    "bob and deep mossy green eyes, soft natural lighting, intelligent and reflective expression, " +
+    "wearing a simple teal sweater.";
+
+  it("keeps a step that carries an image prompt, whole", () => {
+    expect(realStep.length, "the fixture stopped being long enough to prove anything").toBeGreaterThan(200);
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "set_plan", goal: "portraits", steps: [realStep] }));
+    expect(call?.tool).toBe("set_plan");
+    expect(call?.tool === "set_plan" ? (call.steps[0] ?? "") : "").toBe(realStep);
+  });
+
+  it("keeps it in the object form too, which is what app-managed mode writes", () => {
+    const call = parseBuddyToolCall(
+      JSON.stringify({ tool: "set_plan", goal: "portraits", steps: [{ do: realStep, needs: "image" }] }),
+    );
+    expect(call?.tool === "set_plan" ? (call.steps[0] ?? "") : "").toBe(realStep);
+  });
+
+  it("still bounds a step, because the checklist is re-injected every turn", () => {
+    const huge = "x".repeat(MAX_STEP_CHARS + 400);
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "set_plan", goal: "g", steps: [huge] }));
+    expect((call?.tool === "set_plan" ? (call.steps[0] ?? "") : "").length).toBe(MAX_STEP_CHARS);
+  });
+
+  it("is a bigger allowance than a search query, which is the whole point", () => {
+    expect(MAX_STEP_CHARS).toBeGreaterThan(200);
+  });
+
+  it("reads a scheduled task's steps by the same ruler as set_plan", () => {
+    // readAuthoredSteps says in its own doc that it must read exactly as tolerantly as set_plan, so
+    // the two cannot drift into accepting different shapes for the same act of writing a checklist.
+    // Two of the four step-text sites had already been changed and two had not — this is what makes
+    // a half-applied cap fail rather than pass on whichever branch happens to be tested.
+    const call = parseBuddyToolCall(
+      JSON.stringify({ tool: "schedule_task", title: "t", prompt: "p", rule: "daily", steps: [realStep] }),
+    );
+    const steps = call?.tool === "schedule_task" ? (call.steps ?? []) : [];
+    expect(steps.length, "the scheduled task parsed without its steps").toBeGreaterThan(0);
+    expect(steps[0]?.do, "a scheduled task's steps are still cut at the query length").toBe(realStep);
   });
 });
