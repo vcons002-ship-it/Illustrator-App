@@ -5,6 +5,15 @@ export * from "./usePointerFeedback.js";
 // Design tokens + class names. Exported so apps/web (13k lines, previously unable to import
 // the internal tokens file) can finally use them instead of hard-coding every value.
 export * from "./design/index.js";
+// THE MODAL SHELL, no longer internal.
+//
+// It was kept out of this barrel while the twelve panels that use it all lived in this package, and
+// the comment on it said so. That stopped being true the moment the accessibility contract mattered
+// outside: apps/web hand-rolled six of its own overlays — Data, Import bible, Paste text, Test
+// image, Photo transform, Link a phone — every one of them a dialog with no role, no Escape, no
+// focus trap, and no way to fix that without reaching this file. A shell nobody can import is a
+// contract that stops at a package boundary, which is not where the reader's keyboard stops.
+export * from "./ModalShell.js";
 export * from "./BloomTransition.js";
 export * from "./SpoilerGate.js";
 export * from "./ImagePanel.js";
