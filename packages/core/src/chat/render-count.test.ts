@@ -214,3 +214,45 @@ describe("knowing when the tally belongs to a different checklist", () => {
     );
   });
 });
+
+/**
+ * THE WIRING FOR THE IN-TURN CHECKLIST.
+ *
+ * The capability is in buddy-session and tested there. This asserts it is REACHED — a hook nothing
+ * calls is this migration's signature failure, and it leaves the suite green.
+ */
+describe("the checklist tick reaches the turn", () => {
+  const worker = readFileSync(
+    join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"),
+    "utf8",
+  );
+
+  it("is handed to runBuddyTurn", () => {
+    expect(worker).toMatch(/\.\.\.\(appManagedTick \? \{ appManagedTick \} : \{\}\)/);
+  });
+
+  it("rebuilds the contracts from the plan the host already mirrors", () => {
+    // workflowToPlan writes each step's `needs` into the projection and compileWorkflow reads it
+    // back, so there is no second copy of the run's state to fall out of date.
+    expect(worker).toMatch(/compileWorkflow\(msg\.plan!\)/);
+    expect(worker, "the tick judges without the collar").toMatch(/evaluateStep\(step, evidence\)/);
+  });
+
+  it("mirrors every advance to the host, or the card never moves", () => {
+    const tick = /const appManagedTick = wf[\s\S]*?\n {6}: undefined;/.exec(worker)?.[0] ?? "";
+    expect(tick, "the tick moved").toBeTruthy();
+    expect(tick, "an advance is not posted, so the plan card stays where it was").toMatch(
+      /post\(\{ type: "buddyPlan"/,
+    );
+  });
+
+  it("only runs while the checklist has work", () => {
+    expect(worker).toMatch(/msg\.appManagedSteps && planHasPendingStep\(msg\.plan\)/);
+  });
+
+  it("publishes each step's text, which nothing else would", () => {
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(worker, "the worker never forwards the boundary").toMatch(/type: "buddyStepDone"/);
+    expect(app, "the app never renders the step's message").toMatch(/e\.kind === "stepDone"/);
+  });
+});

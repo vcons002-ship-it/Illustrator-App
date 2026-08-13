@@ -5,6 +5,7 @@ import {
   nonEmptyAnswer,
   isBareAcknowledgement,
   isStallConfirmation,
+  type AppManagedNext,
   MIN_CONTINUABLE_CHARS,
   type BuddyTurnEvent,
 } from "./buddy-session.js";
@@ -1685,5 +1686,135 @@ describe("app-managed steps: compiling the checklist is the whole turn", () => {
     // (the scripted model repeats its last line once the script runs out, so just assert it acted)
     expect(rendered.length).toBeGreaterThan(0);
     expect(rendered[0]).toBe("the tractor");
+  });
+});
+
+/**
+ * TWENTY-SIX LETTERS WERE TWENTY-SIX TURNS.
+ *
+ * App-managed steps judged a SETTLED TURN and then dispatched a fresh one whose opening user message
+ * was "Now do ONLY step 2 of 26 … Call its tool and stop". The reader watched it stall, and the
+ * model's reasoning said why: "The user's prompt in this specific turn [2026-08-13 13:16:43.860] is
+ * the system telling me to do step 1." A turn-opening directive is indistinguishable from the reader
+ * speaking. And "call its tool and stop" is an instruction to END THE TURN, handed to a step whose
+ * entire deliverable is the letter A — there is no tool, so it wrote text and waited.
+ *
+ * A step that needs nothing from the host has no reason to be its own turn.
+ */
+describe("an app-managed checklist runs inside one turn", () => {
+  /** A host that judges each round done and hands back the next step, then stops. */
+  function collar(steps: number) {
+    let done = 0;
+    return {
+      seen: [] as string[],
+      tick(evidence: { text: string }): AppManagedNext {
+        this.seen.push(evidence.text);
+        done += 1;
+        return done < steps ? { kind: "continue", directive: `[Now do step ${done + 1} of ${steps}.]` } : { kind: "stop" };
+      },
+    };
+  }
+
+  it("walks every step without the turn ending", async () => {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    const llm = scriptedLlm(letters);
+    const host = collar(26);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write the alphabet, one letter per message" }],
+      deps: baseDeps,
+      appManagedTick: (e) => host.tick(e),
+    });
+    expect(host.seen, "the run did not reach Z inside one turn").toHaveLength(26);
+    expect(host.seen[0]).toBe("A");
+    expect(host.seen[25]).toBe("Z");
+  });
+
+  it("emits a boundary per step, or the letters never become messages", async () => {
+    // The host flushes streamed prose into a bubble when a TOOL CALL follows it, and a text step has
+    // none. Without this event each letter would sit in the stream buffer and be overwritten by the
+    // next — exactly how the last letter of a plan-free series went missing once already.
+    const llm = scriptedLlm(["A", "B", "C"]);
+    const host = collar(3);
+    const steps: string[] = [];
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "A to C" }],
+      deps: baseDeps,
+      appManagedTick: (e) => host.tick(e),
+      onEvent: (e) => {
+        if (e.kind === "stepDone") steps.push(e.text);
+      },
+    });
+    // A and B are mid-run boundaries. C is not: when the collar says stop, the last step's text
+    // becomes the TURN'S ANSWER and is delivered by the ordinary path. Emitting it here as well
+    // would put the final letter on screen twice.
+    expect(steps).toEqual(["A", "B"]);
+  });
+
+  it("delivers the last step as the answer, exactly once", async () => {
+    const llm = scriptedLlm(["A", "B", "C"]);
+    const host = collar(3);
+    const seen: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "A to C" }],
+      deps: baseDeps,
+      appManagedTick: (e) => host.tick(e),
+      onEvent: (e) => {
+        if (e.kind === "stepDone") seen.push(e.text);
+      },
+    });
+    expect(outcome.text, "the final step is not the turn's answer").toBe("C");
+    expect(seen, "the final step was announced as a boundary as well as answered").not.toContain("C");
+    const said = outcome.transcript.filter((m) => m.role === "assistant").map((m) => m.content);
+    expect(said.filter((t) => t === "C"), "C is recorded twice").toHaveLength(1);
+  });
+
+  it("puts every step in the transcript, so the run survives the turn", async () => {
+    const llm = scriptedLlm(["A", "B", "C"]);
+    const host = collar(3);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "A to C" }],
+      deps: baseDeps,
+      appManagedTick: (e) => host.tick(e),
+    });
+    const said = outcome.transcript.filter((m) => m.role === "assistant").map((m) => m.content);
+    for (const l of ["A", "B", "C"]) expect(said, `${l} is missing from the record`).toContain(l);
+  });
+
+  it("hands the directive back as a round, not as a turn-opening message", async () => {
+    // The whole point. Inside a turn it arrives as machinery, next to the round it belongs to;
+    // as a fresh turn's first line it reads as the reader talking, which is what the model said.
+    const llm = scriptedLlm(["A", "B"]);
+    const host = collar(2);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "A then B" }],
+      deps: baseDeps,
+      appManagedTick: (e) => host.tick(e),
+    });
+    const directives = llm.calls.flat().filter((m) => /Now do step 2 of 2/.test(m.content));
+    expect(directives.length, "the directive never reached the model").toBeGreaterThan(0);
+    // It rides the SAME conversation the turn was already having: the run never restarted.
+    expect(llm.calls.length, "the turn ended and a new one began").toBeGreaterThan(1);
+  });
+
+  it("leaves an ordinary turn alone when no checklist is running", async () => {
+    const llm = scriptedLlm(["Paris."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "capital of France?" }],
+      deps: baseDeps,
+    });
+    expect(outcome.text).toBe("Paris.");
+    expect(llm.calls).toHaveLength(1);
   });
 });

@@ -52,6 +52,13 @@ import {
   buildImageReferenceBlock,
   recentThinkingBlock,
   planHasPendingStep,
+  compileWorkflow,
+  activeStep,
+  evaluateStep,
+  attemptedStepWork,
+  advanceWorkflow,
+  stepDirective,
+  workflowToPlan,
   requestedRendersNote,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
@@ -6018,6 +6025,48 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * sitting in a standing instruction competing with forty others.
      */
     const rendersBlock = requestedRendersNote(msg.userText ?? "", planHasPendingStep(msg.plan));
+    /**
+     * APP-MANAGED CHECKLISTS RUN INSIDE THE TURN NOW.
+     *
+     * They used to run one step per TURN: the host judged a settled turn and dispatched a fresh one
+     * whose opening user message was "Now do ONLY step 2 of 26 … Call its tool and stop". The reader
+     * watched the alphabet stall, and the model's reasoning said why — "The user's prompt in this
+     * specific turn [2026-08-13 13:16:43.860] is the system telling me to do step 1". A turn-opening
+     * directive is indistinguishable from the reader speaking, and "call its tool and stop" tells a
+     * step whose deliverable is the letter A to end the turn, when it has no tool to call.
+     *
+     * The contracts survive the round trip on their own: `workflowToPlan` writes each step's `needs`
+     * into the projection and `compileWorkflow` reads it back, so the judging rebuilt here is the
+     * same judging, from the same declarations, with no second copy of the run's state to fall out
+     * of date. Every advance is mirrored to the host through the SAME `buddyPlan` post that set_plan
+     * and complete_step already use, so the card and the stored workflow move exactly as before.
+     *
+     * Only reached when a round produced no tool call. A render still suspends the turn and resumes
+     * on the next one — that boundary is real, because the host genuinely has to run it.
+     */
+    let wf = msg.appManagedSteps && planHasPendingStep(msg.plan) ? compileWorkflow(msg.plan!) : undefined;
+    const appManagedTick = wf
+      ? (evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }) => {
+          const step = activeStep(wf);
+          if (!step) return { kind: "stop" as const };
+          const outcome = evaluateStep(step, evidence);
+          // The model narrated instead of doing the step: nudge without spending an attempt, exactly
+          // as the host's executor does, so a confused model is not marched into a premature park.
+          if (!outcome.done && !outcome.parks && !attemptedStepWork(step, evidence)) {
+            return { kind: "continue" as const, directive: stepDirective(wf!, step, "nudge") };
+          }
+          const adv = advanceWorkflow(wf!, outcome);
+          wf = adv.workflow;
+          plan = workflowToPlan(wf);
+          post({ type: "buddyPlan", requestId: msg.requestId, plan });
+          if ((adv.action === "advance" || adv.action === "skip") && adv.next)
+            return { kind: "continue" as const, directive: stepDirective(wf, adv.next, "advance") };
+          if (adv.action === "retry")
+            return { kind: "continue" as const, directive: stepDirective(wf, step, "retry", outcome.reason ? { reason: outcome.reason } : {}) };
+          // finish / park / abort — the model should be writing to the reader now, not working.
+          return { kind: "stop" as const };
+        }
+      : undefined;
     const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
@@ -6041,6 +6090,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       maxTokens: budgets.reply,
       contextChars: budgets.input,
       loadedToolsets,
+      ...(appManagedTick ? { appManagedTick } : {}),
       // The document is DERIVED from the same prompt options, so what the model loads is exactly the
       // text the prompt would have carried — there is no second copy to fall out of date.
       toolsetDoc: (id: string) => toolsetDoc(id, { ...promptOpts, loadedToolsets }),
@@ -6144,6 +6194,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         else if (e.kind === "thinking") thinking(e.text);
         else if (e.kind === "activity") post({ type: "buddyActivity", requestId: msg.requestId, text: e.text });
         else if (e.kind === "tool") post({ type: "buddyTool", requestId: msg.requestId, round: e.round, call: e.call });
+        // A checklist step finished inside the turn. Nothing else marks that boundary for a step
+        // whose deliverable is text: the host flushes streamed prose when a TOOL CALL follows it,
+        // and a text step has none.
+        else if (e.kind === "stepDone") post({ type: "buddyStepDone", requestId: msg.requestId, text: e.text });
         else
           post({
             type: "buddyToolResult",

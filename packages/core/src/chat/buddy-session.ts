@@ -354,7 +354,26 @@ export type BuddyTurnEvent =
    * settled answer. */
   | { kind: "activity"; text: string }
   | { kind: "tool"; round: number; call: BuddyToolCall }
-  | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload };
+  | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload }
+  /**
+   * A checklist step's work is finished and its text is a complete message.
+   *
+   * The host flushes streamed prose into its own bubble when a TOOL CALL follows it. A text-only
+   * step has no tool call, so without this its letter would sit in the stream buffer and be
+   * overwritten by the next step — the same way the last letter of a plan-free series went missing
+   * once already. This is the boundary; there is nothing else to hang it on.
+   */
+  | { kind: "stepDone"; text: string };
+
+/**
+ * What the host says after judging the round a checklist step just produced.
+ *
+ * `continue` carries the directive for whatever comes next — the following step, a retry, or a nudge
+ * back toward the step's actual tool. Anything else ends the turn: the plan is finished, or the step
+ * is waiting on the reader, and in both cases the model should be writing to them rather than
+ * working.
+ */
+export type AppManagedNext = { kind: "continue"; directive: string } | { kind: "stop" };
 
 export interface BuddyTurnOutcome {
   /** Final assistant prose (empty ONLY when the round ended on a pending tool). */
@@ -523,6 +542,18 @@ export async function runBuddyTurn(opts: {
   signal?: AbortSignal;
   /** Thinking level for local reasoning models (passed straight to the provider's chat). */
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  /**
+   * APP-MANAGED CHECKLISTS, RUN INSIDE THE TURN.
+   *
+   * Called when a round produced no tool call and a checklist may still have work. The host judges
+   * the step from the evidence handed over — observed tool results and the round's prose, never the
+   * model's claim about itself — and answers with the next directive or with "stop".
+   *
+   * A callback rather than the workflow itself: the host owns the workflow, persists it, and already
+   * has the collar (`evaluateStep`/`advanceWorkflow`). Passing the structure in would put two copies
+   * of the run's state in play, and the one in here would be the stale one.
+   */
+  appManagedTick?: (evidence: { toolResults: BuddyTurnOutcome["toolResults"]; text: string }) => AppManagedNext;
   /** Native tool schemas (Ollama `tools`) for a tool-capable local model — passed to the provider so
    * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
    * universal fallback. Build with `ollamaToolSchemas`. */
@@ -772,6 +803,46 @@ export async function runBuddyTurn(opts: {
             "except keep_going, which you should still add if you have more messages to send.]";
         messages.push({ role: "user", content: wrap });
         continue;
+      }
+      /**
+       * A CHECKLIST KEEPS THE TURN. THIS IS THE CHANGE THAT STOPS 26 LETTERS BEING 26 TURNS.
+       *
+       * App-managed steps ran one step per TURN: the host judged the settled turn, then dispatched a
+       * fresh one whose opening user message was "Now do ONLY step 2 of 26 … Call its tool and stop".
+       * Two things went wrong with that, and the reader saw both.
+       *
+       * A turn-opening directive with a timestamp is indistinguishable from the reader speaking. The
+       * model said so: "The user's prompt in this specific turn [2026-08-13 13:16:43.860] is the
+       * system telling me to do step 1" — it was spending its reasoning working out who was talking.
+       * And "call its tool and stop" is an instruction to END THE TURN, handed to a step whose whole
+       * deliverable is the letter A. There is no tool. So it wrote text, stopped, and waited.
+       *
+       * A step that needs nothing from the host has no reason to be its own turn. A host tool is
+       * different and still suspends — the host genuinely has to run a render — but text does not.
+       *
+       * So when a round produces no tool call and a checklist still has work, the host judges the
+       * step from what it observed and hands back the next directive, and the ROUND LOOP carries on.
+       * The judging is unchanged (`evaluateStep` on observed evidence, never the model's claim); what
+       * changes is that its answer arrives as this turn's next round instead of the next turn's
+       * opening line.
+       *
+       * The turn still ends for every reason it should: the plan finishes, a step needs the reader,
+       * a host tool suspends, or the round budget runs out — which on a cloud model is the "keep
+       * going?" checkpoint, and is why this cannot run away unattended.
+       */
+      if (opts.appManagedTick && round < effectiveMax) {
+        const next = opts.appManagedTick({ toolResults, text: clean });
+        if (next.kind === "continue") {
+          // The step's work is this round's prose, and it is a message in its own right. Nothing
+          // else flushes it: the host flushes streamed prose when a TOOL CALL follows it, and a text
+          // step has none — the same reason the last letter of a series went missing once already.
+          opts.onEvent?.({ kind: "stepDone", text: clean });
+          transcript.push({ role: "assistant", content: clean });
+          messages.push({ role: "assistant", content: reply });
+          messages.push({ role: "user", content: next.directive });
+          stalledProse = "";
+          continue;
+        }
       }
       /**
        * A SERIES THAT STALLS LOOKS EXACTLY LIKE A SERIES THAT FINISHED.

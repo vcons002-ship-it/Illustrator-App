@@ -479,6 +479,8 @@ export type BuddyStreamEvent =
   /** Live status while the model works invisibly (thinking-model reasoning). */
   | { kind: "activity"; text: string }
   | { kind: "tool"; call: BuddyToolCall }
+  /** A checklist step finished mid-turn; its text is a complete message the host must flush. */
+  | { kind: "stepDone"; text: string }
   | {
       kind: "toolResult";
       call: BuddyToolCall;
@@ -1243,6 +1245,10 @@ export function useEngineWorker(
         }
         case "buddyTool": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "tool", call: msg.call });
+          break;
+        }
+        case "buddyStepDone": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "stepDone", text: msg.text });
           break;
         }
         case "buddyToolResult": {
