@@ -51,6 +51,7 @@ import {
   buildFileLedgerBlock,
   buildImageReferenceBlock,
   recentThinkingBlock,
+  planHasPendingStep,
   requestedRendersNote,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
@@ -5880,7 +5881,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
-        ...(msg.plan ? { activePlan: msg.plan } : {}),
+        //
+        // ONLY WHILE IT HAS WORK LEFT. A FINISHED checklist stayed installed, and a finished
+        // checklist that still counts as the active one does real damage: `hasPlan` goes true, so
+        // the prompt swaps MULTI-STEP vs SINGLE for mid-checklist discipline, and the next request
+        // never meets the rule that would have planned it. Asked for three elephants right after a
+        // three-bird run, the model got "work the current checklist" for a checklist with nothing
+        // left in it — and made one elephant. The card stays on screen as a record; what ends here
+        // is its claim on the next turn.
+        ...(planHasPendingStep(msg.plan) ? { activePlan: msg.plan } : {}),
         // App-managed steps: the prompt shows ONLY the current step (execution framing) + withdraws
         // complete_step. The host derives `msg.plan` from the live workflow each turn.
         ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
@@ -6008,7 +6017,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * whole point — it arrives WITH the request that needs it, specific and unmissable, instead of
      * sitting in a standing instruction competing with forty others.
      */
-    const rendersBlock = requestedRendersNote(msg.userText ?? "", !!msg.plan);
+    const rendersBlock = requestedRendersNote(msg.userText ?? "", planHasPendingStep(msg.plan));
     const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
