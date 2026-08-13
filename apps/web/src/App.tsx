@@ -7209,6 +7209,13 @@ export function App() {
           if (!isRemoteClient && !settings.incognitoRemote)
             void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
         }
+      } else if (e.kind === "stepDone") {
+        // A checklist step's work finished INSIDE the turn. Its prose is a complete message, and
+        // nothing else would publish it: the flush below is triggered by a tool call, and a text
+        // step has none. Same shape as that flush, and it clears the buffer for the next step.
+        appendBuddy({ role: "assistant", text: e.text });
+        buddyStreamingRef.current = "";
+        setBuddyStreaming("");
       } else if (e.kind === "tool") {
         // Keep any prose the model said before this tool call (a briefing) as its own message.
         const said = stripToolCallJson(buddyStreamingRef.current).trim();

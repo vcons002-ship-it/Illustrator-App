@@ -458,6 +458,10 @@ export type WorkerToMain =
   /** Live status while the model works invisibly (a thinking model reasoning). */
   | { type: "buddyActivity"; requestId: number; text: string }
   | { type: "buddyTool"; requestId: number; round: number; call: BuddyToolCall }
+  /** A checklist step's work finished mid-turn and its text is a complete message. The host flushes
+   * streamed prose when a TOOL CALL follows it; a text-only step has none, so without this its words
+   * sit in the stream buffer until the next step overwrites them. */
+  | { type: "buddyStepDone"; requestId: number; text: string }
   | {
       type: "buddyToolResult";
       requestId: number;
