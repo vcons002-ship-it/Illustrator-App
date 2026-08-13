@@ -918,6 +918,26 @@ export function isRetryableError(message: string): boolean {
 const MAX_QUERY_CHARS = 200;
 
 /**
+ * HOW LONG ONE CHECKLIST STEP MAY BE, and why it is not the search-query cap.
+ *
+ * Steps were measured with MAX_QUERY_CHARS — the ruler for "search the web for X", where 200
+ * characters is generous. A step is a different thing. Asked to plan three portraits, the model
+ * wrote steps that CARRY the image prompt ("Generate image of cute portrait: A cute, pretty
+ * portrait of a petite young woman with an auburn bob and deep mossy green eyes, soft natural
+ * lighting, intelligent and reflective expression, wearing a simple teal sweater") — about 220
+ * characters, cut mid-word at 200, in the checklist the model re-reads every turn.
+ *
+ * `strArg` truncates silently and without an ellipsis, so nothing marked the loss: the reader saw a
+ * sentence stopping at "wearing a s" and could not tell whether the prompt or the panel was to
+ * blame. It was the prompt.
+ *
+ * 500 leaves real headroom for an instruction that embeds a prompt. It is not unbounded because the
+ * checklist is re-injected on EVERY turn of a run — with MAX_PLAN_STEPS that is at most ~16k
+ * characters, and a realistic plan of five steps is a fiftieth of that.
+ */
+export const MAX_STEP_CHARS = 500;
+
+/**
  * HOW MANY STEPS A CHECKLIST MAY HOLD, and a number that was silently 12.
  *
  * "Send me the alphabet, one letter per message" is 26 steps. The model planned 26, the parser kept
@@ -3555,13 +3575,13 @@ function readAuthoredSteps(raw: readonly unknown[]): { do: string; needs?: strin
   for (const item of raw.slice(0, 12)) {
     if (item && typeof item === "object" && !Array.isArray(item)) {
       const o = item as Record<string, unknown>;
-      const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
+      const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_STEP_CHARS);
       if (!text) continue;
       const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
       steps.push({ do: text, ...(needs ? { needs } : {}) });
       continue;
     }
-    const text = strArg(item, MAX_QUERY_CHARS);
+    const text = strArg(item, MAX_STEP_CHARS);
     if (text) steps.push({ do: text });
   }
   return steps;
@@ -3833,7 +3853,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     for (const item of raw) {
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const o = item as Record<string, unknown>;
-        const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
+        const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_STEP_CHARS);
         if (!text) continue;
         const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
         const onFail = strArg(o.onFail ?? o.on_fail, MAX_NAME_CHARS);
@@ -3852,7 +3872,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
         });
         if (needs || onFail || (produces && produces.length) || verify) anyDetail = true;
       } else {
-        const text = strArg(item, MAX_QUERY_CHARS);
+        const text = strArg(item, MAX_STEP_CHARS);
         if (!text) continue;
         steps.push(text);
         stepDetails.push({});
