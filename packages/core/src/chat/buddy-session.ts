@@ -373,7 +373,21 @@ export type BuddyTurnEvent =
  * is waiting on the reader, and in both cases the model should be writing to them rather than
  * working.
  */
-export type AppManagedNext = { kind: "continue"; directive: string } | { kind: "stop" };
+export type AppManagedNext =
+  | {
+      kind: "continue";
+      directive: string;
+      /**
+       * Did the checklist MOVE, or is this the same step being asked for again?
+       *
+       * The turn's tool results are only ever appended to, so the loop needs to know when one step's
+       * evidence stops counting toward the next — otherwise step 2's "an image rendered" contract is
+       * satisfied by step 1's picture, and three steps tick off one render. A nudge or a retry is the
+       * same step still owing its work, and must keep whatever it has already produced.
+       */
+      advanced?: boolean;
+    }
+  | { kind: "stop" };
 
 export interface BuddyTurnOutcome {
   /** Final assistant prose (empty ONLY when the round ended on a pending tool). */
@@ -602,6 +616,16 @@ export async function runBuddyTurn(opts: {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
   const toolResults: BuddyTurnOutcome["toolResults"] = [];
+  /**
+   * HOW MUCH OF `toolResults` BELONGS TO THE STEP BEING JUDGED.
+   *
+   * `toolResults` is the TURN's record and is only ever appended to — it has to be, it is what the
+   * turn returns. The checklist tick was handed the whole of it on every step, so step 2's "an image
+   * rendered" contract was satisfied by step 1's picture and a three-image checklist could tick three
+   * steps off one render. The host's own executor resets its evidence on every advance; this is the
+   * same rule for the in-turn path, expressed as a watermark so the turn's record stays whole.
+   */
+  let stepEvidenceFrom = 0;
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
   let lastTruncated = false; // did the last reply get CUT OFF at the token budget? (→ auto-continue)
@@ -800,7 +824,7 @@ export async function runBuddyTurn(opts: {
           ? "[Now write the next beat of the story as plain prose — continue the scene a little, refer to " +
             "characters by their established names, no commentary and no tool calls.]"
           : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls — " +
-            "except keep_going, which you should still add if you have more messages to send.]";
+            "except send_message, which you should still call if you have more messages to send.]";
         messages.push({ role: "user", content: wrap });
         continue;
       }
@@ -831,7 +855,7 @@ export async function runBuddyTurn(opts: {
        * going?" checkpoint, and is why this cannot run away unattended.
        */
       if (opts.appManagedTick && round < effectiveMax) {
-        const next = opts.appManagedTick({ toolResults, text: clean });
+        const next = opts.appManagedTick({ toolResults: toolResults.slice(stepEvidenceFrom), text: clean });
         if (next.kind === "continue") {
           // The step's work is this round's prose, and it is a message in its own right. Nothing
           // else flushes it: the host flushes streamed prose when a TOOL CALL follows it, and a text
@@ -840,6 +864,10 @@ export async function runBuddyTurn(opts: {
           transcript.push({ role: "assistant", content: clean });
           messages.push({ role: "assistant", content: reply });
           messages.push({ role: "user", content: next.directive });
+          // Whatever satisfied THIS step is spent. A nudge is not an advance and keeps the window
+          // open, so a model that narrated and is being asked again still gets credit for work it
+          // already did — `next.kind` alone cannot tell the two apart, but the plan's position can.
+          if (next.advanced) stepEvidenceFrom = toolResults.length;
           stalledProse = "";
           continue;
         }
@@ -1086,10 +1114,43 @@ export async function runBuddyTurn(opts: {
         break;
       }
       /**
-       * "I HAVE MORE TO SEND." The tool that does nothing, handled here rather than in the dispatch
-       * table because the one thing it has to check is only visible from here: whether anything was
-       * actually written this round. A keep_going with no message buys a round and sends nothing,
-       * and fifty of those is a turn that looks like thinking and produces silence.
+       * ONE MESSAGE OF A SERIES. Handled here rather than in the dispatch table because it publishes
+       * to the reader and touches the turn's own record of what it has sent — neither of which
+       * `runBuddyTool` can reach.
+       *
+       * Note what does NOT happen here: `keptGoingThisTurn` is not set, so the stall check below
+       * never fires for a series driven this way. That is the point of the change rather than an
+       * oversight. The stall check exists because a `keep_going` series could not tell "I forgot to
+       * ask for another round" from "that was the last one" — with the message and the continuation
+       * being one act, a round with no call means the model is finished, which is what every
+       * published harness takes it to mean.
+       */
+      if (call.tool === "send_message") {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const text = call.text.trim();
+        // Nothing else publishes this. Prose written BEFORE a tool call becomes its own bubble
+        // through the host's streaming flush, but this message is an argument, not prose — the same
+        // reason a text checklist step needed its own flush, and the same event serves both.
+        opts.onEvent?.({ kind: "stepDone", text });
+        transcript.push({ role: "assistant", content: text });
+        sentThisTurn.push(text);
+        const result: BuddyToolResultPayload = { sent: true };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        // The position rides back as this call's RESULT. Same note as the old series echo, but it is
+        // now an answer to something the model asked for rather than app prose arriving in the
+        // reader's voice, which is the half that was being disbelieved.
+        feedbacks.push(seriesProgressNote(sentThisTurn));
+        continue;
+      }
+      /**
+       * "I HAVE MORE TO SEND." — the retired predecessor of `send_message`, kept only so a model that
+       * emits it is understood rather than refused.
+       *
+       * It is no longer documented anywhere in the prompt or the native schemas. A tool that does
+       * nothing made every message a two-part act (write the prose, then remember the token), and one
+       * miss in twenty-six ended the task silently. Honouring it costs nothing and is strictly better
+       * than erroring at a model that learned the old shape earlier in the same conversation.
        */
       if (call.tool === "keep_going") {
         opts.onEvent?.({ kind: "tool", round, call });
@@ -1180,7 +1241,7 @@ export async function runBuddyTurn(opts: {
     const results = feedbacks.join("\n\n");
     // Whether this round was ONLY "I have more to send". Three separate decisions below turn on it,
     // and it has to be known before the steering line is built.
-    const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "keep_going");
+    const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "send_message" || c.tool === "keep_going");
     const steering =
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
       // NOT DURING A SERIES. Every six rounds the model is asked to write a progress line before its
@@ -1459,6 +1520,10 @@ export async function runBuddyTool(
       // here so the switch stays exhaustive for the slash-command path, which shares this table.
       case "keep_going":
         return { error: "keep_going only means anything inside a turn" };
+      // Same story: the round loop intercepts this one before dispatch, because publishing to the
+      // reader and recording what the turn has sent are both outside what this table can reach.
+      case "send_message":
+        return { error: "send_message only means anything inside a turn" };
       case "set_plan": {
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
         const plan = deps.setPlan(call.goal, call.steps, call.stepDetails);

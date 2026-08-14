@@ -516,7 +516,7 @@ export type BuddyStreamEvent =
    * Markdown) + side reader, saves the source to the workspace, and caches it for phone download. */
   | { kind: "documentCreated"; id: string; title: string; content: string; path: string; format?: "pdf" | "docx" | "md" | "html" }
   /** The buddy updated its working checklist (set_plan/complete_step) — the app renders + persists it. */
-  | { kind: "plan"; plan: BuddyPlan }
+  | { kind: "plan"; plan: BuddyPlan; origin: "model" | "app" }
   /** Where the request's context budget is going (for the usage donut). */
   | { kind: "usage"; usage: ContextUsage }
   /** remove_library_book deleted a book — the app should refresh its library. */
@@ -1300,7 +1300,7 @@ export function useEngineWorker(
           break;
         }
         case "buddyPlan": {
-          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "plan", plan: msg.plan });
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "plan", plan: msg.plan, origin: msg.origin ?? "model" });
           break;
         }
         case "buddyLibraryChanged": {

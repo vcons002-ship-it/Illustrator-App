@@ -460,6 +460,46 @@ export function recompileWorkflow(prev: Workflow | undefined, plan: BuddyPlan, c
   return { ...fresh, steps };
 }
 
+/**
+ * TAKE THE PROGRESS OFF A PROJECTION THE APP ITSELF JUST ADVANCED.
+ *
+ * `recompileWorkflow` above is for a plan the MODEL re-issued, and it is right to throw the incoming
+ * statuses away: a model revising its checklist has no standing to declare what is finished. But the
+ * app advancing its own run posts the same shape down the same wire, and reading that as a re-plan
+ * regressed the whole run to zero — `compileWorkflow` hardcodes every step to pending, so a
+ * done-marked projection had no way back in. The card read 0/25 while the chat showed 25 messages,
+ * and the next turn started again at step 1.
+ *
+ * Two callers, two meanings, one channel. This is the other meaning: the statuses are authoritative
+ * and the STRUCTURE is not. So progress is copied over the workflow we already hold, which keeps
+ * everything the projection drops — `onFail`, `maxAttempts`, `context`, `produces`, `inferred` — that
+ * a re-compile would have had to guess at again.
+ *
+ * Positional, because the projection is this same workflow's own output and the two cannot disagree
+ * about order. If they ever do — different length, or an instruction that doesn't match — the
+ * projection is not ours and `prev` is returned untouched, which fails closed: a stalled card is a
+ * visible nuisance, a workflow advanced by someone else's plan is silent corruption. PURE.
+ */
+export function adoptPlanProgress(prev: Workflow, plan: BuddyPlan): Workflow {
+  if (plan.steps.length !== prev.steps.length) return prev;
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (!prev.steps.every((s, i) => same(s.instruction, plan.steps[i]!.text))) return prev;
+  const steps = prev.steps.map((s, i) => {
+    const incoming = plan.steps[i]!;
+    const note = incoming.note ?? s.note;
+    return {
+      ...s,
+      status: incoming.status === "done" ? ("done" as WorkflowStepStatus) : s.status,
+      ...(note ? { note } : {}),
+    };
+  });
+  // Arm the first step with work left. Without this every remaining step reads "pending" and
+  // `activeStep` — which looks for the active one — finds nothing, so the run has no position at all.
+  const next = steps.find((s) => s.status === "pending" || s.status === "active");
+  if (next && next.status === "pending") next.status = "active";
+  return { ...prev, steps };
+}
+
 /** Why the executor is handing this step to the model. */
 export type DirectiveKind =
   | "start" // the checklist was just compiled — drive its first step
@@ -494,19 +534,41 @@ export function stepDirective(
   const context = step.context
     ? ` (This continues the kind of work in “${step.context}” — apply it to THIS step's subject, not the previous one's.)`
     : "";
+  /**
+   * STATED, NOT COMMANDED — and the change is not cosmetic.
+   *
+   * These arrive under role "user", because this app has no other channel. So the model reads them as
+   * the READER talking, and the old wording made that as bad as it could be: an imperative
+   * out-of-band command ("Now do ONLY step 4 of 25 … Call its tool and stop — don't recap or
+   * explain") that contradicted the model's own assistant turn two lines above. Its reasoning, off
+   * the reader's screen: "The fact that the previous turn (Step 4) has a model output of 'V' in the
+   * prompt history is confusing, but I must follow the current user prompt which explicitly asks for
+   * 'V'." It resolved a conflict between its memory and an apparent human instruction by trusting the
+   * human, which is correct — the conflict was ours to not create.
+   *
+   * Anthropic documents the register directly, for harness text injected into a conversation: "Write
+   * the text as factual statements rather than imperative system instructions… Text framed as
+   * out-of-band system commands can trigger Claude's prompt-injection defenses, which causes Claude
+   * to surface the text to you instead of treating it as context."
+   *
+   * So each of these now states where the run is and what the step is, and stops. Same information,
+   * no command, and "✓ Previous step done" — a claim about what the model just did, which is exactly
+   * what it had grounds to dispute — becomes a statement about the checklist, which it does not own.
+   */
   const lead =
     kind === "start"
-      ? `Checklist ready — ${total} step${total === 1 ? "" : "s"}. Now do ONLY ${where}:`
+      ? `Checklist ready — ${total} step${total === 1 ? "" : "s"}. Current position: ${where}.`
       : kind === "advance"
-        ? `✓ Previous step done. Now do ONLY ${where}:`
+        ? `Checklist: ${where} is now current.`
         : kind === "retry"
-          ? `Your last attempt didn't satisfy ${where}${extra.reason ? ` (${extra.reason})` : ""}. Do it again now:`
-          : `You haven't done ${where} yet.${
+          ? `Checklist: ${where} is still open${extra.reason ? ` — ${extra.reason}` : ""}.`
+          : `Checklist: ${where} has no work recorded against it yet.${
               extra.checklistMeta
-                ? " The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step."
+                ? " The app ticks steps off itself from what it observes — complete_step and re-planning are not needed."
                 : ""
-            }${extra.needsTool ? ` This step needs an ACTUAL ${extra.needsTool} call this turn (not a description).` : ""} Do it now:`;
-  const tail = kind === "advance" || kind === "start" ? "Call its tool and stop — don't recap or explain." : "Call the tool and stop — no commentary.";
+            }${extra.needsTool ? ` Its contract is satisfied by an actual ${extra.needsTool} call, not by a description of one.` : ""}`;
+  // The step's own text still has to be handed over — it is the one thing the model cannot look up.
+  const tail = "This step only; the next one follows on its own.";
   return `[${lead} ${step.instruction}.${context} ${tail}]`;
 }
 

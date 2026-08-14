@@ -512,9 +512,16 @@ export type WorkerToMain =
       path: string;
       format?: "pdf" | "docx" | "md" | "html";
     }
-  /** The buddy updated its lightweight working checklist (set_plan/complete_step) mid-turn — the host
-   * renders + persists it as the canonical per-session plan. */
-  | { type: "buddyPlan"; requestId: number; plan: BuddyPlan }
+  /** The buddy updated its lightweight working checklist mid-turn — the host renders + persists it as
+   * the canonical per-session plan.
+   *
+   * `origin` says WHO moved it, and the host must branch on it. "model" is the model re-issuing its
+   * checklist through set_plan/complete_step, where the structure is authoritative and the incoming
+   * statuses are not. "app" is this app's own step executor reporting a step it just advanced, where
+   * the reverse holds. Reading the second as the first regressed every run to 0/N — `compileWorkflow`
+   * resets every step to pending, so a done-marked projection had no way back into the host's
+   * workflow. Absent means "model", which is what every pre-existing sender meant. */
+  | { type: "buddyPlan"; requestId: number; plan: BuddyPlan; origin?: "model" | "app" }
   /** remove_library_book deleted a book — the main thread refreshes its library list. */
   | { type: "buddyLibraryChanged"; requestId: number }
   /** A scheduled task was created/cancelled by the chat — the host refreshes its list. */
