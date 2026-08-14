@@ -598,7 +598,28 @@ export type BuddyToolCall =
    * call already becomes its own chat message. All that was absent was a way to say "not finished",
    * so this tool does exactly that and nothing more.
    */
-  | { tool: "keep_going" };
+  | { tool: "keep_going" }
+  /**
+   * SEND ONE MESSAGE TO THE READER, AND STAY IN THE TURN.
+   *
+   * This replaces `keep_going`, and the difference is the whole point. `keep_going` was a tool that
+   * DID NOTHING — it bought permission to continue, so every message of a series was a two-part act:
+   * write the prose, then remember to attach a no-op call. Miss the second half once in twenty-six
+   * and the task ended silently. Worse, it was never in `ollamaToolSchemas`, so a model driving
+   * through native tool-calling could not emit it at all — it knew it needed to, said so in its
+   * reasoning, and had no way to.
+   *
+   * Every published harness works the other way round: the loop CONTINUES while the model is calling
+   * tools and ENDS when it stops. Nothing anywhere asks a model for permission to keep working. So
+   * the message becomes the tool call. One act, not two; a real argument instead of a token; and the
+   * position comes back as a tool RESULT, which is where a harness is supposed to put facts about
+   * the run rather than in prose wearing the reader's face.
+   *
+   * It also gives the checklist something it never had: `{kind:"text"}` could only ever check that
+   * SOME prose existed, so "V", "W" and "I already sent V, moving on" all satisfied it identically.
+   * The argument is the content, so what was sent is now a fact and not an inference.
+   */
+  | { tool: "send_message"; text: string };
 
 /**
  * The runtime roster of EVERY real tool name (the `BuddyToolCall` union is a compile-time type; this is
@@ -660,7 +681,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "mark_step_done", "complete_task", "save_task_context", "update_task_step", "update_task", "update_task_doc",
   "add_task_steps", "list_task_plans",
   "get_task_plan", "use_image_reference", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
-  "complete_step", "keep_going",
+  "complete_step", "keep_going", "send_message",
 ]);
 
 /**
@@ -899,6 +920,8 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return "Checking off a step…";
     case "keep_going":
       return "Continuing…";
+    case "send_message":
+      return "Sending a message…";
     default:
       return "Working on it…";
   }
@@ -936,6 +959,17 @@ const MAX_QUERY_CHARS = 200;
  * characters, and a realistic plan of five steps is a fiftieth of that.
  */
 export const MAX_STEP_CHARS = 500;
+
+/**
+ * The longest single message `send_message` will publish.
+ *
+ * Generous, because this is the READER'S message and truncating one is losing what they asked for —
+ * the series that needs this tool is usually letters or short lines, but "explain each of these five
+ * ideas, one message each" is the same shape and each of those is a paragraph. Bounded at all only
+ * so a runaway argument cannot push a single round past the context budget; a model with more to say
+ * than this should be writing its answer as prose, not as a series item.
+ */
+export const MAX_SENT_MESSAGE_CHARS = 4000;
 
 /**
  * HOW MANY STEPS A CHECKLIST MAY HOLD, and a number that was silently 12.
@@ -1588,21 +1622,15 @@ export function buildBuddySystemPrompt(raw: {
   // just calling the tool. So with no plan we give a one-line single-vs-multi hint; the full discipline
   // appears only once a checklist is actually running.
   const multiStepGuide = !hasPlan
-    ? 'MANY MESSAGES vs MANY ACTIONS. MESSAGES means text you type. A task that is the SAME small ' +
+    ? // Two paragraphs shorter than the version this replaces, and the cut is the point rather than a
+      // saving. "NOTHING CONTINUES ON ITS OWN — no loop runs behind you. End a reply without
+      // keep_going and the turn is OVER" was true and had to be said, because continuing depended on
+      // the model remembering a token that did nothing. Sending IS the call now, so the turn carries
+      // on for the same reason any tool loop does, and the warning has nothing left to warn about.
+      'MANY MESSAGES vs MANY ACTIONS. MESSAGES means text you type. A task that is the SAME small ' +
       'thing over and over — "the alphabet, one letter per message", a countdown — needs NO checklist: ' +
-      'send the first one, call {"tool":"keep_going"} in the same reply, and ' +
-      "you get to send the next. Repeat until done; a checklist there is overkill — but if the reader ASKS " +
-      "for a plan, MAKE ONE: their request wins.\n" +
-
-      // Both sentences below refute one the model actually wrote before stopping on the first letter:
-      // "Since I can't count in my head reliably or use a tool for this simple task, I will just keep
-      // going until I feel done (which is Z). The system handles the loop via keep_going." Nothing in
-      // the system does. It had read the paragraph above and still concluded the loop was automatic,
-      // so the correction has to say that outright rather than restate the instruction.
-      "NOTHING CONTINUES ON ITS OWN: no loop runs behind you. End a reply without " +
-      '{"tool":"keep_going"} and the turn is OVER. It is not a real tool and costs nothing, so ' +
-      '"too simple" is no reason to omit it.\n' +
-""
+      "send each one with send_message and the turn stays yours. A checklist there is overkill — but if " +
+      "the reader ASKS for a plan, MAKE ONE: their request wins.\n"
     : opts.appManagedSteps
       ? // App-managed mid-plan: the YOUR CURRENT STEP block already says do-one-step / no complete_step.
         ""
@@ -1657,7 +1685,12 @@ export function buildBuddySystemPrompt(raw: {
       "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
       'every turn and saved. {"tool":"complete_step","note":"…"} — check off the CURRENT (first unfinished) step, ' +
       "AFTER you've actually done it (no step number needed). Then keep going — the app hands you another turn " +
-      "while steps remain, so work straight down the list off your checklist. Skip both for a simple one-shot ask.\n";
+      "while steps remain, so work straight down the list off your checklist. Skip both for a simple one-shot ask.\n" +
+      // The catalog entry its predecessor never had. keep_going was described only in a paragraph of
+      // prose further down and was absent from the native schemas entirely, so a model looking for
+      // the tool that sends a series found nothing in the one place it lists what it can call.
+      '- {"tool":"send_message","text":"…"} — send ONE message now and STAY in this turn; call it again for ' +
+      "the next. The text IS the message, so don't also write it as prose. The turn ends when you stop.\n";
   // A compact intent→tool decision table read BEFORE the full catalog, so the model resolves the
   // look-alike choices (search vs generate, read vs open, find vs read, draft vs send, run vs save)
   // up front. Lines for tools that aren't available this session are omitted so nothing dangles.
@@ -1766,7 +1799,7 @@ export function buildBuddySystemPrompt(raw: {
    */
   const planningRule = !hasPlan
     ? "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (several images, or research → write-up) → " +
-      "call set_plan FIRST, one step per action — keep_going CANNOT do this: a render ENDS the turn, so its " +
+      "call set_plan FIRST, one step per action — send_message CANNOT do this: a render ENDS the turn, so its " +
       "round never comes. A SINGLE action (one image, one search) → call its tool directly; do NOT make a " +
       "plan for one step. WRITING something and MAKING something are " +
       "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
@@ -3348,6 +3381,18 @@ export function ollamaToolSchemas(opts: {
       ["steps"],
     ),
     toolFn("complete_step", "Mark the CURRENT checklist step done — only after you've actually done it.", { note: strParam("Optional short note.") }, []),
+    // NEVER GATE THIS, and never let it fall out of this list. Its predecessor `keep_going` was
+    // documented in the prompt and absent from these schemas, so a model driving through native
+    // tool-calling was told to call something it had no way to call — it said in its reasoning that
+    // it would, and then couldn't. That is the entire "it knows it needs to and doesn't".
+    toolFn(
+      "send_message",
+      "Send ONE message to the reader now and stay in this turn, so you can send more. Use this for a " +
+        "task that is many separate messages — the alphabet one letter at a time, a countdown, a list " +
+        "sent line by line. Call it again for each one. The turn ends when you stop calling it.",
+      { text: strParam("The message to send, exactly as the reader should see it.") },
+      ["text"],
+    ),
     toolFn(
       "remember",
       "Save a durable note about the reader, or about your own/their identity.",
@@ -3883,6 +3928,11 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return { tool, ...(goal ? { goal } : {}), steps, ...(anyDetail ? { stepDetails } : {}) };
   }
   if (tool === "keep_going") return { tool };
+  if (tool === "send_message") {
+    // No text, no message. Returning undefined re-issues rather than publishing an empty bubble.
+    const text = strArg(obj.text ?? obj.message ?? obj.content, MAX_SENT_MESSAGE_CHARS);
+    return text ? { tool, text } : undefined;
+  }
   if (tool === "complete_step") {
     // No required args — the app ticks the first unfinished step.
     const note = strArg(obj.note, MAX_QUERY_CHARS);
@@ -4681,6 +4731,8 @@ export interface BuddyOpenedInfo {
 export interface BuddyToolResultPayload {
   /** The model asked for another round rather than ending the turn. See the `keep_going` tool. */
   keptGoing?: boolean;
+  /** One message of a series reached the reader. See the `send_message` tool. */
+  sent?: boolean;
   /** A caveat about a result that SUCCEEDED — currently only a checklist the parser had to trim.
    * Not an error: the plan was set, it just is not the plan the model wrote. */
   note?: string;
@@ -5024,6 +5076,11 @@ function formatBuddyToolResultBody(
     // repeated in the context once per message of a long run. `seriesProgressNote` is the one
     // exception and it earns it — see there.
     return "[go on]";
+  }
+  if (call.tool === "send_message") {
+    // The round loop answers this one with `seriesProgressNote`, which knows the whole run and not
+    // just this call. Reached only if something outside that loop formats the result.
+    return "[sent]";
   }
   if (call.tool === "set_plan" || call.tool === "complete_step") {
     if (!result.plan) return "[plan: nothing to update]";

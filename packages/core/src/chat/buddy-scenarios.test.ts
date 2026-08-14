@@ -307,8 +307,8 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
    * the turn, so the round keep_going asks for never arrives. Stated as the mechanism, at the point
    * where the choice is made, rather than as a category the model has to sort the request into.
    */
-  it("says why keep_going cannot serve a run of renders", () => {
-    expect(prompt).toMatch(/keep_going CANNOT do this/);
+  it("says why send_message cannot serve a run of renders", () => {
+    expect(prompt).toMatch(/send_message CANNOT do this/);
     expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/a render ENDS the turn/);
   });
 
@@ -325,16 +325,32 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/MESSAGES means text you type/);
   });
 
-  it("says outright that nothing continues on its own", () => {
-    expect(prompt).toContain("NOTHING CONTINUES ON ITS OWN");
-    expect(prompt).toMatch(/no loop runs behind you/);
-    expect(prompt).toMatch(/the turn is OVER/);
+  /**
+   * THE TWO RULES THAT USED TO SIT HERE ARE GONE, AND THAT IS THE FIX RATHER THAN A REGRESSION.
+   *
+   * They read: "NOTHING CONTINUES ON ITS OWN — no loop runs behind you. End a reply without
+   * keep_going and the turn is OVER" and "It is not a real tool and costs nothing, so 'too simple' is
+   * no reason to omit it." Both were true, both were needed, and both existed only because
+   * continuing depended on the model remembering a token that did nothing.
+   *
+   * Sending IS the call now. The turn continues for the same reason any tool loop continues, so
+   * there is no loop-that-isn't-running to warn about, and "not a real tool" has stopped being true.
+   * What replaces them is not more prose — it is the two things the old design got wrong.
+   */
+  it("gives the series tool a real argument, so the message cannot be separated from the call", () => {
+    // keep_going carried nothing: the message was prose beside it, and a reply that wrote the prose
+    // and forgot the token sent the message and ended the run. There is no second half to forget.
+    expect(prompt).toMatch(/\{"tool":"send_message","text":"…"\}/);
+    expect(prompt, "the model can still write the message beside the call and double it").toMatch(
+      /The text IS the message, so don't also write it as prose/,
+    );
   });
 
-  it("refuses 'too simple to need a tool' as a reason to skip keep_going", () => {
-    expect(prompt).toMatch(/It is not a real tool/);
-    expect(prompt).toMatch(/not a real tool and costs nothing/);
-    expect(prompt).toMatch(/"too simple" is no reason to omit it/);
+  it("says the turn continues while it calls, and ends when it stops", () => {
+    // The polarity, stated once. Every published harness works this way and none of them has a tool
+    // for asking permission to carry on.
+    expect(prompt).toMatch(/STAY in this turn; call it again for the next/);
+    expect(prompt).toMatch(/The turn ends when you stop/);
   });
 
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {

@@ -6058,9 +6058,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           const adv = advanceWorkflow(wf!, outcome);
           wf = adv.workflow;
           plan = workflowToPlan(wf);
-          post({ type: "buddyPlan", requestId: msg.requestId, plan });
+          // origin "app" — WE advanced this, the model did not re-plan. Without the tag the host runs
+          // it through recompileWorkflow, which throws the incoming statuses away and resets the run.
+          post({ type: "buddyPlan", requestId: msg.requestId, plan, origin: "app" });
           if ((adv.action === "advance" || adv.action === "skip") && adv.next)
-            return { kind: "continue" as const, directive: stepDirective(wf, adv.next, "advance") };
+            // `advanced` — the only branch where the checklist actually moved on, so the only one
+            // where the previous step's evidence stops counting. A retry/nudge below keeps it.
+            return { kind: "continue" as const, directive: stepDirective(wf, adv.next, "advance"), advanced: true };
           if (adv.action === "retry")
             return { kind: "continue" as const, directive: stepDirective(wf, step, "retry", outcome.reason ? { reason: outcome.reason } : {}) };
           // finish / park / abort — the model should be writing to the reader now, not working.

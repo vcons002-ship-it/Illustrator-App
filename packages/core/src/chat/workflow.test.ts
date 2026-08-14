@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { producedArtifactFrom } from "./buddy-tools.js";
 import type { BuddyPlan, BuddyToolCall, BuddyToolResultPayload } from "./buddy-tools.js";
@@ -18,6 +20,7 @@ import {
   isWebSearchStep,
   isToolContract,
   needsToDoneWhen,
+  adoptPlanProgress,
   reactivateWorkflow,
   recompileWorkflow,
   resumeWorkflow,
@@ -679,7 +682,29 @@ describe("no step is ever reached anonymously", () => {
     // The whole fix: a planning turn no longer leaves step 1 to the model's own reading of its plan.
     const d = stepDirective(wf, wf.steps[0]!, "start");
     expect(d).toContain("Checklist ready — 3 steps");
-    expect(d).toContain("ONLY step 1 of 3");
+    expect(d).toContain("step 1 of 3");
+  });
+
+  /**
+   * THESE ARE STATEMENTS NOW, NOT ORDERS — asserted, because the wording IS the fix.
+   *
+   * They arrive under role "user" and there is no other channel, so the model reads them as the
+   * reader talking. Written as imperatives ("Now do ONLY step 4 of 25 … Call its tool and stop") they
+   * contradicted the model's own assistant turn two lines above, and it resolved the conflict the way
+   * it should — by trusting the apparent human — and re-sent a letter it had already sent.
+   *
+   * Anthropic's guidance for harness text injected into a conversation is explicit: "Write the text
+   * as factual statements rather than imperative system instructions… Text framed as out-of-band
+   * system commands can trigger Claude's prompt-injection defenses."
+   */
+  it("states the position instead of commanding, and claims nothing about what the model just did", () => {
+    const d = stepDirective(wf, wf.steps[1]!, "advance");
+    expect(d, "still an out-of-band command").not.toMatch(/Now do ONLY/);
+    expect(d, "still orders the turn ended, which a text step has no tool to do").not.toMatch(/and stop/);
+    // "✓ Previous step done" was a claim about the MODEL's work — the one thing it had grounds to
+    // dispute, and did. The checklist's position is not its to argue with.
+    expect(d, "still tells the model what it did").not.toMatch(/Previous step done/);
+    expect(d).toMatch(/step 2 of 3 is now current/);
   });
 
   it("carries the antecedent of an elliptical step, and only then", () => {
@@ -693,9 +718,11 @@ describe("no step is ever reached anonymously", () => {
   });
 
   it("says which tool a nudged step needs, and who owns the checklist", () => {
+    // Same two facts as before the register changed — the tool the contract wants, and that the app
+    // does its own ticking — stated rather than ordered.
     const d = stepDirective(wf, wf.steps[1]!, "nudge", { needsTool: "generate_image", checklistMeta: true });
-    expect(d).toContain("ACTUAL generate_image call");
-    expect(d).toContain("do NOT call complete_step");
+    expect(d).toContain("actual generate_image call");
+    expect(d).toMatch(/complete_step and re-planning are not needed/);
   });
 
   it("counts a single-step checklist in the singular", () => {
@@ -1024,5 +1051,93 @@ describe("a run with no step holding the baton", () => {
     const tried = wf(["pending"]);
     tried.steps[0]!.attempts = 1;
     expect(reactivateWorkflow(tried).steps[0]!.attempts).toBe(1);
+  });
+});
+
+/**
+ * THE CARD READ 0/25 WHILE THE CHAT SHOWED 25 SENT MESSAGES.
+ *
+ * The app's own step executor advanced the run and posted the result down the same wire `set_plan`
+ * uses. The host read that as the model re-issuing its checklist and ran it through
+ * `recompileWorkflow`, which takes statuses only from the copy it already held — the pre-turn one,
+ * which by definition has not advanced. `compileWorkflow` hardcodes every step to pending, so a
+ * done-marked projection had no way back in. Every advance regressed the run to zero, and the next
+ * turn re-issued step 1: the reader watched the alphabet start again at A.
+ */
+describe("adopting progress the app itself made", () => {
+  const plan: BuddyPlan = {
+    goal: "letters",
+    steps: [{ text: "send Z", status: "pending" }, { text: "send Y", status: "pending" }, { text: "send X", status: "pending" }],
+  };
+  const advanced = (done: number): BuddyPlan => ({
+    ...plan,
+    steps: plan.steps.map((s, i) => ({ ...s, status: i < done ? "done" : "pending" })),
+  });
+
+  it("takes the ticks from the projection, which recompiling threw away", () => {
+    const wf = compileWorkflow(plan);
+    // The regression, stated as the assertion that fails against it: recompile reports nothing done.
+    expect(recompileWorkflow(wf, advanced(2)).steps.filter((s) => s.status === "done")).toHaveLength(0);
+    expect(adoptPlanProgress(wf, advanced(2)).steps.filter((s) => s.status === "done")).toHaveLength(2);
+  });
+
+  it("arms the next step, so the run still has a position", () => {
+    // Without this every remaining step reads "pending" and `activeStep` finds nothing at all.
+    const after = adoptPlanProgress(compileWorkflow(plan), advanced(2));
+    expect(activeStep(after)?.instruction).toBe("send X");
+  });
+
+  it("keeps everything the projection drops", () => {
+    // `workflowToPlan` emits only {text,status,note,needs} — a re-compile would have to guess the
+    // rest again, and guesses a `files` contract wrong. Adopting copies progress onto what we hold.
+    const wf = compileWorkflow({
+      goal: "g",
+      steps: [{ text: "write report.md", status: "pending", needs: "file", onFail: "skip" }, { text: "send Y", status: "pending" }],
+    });
+    const after = adoptPlanProgress(wf, {
+      goal: "g",
+      steps: [{ text: "write report.md", status: "done" }, { text: "send Y", status: "pending" }],
+    });
+    expect(after.steps[0]!.onFail).toBe(wf.steps[0]!.onFail);
+    expect(after.steps[0]!.doneWhen).toEqual(wf.steps[0]!.doneWhen);
+    expect(after.steps[0]!.status).toBe("done");
+  });
+
+  it("never un-ticks a step the projection has fallen behind on", () => {
+    // Progress only moves forward. A stale projection must not resurrect finished work.
+    const wf = adoptPlanProgress(compileWorkflow(plan), advanced(2));
+    expect(adoptPlanProgress(wf, advanced(1)).steps.filter((s) => s.status === "done")).toHaveLength(2);
+  });
+
+  it("fails CLOSED on a projection that isn't ours", () => {
+    // A stalled card is a visible nuisance; a workflow advanced by someone else's plan is silent
+    // corruption. Different length or different instructions → the workflow is returned untouched.
+    const wf = compileWorkflow(plan);
+    expect(adoptPlanProgress(wf, { steps: [{ text: "send Z", status: "done" }] })).toBe(wf);
+    expect(adoptPlanProgress(wf, { steps: [{ text: "draw a cat", status: "done" }, ...advanced(0).steps.slice(1)] })).toBe(wf);
+  });
+});
+
+/**
+ * THE WIRING. A correct function nothing reaches is this migration's signature failure, and it
+ * leaves the suite green — so the channel that carries the distinction is asserted too.
+ */
+describe("the host can tell who moved the checklist", () => {
+  const read = (p: string) => readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", p), "utf8");
+
+  it("the app's own advance is tagged at the source", () => {
+    expect(read("engine.worker.ts")).toMatch(/post\(\{ type: "buddyPlan", requestId: msg\.requestId, plan, origin: "app" \}\)/);
+  });
+
+  it("the tag survives the hop to the host", () => {
+    expect(read("useEngineWorker.ts")).toMatch(/kind: "plan", plan: msg\.plan, origin: msg\.origin \?\? "model"/);
+  });
+
+  it("the host branches on it instead of recompiling everything", () => {
+    const app = read("App.tsx");
+    expect(app, "the app's own advance still runs through recompileWorkflow").toMatch(
+      /appManagedActive && e\.origin === "app"/,
+    );
+    expect(app).toMatch(/applyWorkflow\(adoptPlanProgress\(prev, e\.plan\)\)/);
   });
 });

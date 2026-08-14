@@ -91,6 +91,7 @@ import {
   isOnlyTurnStamp,
   stampAssistantContent,
   stampTurnContent,
+  isAppDirective,
   stripTurnStamp,
   agentBranchName,
   parseGitConflicts,
@@ -216,6 +217,7 @@ import {
   type Workflow,
   compileWorkflow,
   recompileWorkflow,
+  adoptPlanProgress,
   evaluateStep,
   advanceWorkflow,
   activeStep,
@@ -7164,7 +7166,10 @@ export function App() {
     // the whole thing would have been a silent no-op that still typechecked and still passed tests.
     const carriedThinking = checklistInFlight() ? lastThinkingRef.current : undefined;
     lastThinkingRef.current = ""; // a step that thinks nothing must not inherit the last one's
-    const stampedUserText = stampTurnContent(userText, Date.now());
+    // Not the app's own directives — see isAppDirective. A step instruction stamped with a clock
+    // reads as one more thing the reader typed at a specific moment, and the model spent its budget
+    // working out that it wasn't.
+    const stampedUserText = stampTurnContent(userText, isAppDirective(userText) ? undefined : Date.now());
     const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
@@ -7182,7 +7187,20 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
-        if (appManagedActive) {
+        if (appManagedActive && e.origin === "app") {
+          // OUR OWN STEP EXECUTOR ADVANCED — adopt the progress, do not re-compile.
+          //
+          // This arrives on the same wire as set_plan and used to be treated the same way, which
+          // reset the run to step 1 on every single advance: recompileWorkflow reads statuses only
+          // from `prev`, and `prev` is the PRE-TURN copy that by definition has not advanced. The
+          // card read 0/25 while the chat showed 25 sent messages, and the next turn re-issued step 1.
+          //
+          // Nothing else here may run for this origin either. Wiping the evidence would discard the
+          // work this very advance was judged on, and setting planCompiledThisTurn would send the
+          // end-of-turn executor down the PLANNING branch — the second half of the same bug.
+          const prev = buddyWorkflowRef.current;
+          if (prev) applyWorkflow(adoptPlanProgress(prev, e.plan));
+        } else if (appManagedActive) {
           // App-managed: the model just COMPILED (or re-compiled) the plan via set_plan. Turn it into a
           // workflow with per-step DoneWhen contracts; from here the APP runs it and ticks steps from
           // evidence. applyWorkflow mirrors the read-only plan projection into buddyPlan + persists.

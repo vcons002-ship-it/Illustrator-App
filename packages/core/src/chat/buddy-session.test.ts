@@ -497,6 +497,100 @@ describe("runBuddyTurn — a budget spent thinking is not an answer cut short", 
   });
 });
 
+describe("runBuddyTurn — a series driven by send_message", () => {
+  /**
+   * THE REPLACEMENT FOR keep_going, AND THE FOUR THINGS IT FIXES AT ONCE.
+   *
+   * keep_going was a tool that did nothing: every message was a two-part act — write the prose, then
+   * remember to attach a no-op call — and one miss in twenty-six ended the task in silence. It was
+   * also absent from `ollamaToolSchemas`, so a model on native tool-calling could not emit it at all.
+   *
+   * Sending IS the call now. The loop continues because a tool was called, which is how every
+   * published harness decides to continue, and it ends when the model stops calling — no permission,
+   * no stall question, no token to forget.
+   */
+  it("publishes each message and keeps the turn, with no continuation token at all", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"send_message","text":"Z"}',
+      '{"tool":"send_message","text":"Y"}',
+      '{"tool":"send_message","text":"X"}',
+      "That's the first three, backwards.",
+    ]);
+    const sent: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "send the alphabet backwards, one letter per message" }],
+      deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    // Note what is NOT in the script: not one keep_going. The rounds were bought by the work.
+    expect(outcome.toolResults.filter((r) => r.call.tool === "send_message")).toHaveLength(3);
+    expect(sent, "the reader never saw the messages as separate bubbles").toEqual(["Z", "Y", "X"]);
+    expect(outcome.transcript.map((t) => t.content)).toEqual(expect.arrayContaining(["Z", "Y", "X"]));
+    expect(outcome.text).toContain("backwards");
+  });
+
+  it("ends the turn when the model stops calling it — nothing has to say it is finished", async () => {
+    // The old design could not tell "I forgot the token" from "that was the last one", so it had to
+    // ASK, and the question then ate the final message. Stopping is the signal now.
+    const llm = scriptedLlm(['{"tool":"send_message","text":"1"}', "Done — that's all of them."]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "count to one, one per message" }], deps: baseDeps,
+    });
+    expect(llm.calls, "it kept asking after the model had stopped").toHaveLength(2);
+    expect(outcome.text).toContain("Done");
+  });
+
+  it("hands the position back as the CALL'S RESULT, not as prose in the reader's voice", async () => {
+    // The sharpest finding of the harness research: the model ALREADY had its position — the old
+    // series echo carried all 26 letters, well under its cap — and lost its place anyway, because
+    // the note arrived under role "user" contradicting the model's own turn two lines above. Same
+    // facts, delivered as the answer to something it asked for.
+    const llm = scriptedLlm([
+      '{"tool":"send_message","text":"Z"}',
+      '{"tool":"send_message","text":"Y"}',
+      "done",
+    ]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "two letters, one each" }], deps: baseDeps,
+    });
+    const fed = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(fed, "the model is never told what it has sent").toMatch(/you have sent 1 message so far this turn/);
+    expect(fed, "the order is not handed back, so it must re-read its own turns").toMatch(/in order: "Z"/);
+  });
+
+  it("does not ask 'was that the last one?' — the question that swallowed the final message", async () => {
+    // The stall check exists only for keep_going, and must not fire here. It once ate the last letter
+    // of a series: the model answered a question the reader never saw and "Z" never reached the screen.
+    const llm = scriptedLlm(['{"tool":"send_message","text":"A"}', "that's it"]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "one message please" }], deps: baseDeps,
+    });
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).not.toMatch(/Was that the last one/);
+  });
+
+  it("refuses to publish an empty message rather than sending a blank bubble", async () => {
+    const llm = scriptedLlm(['{"tool":"send_message","text":"   "}', "sorry, here: A"]);
+    const sent: string[] = [];
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "send a letter" }], deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    expect(sent, "a blank bubble reached the reader").toEqual([]);
+  });
+
+  it("still understands a keep_going from a model that learned the old shape", async () => {
+    // Retired, undocumented, and still honoured — erroring at a model mid-conversation for using the
+    // spelling it saw earlier would lose the reader's messages to make a point.
+    const llm = scriptedLlm(['A\n{"tool":"keep_going"}', "B"]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "two messages" }], deps: baseDeps,
+    });
+    expect(outcome.toolResults.filter((r) => r.result.error), "the old spelling is now refused").toHaveLength(0);
+  });
+});
+
 describe("runBuddyTurn — a turn that is many messages, without a checklist", () => {
   it("keeps sending until the model stops asking for another round", async () => {
     const llm = scriptedLlm([
@@ -560,8 +654,8 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
       .map((m) => m.content)
       .find((c) => /Now reply to the reader in plain text/.test(c));
     expect(wrap, "the wrap-up directive was never sent").toBeTruthy();
-    expect(wrap, "it still tells the model every tool is off, keep_going included").toMatch(
-      /except keep_going/,
+    expect(wrap, "it still tells the model every tool is off, the series tool included").toMatch(
+      /except send_message/,
     );
   });
 
@@ -1729,6 +1823,45 @@ describe("an app-managed checklist runs inside one turn", () => {
     expect(host.seen, "the run did not reach Z inside one turn").toHaveLength(26);
     expect(host.seen[0]).toBe("A");
     expect(host.seen[25]).toBe("Z");
+  });
+
+  /**
+   * THREE STEPS TICKED OFF ONE RENDER.
+   *
+   * `toolResults` is the TURN's record and is only ever appended to — it has to be, it is what the
+   * turn returns. Every tick was handed the whole of it, so step 2's "an image rendered" contract was
+   * satisfied by step 1's picture, and a three-image checklist could finish on one. The host's own
+   * end-of-turn executor resets its evidence on each advance; the in-turn path did not.
+   */
+  it("gives each step only the evidence produced since the last advance", async () => {
+    const seen: number[] = [];
+    let step = 0;
+    const llm = scriptedLlm([
+      '{"tool":"search_web","query":"one"}',
+      "narrating instead of working",
+      "second step's answer",
+      "done",
+    ]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "two steps" }],
+      deps: baseDeps,
+      appManagedTick: (e) => {
+        seen.push(e.toolResults.length);
+        step += 1;
+        // Round 2 is a NUDGE (same step, no advance); round 3 advances; round 4 stops.
+        if (step === 1) return { kind: "continue", directive: "[still step 1.]" };
+        if (step === 2) return { kind: "continue", directive: "[step 2 now.]", advanced: true };
+        return { kind: "stop" };
+      },
+    });
+    // The search happened before any of these ticks, so step 1 sees it — twice, because a nudge is
+    // the same step still owing its work and must not lose what it already produced.
+    expect(seen[0], "step 1 cannot see the search it just made").toBe(1);
+    expect(seen[1], "a nudge threw away the step's own evidence").toBe(1);
+    // The advance is the cut. Step 2 starts empty, so it cannot be satisfied by step 1's search.
+    expect(seen[2], "step 2 inherited step 1's tool result and can tick off on it").toBe(0);
   });
 
   it("emits a boundary per step, or the letters never become messages", async () => {

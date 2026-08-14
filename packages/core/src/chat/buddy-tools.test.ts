@@ -2293,6 +2293,42 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
   });
 
   describe("ollamaToolSchemas", () => {
+    /**
+     * THE BUG THIS WHOLE CHANGE CAME OUT OF, AS ONE ASSERTION.
+     *
+     * `keep_going` was described in the system prompt and was NOT in this list. A model driving
+     * through native tool-calling sees only this list, so it was being told, in prose, to call
+     * something it had no way to emit. The reader's report was exactly that shape: "keep_going works,
+     * but the AI isn't calling it properly despite knowing it needs to in the reasoning and thinking
+     * it will." It knew, it said it would, and it could not.
+     *
+     * Nothing caught it because the prompt and the schemas are asserted in different files and
+     * neither asked whether they agree. This asks.
+     */
+    it("advertises the series tool, which is the only way a native-tool-calling model can send one", () => {
+      const names = ollamaToolSchemas({}).map((s) => s.function.name);
+      expect(names, "a model on native tool-calling cannot send a series at all").toContain("send_message");
+    });
+
+    it("never gates it behind a toolset, which would put it back out of reach", () => {
+      // The failure mode is silent — the model just stops after one message — so this is checked in
+      // the most withheld configuration there is rather than the default one.
+      const names = ollamaToolSchemas({ loadedToolsets: [] }).map((s) => s.function.name);
+      expect(names).toContain("send_message");
+    });
+
+    it("every tool the prompt tells it to call for a series is one it can actually emit", () => {
+      // The general form of the same bug: any tool named in the always-on prompt as the way to do
+      // something must exist in the list a native model is given. Kept to the series tools, because
+      // the text protocol is a real fallback for everything else — but NOT for this one, which is
+      // the tool that keeps the turn alive.
+      const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], loadedToolsets: [] });
+      const names = new Set(ollamaToolSchemas({ loadedToolsets: [] }).map((s) => s.function.name));
+      for (const tool of ["send_message", "set_plan"]) {
+        if (prompt.includes(tool)) expect(names, `the prompt names ${tool} but no schema offers it`).toContain(tool);
+      }
+    });
+
     it("always advertises the core tools and gates the rest", () => {
       const base = ollamaToolSchemas({});
       const names = base.map((s) => s.function.name);

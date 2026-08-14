@@ -581,3 +581,22 @@ export function stampTurnContent(content: string, at: number | undefined): strin
   if (TURN_STAMP.test(content)) return content;
   return `[${stampClock(at)}] ${content}`;
 }
+
+/**
+ * Whether this turn's opening text is the APP talking, not the reader.
+ *
+ * The clock above exists for the reader's messages, where it answers a real question — how long ago
+ * was this said. A step directive is not a message and has no such question: it is the app handing
+ * over the next instruction, and stamping it made it read as one more thing the reader typed at a
+ * specific moment. The model said so, in reasoning the reader never saw: "The user's prompt in this
+ * specific turn [2026-08-13 13:16:43.860] is the system telling me to do step 1" — it had worked out
+ * the truth and was spending its budget arguing with the format.
+ *
+ * Every app-authored injection in this codebase is wrapped in square brackets and nothing the reader
+ * types is, which is why the shape is the test rather than a flag threaded through six call sites.
+ * A reader who does type a bracketed line loses a timestamp and nothing else. PURE.
+ */
+export function isAppDirective(content: string): boolean {
+  const t = content.trim();
+  return t.startsWith("[") && t.endsWith("]");
+}
