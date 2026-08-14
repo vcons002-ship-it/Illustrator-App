@@ -1141,3 +1141,48 @@ describe("the host can tell who moved the checklist", () => {
     expect(app).toMatch(/applyWorkflow\(adoptPlanProgress\(prev, e\.plan\)\)/);
   });
 });
+
+
+/**
+ * A TEXT STEP COULD ONLY EVER COUNT CHARACTERS.
+ *
+ * `{kind:"text"}` was judged by `evidence.text.trim().length >= 1`, and an inferred contract never
+ * sets a regex — so "V", "W" and "I already sent V, moving on" all satisfied it identically. The
+ * collar could not catch the single error this kind of step actually has, which is sending the wrong
+ * thing. It was not being lax; the content was never in front of it.
+ *
+ * `send_message` puts the message in the call, so what was sent is a fact now.
+ */
+describe("judging a step by WHAT was sent, not merely that something was", () => {
+  const sendMsg = (text: string) => ({
+    call: { tool: "send_message" as const, text },
+    result: { sent: true } as BuddyToolResultPayload,
+  });
+
+  it("counts a message sent through the tool as the step's answer", () => {
+    // Without this a step whose whole deliverable is one message reads as undone, because the
+    // deliverable went through a tool instead of arriving as round prose.
+    const s = step({ doneWhen: { kind: "text", min: 1 } });
+    expect(evaluateStep(s, ev([sendMsg("V")], "")).done).toBe(true);
+    expect(evaluateStep(s, ev([], "")).done).toBe(false);
+  });
+
+  it("lets a step declare WHICH message satisfies it", () => {
+    // The assertion that fails against the old code: both of these passed before, because both are
+    // non-empty prose. Only the right letter passes now.
+    const s = step({ doneWhen: { kind: "text", min: 1, regex: "^V$" } });
+    expect(evaluateStep(s, ev([sendMsg("V")], "")).done).toBe(true);
+    expect(evaluateStep(s, ev([sendMsg("W")], "")).done, "the wrong letter still ticks the step off").toBe(false);
+  });
+
+  it("does not credit a message the tool refused to send", () => {
+    const s = step({ doneWhen: { kind: "text", min: 1 } });
+    const refused = { call: { tool: "send_message" as const, text: "V" }, result: {} as BuddyToolResultPayload };
+    expect(evaluateStep(s, ev([refused], "")).done).toBe(false);
+  });
+
+  it("still reads ordinary prose, which is how most text steps are done", () => {
+    expect(evaluateStep(step({ doneWhen: { kind: "text", min: 1 } }), ev([], "here is the answer")).done).toBe(true);
+    expect(evaluateStep(step({ doneWhen: { kind: "narration" } }), ev([sendMsg("a beat")], "")).done).toBe(true);
+  });
+});

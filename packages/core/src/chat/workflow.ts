@@ -639,6 +639,26 @@ function attemptedArtifact(evidence: StepEvidence): boolean {
 }
 
 /**
+ * EVERYTHING THE MODEL PUT IN FRONT OF THE READER THIS STEP.
+ *
+ * An answer used to be `evidence.text` alone — the round's prose — which made a text contract a
+ * character count and nothing more. "V", "W" and "I already sent V, moving on" all satisfied it
+ * identically, so the collar could not catch the one error this kind of step actually has: sending
+ * the wrong thing. It was not being lax, it had nothing to read.
+ *
+ * A message sent through `send_message` arrives as a tool RESULT with the text as its argument, so
+ * what was sent is now a fact rather than an inference. Folding it in here is what lets a step
+ * declare `regex` and have it mean something, and it keeps a step whose whole deliverable is one
+ * message from reading as undone because the deliverable went through a tool instead of prose. PURE.
+ */
+function answerText(evidence: StepEvidence): string {
+  const sent = evidence.toolResults
+    .filter((r) => r.call.tool === "send_message" && r.result.sent)
+    .map((r) => (r.call as { tool: "send_message"; text: string }).text);
+  return [evidence.text, ...sent].join("\n").trim();
+}
+
+/**
  * THE COLLAR. Judge the active step against its contract using ONLY observed evidence — never the
  * model's claim. The host folds host-tool outcomes (generate_image → `image.ok`, write_file →
  * `writeFile.ok`, run_command → `command.code`) into `evidence.toolResults`, so every kind is a
@@ -686,7 +706,7 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
       // as "write something" then reported it undone — for ever, because doing it again produced the
       // same nothing. A contract the MODEL declared still holds; this only overrides a guess.
       if (step.inferred && producedArtifact(evidence)) return { done: true };
-      const body = evidence.text.trim();
+      const body = answerText(evidence);
       if (body.length < (dw.min ?? 1)) return { done: false, reason: "no answer was produced" };
       if (dw.regex) {
         let re: RegExp | undefined;
@@ -708,7 +728,7 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
     }
     case "narration":
       if (step.inferred && producedArtifact(evidence)) return { done: true }; // same rule as `text`
-      return evidence.text.trim().length > 0 ? { done: true } : { done: false, reason: "nothing was said" };
+      return answerText(evidence).length > 0 ? { done: true } : { done: false, reason: "nothing was said" };
     case "user_reply":
       // The model asked; the step is satisfied by the reader's NEXT message, not by this turn.
       return { done: false, parks: true };
