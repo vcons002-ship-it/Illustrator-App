@@ -482,21 +482,52 @@ Five mechanisms, all built to compensate for one inverted polarity.
 
 ---
 
-## Part 5 — Sequencing
+## Part 5 — Sequencing and status
 
-1. **The checklist regression (M2, discriminator only).** A live bug with a two-line fix. Do it first
-   and independently — it restores ticking regardless of what follows.
-2. **`send_message` replaces `keep_going` (M1).** The load-bearing change. Includes the schema entry,
-   the catalog entry, and deleting the five compensating mechanisms above.
-3. **Register (M5).** Free, no plumbing, no token cost.
-4. **Evidence slicing + veto shape (M2 tail, M4).**
-5. **The typed envelope (M3).** Largest, most valuable, wants its own pass — and needs the empirical
-   check in §6 first.
-6. **Audience split (M6).**
+| | | Status |
+|---|---|---|
+| 1 | **The checklist regression** (M2, channel discriminator) | **done** — `43976a4`..`2db494e` |
+| 2 | **`send_message` replaces `keep_going`** (M1) | **done** |
+| 3 | **Register** (M5) — directives stated, not commanded; no clock on app text | **done** |
+| 4 | **Evidence slicing + content-aware text contract** (M2 tail, M4) | **done** |
+| 4b | **The turn-boundary contradiction** in `routingGuide` (§2.4) | **done** |
+| 5 | **The typed envelope** (M3) | **blocked** — see below |
+| 6 | **Audience split** (M6) | not started |
 
-Steps 1–4 need no provider work and no new prompt tokens, which matters: the always-on prompt measures
-**5,796 of its 5,800-token budget** — four tokens of headroom [CODE, reproduced]. M1 and M5 *return*
-tokens.
+Steps 1–4 needed no provider work and no net prompt tokens. The always-on prompt still measures inside
+its 5,800-token budget with **3 tokens of headroom**; M1 and M5 returned enough to pay for 4b.
+
+**Why 5 is blocked rather than skipped.** The envelope's value depends on a fact this research could
+not establish: whether the Ollama builds we actually ship accept `role:"tool"` in practice. The
+native `/api/chat` docs say yes [D]; nothing was tested against our binaries, and there is no Ollama
+in the environment this work was done in. Writing the projection blind would touch every provider
+adapter on the strength of a documented-but-unverified capability, and a wrong guess degrades every
+model path at once rather than one. Open question §7.2 is the gate; it wants ten minutes on a machine
+with the models installed, not more desk research.
+
+The one piece that needs no verification — a stable self-identifying envelope for the fallback path —
+was deliberately **not** done either, for a different reason: there is no evidence a different bracket
+shape changes how the text is read, and inventing one would be exactly the fitted-to-the-example
+guessing this whole pass exists to stop doing.
+
+### What actually changed, against the four laws
+
+- **L1** — `keep_going` is gone from the prompt and the schemas. The loop continues because a tool was
+  called, and ends when the model stops calling. The stall check, `isStallConfirmation` and the
+  "was that the last one?" round-trip no longer fire for a series; they remain only for the retired
+  spelling.
+- **L2** — one owner per turn. The worker's advance is tagged `origin: "app"` and the host adopts it
+  rather than recompiling. `adoptPlanProgress` fails closed on a plan that isn't ours.
+- **L3** — partially. The app still grades, but a text step now grades against *what was sent* rather
+  than *that something was said*, which is the difference between a contract and a character count.
+  The full veto shape (model claims, harness refuses with a reason) is not built.
+- **L4** — directives are statements. `✓ Previous step done` — a claim about the model's own work,
+  which is the one thing it had grounds to dispute, and did — is now `Checklist: step N of M is now
+  current`. App-authored text is no longer stamped with a clock.
+- **L5** — the mechanism exists (`send_message` makes a series one turn of N tool calls rather than N
+  turns), but the stronger form — emit the whole sequence in one response and let the renderer pace
+  it — is not built. It remains the cheapest option for pure recitation and is worth doing if the
+  alphabet still misbehaves.
 
 ---
 
@@ -582,4 +613,16 @@ document and are marked [D?] throughout. If any of it becomes load-bearing, re-f
   25-step in-turn run the model's visible checklist keeps saying step 1 is current, and the grammar
   stays pinned to step 1's required tool.
 - The wrap-up directive is the one continue-path that is **not** round-guarded, so at the cap the model
-  can still be handed a directive advertising `keep_going`, whose calls line 744 then discards.
+  can still be handed a directive advertising the series tool, whose calls line 744 then discards.
+
+---
+
+## Addendum — what this document describes and what the code now does
+
+Parts 1–4 are the research and the design, written before any of it was built. Part 5 carries the
+status. Where the two disagree, the code is right and this document is the record of why it was
+changed — in particular §2.1's "the model already has the position" and §2.2's missing native schema
+are both statements about the code **as it was**, and are the reasons the current code differs.
+
+Everything still marked open in §7 is open. The decomposition guidance in §5 is still the weakest
+sourcing here and is still marked [D?] throughout; nothing shipped depends on it.
