@@ -1736,8 +1736,15 @@ export function buildBuddySystemPrompt(raw: {
         "draftId (list_drafts to find it) — never draft_email again, that leaves a second copy. Only send_email when " +
         'they explicitly say "send".\n'
       : "") +
-    "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
-    "comes back to you, so CHAIN tools: search → read → write → run, reacting to each result.\n\n";
+    // WAS: "Every tool's result comes back to you, so CHAIN tools: search → read → write → run".
+    // Two of those four END the turn — write_file and run_command are host tools, along with 19
+    // others — so the chain it describes dies at "write" and whatever the model meant to do after it
+    // never happens. It is the only always-on line that says anything about turn boundaries, and it
+    // said the opposite of the truth. The correction has to be here rather than as one more rule: a
+    // model reading "chain them" has no reason to go looking for a contradiction elsewhere.
+    "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). A search, " +
+    "read or calculation comes back — CHAIN those. Making a picture or video, writing a file, running a " +
+    "command or touching their PC ENDS the turn: give each its OWN step.\n\n";
   // Story "as you go": once a story is OPEN, the model just writes the next beat as a normal prose
   // reply — NO tool. The app turns that reply into the beat and illustrates it (cadence + redraw are
   // the reader's UI controls). This keeps the model out of tool-juggling. Empty when no story is open.

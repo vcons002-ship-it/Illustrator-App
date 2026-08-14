@@ -307,6 +307,26 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
    * the turn, so the round keep_going asks for never arrives. Stated as the mechanism, at the point
    * where the choice is made, rather than as a category the model has to sort the request into.
    */
+  /**
+   * THE ONLY ALWAYS-ON LINE ABOUT TURN BOUNDARIES SAID THE OPPOSITE OF THE TRUTH.
+   *
+   * routingGuide read: "Every tool's result comes back to you, so CHAIN tools: search → read → write
+   * → run, reacting to each result." Two of those four END the turn — write_file and run_command are
+   * host tools, along with 19 others — so the chain it describes dies at "write", and whatever the
+   * model planned to do after it never happens. A model reading "chain them" has no reason to go
+   * looking for the correction, which lived only in the mid-plan branch and so was absent exactly
+   * when this line was read alone.
+   */
+  it("does not promise that a write or a command comes back inside the turn", () => {
+    expect(prompt, "the chain that dies at its third link is back").not.toMatch(/search → read → write → run/);
+    expect(prompt, "still says EVERY tool's result comes back").not.toMatch(/Every tool's result[\s\S]{0,20}comes back/);
+  });
+
+  it("says which kinds of tool end the turn, where the chaining advice is given", () => {
+    expect(prompt).toMatch(/A search, read or calculation comes back — CHAIN those/);
+    expect(prompt).toMatch(/ENDS the turn: give each its OWN step/);
+  });
+
   it("says why send_message cannot serve a run of renders", () => {
     expect(prompt).toMatch(/send_message CANNOT do this/);
     expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/a render ENDS the turn/);
