@@ -684,6 +684,64 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "complete_step", "keep_going", "send_message",
 ]);
 
+/** Tools that stop the auto-run loop for the host/UI (approval, a render, a main-thread run, or
+ * a research pass). They can't run inside the worker turn, so they're handed up as a pendingTool. */
+export type HostToolName =
+  | "generate_image"
+  | "generate_video"
+  | "generate_long_video"
+  | "stitch_videos"
+  | "find_files"
+  | "run_command"
+  | "write_file"
+  | "edit_file"
+  | "screenshot"
+  | "control_ui"
+  | "plan_task"
+  | "prep_order"
+  | "tv_chart"
+  | "browser_eval"
+  | "delegate"
+  | "send_email"
+  | "delegate_coding_task"
+  | "spawn_coding_agents"
+  | "set_cell"
+  | "add_formula_column"
+  | "read_data";
+export const HOST_TOOLS = new Set<HostToolName>([
+  "generate_image",
+  "generate_video",
+  "generate_long_video",
+  // stitch_videos joins clips with the host's ffmpeg + filesystem — runs there, auto-approved.
+  "stitch_videos",
+  "find_files",
+  "run_command",
+  "write_file",
+  "edit_file",
+  "screenshot",
+  // Reaches out of the app and onto the desktop (a PowerShell command against another program's
+  // accessibility tree), so it runs where run_command does — never inside the worker.
+  "control_ui",
+  "plan_task",
+  "prep_order",
+  "tv_chart",
+  // Drives a page over the debug port — needs the desktop bridge, so it is handed up like tv_chart.
+  "browser_eval",
+  "delegate",
+  // send_email is outward-facing + irreversible — handed up so the host shows an approval card
+  // (draft_email stays auto-run below: a draft just sits in Gmail for the reader to review).
+  "send_email",
+  // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
+  "spawn_coding_agents",
+  // The open spreadsheet lives in the host's book state, not the worker's — the data-view grid and
+  // the persisted book are both there, so a cell edit has to happen where the table is.
+  "set_cell",
+  "add_formula_column",
+  "read_data",
+  // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
+  "delegate_coding_task",
+]);
+
 /**
  * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
  * has opted into "full autonomy". These are the irreversible / dangerous primitives:
@@ -1752,9 +1810,8 @@ export function buildBuddySystemPrompt(raw: {
     // never happens. It is the only always-on line that says anything about turn boundaries, and it
     // said the opposite of the truth. The correction has to be here rather than as one more rule: a
     // model reading "chain them" has no reason to go looking for a contradiction elsewhere.
-    "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). A search, " +
-    "read or calculation comes back — CHAIN those. Making a picture or video, writing a file, running a " +
-    "command or touching their PC ENDS the turn: give each its OWN step.\n\n";
+    "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Give each " +
+    "turn-ending tool its OWN step; chain everything else.\n\n";
   // Story "as you go": once a story is OPEN, the model just writes the next beat as a normal prose
   // reply — NO tool. The app turns that reply into the beat and illustrates it (cadence + redraw are
   // the reader's UI controls). This keeps the model out of tool-juggling. Empty when no story is open.
@@ -1817,7 +1874,7 @@ export function buildBuddySystemPrompt(raw: {
   const planningRule = !hasPlan
     ? "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (several images, or research → write-up) → " +
       "call set_plan FIRST, one step per action — [[next]] CANNOT do this: it splits ONE reply, and a " +
-      "render ENDS the turn before the rest of it arrives. A SINGLE action (one image, one search) → " +
+      "turn-ending tool stops that reply. A SINGLE action (one image, one search) → " +
       "call its tool directly; do NOT make a " +
       "plan for one step. WRITING something and MAKING something are " +
       "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
@@ -1842,7 +1899,7 @@ export function buildBuddySystemPrompt(raw: {
       "code, run it, read the result, then fix and re-run until it works. "
     : "") +
   "\"make / draw / generate an image of …\" → actually CALL generate_image (don't just write a prompt for them to " +
-  "paste). A fact, API, name, or figure you're unsure of → search_web then read before you answer. After one " +
+  "paste). After one " +
   "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
   "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
   "destructive or irreversible action without a clear go-ahead.\n" +
@@ -1856,22 +1913,14 @@ export function buildBuddySystemPrompt(raw: {
   "NEW arrives; doubt is not new. Repetitive work needs the LEAST thinking.\n" +
   multiStepGuide;
 
-  return (
-    `${persona} Either way, you are a full conversational assistant: answer ` +
-    "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
-    `${mature}\n\n` +
-    `${nowBlock}${generationRateNote(opts.lastGeneration)}${buildBlock}${liveBlock}${creativeBlock}` +
-    `${planBlock}` +
-    (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
-    (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
-    `${library}\n\n` +
-    conductRules +
-    routingGuide +
-    // The on-demand index sits immediately before the tools it stands in for, so the model reads
-    // "here is what you have" and "here is what you can fetch" as one thought.
-    (opts.omitToolsetIndex || !opts.loadedToolsets
-      ? ""
-      : `${toolsetIndexBlock(availableToolsets(raw), opts.loadedToolsets)}\n\n`) +
+  /**
+   * THE CATALOGUE, BOUND — so the line above it can be derived from what it actually offers.
+   *
+   * Kept a local rather than a helper: every branch below closes over a dozen locals from this
+   * function (styles, fileTool, commandTool, workingFolderNote…), and lifting it out would mean
+   * threading all of them through a parameter list.
+   */
+  const catalog =
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     (opts.omitToolsetIndex || !opts.loadedToolsets
       ? ""
@@ -2463,7 +2512,69 @@ export function buildBuddySystemPrompt(raw: {
     "SEVERAL FILES AT ONCE: one fenced block PER file, each NAMED on its fence line (```css styles.css). Never start a " +
     "second file inside an open block. Read the `multi-file-projects` skill before writing a linked set.\n" +
     POLISH_CHAT_GUIDANCE +
-    (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
+    (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "");
+
+  /**
+   * WHAT CHANGES EVERY TURN GOES LAST — a cache decision, not a rhetorical one.
+   *
+   * `nowBlock` sat 3.1% into this prompt and the library at 6.5%. Both change between turns, and a KV
+   * cache reuses only the longest common PREFIX — so ~93% of the prompt was re-processed on every
+   * single turn. On a local server that is the whole cost: a Qwen3.6-35B measured 52 seconds of
+   * prompt processing on a request whose text it had already seen, logging "forcing full prompt
+   * re-processing due to lack of cache data". On the Anthropic path it is the difference between a
+   * cache read at 0.1x and a cache write at 1.25x.
+   *
+   * POSITION RISK, ACKNOWLEDGED. `537c8de` moved rules in this prompt and caused three regressions,
+   * so moving anything here is not free. What moves is FACTS — the date, the library, the current
+   * checklist — never rules: no conduct rule, routing rule or tool description changes position. The
+   * souls stay above for the same reason, with a test that says they belong before the routing guide;
+   * a durable identity changes only when `remember` runs, not every turn. Facts also read well last,
+   * closest to the conversation they describe.
+   */
+  const volatileTail =
+    `${nowBlock}${generationRateNote(opts.lastGeneration)}` + `${planBlock}` + `${library}`;
+
+  return (
+    `${persona} Either way, you are a full conversational assistant: answer ` +
+    "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
+    `${mature}\n\n` +
+    `${buildBlock}${liveBlock}${creativeBlock}` +
+    (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
+    (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
+    conductRules +
+    routingGuide +
+    // The on-demand index sits immediately before the tools it stands in for, so the model reads
+    // "here is what you have" and "here is what you can fetch" as one thought.
+    (opts.omitToolsetIndex || !opts.loadedToolsets
+      ? ""
+      : `${toolsetIndexBlock(availableToolsets(raw), opts.loadedToolsets)}\n\n`) +
+    endsTurnLine(catalog) +
+    catalog +
+    // Everything above this line is byte-identical from one turn to the next; everything below moves.
+    (volatileTail.trim() ? `\n\n${volatileTail.replace(/\n+$/, "")}` : "")
+  );
+}
+
+/**
+ * WHICH OF THE TOOLS IN FRONT OF IT END THE TURN.
+ *
+ * 21 tools suspend the turn and the prompt named about four of them, in prose, in one place — a line
+ * that was itself factually WRONG until recently ("CHAIN tools: search → read → write → run", where
+ * two of those four end the turn). The model cannot look this up: suspension is a property of the
+ * dispatcher, invisible at the moment of choosing.
+ *
+ * Read from `HOST_TOOLS` so it cannot drift from the set that actually decides, and intersected with
+ * what this catalogue SHOWS as callable so it never names a tool the model has not been given — the
+ * mistake this prompt warns about elsewhere, and one the suite already enforces. A hand-written
+ * marker on 21 scattered entries would have drifted, and a PARTIAL marking is worse than none: the
+ * model would reasonably read an unmarked tool as safe to chain after. PURE.
+ */
+function endsTurnLine(catalog: string): string {
+  const here = [...HOST_TOOLS].filter((t) => catalog.includes(`"tool":"${t}"`)).sort();
+  if (here.length === 0) return "";
+  return (
+    `THESE END YOUR TURN — the app runs them and answers in a NEW turn, so anything you planned to do ` +
+    `after one will not happen in this reply: ${here.join(", ")}. Everything else comes straight back.\n\n`
   );
 }
 

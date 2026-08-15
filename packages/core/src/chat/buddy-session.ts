@@ -25,6 +25,8 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
   MAX_PLAN_STEPS,
+  HOST_TOOLS,
+  type HostToolName,
   toolCallsInThinking,
   meantToSendMessage,
   splitSeriesMessages,
@@ -430,63 +432,6 @@ export function nonEmptyAnswer(text: string, hadTools: boolean): string {
   return hadTools ? "Done — see the results above." : "I didn't catch that — could you rephrase?";
 }
 
-/** Tools that stop the auto-run loop for the host/UI (approval, a render, a main-thread run, or
- * a research pass). They can't run inside the worker turn, so they're handed up as a pendingTool. */
-type HostToolName =
-  | "generate_image"
-  | "generate_video"
-  | "generate_long_video"
-  | "stitch_videos"
-  | "find_files"
-  | "run_command"
-  | "write_file"
-  | "edit_file"
-  | "screenshot"
-  | "control_ui"
-  | "plan_task"
-  | "prep_order"
-  | "tv_chart"
-  | "browser_eval"
-  | "delegate"
-  | "send_email"
-  | "delegate_coding_task"
-  | "spawn_coding_agents"
-  | "set_cell"
-  | "add_formula_column"
-  | "read_data";
-const HOST_TOOLS = new Set<HostToolName>([
-  "generate_image",
-  "generate_video",
-  "generate_long_video",
-  // stitch_videos joins clips with the host's ffmpeg + filesystem — runs there, auto-approved.
-  "stitch_videos",
-  "find_files",
-  "run_command",
-  "write_file",
-  "edit_file",
-  "screenshot",
-  // Reaches out of the app and onto the desktop (a PowerShell command against another program's
-  // accessibility tree), so it runs where run_command does — never inside the worker.
-  "control_ui",
-  "plan_task",
-  "prep_order",
-  "tv_chart",
-  // Drives a page over the debug port — needs the desktop bridge, so it is handed up like tv_chart.
-  "browser_eval",
-  "delegate",
-  // send_email is outward-facing + irreversible — handed up so the host shows an approval card
-  // (draft_email stays auto-run below: a draft just sits in Gmail for the reader to review).
-  "send_email",
-  // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
-  "spawn_coding_agents",
-  // The open spreadsheet lives in the host's book state, not the worker's — the data-view grid and
-  // the persisted book are both there, so a cell edit has to happen where the table is.
-  "set_cell",
-  "add_formula_column",
-  "read_data",
-  // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
-  "delegate_coding_task",
-]);
 /** Type-guard so the non-host branch narrows to the tools `runBuddyTool` can execute. */
 function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool: HostToolName }> {
   return (HOST_TOOLS as Set<string>).has(call.tool);

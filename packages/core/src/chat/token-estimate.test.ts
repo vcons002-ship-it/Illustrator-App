@@ -118,3 +118,62 @@ describe("the budget is policed with it", () => {
     expect(src).toMatch(/const tok = estimateTokens;/);
   });
 });
+
+
+/**
+ * WHAT CHANGES EVERY TURN MUST COME LAST, OR THE CACHE IS WORTHLESS.
+ *
+ * A KV cache reuses only the longest common PREFIX. The date sat 3.1% into this prompt and the
+ * library at 6.5%, so ~93% of it was re-processed every single turn. A Qwen3.6-35B measured 52
+ * seconds of prompt processing on a request whose text it had already seen, logging "forcing full
+ * prompt re-processing due to lack of cache data". On the Anthropic path the same boundary is the
+ * difference between a cache read at 0.1x and a cache write at 1.25x.
+ *
+ * This is the assertion that keeps the boundary from drifting back. It is easy to undo by accident:
+ * anyone adding a new fact near the identity block moves it.
+ */
+describe("the stable prefix", () => {
+  const build = async () => {
+    const { buildBuddySystemPrompt } = await import("./buddy-tools.js");
+    return buildBuddySystemPrompt({
+      persona: "assistant",
+      library: [{ id: "text-1", title: "Dune", author: "Frank Herbert", addedAt: 1 }],
+      now: "Sunday, June 15, 2026, 4:58 PM",
+      loadedToolsets: [],
+      activePlan: { goal: "g", steps: [{ text: "A", status: "pending" }] },
+    } as never);
+  };
+
+  it("puts everything that changes between turns in the last tenth", async () => {
+    const p = await build();
+    for (const volatile of ["Sunday, June 15", '"Dune" by Frank Herbert', "CURRENT CHECKLIST"]) {
+      const at = p.indexOf(volatile);
+      expect(at, `${volatile} is not in the prompt, so this asserts nothing`).toBeGreaterThan(0);
+      expect(at / p.length, `${volatile} sits at ${((at / p.length) * 100).toFixed(1)}% and breaks the prefix`).toBeGreaterThan(0.9);
+    }
+  });
+
+  it("keeps the rules and the catalogue in the stable part", async () => {
+    // The other half of the same property: moving the volatile tail is only a win if the bulk stayed
+    // put. These are also the positions `537c8de` proved are not free to change.
+    const p = await build();
+    expect(p.indexOf("CONVERSATION RULES") / p.length).toBeLessThan(0.1);
+    expect(p.indexOf("TOOLS — use one") / p.length).toBeLessThan(0.5);
+  });
+
+  it("does not lose a single volatile block in the move", async () => {
+    // A reorder that silently drops content is the worst outcome — it would look like a win on every
+    // measurement in this file.
+    const p = await build();
+    for (const kept of ["CURRENT DATE & TIME", "THE READER'S LIBRARY", "CURRENT CHECKLIST", "Dune"]) {
+      expect(p, `${kept} was dropped by the reorder`).toContain(kept);
+    }
+  });
+
+  it("still builds cleanly when every volatile block is absent", async () => {
+    const { buildBuddySystemPrompt } = await import("./buddy-tools.js");
+    const bare = buildBuddySystemPrompt({ persona: "assistant", library: [] } as never);
+    expect(bare.length).toBeGreaterThan(1000);
+    expect(bare, "an empty tail left dangling separators").not.toMatch(/\n{3,}$/);
+  });
+});
