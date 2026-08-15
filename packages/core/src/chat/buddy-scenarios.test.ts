@@ -322,14 +322,40 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt, "still says EVERY tool's result comes back").not.toMatch(/Every tool's result[\s\S]{0,20}comes back/);
   });
 
-  it("says which kinds of tool end the turn, where the chaining advice is given", () => {
-    expect(prompt).toMatch(/A search, read or calculation comes back — CHAIN those/);
-    expect(prompt).toMatch(/ENDS the turn: give each its OWN step/);
+  /**
+   * NAMES THEM, RATHER THAN DESCRIBING THEM — and cannot drift, because it is derived.
+   *
+   * 21 tools suspend the turn. The prompt used to describe about four of them in prose, and that
+   * description was factually WRONG until recently ("CHAIN tools: search → read → write → run", where
+   * two of the four end the turn). Suspension is a property of the dispatcher, invisible to the model
+   * at the moment it chooses — the one branch condition a prompt genuinely can supply.
+   */
+  it("names every turn-ending tool it has actually given the model", () => {
+    const line = /THESE END YOUR TURN[^\n]*/.exec(prompt)?.[0] ?? "";
+    expect(line, "the turn-ending list is gone").toBeTruthy();
+    // A few that must be in it, spanning renders, files, commands and desktop reach.
+    for (const t of ["generate_image", "write_file", "run_command"]) {
+      expect(line, `${t} suspends the turn and is not named`).toContain(t);
+    }
+    // And the mechanism, so it reads as a fact rather than a rule to obey.
+    expect(line).toMatch(/answers in a NEW turn/);
+  });
+
+  it("never names a turn-ending tool it has NOT given the model", () => {
+    // The same rule the suite already enforces for the catalogue: naming a tool the model cannot call
+    // is the mistake this prompt warns about elsewhere. Derived by intersection, so it holds by
+    // construction rather than by maintenance.
+    const line = /THESE END YOUR TURN[^\n]*/.exec(prompt)?.[0] ?? "";
+    for (const name of line.replace(/^[^:]*:\s*/, "").split(/,\s*/)) {
+      const t = name.replace(/\..*$/, "").trim();
+      if (t) expect(prompt, `${t} is named as turn-ending but never shown as a call`).toContain(`"tool":"${t}"`);
+    }
   });
 
   it("says why the marker cannot serve a run of renders", () => {
     expect(prompt).toMatch(/\[\[next\]\] CANNOT do this/);
-    expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/a render ENDS the turn/);
+    // The WHY, now stated once against the derived list rather than re-approximated here.
+    expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/turn-ending tool stops that reply/);
   });
 
   it("still sends several images to a checklist", () => {
