@@ -2581,27 +2581,37 @@ export const SERIES_ECHO_MAX_ITEM = 24;
 export const SERIES_ECHO_MAX_TOTAL = 400;
 
 /**
- * WHERE THE SERIES HAS GOT TO, handed back with each "go on".
+ * WHERE THE SERIES HAS GOT TO — a RECEIPT for the message just sent, and nothing more.
  *
- * A checklist run is told its position on every step — "now do ONLY step 6 of 26" — and that is the
- * single biggest difference between the two ways this app runs a long job. A plain series has no
- * checklist and so no position at all: the model has to work out what it already sent by reading
- * back through its own turns, behind a system prompt several times the size of the conversation.
- * Asked for the alphabet, it starts repeating letters, which is exactly what the reader saw.
+ * A plain series has no checklist and so no position: the model has to work out what it already sent
+ * by reading back through its own turns, behind a system prompt several times the size of the
+ * conversation. Asked for the alphabet it starts repeating letters, which is what the reader saw. So
+ * the count always rides back, and the messages themselves while they stay short — precisely the
+ * shape of series that loses its place. A series of paragraphs would flood every round with its own
+ * history, and its messages are distinctive enough to find in the transcript anyway.
  *
- * The COUNT is always worth sending — it is a handful of tokens and it is the fact most likely to be
- * lost. The messages themselves are echoed only while they stay short, which is precisely the shape
- * of series that loses its place; a series of paragraphs would flood every round with its own
- * history, and its messages are distinctive enough to find in the transcript anyway. PURE.
+ * IT MUST NOT ASK FOR ANOTHER ONE. This was written for `keep_going`, where saying "go on" was the
+ * whole job: the model had already decided to continue and the note only told it where it was. As
+ * `send_message`'s result it fires after EVERY message, and it read "[go on — … Send the NEXT one]".
+ * So a run that had finished the alphabet was told, by the app, to send another — and did, twenty-six
+ * times over: "That's the whole alphabet!", "All done.", "Bye!", "!", "1", and then reasoning aloud
+ * about whether "2" was what had been asked for. Its own words, quoting this string back: "Maybe
+ * 'Send the NEXT one' refers to the alphabet? I finished Z."
+ *
+ * The turn ends when the model stops calling the tool, so anything here that reads as an instruction
+ * to carry on is an instruction never to stop. This reports what happened and leaves the decision
+ * where it belongs. PURE.
  */
 export function seriesProgressNote(sent: readonly string[]): string {
-  if (sent.length === 0) return "[go on]";
-  const count = `you have sent ${sent.length} message${sent.length === 1 ? "" : "s"} so far this turn`;
+  if (sent.length === 0) return "[Sent.]";
+  const count = `${sent.length} message${sent.length === 1 ? "" : "s"} sent this turn`;
   const echoable =
     sent.every((s) => s.length <= SERIES_ECHO_MAX_ITEM) && sent.join(", ").length <= SERIES_ECHO_MAX_TOTAL;
+  // "already reached the reader" carries the don't-repeat constraint as a fact about what happened,
+  // rather than as one more thing the app is telling the model to do.
   return echoable
-    ? `[go on — ${count}, in order: ${sent.map((s) => JSON.stringify(s)).join(", ")}. Send the NEXT one; do not repeat any of these.]`
-    : `[go on — ${count}. Send the NEXT one; do not repeat one you have already sent.]`;
+    ? `[Sent. ${count}, in order: ${sent.map((s) => JSON.stringify(s)).join(", ")} — these have already reached the reader.]`
+    : `[Sent. ${count} — each has already reached the reader.]`;
 }
 
 /** How much reasoning rides from one ROUND to the next inside a turn. Shorter than the between-step
