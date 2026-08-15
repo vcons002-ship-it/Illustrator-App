@@ -654,6 +654,86 @@ describe("a tool call written inside the reasoning", () => {
  * it cannot stop. Every one of those failures lives in the ROUNDS — and a recitation does not need
  * any. The model knows the alphabet; the renderer can do the splitting.
  */
+/**
+ * "IT REASONS, LOOKS READY TO COMMIT, THEN SAYS 'WAIT' — AND NEVER FINISHES."
+ *
+ * Nothing holds the model in the loop, but nothing catches it falling out of one either: thinking
+ * tokens come out of the same generation budget as the reply, so a long enough deliberation hits the
+ * cap with `done_reason: "length"`, the thinking is stripped, and what returns is an EMPTY string.
+ *
+ * The app already knows. `lastTruncated` is true and `clean` is empty, and together those two facts
+ * can only mean one thing. The auto-continue cannot help and says so in its own comment — it is gated
+ * on MIN_CONTINUABLE_CHARS to avoid asking a model to continue an answer it never started, observing
+ * that when nothing is there "the budget went somewhere else". This is where it went. The case was
+ * diagnosed and left unhandled, and the turn fell through to `nonEmptyAnswer`, handing the reader
+ * "I didn't catch that — could you rephrase?" after a minute of reasoning.
+ */
+describe("a reply that spent its whole budget thinking", () => {
+  /** A model that ruminates past the cap: no content, and the provider reports it was cut off. */
+  function truncatedLlm(script: { truncated: boolean; reply: string }[]): ChatCapable & { calls: ChatTurn[][] } {
+    const calls: ChatTurn[][] = [];
+    return {
+      calls,
+      async chat(messages, opts) {
+        calls.push([...messages]);
+        const turn = script[Math.min(calls.length - 1, script.length - 1)]!;
+        (opts as { onComplete?: (m: { truncated: boolean }) => void } | undefined)?.onComplete?.({
+          truncated: turn.truncated,
+        });
+        return turn.reply;
+      },
+    };
+  }
+
+  it("says what happened, instead of asking the reader to rephrase", async () => {
+    const llm = truncatedLlm([
+      { truncated: true, reply: "" },
+      { truncated: false, reply: "High tide is at 06:12." },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "when is high tide?" }], deps: baseDeps,
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said, "nothing tells the model it ran out of room mid-thought").toMatch(
+      /hit its length limit while you were still thinking/,
+    );
+    expect(outcome.text).toContain("06:12");
+    expect(outcome.text).not.toMatch(/didn't catch that/);
+  });
+
+  it("does not fire on a truncated reply that DID produce text", async () => {
+    // That is an answer cut off mid-sentence, which the auto-continue already handles. Confusing the
+    // two would tell a model that was writing fine to stop and be brief.
+    const long = "A very long answer that kept going and going. ".repeat(12);
+    const llm = truncatedLlm([{ truncated: true, reply: long }, { truncated: false, reply: "…and the rest." }]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "explain at length" }], deps: baseDeps,
+    });
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).not.toMatch(/still thinking/);
+  });
+
+  it("does not fire when the reply was simply empty and NOT truncated", async () => {
+    // An empty reply that finished normally is the wrap-up's case, not this one.
+    const llm = truncatedLlm([{ truncated: false, reply: "" }, { truncated: false, reply: "done" }]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "hi" }], deps: baseDeps,
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said).not.toMatch(/still thinking/);
+    expect(said, "the ordinary wrap-up stopped firing").toMatch(/Now reply to the reader in plain text/);
+  });
+
+  it("says it once, so a model that does it twice still ends the turn", async () => {
+    const llm = truncatedLlm([{ truncated: true, reply: "" }]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps,
+    });
+    const last = llm.calls[llm.calls.length - 1]!.map((m) => m.content).join("\n");
+    expect(last.match(/still thinking/g) ?? [], "the correction repeats without end").toHaveLength(1);
+    expect(outcome.text.trim(), "the turn never produced anything").not.toBe("");
+  });
+});
+
 describe("runBuddyTurn — a series written in one reply", () => {
   it("turns one reply into a message each, with no tool call anywhere", async () => {
     const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
