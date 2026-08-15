@@ -25,6 +25,7 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
   MAX_PLAN_STEPS,
+  toolCallsInThinking,
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
@@ -59,6 +60,16 @@ import { allowedInCreativeIdle } from "./tool-approval.js";
  * note (never a silent cut), so the reader can always get the rest. The Stop button also interrupts
  * between passes. */
 const MAX_REPLY_CONTINUATIONS = 8;
+
+/**
+ * How many times one turn will tell the model its call was in its reasoning rather than its reply.
+ *
+ * Two, because the correction either lands immediately or is not going to: a model that writes the
+ * call into its thinking twice after being told is doing something the wording will not fix, and the
+ * wrap-up is a better ending for the reader than an unbounded loop of the same sentence. Each nudge
+ * also costs a full round of the turn's budget.
+ */
+const MAX_THOUGHT_ONLY_NUDGES = 2;
 
 /**
  * HOW MUCH VISIBLE ANSWER THERE MUST BE BEFORE "CONTINUE WHERE YOU LEFT OFF" MEANS ANYTHING.
@@ -628,6 +639,10 @@ export async function runBuddyTurn(opts: {
   let stepEvidenceFrom = 0;
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
+  // How many times this turn the model has been told its call was in its reasoning. Bounded because
+  // a model that keeps doing it is not going to be talked out of it, and the wrap-up below is a
+  // better ending than an unbounded loop of the same correction.
+  let thoughtOnlyNudges = 0;
   let lastTruncated = false; // did the last reply get CUT OFF at the token budget? (→ auto-continue)
   // Per-turn tool-round budget: a small "keep going?" interval for cloud models, else the big backstop.
   //
@@ -704,17 +719,30 @@ export async function runBuddyTurn(opts: {
       ? trimTurnMessages(messages, opts.history.length, opts.contextChars)
       : messages;
     const settled = opts.llm.chat(sent, {
+      /**
+       * REASONING IS CAPTURED WHETHER OR NOT ANYONE IS WATCHING.
+       *
+       * This used to sit inside the `opts.onEvent` gate beside `onToken`, which conflated recording
+       * with displaying. `lastThinking` is not a display concern: it feeds the settled message's
+       * `thinking`, the round recap, and the reasoning-only recovery below — so a caller that passed
+       * no `onEvent` silently got none of them, and the recovery in particular would have been dead
+       * code for the sub-agent and delegate turns.
+       *
+       * Safe to always pass: providers branch on `onToken` to choose streaming over buffered, and
+       * none of them branches on `onThinking`. `noteContent` only feeds the heartbeat, which is
+       * itself gated on `onEvent`, so calling it here without a subscriber is a no-op.
+       */
+      onThinking: (text: string) => {
+        noteContent();
+        lastThinking = text;
+        opts.onEvent?.({ kind: "thinking", text });
+      },
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => {
               noteContent();
               opts.onEvent?.({ kind: "token", text });
             }),
-            onThinking: (text: string) => {
-              noteContent();
-              lastThinking = text;
-              opts.onEvent?.({ kind: "thinking", text });
-            },
           }
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
@@ -799,6 +827,41 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       let clean = stripToolCallJson(reply).trim();
+      /**
+       * THE CALL WAS IN THE REASONING. SAY SO, BEFORE FORBIDDING TOOL CALLS.
+       *
+       * Reported from real use: "it seemed to over and over again try to call the first tool of a
+       * multi-step plan with no luck. then when the initial thinking ended, the second attempt worked
+       * fairly quickly." That is this branch's neighbour doing damage. A reply that is entirely
+       * reasoning comes back EMPTY — the provider strips thinking — so `clean` is empty, and the
+       * wrap-up below reads that as "produced nothing" and answers with "reply in plain text. No tool
+       * calls." The model was mid-way through acting and has just been told not to.
+       *
+       * Neither side can see what happened. The model's reasoning is in front of it, so a call it
+       * wrote there is indistinguishable from one it made, and no result reads as a failed call — so
+       * it writes it again, inside the same think. The turn then ends having done nothing, and the
+       * next one works immediately because it starts from prose rather than from thought.
+       *
+       * Scoped deliberately to an EMPTY reply. A model that reasons about a tool and then answers in
+       * prose has decided against it, and nudging there would force a call nobody asked for. Empty
+       * plus a call in the reasoning is the unambiguous case: it meant to act, and nothing happened.
+       */
+      if (!clean && !calls.length && thoughtOnlyNudges < MAX_THOUGHT_ONLY_NUDGES && round < effectiveMax) {
+        const inThought = toolCallsInThinking(roundThinking);
+        if (inThought.length > 0) {
+          thoughtOnlyNudges += 1;
+          opts.onEvent?.({ kind: "activity", text: "Picking that back up…" });
+          messages.push({ role: "assistant", content: reply });
+          messages.push({
+            role: "user",
+            content:
+              `[Your ${inThought[0]!.tool} call was inside your reasoning. Nothing runs there — only ` +
+              "your REPLY is executed, which is why no result came back. Send that same call again as " +
+              "the reply itself: the JSON object on its own, outside your thinking.]",
+          });
+          continue;
+        }
+      }
       // The model ended on a tool/blank with NO prose. Ask once for a plain-text wrap-up so the
       // reader never gets an empty bubble; if it's still empty, fall back to a short line.
       if (!clean && !wrappedUp) {

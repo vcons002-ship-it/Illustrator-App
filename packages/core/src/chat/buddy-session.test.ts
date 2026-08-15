@@ -497,6 +497,96 @@ describe("runBuddyTurn — a budget spent thinking is not an answer cut short", 
   });
 });
 
+
+/**
+ * A scripted model that also REASONS — each entry is [thinking, reply]. The default scriptedLlm
+ * cannot express the case below, where everything the model produced was reasoning.
+ */
+function thinkingLlm(script: { think?: string; reply: string }[]): ChatCapable & { calls: ChatTurn[][] } {
+  const calls: ChatTurn[][] = [];
+  return {
+    calls,
+    async chat(messages, opts) {
+      calls.push([...messages]);
+      const turn = script[Math.min(calls.length - 1, script.length - 1)]!;
+      if (turn.think) (opts as { onThinking?: (t: string) => void } | undefined)?.onThinking?.(turn.think);
+      return turn.reply;
+    },
+  };
+}
+
+/**
+ * "IT TRIED THE FIRST TOOL OVER AND OVER WITH NO LUCK, THEN THE SECOND ATTEMPT WORKED."
+ *
+ * A reply that is entirely reasoning comes back EMPTY, because the provider strips thinking before
+ * returning it. The wrap-up branch read that as "produced nothing" and answered a model that was
+ * mid-way through acting with "reply in plain text — No tool calls", forbidding the one move that
+ * would have recovered the turn. Neither side could see what happened: the model's own reasoning is
+ * in front of it, so a call written there is indistinguishable from one it made, and no result reads
+ * as a failed call — so it writes it again.
+ */
+describe("a tool call written inside the reasoning", () => {
+  const callInThought = '{"tool":"search_web","query":"tide tables"}';
+
+  it("is not answered with an instruction forbidding tool calls", async () => {
+    const llm = thinkingLlm([
+      { think: `I should look this up. ${callInThought}`, reply: "" },
+      { reply: callInThought },
+      { reply: "Here are the tide tables." },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "when is high tide?" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "t", link: "https://x", snippet: "s" }] },
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said, "the model was told not to call tools while it was trying to").not.toMatch(/No tool calls/);
+    expect(said, "it is never told where the call actually went").toMatch(/was inside your reasoning/);
+    // And the recovery lands: the tool really runs, in this same turn.
+    expect(outcome.toolResults.map((r) => r.call.tool)).toContain("search_web");
+  });
+
+  it("names the tool it saw, so the correction is about the call it actually wrote", async () => {
+    const llm = thinkingLlm([
+      { think: 'thinking… {"tool":"generate_image","prompt":"a fox"}', reply: "" },
+      { reply: "ok" },
+    ]);
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "draw a fox" }], deps: baseDeps });
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).toMatch(/Your generate_image call was inside your reasoning/);
+  });
+
+  it("leaves a model that reasoned and then ANSWERED alone", async () => {
+    // Considering a tool and deciding against it is ordinary. Nudging here would force a call nobody
+    // asked for, which is why this is scoped to an empty reply rather than to "no tool ran".
+    const llm = thinkingLlm([
+      { think: `maybe ${callInThought}? no, I know this one.`, reply: "High tide is at 06:12." },
+    ]);
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "when is high tide?" }], deps: baseDeps });
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).not.toMatch(/was inside your reasoning/);
+  });
+
+  it("gives up after two, rather than repeating one correction forever", async () => {
+    // A model that keeps doing it after being told is not going to be talked out of it, and each
+    // nudge costs a round of the turn's budget.
+    //
+    // The reasoning has to DIFFER per round: `roundThinking` is empty when a round's thinking is
+    // byte-identical to the last, which is a deliberate guard against handing back stale intent, and
+    // it means a model that repeats itself word for word is not nudged twice anyway.
+    const llm = thinkingLlm([
+      { think: `stuck. ${callInThought}`, reply: "" },
+      { think: `still stuck, retrying. ${callInThought}`, reply: "" },
+      { think: `and again, third time. ${callInThought}`, reply: "" },
+      { think: `a fourth. ${callInThought}`, reply: "" },
+    ]);
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps });
+    const lastTurn = llm.calls[llm.calls.length - 1]!.map((m) => m.content).join("\n");
+    expect(lastTurn.match(/was inside your reasoning/g) ?? [], "the nudge is unbounded").toHaveLength(2);
+    // And the turn still ends properly rather than spinning: the wrap-up takes over.
+    expect(lastTurn).toMatch(/Now reply to the reader in plain text/);
+  });
+});
+
 describe("runBuddyTurn — a series driven by send_message", () => {
   /**
    * THE REPLACEMENT FOR keep_going, AND THE FOUR THINGS IT FIXES AT ONCE.
