@@ -1638,9 +1638,10 @@ export function buildBuddySystemPrompt(raw: {
       // the model remembering a token that did nothing. Sending IS the call now, so the turn carries
       // on for the same reason any tool loop does, and the warning has nothing left to warn about.
       'MANY MESSAGES vs MANY ACTIONS. MESSAGES means text you type. A task that is the SAME small ' +
-      'thing over and over — "the alphabet, one letter per message", a countdown — needs NO checklist: ' +
-      "send each one with send_message and the turn stays yours. A checklist there is overkill — but if " +
-      "the reader ASKS for a plan, MAKE ONE: their request wins.\n"
+      'thing over and over — "the alphabet, one letter per message", a countdown — needs NO checklist ' +
+      "and NO tools: write them ALL in one reply with a line of only [[next]] between them — each " +
+      "becomes its own message. Use send_message only when real WORK separates them. If the reader " +
+      "ASKS for a plan, MAKE ONE: their request wins.\n"
     : opts.appManagedSteps
       ? // App-managed mid-plan: the checklist block above already says do-one-step / no complete_step.
         ""
@@ -1699,8 +1700,10 @@ export function buildBuddySystemPrompt(raw: {
       // The catalog entry its predecessor never had. keep_going was described only in a paragraph of
       // prose further down and was absent from the native schemas entirely, so a model looking for
       // the tool that sends a series found nothing in the one place it lists what it can call.
-      '- {"tool":"send_message","text":"…"} — send ONE message now and STAY in this turn; call it again for ' +
-      "the next. The text IS the message, so don't also write it as prose. The turn ends when you stop.\n";
+      // WHEN to reach for it is stated once, in the guide above ("only when real WORK separates
+      // them"). Repeating it here bought nothing and the budget has no room for saying things twice.
+      '- {"tool":"send_message","text":"…"} — send ONE message and STAY in the turn. Turn ends when ' +
+      "you stop.\n";
   // A compact intent→tool decision table read BEFORE the full catalog, so the model resolves the
   // look-alike choices (search vs generate, read vs open, find vs read, draft vs send, run vs save)
   // up front. Lines for tools that aren't available this session are omitted so nothing dangles.
@@ -3586,6 +3589,73 @@ export function buildToolCallFormat(toolNames: string[]): Record<string, unknown
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
 export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];
+}
+
+/**
+ * THE MARKER THAT TURNS ONE REPLY INTO SEVERAL MESSAGES.
+ *
+ * Deliberately not `---`, `***` or a blank line: all three are things a model emits constantly in
+ * ordinary prose, and a separator that fires by accident splits a normal answer into nonsense. This
+ * appears in no natural writing, is plain ASCII a small local model can emit reliably, and says what
+ * it does without the prompt having to explain it.
+ */
+export const SERIES_SPLIT = "[[next]]";
+
+/**
+ * ONE RESPONSE, SEVERAL MESSAGES — the cheapest way to do a series, and the one with no moving parts.
+ *
+ * A run of messages had been modelled as a run of TOOL CALLS: the model sends one, gets a result,
+ * decides again, sends the next. That is the right shape when the items are interleaved with real
+ * work, and it is a lot of machinery for reciting the alphabet — twenty-six rounds, each one a fresh
+ * chance to lose the thread, and every failure this migration has chased lived in one of them. The
+ * model wrote the call into its reasoning; the model wrote the message as prose and ended the turn;
+ * the result told it to keep going and it could not stop.
+ *
+ * None of that exists here. The model knows the alphabet, writes it once with a marker between the
+ * letters, and the RENDERER does the splitting. Zero rounds, zero position tracking, nothing to
+ * forget: the task is exactly as easy as the model finds it, which for a recitation is instant.
+ *
+ * SELF-GATING, which is what makes it safe. Splitting happens only because the model emitted the
+ * marker, so nothing has to guess from the reader's wording whether a series was wanted — the trap
+ * that produced "count from 15 to 25" as twenty-five messages. A reply without the marker is one
+ * message, exactly as before.
+ *
+ * The marker must be ALONE on its line. A mention of it inside a sentence (or in code the model is
+ * quoting) is text, not an instruction to split. PURE.
+ */
+export function splitSeriesMessages(text: string): string[] {
+  // Case-insensitively, matching the per-line test below — a model writes [[NEXT]] as often as
+  // [[next]], and a guard stricter than the check it guards would silently skip half of them.
+  if (!text.toLowerCase().includes(SERIES_SPLIT)) return [text];
+  const parts: string[] = [];
+  let current: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim().toLowerCase() === SERIES_SPLIT) {
+      parts.push(current.join("\n").trim());
+      current = [];
+    } else current.push(line);
+  }
+  parts.push(current.join("\n").trim());
+  // Empty runs are dropped rather than published: a trailing marker, or two in a row, is a model
+  // being untidy and must not become blank bubbles the reader has to scroll past.
+  const kept = parts.filter(Boolean);
+  return kept.length > 0 ? kept : [text];
+}
+
+/**
+ * The same reply as the reader should see it WHILE it streams.
+ *
+ * The split happens when the turn settles, so without this the marker lands on screen as the model
+ * types it — the reader watches "A [[next]] B [[next]] C" pile up and then get replaced by bubbles.
+ * Removing the marker lines is enough: they are the only thing that is machinery rather than message,
+ * and every other character is exactly what the reader is going to keep. PURE.
+ */
+export function stripSeriesMarkers(text: string): string {
+  if (!text.toLowerCase().includes(SERIES_SPLIT)) return text;
+  return text
+    .split("\n")
+    .filter((l) => l.trim().toLowerCase() !== SERIES_SPLIT)
+    .join("\n");
 }
 
 /**

@@ -92,6 +92,7 @@ import {
   stampAssistantContent,
   stampTurnContent,
   isAppDirective,
+  stripSeriesMarkers,
   stripTurnStamp,
   agentBranchName,
   parseGitConflicts,
@@ -7173,7 +7174,9 @@ export function App() {
     const res = await buddyChat(history, stampedUserText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
         buddyStreamingRef.current += e.text;
-        setBuddyStreaming(stripTurnStamp(buddyStreamingRef.current));
+        // The series marker is machinery, not message. The split happens when the turn settles, so
+        // without this the reader watches "A [[next]] B" pile up and then get replaced by bubbles.
+        setBuddyStreaming(stripSeriesMarkers(stripTurnStamp(buddyStreamingRef.current)));
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
       } else if (e.kind === "thinking") {
         // Captured as it streams, not at settle: a tool step's turn is SUSPENDED by the tool (a

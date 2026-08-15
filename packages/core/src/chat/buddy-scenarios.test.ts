@@ -361,16 +361,32 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     // keep_going carried nothing: the message was prose beside it, and a reply that wrote the prose
     // and forgot the token sent the message and ended the run. There is no second half to forget.
     expect(prompt).toMatch(/\{"tool":"send_message","text":"…"\}/);
-    expect(prompt, "the model can still write the message beside the call and double it").toMatch(
-      /The text IS the message, so don't also write it as prose/,
-    );
   });
 
   it("says the turn continues while it calls, and ends when it stops", () => {
     // The polarity, stated once. Every published harness works this way and none of them has a tool
     // for asking permission to carry on.
-    expect(prompt).toMatch(/STAY in this turn; call it again for the next/);
-    expect(prompt).toMatch(/The turn ends when you stop/);
+    expect(prompt).toMatch(/STAY in the turn/);
+    expect(prompt).toMatch(/Turn ends when you stop/);
+  });
+
+  /**
+   * THE CHEAPEST SERIES HAS NO TOOL IN IT AT ALL.
+   *
+   * A recitation was being modelled as a run of tool calls — twenty-six rounds, each a fresh chance
+   * to lose the thread, and every failure this migration chased lived in one of them: the call
+   * written into the reasoning, the message written as prose that ended the turn, the result that
+   * told it to keep going and left it unable to stop. The model knows the alphabet. It can write it
+   * once.
+   */
+  it("offers the marker as the way to do a plain series, and says it needs no tools", () => {
+    expect(prompt).toMatch(/\[\[next\]\]/);
+    expect(prompt, "nothing says a plain series needs no tools at all").toMatch(/needs NO checklist and NO tools/);
+    expect(prompt).toMatch(/each becomes its own message/);
+  });
+
+  it("still says WHEN the tool is the right one instead, so the two do not compete", () => {
+    expect(prompt).toMatch(/Use send_message only when real WORK separates them/);
   });
 
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
