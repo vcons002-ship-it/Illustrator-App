@@ -597,6 +597,9 @@ export async function runBuddyTurn(opts: {
   let stepEvidenceFrom = 0;
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
+  // Guard: say "you ran out of room thinking" once per turn. A model that does it twice is not going
+  // to be talked out of it, and each attempt costs another full generation.
+  let ranOutThinking = false;
   // How many times this turn the model has been told its call was in its reasoning. Bounded because
   // a model that keeps doing it is not going to be talked out of it, and the wrap-up below is a
   // better ending than an unbounded loop of the same correction.
@@ -838,6 +841,46 @@ export async function runBuddyTurn(opts: {
           });
           continue;
         }
+      }
+      /**
+       * IT SPENT THE WHOLE BUDGET THINKING AND NOTHING CAME OUT.
+       *
+       * Reported as: the model reasons, looks ready to commit, then says "wait" or "one small check",
+       * and never finishes. Nothing is holding it in the loop — but nothing catches it falling out of
+       * one either, and the app already knows exactly what happened.
+       *
+       * Thinking tokens count against the same generation budget as the reply. Ruminate long enough
+       * and the provider stops at the cap with `done_reason: "length"`, the thinking is stripped, and
+       * what returns is an EMPTY string. Two facts, both already tracked: `lastTruncated` is true and
+       * `clean` is empty. Together they can only mean one thing.
+       *
+       * The auto-continue below cannot help, and says so in its own comment — it is gated on
+       * MIN_CONTINUABLE_CHARS precisely to avoid asking a model to continue an answer it never
+       * started, noting that when there is nothing there "the budget went somewhere else". This is
+       * where it went. So the case was diagnosed and then deliberately left unhandled, and the turn
+       * fell through to `nonEmptyAnswer`, which hands the reader "I didn't catch that — could you
+       * rephrase?" after a minute of reasoning.
+       *
+       * The prompt does carry WHEN YOU ALREADY KNOW, ACT. That is read once, at the top, competing
+       * with every other rule; this arrives at the moment it happens, about the reply just made.
+       *
+       * Cannot ask for less thinking, only for an answer: on this provider `reasoningEffort: "none"`
+       * becomes `think: false`, and a thinking model told not to think reasons in plain content
+       * instead — the monologue then lands in the chat as the reader's answer. Words are the only
+       * lever here.
+       */
+      if (lastTruncated && !clean && !calls.length && !ranOutThinking && round < effectiveMax) {
+        ranOutThinking = true;
+        opts.onEvent?.({ kind: "activity", text: "Wrapping that up…" });
+        messages.push({ role: "assistant", content: reply });
+        messages.push({
+          role: "user",
+          content:
+            "[That reply hit its length limit while you were still thinking, so nothing came out at " +
+            "all. You have already worked this out — give the answer now, in the reply itself and " +
+            "briefly. If it needs a tool, make the call. Do not re-check anything.]",
+        });
+        continue;
       }
       // The model ended on a tool/blank with NO prose. Ask once for a plain-text wrap-up so the
       // reader never gets an empty bubble; if it's still empty, fall back to a short line.
