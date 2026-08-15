@@ -1640,8 +1640,8 @@ export function buildBuddySystemPrompt(raw: {
       'MANY MESSAGES vs MANY ACTIONS. MESSAGES means text you type. A task that is the SAME small ' +
       'thing over and over — "the alphabet, one letter per message", a countdown — needs NO checklist ' +
       "and NO tools: write them ALL in one reply with a line of only [[next]] between them — each " +
-      "becomes its own message. Use send_message only when real WORK separates them. If the reader " +
-      "ASKS for a plan, MAKE ONE: their request wins.\n"
+      "becomes its own message. That is the ONLY way to send a series; there is no per-message tool. " +
+      "If the reader ASKS for a plan, MAKE ONE: their request wins.\n"
     : opts.appManagedSteps
       ? // App-managed mid-plan: the checklist block above already says do-one-step / no complete_step.
         ""
@@ -1700,10 +1700,7 @@ export function buildBuddySystemPrompt(raw: {
       // The catalog entry its predecessor never had. keep_going was described only in a paragraph of
       // prose further down and was absent from the native schemas entirely, so a model looking for
       // the tool that sends a series found nothing in the one place it lists what it can call.
-      // WHEN to reach for it is stated once, in the guide above ("only when real WORK separates
-      // them"). Repeating it here bought nothing and the budget has no room for saying things twice.
-      '- {"tool":"send_message","text":"…"} — send ONE message and STAY in the turn. Turn ends when ' +
-      "you stop.\n";
+"";
   // A compact intent→tool decision table read BEFORE the full catalog, so the model resolves the
   // look-alike choices (search vs generate, read vs open, find vs read, draft vs send, run vs save)
   // up front. Lines for tools that aren't available this session are omitted so nothing dangles.
@@ -1819,8 +1816,9 @@ export function buildBuddySystemPrompt(raw: {
    */
   const planningRule = !hasPlan
     ? "MULTI-STEP vs SINGLE: a task with 2+ distinct ACTIONS (several images, or research → write-up) → " +
-      "call set_plan FIRST, one step per action — send_message CANNOT do this: a render ENDS the turn, so its " +
-      "round never comes. A SINGLE action (one image, one search) → call its tool directly; do NOT make a " +
+      "call set_plan FIRST, one step per action — [[next]] CANNOT do this: it splits ONE reply, and a " +
+      "render ENDS the turn before the rest of it arrives. A SINGLE action (one image, one search) → " +
+      "call its tool directly; do NOT make a " +
       "plan for one step. WRITING something and MAKING something are " +
       "TWO actions: \"a story before each of 3 pictures\" is SIX steps (write, draw, write, draw, write, draw), " +
       "not three — a step asking for both comes back with only the picture.\n"
@@ -3414,18 +3412,6 @@ export function ollamaToolSchemas(opts: {
       ["steps"],
     ),
     toolFn("complete_step", "Mark the CURRENT checklist step done — only after you've actually done it.", { note: strParam("Optional short note.") }, []),
-    // NEVER GATE THIS, and never let it fall out of this list. Its predecessor `keep_going` was
-    // documented in the prompt and absent from these schemas, so a model driving through native
-    // tool-calling was told to call something it had no way to call — it said in its reasoning that
-    // it would, and then couldn't. That is the entire "it knows it needs to and doesn't".
-    toolFn(
-      "send_message",
-      "Send ONE message to the reader now and stay in this turn, so you can send more. Use this for a " +
-        "task that is many separate messages — the alphabet one letter at a time, a countdown, a list " +
-        "sent line by line. Call it again for each one. The turn ends when you stop calling it.",
-      { text: strParam("The message to send, exactly as the reader should see it.") },
-      ["text"],
-    ),
     toolFn(
       "remember",
       "Save a durable note about the reader, or about your own/their identity.",
