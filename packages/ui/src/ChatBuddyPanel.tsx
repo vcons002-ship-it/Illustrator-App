@@ -29,6 +29,8 @@ import { activeModelLabel, defaultMenuTab, filterOptions, sectionizeGroup, type 
 import type { LocalBackendId, ReaderSettings } from "./SettingsPanel.js";
 import { loadNaturalVoice, naturalVoiceReady, speakNaturally } from "./natural-voice.js";
 import {
+  approvalCodeStyle,
+  approvalDockStyle,
   approvalStyle,
   chatHeaderStyle as headerStyle,
   chatInputRowStyle as inputRowStyle,
@@ -209,6 +211,39 @@ export interface ChatBuddyPanelProps {
    * "not handed over" rather than "nothing here". */
   awaitingSync?: boolean;
   onToggleHistory?: () => void;
+}
+
+/**
+ * The tools this panel has a purpose-written approval card for. Everything else falls to the
+ * generic card. Exported so a test can hold the list to what is actually rendered — the point of
+ * the fallback is that being off this list costs a nicer card, never the card itself.
+ */
+export const CARDED_TOOLS: ReadonlySet<string> = new Set([
+  "generate_image",
+  "generate_video",
+  "generate_long_video",
+  "find_files",
+  "browser_eval",
+  "run_command",
+  "send_email",
+  "spawn_coding_agents",
+  "screenshot",
+]);
+
+/**
+ * A tool call's arguments, readable, for the generic approval card. PURE.
+ *
+ * One `name: value` per line rather than raw JSON, because this is the only thing the reader has to
+ * decide on. Long strings are clipped: a `write_file` carrying 200k of content is not something
+ * anyone proofreads in a phone-sized card, and letting it through would push the buttons off screen —
+ * which is the failure this whole card exists to prevent.
+ */
+export function describeCallArgs(call: BuddyToolCall): string {
+  const clip = (v: unknown): unknown => (typeof v === "string" && v.length > 300 ? `${v.slice(0, 300)}…` : v);
+  const lines = Object.entries(call)
+    .filter(([k]) => k !== "tool")
+    .map(([k, v]) => `${k}: ${JSON.stringify(clip(v))}`.slice(0, 400));
+  return lines.length ? lines.join("\n") : "(no arguments)";
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -909,20 +944,153 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.activity ? (
           <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>{props.activity}</div>
         ) : null}
-        {(props.agentApprovals ?? []).map((a) => {
-          const what =
-            a.call.tool === "run_command"
-              ? a.call.command
-              : a.call.tool === "write_file"
-                ? `write ${a.call.path}`
-                : a.call.tool;
-          return (
-            <div
-              key={a.id}
-              style={{ ...approvalStyle, borderColor: "rgba(120,170,255,0.6)", background: "rgba(120,170,255,0.08)" }}
-            >
+      </div>
+
+      {/* APPROVALS LIVE OUTSIDE THE MESSAGE LIST — between it and the composer, where nothing
+          can scroll them away.
+
+          They used to be the last children of the scroller, which put them on screen only for a
+          reader already pinned to the bottom of it. On a phone the chat dock is a few hundred
+          pixels tall, so a run that stopped to ask permission showed its one-line activity row
+          and nothing else: no command to read, no Deny to press, and no way to tell a run that
+          was waiting from one that had hung. A block holding up the work is the one thing in
+          this panel that must never need scrolling to.
+
+          Capped and scrollable in its own right so a long command or a stack of agent approvals
+          takes a share of the panel rather than all of it. This also replaces the "⚠ Waiting for
+          your approval — Show it" banner that used to stand in for the card while minimized: the
+          card itself is here now, at every dock height, so the stand-in has nothing left to do. */}
+      {(props.pendingTool || (props.agentApprovals?.length ?? 0) > 0) && (
+        <div style={approvalDockStyle}>
+          {(props.agentApprovals ?? []).map((a) => {
+            const what =
+              a.call.tool === "run_command"
+                ? a.call.command
+                : a.call.tool === "write_file"
+                  ? `write ${a.call.path}`
+                  : a.call.tool;
+            return (
+              <div
+                key={a.id}
+                style={{ ...approvalStyle, borderColor: "rgba(120,170,255,0.6)", background: "rgba(120,170,255,0.08)" }}
+              >
+                <div style={{ fontSize: 12, marginBottom: 6 }}>
+                  🤖 <b>{a.title}</b> wants to {a.call.tool === "run_command" ? "run a command" : "write a file"}:
+                  <code
+                    style={{
+                      display: "block",
+                      marginTop: 4,
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      background: "rgba(0,0,0,0.3)",
+                      fontFamily: "ui-monospace, Menlo, monospace",
+                      fontSize: 12,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {what.slice(0, 600)}
+                  </code>
+                  <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                    Runs in this agent's isolated worktree. Other agents keep working while this waits.
+                  </span>
+                </div>
+                <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={() => props.onApproveAgentTool?.(a.id)}>
+                  Approve
+                </button>
+                <button className={cx.btn} style={smallButtonStyle} onClick={() => props.onDenyAgentTool?.(a.id)}>
+                  Deny
+                </button>
+              </div>
+            );
+          })}
+          {props.pendingTool?.tool === "generate_image" && (
+            <div style={approvalStyle}>
               <div style={{ fontSize: 12, marginBottom: 6 }}>
-                🤖 <b>{a.title}</b> wants to {a.call.tool === "run_command" ? "run a command" : "write a file"}:
+                Generate this image?
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  “{props.pendingTool.prompt}”
+                  {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+                  {props.pendingTool.steps ? ` · ${props.pendingTool.steps} steps` : ""}
+                  {props.pendingTool.style ? ` · style: ${props.pendingTool.style}` : ""}
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run
+              </button>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Dismiss
+              </button>
+            </div>
+          )}
+          {props.pendingTool?.tool === "generate_video" && (
+            <div style={approvalStyle}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🎬 Generate this video?
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  “{props.pendingTool.prompt}”
+                  {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+                  {props.pendingTool.frames ? ` · ${props.pendingTool.frames} frames` : ""}
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run
+              </button>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Dismiss
+              </button>
+            </div>
+          )}
+          {props.pendingTool?.tool === "generate_long_video" && (
+            <div style={approvalStyle}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🎬 Generate a long video from {props.pendingTool.clips.length} shots?
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  {props.pendingTool.title ? `“${props.pendingTool.title}” · ` : ""}
+                  renders each clip, chains them, and stitches into one video
+                  {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run
+              </button>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Dismiss
+              </button>
+            </div>
+          )}
+          {props.pendingTool?.tool === "find_files" && (
+            <div style={approvalStyle}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🔒 Let the buddy search your computer for a file?
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  “{props.pendingTool.query}” — it reads file names only, and opens nothing without your click.
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Allow once
+              </button>
+              {props.onApprovePendingToolAlways && (
+                <button className={cx.btn}
+                  style={{ ...smallButtonStyle, marginRight: 6 }}
+                  onClick={props.onApprovePendingToolAlways}
+                  title="Don't ask again for file searches this session"
+                >
+                  Allow this session
+                </button>
+              )}
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Deny
+              </button>
+            </div>
+          )}
+          {/* Driving a page is as much a reach into the reader's machine as a shell command, and it
+              shares run_command's gate — so it needs its own approval card. Without one the pending
+              tool would sit there with nothing rendered and no way to approve it: a silent hang. */}
+          {props.pendingTool?.tool === "browser_eval" && (
+            <div style={{ ...approvalStyle, borderColor: t.accent.edge, background: t.accent.edge }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🌐 Run this in the open page{props.pendingTool.target ? ` (${props.pendingTool.target})` : ""}?
                 <code
                   style={{
                     display: "block",
@@ -936,276 +1104,168 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                     wordBreak: "break-all",
                   }}
                 >
-                  {what.slice(0, 600)}
+                  {props.pendingTool.expression}
                 </code>
                 <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
-                  Runs in this agent's isolated worktree. Other agents keep working while this waits.
+                  Runs JavaScript inside a page in a browser you started with a debug port. Read it before approving.
                 </span>
               </div>
-              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={() => props.onApproveAgentTool?.(a.id)}>
-                Approve
+              <span style={{ display: "flex", gap: 6 }}>
+                <button className={cx.btn} style={smallButtonStyle} onClick={props.onApprovePendingTool}>
+                  Run it
+                </button>
+                <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                  No
+                </button>
+              </span>
+            </div>
+          )}
+          {props.pendingTool?.tool === "run_command" && (
+            <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                ⚠ Run this command on your computer?
+                <code
+                  style={{
+                    display: "block",
+                    marginTop: 4,
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: "rgba(0,0,0,0.3)",
+                    fontFamily: "ui-monospace, Menlo, monospace",
+                    fontSize: 12,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {props.pendingTool.command}
+                </code>
+                <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                  Runs in your VisualReader/workspace folder, with your permissions. Read it before approving.
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run
               </button>
-              <button className={cx.btn} style={smallButtonStyle} onClick={() => props.onDenyAgentTool?.(a.id)}>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
                 Deny
               </button>
             </div>
-          );
-        })}
-        {props.pendingTool?.tool === "generate_image" && (
-          <div style={approvalStyle}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              Generate this image?
-              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                “{props.pendingTool.prompt}”
-                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
-                {props.pendingTool.steps ? ` · ${props.pendingTool.steps} steps` : ""}
-                {props.pendingTool.style ? ` · style: ${props.pendingTool.style}` : ""}
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Run
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "generate_video" && (
-          <div style={approvalStyle}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              🎬 Generate this video?
-              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                “{props.pendingTool.prompt}”
-                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
-                {props.pendingTool.frames ? ` · ${props.pendingTool.frames} frames` : ""}
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Run
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "generate_long_video" && (
-          <div style={approvalStyle}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              🎬 Generate a long video from {props.pendingTool.clips.length} shots?
-              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                {props.pendingTool.title ? `“${props.pendingTool.title}” · ` : ""}
-                renders each clip, chains them, and stitches into one video
-                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Run
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "find_files" && (
-          <div style={approvalStyle}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              🔒 Let the buddy search your computer for a file?
-              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                “{props.pendingTool.query}” — it reads file names only, and opens nothing without your click.
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Allow once
-            </button>
-            {props.onApprovePendingToolAlways && (
-              <button className={cx.btn}
-                style={{ ...smallButtonStyle, marginRight: 6 }}
-                onClick={props.onApprovePendingToolAlways}
-                title="Don't ask again for file searches this session"
-              >
-                Allow this session
-              </button>
-            )}
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Deny
-            </button>
-          </div>
-        )}
-        {/* Driving a page is as much a reach into the reader's machine as a shell command, and it
-            shares run_command's gate — so it needs its own approval card. Without one the pending
-            tool would sit there with nothing rendered and no way to approve it: a silent hang. */}
-        {props.pendingTool?.tool === "browser_eval" && (
-          <div style={{ ...approvalStyle, borderColor: t.accent.edge, background: t.accent.edge }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              🌐 Run this in the open page{props.pendingTool.target ? ` (${props.pendingTool.target})` : ""}?
-              <code
-                style={{
-                  display: "block",
-                  marginTop: 4,
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  background: "rgba(0,0,0,0.3)",
-                  fontFamily: "ui-monospace, Menlo, monospace",
-                  fontSize: 12,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                }}
-              >
-                {props.pendingTool.expression}
-              </code>
-              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
-                Runs JavaScript inside a page in a browser you started with a debug port. Read it before approving.
-              </span>
-            </div>
-            <span style={{ display: "flex", gap: 6 }}>
-              <button className={cx.btn} style={smallButtonStyle} onClick={props.onApprovePendingTool}>
-                Run it
+          )}
+          {props.pendingTool?.tool === "send_email" && (
+            <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                ✉ Send this email from your account?
+                <span style={{ display: "block", marginTop: 4 }}>
+                  <b>To:</b> {props.pendingTool.to.join(", ")}
+                  {props.pendingTool.cc && props.pendingTool.cc.length > 0 ? ` · Cc: ${props.pendingTool.cc.join(", ")}` : ""}
+                </span>
+                <span style={{ display: "block" }}>
+                  <b>Subject:</b> {props.pendingTool.subject}
+                </span>
+                <div
+                  style={{
+                    marginTop: 4,
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: "rgba(0,0,0,0.3)",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    maxHeight: 160,
+                    overflowY: "auto",
+                  }}
+                >
+                  {props.pendingTool.body}
+                </div>
+                <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                  Sends immediately from your connected Google account. To keep it as a draft instead, ask the assistant to draft it.
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Send
               </button>
               <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-                No
+                Cancel
               </button>
-            </span>
-          </div>
-        )}
-        {props.pendingTool?.tool === "run_command" && (
-          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              ⚠ Run this command on your computer?
-              <code
-                style={{
-                  display: "block",
-                  marginTop: 4,
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  background: "rgba(0,0,0,0.3)",
-                  fontFamily: "ui-monospace, Menlo, monospace",
-                  fontSize: 12,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                }}
-              >
-                {props.pendingTool.command}
-              </code>
-              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
-                Runs in your VisualReader/workspace folder, with your permissions. Read it before approving.
-              </span>
             </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Run
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Deny
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "send_email" && (
-          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              ✉ Send this email from your account?
-              <span style={{ display: "block", marginTop: 4 }}>
-                <b>To:</b> {props.pendingTool.to.join(", ")}
-                {props.pendingTool.cc && props.pendingTool.cc.length > 0 ? ` · Cc: ${props.pendingTool.cc.join(", ")}` : ""}
-              </span>
-              <span style={{ display: "block" }}>
-                <b>Subject:</b> {props.pendingTool.subject}
-              </span>
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  background: "rgba(0,0,0,0.3)",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  maxHeight: 160,
-                  overflowY: "auto",
-                }}
-              >
-                {props.pendingTool.body}
-              </div>
-              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
-                Sends immediately from your connected Google account. To keep it as a draft instead, ask the assistant to draft it.
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Send
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "spawn_coding_agents" && (
-          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              🤖 Run {props.pendingTool.tasks.length} coding agents in parallel?
-              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                {props.pendingTool.tasks.map((t, i) => (
-                  <li key={i} style={{ marginBottom: 2 }}>
-                    <b>{t.title}</b>
-                    <span style={{ display: "block", opacity: 0.7 }}>{t.instructions.slice(0, 160)}</span>
-                  </li>
-                ))}
-              </ul>
-              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
-                Each works in its own isolated git worktree, then the app merges their changes into this
-                chat's working folder and cleans up the branches. They write + run commands on their own
-                (Autonomous workspace). Review the merged changes afterward.
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Run agents
-            </button>
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {props.pendingTool?.tool === "screenshot" && (
-          <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              📷 Let the assistant {props.pendingTool.window ? `capture the “${props.pendingTool.window}” window` : "capture your screen"} and look at it?
-              {props.pendingTool.question && (
-                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                  To check: “{props.pendingTool.question}”
+          )}
+          {props.pendingTool?.tool === "spawn_coding_agents" && (
+            <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🤖 Run {props.pendingTool.tasks.length} coding agents in parallel?
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                  {props.pendingTool.tasks.map((t, i) => (
+                    <li key={i} style={{ marginBottom: 2 }}>
+                      <b>{t.title}</b>
+                      <span style={{ display: "block", opacity: 0.7 }}>{t.instructions.slice(0, 160)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                  Each works in its own isolated git worktree, then the app merges their changes into this
+                  chat's working folder and cleans up the branches. They write + run commands on their own
+                  (Autonomous workspace). Review the merged changes afterward.
                 </span>
-              )}
-              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                {props.pendingTool.window
-                  ? "Captures just that window and sends it to your chat model."
-                  : "Captures your whole primary screen and sends it to your chat model — close anything private first."}
-              </span>
-            </div>
-            <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
-              Capture
-            </button>
-            {props.onApprovePendingToolAlways && (
-              <button className={cx.btn}
-                style={{ ...smallButtonStyle, marginRight: 6 }}
-                onClick={props.onApprovePendingToolAlways}
-                title="Don't ask again for screen captures this session (e.g. while testing a running game)"
-              >
-                Allow this session
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run agents
               </button>
-            )}
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
-              Deny
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* An approval lives INSIDE the message list, which is hidden while minimized — so a run that
-          stopped to ask permission looked like a run that had simply hung, with the button to
-          unblock it off-screen. Never hide a prompt that's blocking work: say so, and offer the way
-          to it. (Cheap to render, and only appears when something is actually waiting.) */}
-      {minimized && (props.pendingTool || (props.agentApprovals?.length ?? 0) > 0) && (
-        <div style={{ ...approvalStyle, margin: "0 10px 6px", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12 }}>⚠ Waiting for your approval.</span>
-          {props.onToggleHistory && (
-            <button className={cx.btn} style={smallButtonStyle} onClick={props.onToggleHistory}>
-              Show it
-            </button>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {props.pendingTool?.tool === "screenshot" && (
+            <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                📷 Let the assistant {props.pendingTool.window ? `capture the “${props.pendingTool.window}” window` : "capture your screen"} and look at it?
+                {props.pendingTool.question && (
+                  <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                    To check: “{props.pendingTool.question}”
+                  </span>
+                )}
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  {props.pendingTool.window
+                    ? "Captures just that window and sends it to your chat model."
+                    : "Captures your whole primary screen and sends it to your chat model — close anything private first."}
+                </span>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Capture
+              </button>
+              {props.onApprovePendingToolAlways && (
+                <button className={cx.btn}
+                  style={{ ...smallButtonStyle, marginRight: 6 }}
+                  onClick={props.onApprovePendingToolAlways}
+                  title="Don't ask again for screen captures this session (e.g. while testing a running game)"
+                >
+                  Allow this session
+                </button>
+              )}
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Deny
+              </button>
+            </div>
+          )}
+          {/* THE CATCH-ALL, and the reason it exists.
+              Nine tools above have a card written for them. Anything else the policy decides to ask
+              about — control_ui with live control off, delegate_coding_task, a tool added later —
+              had no card at all, so the turn suspended waiting for a click on a card that was never
+              rendered: a silent hang with no approve, no deny, and nothing on screen saying why the
+              assistant had stopped. A generic card is a poor card and an infinitely better nothing,
+              and it means a new tool can never reintroduce that hang by omission. */}
+          {props.pendingTool && !CARDED_TOOLS.has(props.pendingTool.tool) && (
+            <div style={{ ...approvalStyle, borderColor: t.state.warn, background: t.state.warn }}>
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                ⚠ Let the assistant run <b>{props.pendingTool.tool}</b>?
+                <code style={approvalCodeStyle}>{describeCallArgs(props.pendingTool)}</code>
+              </div>
+              <button className={cx.btn} style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+                Run
+              </button>
+              <button className={cx.btn} style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+                Deny
+              </button>
+            </div>
           )}
         </div>
       )}

@@ -328,3 +328,53 @@ describe("every overlay panel is a real dialog", () => {
     expect(src).toContain("disableBackdropClose");
   });
 });
+
+/**
+ * STOP HAS TO REACH A PENDING APPROVAL.
+ *
+ * `buddyCancel` aborts the turn in flight and nothing else, so a run suspended on an approval
+ * survived Stop: the card stayed pending, and a pending tool is one of the guards the scheduled-task
+ * and idle-turn executors check before they will start anything — so everything after it quietly
+ * declined to run too. Reported from a phone, where the card is easiest to miss in the first place
+ * and Stop is the control the reader reaches for.
+ *
+ * Both entry points — the panel's own button and the phone's `vrcmd:chatCancel` relay — have to go
+ * through the same clearing. Wiring one and not the other is the shape this regressed in.
+ */
+describe("Stop clears a pending approval", () => {
+  it("routes both the button and the phone's relay through stopBuddyRun", () => {
+    expect(APP).toContain("const stopBuddyRun = useCallback(");
+    // The relay handler. If this goes back to bare buddyCancel(), a phone's Stop leaves the card up.
+    expect(APP).toMatch(/case "vrcmd:chatCancel":\s*\n\s*stopBuddyRun\(\);/);
+    // The button, via onBuddyCancel — which relays on a phone and clears here on the desktop.
+    expect(APP).toMatch(/if \(isRemoteClient\) sendAppSync\(\{ type: "vrcmd:chatCancel" \}\);\s*\n\s*else stopBuddyRun\(\);/);
+  });
+
+  it("clears exactly what Deny clears", () => {
+    const body = APP.slice(APP.indexOf("const stopBuddyRun = useCallback("));
+    const fn = body.slice(0, body.indexOf("}, [buddyCancel]);"));
+    for (const line of ["buddyCancel();", "setBuddyPendingTool(undefined);", "pendingBuddyTranscript.current = [];", "pendingBuddyHistory.current = [];"]) {
+      expect(fn, line).toContain(line);
+    }
+  });
+});
+
+/**
+ * A TOOL THAT REACHES THE READER'S COMPUTER NAMES WHAT IT IS REACHING FOR.
+ *
+ * The trace row and the activity line are the entire view of that reach on a linked phone, and
+ * "Proposing a command…" was the same row whether the assistant wanted `ls` or `rm -rf` — nothing to
+ * judge before approving, nothing recognisable in the trace after.
+ */
+describe("the live activity line", () => {
+  it("describes desktop-runtime proposals by their payload", () => {
+    expect(APP).toContain("describeToolProposal");
+    expect(APP).toMatch(/isDesktopRuntimeTool\(c\) \|\| c\.tool === "browser_eval" \? describeToolProposal\(c\)/);
+  });
+
+  it("no longer carries the generic strings those tools fell to", () => {
+    expect(APP).not.toContain("Proposing a command…");
+    expect(APP).not.toContain("Searching your files…");
+    expect(APP).not.toContain("Asking to see your screen…");
+  });
+});

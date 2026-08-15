@@ -22,6 +22,7 @@ describe("BUILTIN_SKILLS", () => {
       "control-open-programs",
       "office-documents",
       "designed-documents",
+      "manage-local-models",
       "multi-file-projects",
     ]);
     for (const s of BUILTIN_SKILLS) {
@@ -88,6 +89,54 @@ describe("the playbooks moved out of the always-on prompt", () => {
       expect(findSkill(merged, q)?.name, q).toBe("designed-documents");
     }
     expect(findSkill(merged, "website")?.name).toBe("multi-file-projects");
+  });
+});
+
+/**
+ * The models the app talks to are downloaded onto the reader's own disk, and they are big. The ask
+ * arrives as "what's taking up all this space" long before it arrives as anything about Ollama —
+ * and the obvious answer, hunting for `.gguf` files to delete, is both impossible (they are
+ * content-addressed blobs) and destructive (blobs are shared between models). That one wrong turn
+ * is what the body exists to close off.
+ */
+describe("the local-models playbook", () => {
+  const local = readSkillBody(withBuiltinSkills([]), "manage-local-models");
+
+  it("gives the four commands that actually answer the question", () => {
+    for (const cmd of ["ollama list", "ollama ps", "ollama show", "ollama rm", "ollama pull"]) {
+      expect(local, cmd).toContain(cmd);
+    }
+  });
+
+  it("closes off deleting files by hand — the reason this needs a playbook at all", () => {
+    expect(local).toContain("content-addressed");
+    expect(local).toContain("blobs/sha256-");
+    expect(local).toMatch(/Blobs are SHARED/);
+    expect(local).toMatch(/Never do it/);
+    expect(local).toMatch(/ONLY safe\s+delete/);
+  });
+
+  it("names where the models live on each platform, and what overrides it", () => {
+    expect(local).toContain("%USERPROFILE%\\.ollama\\models");
+    expect(local).toContain("~/.ollama/models");
+    expect(local).toContain("/usr/share/ollama/.ollama/models");
+    expect(local).toContain("OLLAMA_MODELS");
+  });
+
+  it("makes an irreversible delete a confirmed one, and flags removing the model in use", () => {
+    expect(local).toMatch(/not undoable/);
+    expect(local).toMatch(/SHOW the reader the list first/);
+    expect(local).toMatch(/unable to reply until another one/);
+  });
+
+  it("is found by the words the ask arrives in", () => {
+    // `findSkill` matches on substrings of the name or the description, so the description has to
+    // carry the reader's vocabulary — "space", "delete", "downloaded" — and not just "Ollama",
+    // which is the word for the thing rather than the word for the problem.
+    const merged = withBuiltinSkills([]);
+    for (const q of ["models", "space", "delete", "downloaded"]) {
+      expect(findSkill(merged, q)?.name, q).toBe("manage-local-models");
+    }
   });
 });
 

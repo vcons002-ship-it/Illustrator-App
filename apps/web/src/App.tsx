@@ -50,6 +50,7 @@ import {
   uiAutomationCommand,
   parseUiAutomationOutput,
   describeBuddyToolActivity,
+  describeToolProposal,
   isLiveControlTool,
   roundSignature,
   stuckOnRepeat,
@@ -7247,8 +7248,14 @@ export function App() {
           setBuddyStreaming("");
         }
         const c = e.call;
+        // TOOLS THAT REACH THE READER'S COMPUTER NAME WHAT THEY'RE REACHING FOR. Everything below
+        // this line describes a category of work ("Proposing a command…"), which is enough for a
+        // web search and useless for a shell command: it is the same row whether the assistant
+        // wants `ls` or `rm -rf`. On a linked phone that row was the whole story — nothing to read
+        // before approving, and nothing recognisable in the trace afterwards.
         const label =
-          c.tool === "search_books" ? `Searching Project Gutenberg for “${c.query}”…`
+          isDesktopRuntimeTool(c) || c.tool === "browser_eval" ? describeToolProposal(c)
+          : c.tool === "search_books" ? `Searching Project Gutenberg for “${c.query}”…`
           : c.tool === "random_books" ? "Pulling some classics off the shelf…"
           : c.tool === "search_web" ? `Searching for “${c.query}”…`
           : c.tool === "read_url" ? `Reading ${c.url}…`
@@ -7261,10 +7268,7 @@ export function App() {
           : c.tool === "open_pasted_text" ? "Opening your text…"
           : c.tool === "remove_library_book" ? "Removing from your library…"
           : c.tool === "generate_image" ? "Preparing an image…"
-          : c.tool === "find_files" ? "Searching your files…"
           : c.tool === "read_file" ? "Reading a file…"
-          : c.tool === "run_command" ? "Proposing a command…"
-          : c.tool === "screenshot" ? "Asking to see your screen…"
           : c.tool === "gmail_search" ? "Searching your email…"
           : c.tool === "read_email" ? "Reading an email…"
           : c.tool === "read_attachment" ? "Reading an attachment…"
@@ -8816,10 +8820,29 @@ export function App() {
   }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
+  /**
+   * STOP MEANS STOP — INCLUDING A QUESTION THE RUN IS WAITING ON.
+   *
+   * `buddyCancel` aborts the turn in flight and nothing else. It never touched `buddyPendingTool`,
+   * so a run that had suspended to ask permission SURVIVED Stop: the approval stayed pending, and
+   * because a pending tool is one of the guards the executor checks before it will start anything
+   * (see the scheduled-task and idle-turn gates), everything after it quietly declined to run too.
+   * From the reader's side the assistant had simply stopped answering, with nothing they could
+   * press to say otherwise — and on a phone, where the card is easiest to miss in the first place,
+   * Stop is the control they reach for.
+   *
+   * Pressing Stop with a question on screen is a decline, so it clears exactly what Deny clears.
+   */
+  const stopBuddyRun = useCallback(() => {
+    buddyCancel();
+    setBuddyPendingTool(undefined);
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+  }, [buddyCancel]);
   const onBuddyCancel = useCallback(() => {
     if (isRemoteClient) sendAppSync({ type: "vrcmd:chatCancel" });
-    else buddyCancel();
-  }, [isRemoteClient, sendAppSync, buddyCancel]);
+    else stopBuddyRun();
+  }, [isRemoteClient, sendAppSync, stopBuddyRun]);
 
   // Reset the live conversation view when moving between sessions.
   const resetBuddyView = useCallback(() => {
@@ -9280,7 +9303,7 @@ export function App() {
           onClearBuddy();
           break;
         case "vrcmd:chatCancel":
-          buddyCancel();
+          stopBuddyRun(); // the phone's Stop button — same meaning as the desktop's (see stopBuddyRun)
           break;
         case "vrcmd:chatApproveTool":
           if (c.always) onAllowBuddyAlways();
@@ -9306,7 +9329,7 @@ export function App() {
       onDeleteBuddySession,
       onRenameBuddySession,
       onClearBuddy,
-      buddyCancel,
+      stopBuddyRun,
       onAllowBuddyAlways,
       onApproveBuddyPendingTool,
       onDismissBuddyPendingTool,

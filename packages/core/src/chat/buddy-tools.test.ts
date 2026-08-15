@@ -14,6 +14,7 @@ import {
   buildProjectGuideBlock,
   buildToolCallFormat,
   describeBuddyToolActivity,
+  describeToolProposal,
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
@@ -2533,6 +2534,45 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(describeBuddyToolActivity({ tool: "calculate", expression: "2+2" })).toBe("Calculating…");
     // An uncommon tool still gets a sane generic line (never blank).
     expect(describeBuddyToolActivity({ tool: "set_visual_style", style: "watercolor" })).toBe("Working on it…");
+  });
+
+  /**
+   * The reported failure: on a linked phone, a run that reached for the shell showed
+   * "Proposing a command…" and nothing else — the same row whether the assistant wanted `ls` or
+   * `rm -rf`, with nothing to judge before approving and nothing recognisable in the trace after.
+   * Every branch here carries its payload; that is the whole point of the function.
+   */
+  it("describeToolProposal names WHAT a machine-touching tool is asking to do", () => {
+    expect(describeToolProposal({ tool: "run_command", command: "npm test -- --watch=false" })).toBe(
+      "Proposing: npm test -- --watch=false",
+    );
+    expect(describeToolProposal({ tool: "write_file", path: "src/app.ts", content: "x" })).toBe(
+      "Proposing to write src/app.ts",
+    );
+    expect(describeToolProposal({ tool: "edit_file", path: "src/app.ts", edits: [] })).toBe(
+      "Proposing to edit src/app.ts",
+    );
+    expect(describeToolProposal({ tool: "find_files", query: "tax return" })).toMatch(/search your files for .*tax return/);
+    expect(describeToolProposal({ tool: "screenshot", window: "Blender" })).toBe("Proposing to capture “Blender”");
+    expect(describeToolProposal({ tool: "screenshot" })).toBe("Proposing to capture your screen");
+    expect(describeToolProposal({ tool: "browser_eval", expression: "1" })).toBe(
+      "Proposing to run script in the open page",
+    );
+    expect(describeToolProposal({ tool: "delegate_coding_task", task: "add a retry to the fetch" })).toBe(
+      "Proposing a coding task: add a retry to the fetch",
+    );
+  });
+
+  it("describeToolProposal clips a long command instead of pushing the buttons off a phone screen", () => {
+    const line = describeToolProposal({ tool: "run_command", command: `echo ${"x".repeat(500)}` });
+    expect(line.length).toBeLessThanOrEqual("Proposing: ".length + 81);
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("describeToolProposal falls through to the in-flight description for everything else", () => {
+    // Not a reach into the machine — the existing, already-specific line is the right one.
+    expect(describeToolProposal({ tool: "read_url", url: "https://example.org/a" })).toBe("Reading example.org…");
+    expect(describeToolProposal({ tool: "control_ui", action: "windows" })).toBe("Looking at what's open…");
   });
 
   it("looksLikeToolJson flags a tool-shaped reply so raw JSON isn't shown as prose", () => {

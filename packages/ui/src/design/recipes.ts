@@ -163,3 +163,34 @@ export const approvalStyle: CSSProperties = {
   padding: 10,
   background: t.accent.wash,
 };
+
+/**
+ * The strip the approval cards sit in — between the scrolling message list and the composer.
+ *
+ * Deliberately NOT inside the list: a card that is holding up the run must not be scrollable away.
+ * It carries its own ceiling and its own scroll instead, so a long command or a stack of agent
+ * approvals takes a share of a short phone dock rather than all of it.
+ */
+export const approvalDockStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  padding: "6px 10px",
+  maxHeight: "min(45vh, 340px)",
+  overflowY: "auto",
+  flex: "0 0 auto",
+  borderTop: `1px solid ${t.border.faint}`,
+};
+
+/** The command / expression / payload read-out inside an approval card — the thing the reader is
+ * actually being asked to judge, so it wraps rather than truncating. */
+export const approvalCodeStyle: CSSProperties = {
+  display: "block",
+  marginTop: 4,
+  padding: "6px 8px",
+  borderRadius: 6,
+  background: t.surface.sunken,
+  fontFamily: "ui-monospace, Menlo, monospace",
+  fontSize: 12,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+};
