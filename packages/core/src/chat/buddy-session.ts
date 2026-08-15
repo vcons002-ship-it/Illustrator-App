@@ -587,7 +587,18 @@ export async function runBuddyTurn(opts: {
    * call is required (an app-managed step whose contract demands a specific tool). Forces a stubborn
    * small model to emit the call instead of narrating. Build with `buildToolCallFormat`. Ignored by
    * cloud / non-Ollama providers. */
-  toolFormat?: Record<string, unknown>;
+  /**
+   * Grammar-constrain the reply to the tool the CURRENT step owes (Ollama `format`).
+   *
+   * A FUNCTION, resolved every round, because a checklist now runs every step inside one turn. As a
+   * fixed object it was computed once from the turn's opening step and then stayed there while the
+   * tick moved on — so from step two the sampler admitted only step ONE's tool. The model could not
+   * emit the call it actually needed, could not emit plain text either, and on a reasoning model the
+   * only unconstrained channel left was the thinking. Reported exactly that way: thinking that can't
+   * escape into a tool call, and the same call attempted over and over — which is the one shape the
+   * grammar still permitted.
+   */
+  toolFormat?: Record<string, unknown> | (() => Record<string, unknown> | undefined);
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -769,7 +780,10 @@ export async function runBuddyTurn(opts: {
       ...(opts.tools?.length ? { tools: opts.tools } : {}),
       // Force a parseable tool call this turn when the step's contract requires one (provider gates it
       // to the Ollama path; it suppresses `tools` there since the two can't both apply).
-      ...(opts.toolFormat ? { toolFormat: opts.toolFormat } : {}),
+      ...(((): { toolFormat?: Record<string, unknown> } => {
+        const f = typeof opts.toolFormat === "function" ? opts.toolFormat() : opts.toolFormat;
+        return f ? { toolFormat: f } : {};
+      })()),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },

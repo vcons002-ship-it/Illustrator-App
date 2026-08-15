@@ -54,6 +54,8 @@ import {
   planHasPendingStep,
   compileWorkflow,
   activeStep,
+  doneWhenToNeeds,
+  isToolAvailable,
   evaluateStep,
   attemptedStepWork,
   advanceWorkflow,
@@ -6072,16 +6074,35 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         }
       : undefined;
     const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
-    // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
-    // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
-    // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
-    // provider applies Ollama `format`; cloud ignores `toolFormat`. A file step also allows read_file
-    // (a sensible precursor) so the model can read before rewriting.
-    const requiredNeeds = msg.appManagedSteps ? plan?.steps.find((s) => s.status !== "done")?.needs : undefined;
-    const toolFormat =
-      requiredNeeds && llm.id === "local-server"
-        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "edit_file", "read_file"] : [requiredNeeds])
-        : undefined;
+    /**
+     * G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
+     * demands, so a stubborn small model can't narrate instead of acting. Only for a concrete tool
+     * need (the step's `needs` token is a tool name); text/narration steps stay free. Local-server
+     * only — the provider applies Ollama `format`; cloud ignores `toolFormat`. A file step also
+     * allows read_file (a sensible precursor) so the model can read before rewriting.
+     *
+     * READ EVERY ROUND, NOT ONCE PER TURN. This used to be a value, computed here from the plan's
+     * opening step, which was right when a turn was one step. A checklist now runs every step inside
+     * one turn, so a fixed grammar stayed pinned to step ONE's tool while the tick moved on: from
+     * step two the sampler admitted nothing but a call the model had already made and no longer
+     * needed. No other tool, no plain text — and on a reasoning model the only channel left
+     * unconstrained was the thinking, which is where the run then sat.
+     *
+     * NEVER LOCK ONTO A TOOL THAT CANNOT BE CALLED. `buildToolCallFormat` reads the full schema list,
+     * ungated, so a step needing a deferred tool produced a grammar for something this session has
+     * not loaded — and `load_toolset`, the one move that would fix it, was itself forbidden by that
+     * grammar. A step like that is left unconstrained instead, which is the weaker guarantee and the
+     * only one that can actually be satisfied.
+     */
+    const stepFormat = (): Record<string, unknown> | undefined => {
+      if (!msg.appManagedSteps || llm.id !== "local-server") return undefined;
+      // The live workflow first — it is the copy the tick advances. `plan` only backstops the round
+      // before the tick has run (and the legacy path, where there is no workflow in here at all).
+      const live = wf ? activeStep(wf) : undefined;
+      const needs = (live ? doneWhenToNeeds(live.doneWhen) : undefined) ?? plan?.steps.find((s) => s.status !== "done")?.needs;
+      if (!needs || !isToolAvailable(needs, loadedToolsets)) return undefined;
+      return buildToolCallFormat(needs === "write_file" ? ["write_file", "edit_file", "read_file"] : [needs]);
+    };
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
       system: volatile ? `${setup}\n\n${volatile}` : setup,
@@ -6127,7 +6148,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             }),
           }
         : {}),
-      ...(toolFormat ? { toolFormat } : {}),
+      toolFormat: stepFormat,
       // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
       // the next BEAT (prose), so the recovered reply is still appendable to the book.
       ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),

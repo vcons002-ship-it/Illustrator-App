@@ -1810,6 +1810,76 @@ describe("runBuddyTurn", () => {
   });
 });
 
+/**
+ * "IT'S THINKING THAT CAN'T SEEM TO ESCAPE INTO AN ACTUAL TOOL CALL — THE THINKING HAS NO OUTLET."
+ *
+ * G3 grammar-constrains the reply to the tool the active step owes, so a stubborn small model cannot
+ * narrate instead of acting. It was computed ONCE per turn, which was right when a turn was one step.
+ * A checklist now runs every step inside one turn, so the grammar stayed pinned to step ONE's tool
+ * while the tick moved on: from step two the sampler admitted only a call the model had already made
+ * and no longer needed. Not the tool it wanted, and not plain text either — and on a reasoning model
+ * the one channel still unconstrained was the thinking.
+ *
+ * That also explains "trying the same tool call over and over": the stale grammar permitted exactly
+ * one shape, so every attempt came out as the same call.
+ */
+describe("the reply grammar follows the step, not the turn", () => {
+  const fmt = (tool: string) => ({ type: "object", properties: { tool: { enum: [tool] } } });
+
+  it("is resolved every round rather than fixed when the turn opened", async () => {
+    const seen: (string | undefined)[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(messages, opts) {
+        this.calls.push([...messages]);
+        const f = (opts as { toolFormat?: { properties?: { tool?: { enum?: string[] } } } } | undefined)?.toolFormat;
+        seen.push(f?.properties?.tool?.enum?.[0]);
+        return this.calls.length < 3 ? '{"tool":"calculate","expression":"1+1"}' : "done";
+      },
+    };
+    // The grammar moves with the step: first two rounds owe search_web, then generate_image.
+    let step = 0;
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "two steps" }],
+      deps: baseDeps,
+      toolFormat: () => (step++ < 2 ? fmt("search_web") : fmt("generate_image")),
+    });
+    expect(seen.slice(0, 2), "the grammar never moved off the opening step").toEqual(["search_web", "search_web"]);
+    expect(seen[2], "a later round is still locked to the first step's tool").toBe("generate_image");
+  });
+
+  it("still accepts a plain object, so nothing that passes one regresses", async () => {
+    const seen: (string | undefined)[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(_m, opts) {
+        this.calls.push([]);
+        const f = (opts as { toolFormat?: { properties?: { tool?: { enum?: string[] } } } } | undefined)?.toolFormat;
+        seen.push(f?.properties?.tool?.enum?.[0]);
+        return "done";
+      },
+    };
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps, toolFormat: fmt("write_file") });
+    expect(seen[0]).toBe("write_file");
+  });
+
+  it("sends no grammar at all when the resolver declines", async () => {
+    const seen: unknown[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(_m, opts) {
+        this.calls.push([]);
+        seen.push((opts as { toolFormat?: unknown } | undefined)?.toolFormat);
+        return "done";
+      },
+    };
+    await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps, toolFormat: () => undefined });
+    expect(seen[0], "an undefined grammar is still sent as a constraint").toBeUndefined();
+  });
+});
+
 describe("app-managed steps: compiling the checklist is the whole turn", () => {
   // Reported: "it generated image 3 in step 1, then realised its mistake and generated image 1 before
   // checking off step 1." Both renders were real. The first happened in the SAME turn as set_plan —
