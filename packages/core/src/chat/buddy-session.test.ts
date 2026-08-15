@@ -894,7 +894,7 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
    * It reasoned correctly. The clause exists to stop the model reaching for ANOTHER tool instead of
    * answering; keep_going runs nothing and only says the turn is unfinished.
    */
-  it("does not forbid keep_going when it asks for plain text", async () => {
+  it("names both ways out when it asks for plain text, and commands neither", async () => {
     // Round 0 is all thinking and no prose — the state that fires the wrap-up.
     const llm = scriptedLlm(["", 'A\n{"tool":"keep_going"}', "B"]);
     await runBuddyTurn({
@@ -908,9 +908,23 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
       .map((m) => m.content)
       .find((c) => /Now reply to the reader in plain text/.test(c));
     expect(wrap, "the wrap-up directive was never sent").toBeTruthy();
-    expect(wrap, "it still tells the model every tool is off, the series tool included").toMatch(
-      /except send_message/,
-    );
+    /**
+     * THE CARVE-OUT BECAME THE PROBLEM IT WAS ADDED TO SOLVE.
+     *
+     * It read "No tool calls — except send_message, which you should still call if you have more
+     * messages to send", inherited from keep_going where a blanket ban had killed a series outright.
+     * But this directive only fires once the model has ALREADY stopped calling, so naming the tool
+     * here is the app asking a finished run to start again. Counting to -100, the model read it back
+     * and did: "the specific constraint 'except send_message' allows me to break out of the 'plain
+     * text only' rule for this task." It then never ended the turn.
+     *
+     * Both ways out are named now, and neither is commanded — the same correction the series receipt
+     * needed. The case the carve-out protected is covered by the two recoveries that fire before this.
+     */
+    expect(wrap, "a finished run is invited to start sending again").not.toMatch(/except send_message/);
+    expect(wrap, "the blanket ban is back, which once killed a series outright").not.toMatch(/No tool calls/);
+    expect(wrap, "carrying on is not named as available").toMatch(/genuinely still has items left, carry on/);
+    expect(wrap, "wrapping up is not named as available").toMatch(/otherwise this is the wrap-up/);
   });
 
   /**

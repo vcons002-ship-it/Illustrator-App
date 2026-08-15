@@ -918,8 +918,20 @@ export async function runBuddyTurn(opts: {
         const wrap = opts.storyMode
           ? "[Now write the next beat of the story as plain prose — continue the scene a little, refer to " +
             "characters by their established names, no commentary and no tool calls.]"
-          : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls — " +
-            "except send_message, which you should still call if you have more messages to send.]";
+          : // NAMES BOTH WAYS OUT, like the series receipt does, and for the same reason.
+            //
+            // It used to read "No tool calls — except send_message, which you should still call if you
+            // have more messages to send." That carve-out was inherited from keep_going, where a
+            // blanket "no tool calls" had once killed a series outright. But this directive fires when
+            // the model has ALREADY stopped calling — so naming the tool here is the app asking a
+            // finished run to start again. Counting to -100, the model read it back and did exactly
+            // that: "the specific constraint 'except send_message' allows me to break out of the
+            // 'plain text only' rule for this task."
+            //
+            // The case the carve-out protected is covered now by the two recoveries above, which fire
+            // first and handle a model whose work never reached the wire.
+            "[Now reply to the reader in plain text — briefly say what you did or found. If the task " +
+            "genuinely still has items left, carry on instead; otherwise this is the wrap-up.]";
         messages.push({ role: "user", content: wrap });
         continue;
       }

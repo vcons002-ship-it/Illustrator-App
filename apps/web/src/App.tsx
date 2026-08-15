@@ -93,6 +93,7 @@ import {
   stampTurnContent,
   isAppDirective,
   stripSeriesMarkers,
+  splitSeriesMessages,
   stripTurnStamp,
   agentBranchName,
   parseGitConflicts,
@@ -7597,6 +7598,20 @@ export function App() {
     }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
+    /**
+     * KEEP WHAT IT WROTE, TOO — the streamed text, not just the tool calls.
+     *
+     * The line below wipes the stream buffer, and the interrupted-run branch further down only
+     * preserved `turnToolRecordRef` (what the model DID). Anything it had merely written was thrown
+     * away, so a reader who pressed Stop on a long answer watched it vanish. Reported after a count
+     * to -100: "when I stopped the work the counting disappeared as if it never solidified itself in
+     * the chat." It never had — the split into messages happens when a turn SETTLES, and this turn
+     * never did.
+     *
+     * Only on the error path. A turn that settled normally has its text appended below, and flushing
+     * here as well would post everything twice.
+     */
+    const strandedStream = res.error ? stripToolCallJson(buddyStreamingRef.current).trim() : "";
     setBuddyStreaming("");
     setBuddyThinking("");
     setBuddyActivity("");
@@ -7609,6 +7624,12 @@ export function App() {
       // had made while leaving the bubbles on screen — the reader could see three searches the model
       // then denied having done. The note carries the results AND the fact that the run stopped
       // early, because replaying results without that reads as a finished job.
+      // Its own words first, in the same shape a settled turn would have given them: a run stopped
+      // part-way through a series has already earned those messages, and the marker splits them here
+      // exactly as it would have at settle.
+      for (const part of strandedStream ? splitSeriesMessages(strandedStream) : []) {
+        appendBuddy({ role: "assistant", text: part, turns: [] });
+      }
       const note = interruptedRunNote(turnToolRecordRef.current, res.error);
       appendBuddy({ role: "tool", text: note.text, turns: note.turns });
       turnToolRecordRef.current = [];
