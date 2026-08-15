@@ -3342,29 +3342,51 @@ describe("launching something that stays up, and driving it", () => {
  */
 describe("telling a series where it has got to", () => {
   it("says nothing extra before anything has been sent", () => {
-    expect(seriesProgressNote([])).toBe("[go on]");
+    expect(seriesProgressNote([])).toBe("[Sent.]");
   });
 
   it("counts what has gone, and reads it back while the messages are short", () => {
     const note = seriesProgressNote(["A", "B", "C"]);
-    expect(note).toContain("you have sent 3 messages");
+    expect(note).toContain("3 messages sent this turn");
     expect(note).toContain('"A", "B", "C"');
-    // The instruction that the count exists to serve.
-    expect(note).toMatch(/Send the NEXT one/);
-    expect(note).toMatch(/do not repeat/i);
+  });
+
+  /**
+   * IT ASKED FOR ANOTHER MESSAGE, EVERY TIME, AND THAT NEVER ENDS.
+   *
+   * This note was written for `keep_going`, where "go on … Send the NEXT one" was the whole job — the
+   * model had already decided to continue and this only told it where it was. As `send_message`'s
+   * RESULT it fires after every message, so a run that had just finished the alphabet was told by the
+   * app to send another one. It did: "That's the whole alphabet!", "All done.", "Bye!", "!", "1", and
+   * then reasoned aloud about whether "2" was being asked for — quoting this string back while doing
+   * it: "Maybe 'Send the NEXT one' refers to the alphabet? I finished Z."
+   *
+   * The turn ends when the model stops calling the tool. Anything here that reads as "carry on" is an
+   * instruction never to stop.
+   */
+  it("does not ask for another message — that is what would not let the turn end", () => {
+    for (const note of [seriesProgressNote([]), seriesProgressNote(["A"]), seriesProgressNote(["A", "B", "C"])]) {
+      expect(note, "the receipt tells the model to keep going").not.toMatch(/go on/i);
+      expect(note, "the receipt asks for the next message").not.toMatch(/next one|send (?:the )?next|another/i);
+    }
+  });
+
+  it("carries the don't-repeat constraint as a FACT rather than a further instruction", () => {
+    // Same information, no imperative: what already happened, not what to do about it.
+    expect(seriesProgressNote(["A", "B"])).toMatch(/already reached the reader/);
   });
 
   it("gets the singular right, because 1 messages reads as a bug", () => {
-    expect(seriesProgressNote(["A"])).toContain("you have sent 1 message so far");
+    expect(seriesProgressNote(["A"])).toContain("1 message sent this turn");
   });
 
   it("keeps the count but drops the echo once the messages are real prose", () => {
     // A series of paragraphs would put its entire history into every round — the exact cost the
-    // "[go on]" note was kept to three words to avoid. Those messages are also distinctive enough to
+    // bare receipt was kept short to avoid. Those messages are also distinctive enough to
     // find in the transcript, which is the argument the one-character case cannot make.
     const long = ["Once upon a time there was a very long opening paragraph indeed.", "And then another."];
     const note = seriesProgressNote(long);
-    expect(note).toContain("you have sent 2 messages");
+    expect(note).toContain("2 messages sent this turn");
     expect(note).not.toContain("Once upon a time");
   });
 
@@ -3373,7 +3395,7 @@ describe("telling a series where it has got to", () => {
     // lands in the context, so it is the total that has to be capped.
     const many = Array.from({ length: 60 }, (_, i) => `item ${i}`);
     expect(seriesProgressNote(many)).not.toContain('"item 0"');
-    expect(seriesProgressNote(many)).toContain("you have sent 60 messages");
+    expect(seriesProgressNote(many)).toContain("60 messages sent this turn");
   });
 
   it("still echoes a full alphabet, which is the case it was written for", () => {

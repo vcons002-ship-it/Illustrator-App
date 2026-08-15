@@ -646,8 +646,54 @@ describe("runBuddyTurn — a series driven by send_message", () => {
       llm, system: "sys", history: [{ role: "user", content: "two letters, one each" }], deps: baseDeps,
     });
     const fed = llm.calls.flat().map((m) => m.content).join("\n");
-    expect(fed, "the model is never told what it has sent").toMatch(/you have sent 1 message so far this turn/);
+    expect(fed, "the model is never told what it has sent").toMatch(/1 message sent this turn/);
     expect(fed, "the order is not handed back, so it must re-read its own turns").toMatch(/in order: "Z"/);
+  });
+
+  /**
+   * "IT GAVE THE FULL ALPHABET THEN GOT STUCK ON ITS TURN SENDING RANDOM MESSAGES."
+   *
+   * Off the reader's screen: X, Y, Z, then "That's the whole alphabet!", "All done.", "Bye!", "!",
+   * "1", and then reasoning about whether "2" was wanted. The cause was this app's own text. Every
+   * send_message came back with "[go on — … Send the NEXT one]", inherited from keep_going where
+   * saying "go on" was the entire job. As a RESULT it fires after every message, so a run that had
+   * just finished the alphabet was told by the app to send another one — and there is no count at
+   * which that stops being true.
+   *
+   * The model quoted it back while trying to obey: "Maybe 'Send the NEXT one' refers to the
+   * alphabet? I finished Z."
+   */
+  it("never hands back anything that reads as 'now send another'", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"send_message","text":"Y"}',
+      '{"tool":"send_message","text":"Z"}',
+      "That's the whole alphabet.",
+    ]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "finish the alphabet, one letter per message" }],
+      deps: baseDeps,
+    });
+    // Everything the app said to the model this turn, minus the system prompt and the reader's line.
+    const appSaid = llm.calls
+      .flat()
+      .filter((m) => m.role === "user" && m.content.trim().startsWith("["))
+      .map((m) => m.content)
+      .join("\n");
+    expect(appSaid, "no app text reached the model at all — the gate proves nothing").toBeTruthy();
+    expect(appSaid, "the app is still telling it to keep going").not.toMatch(/go on/i);
+    expect(appSaid, "the app is still asking for the next message").not.toMatch(/next one|send (?:the )?next/i);
+  });
+
+  it("still tells it what has been delivered, which is the half worth keeping", async () => {
+    const llm = scriptedLlm(['{"tool":"send_message","text":"Y"}', '{"tool":"send_message","text":"Z"}', "done"]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "two letters" }], deps: baseDeps,
+    });
+    const fed = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(fed).toMatch(/2 messages sent this turn/);
+    expect(fed).toMatch(/"Y", "Z"/);
   });
 
   it("does not ask 'was that the last one?' — the question that swallowed the final message", async () => {
