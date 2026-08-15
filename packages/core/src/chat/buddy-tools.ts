@@ -1419,8 +1419,21 @@ export function buildBuddySystemPrompt(raw: {
   const runLocation = opts.workingDir
     ? `\`${opts.workingDir}\` (the folder the reader chose for this session)`
     : "your VisualReader workspace — a dedicated, app-owned folder (the default working directory)";
+  // Named FIRST, before any advice about how to use the shell — a model that has already started
+  // writing `ls -la` is not going to be talked out of it by a note further down.
+  const shell = shellPlatform(opts.workingDir);
+  const shellNote =
+    shell === "windows"
+      ? "THIS IS A WINDOWS MACHINE and run_command runs in cmd.exe. Use Windows commands: `dir`, `type`, " +
+        "`copy`, `del`, `where`, `findstr`, backslash paths, `%USERPROFILE%` — NOT ls, cat, rm, grep, " +
+        "find, du, or `~`. Those do not exist here and the command fails outright. PowerShell is " +
+        "available via `powershell -Command \"…\"` when you need more than cmd offers. "
+      : shell === "posix"
+        ? "This is a Unix-like machine — ordinary POSIX shell commands apply. "
+        : "";
   const workingFolderNote = opts.canRunCommands
-    ? `WHERE YOUR CODE RUNS — read this before writing any code: run_command, write_file, AND the chat's ▶ Run ` +
+    ? shellNote +
+      `WHERE YOUR CODE RUNS — read this before writing any code: run_command, write_file, AND the chat's ▶ Run ` +
       `button ALL operate in ${runLocation}. That folder is the CURRENT DIRECTORY: a relative path like \`data.csv\` ` +
       "or `out/plot.png` resolves THERE, and write_file saves THERE — so a script you write and a data file you " +
       "write_file land in the SAME place and find each other by plain relative names. Do NOT assume the code runs " +
@@ -1429,7 +1442,7 @@ export function buildBuddySystemPrompt(raw: {
       "and no display, so `input()`, interactive prompts, and `plt.show()`/GUI windows will hang or do nothing: " +
       "PRINT every result you want to see, and SAVE any chart/image to a file in the workspace. Each command starts " +
       "in this folder FRESH — a `cd` into a subfolder does NOT carry to the next command, so chain with `&&` or " +
-      "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first. " +
+      "re-`cd` each time. " +
       "NEVER say a file was saved or a command/script RAN until write_file / run_command actually " +
       "RETURNS a result — do not narrate success in advance or claim an output you didn't receive.\n"
     : raw.canRunCommands
@@ -3720,6 +3733,31 @@ export const SERIES_SPLIT = "[[next]]";
  * The marker must be ALONE on its line. A mention of it inside a sentence (or in code the model is
  * quoting) is text, not an instruction to split. PURE.
  */
+/**
+ * WHICH SHELL THE COMMANDS WILL ACTUALLY RUN IN, read off the path they run in.
+ *
+ * Nothing told the model what machine it was on. The only hint anywhere in the prompt was a
+ * parenthetical — "run `pwd` (or `cd` on Windows)" — so it defaulted to Linux and every first command
+ * on a Windows box died: `ls -lh ~/.cache/...` and `find / -name "*.gguf"` came back "The system
+ * cannot find the path specified", and `ls -la && du -sh *` came back "'ls' is not recognized as an
+ * internal or external command". It then re-planned, which from the outside reads as the model having
+ * forgotten the conversation — it had not; it had lost a round to a shell it did not know it was in.
+ *
+ * The app already knew. `C:\Users\…` is a Windows path and `/home/…` is not, and the working folder
+ * is passed into the prompt already. A drive letter is one letter followed by a colon and a
+ * separator, which is exactly what distinguishes it from a URL scheme or a relative path.
+ *
+ * Deliberately returns undefined rather than guessing when there is no path to read: telling a Linux
+ * machine it is Windows would break the case that currently works. PURE.
+ */
+export function shellPlatform(workingDir: string | undefined): "windows" | "posix" | undefined {
+  const d = workingDir?.trim();
+  if (!d) return undefined;
+  if (/^[A-Za-z]:[\\/]/.test(d) || d.startsWith("\\\\")) return "windows";
+  if (d.startsWith("/") || d.startsWith("~")) return "posix";
+  return undefined;
+}
+
 export function splitSeriesMessages(text: string): string[] {
   // Case-insensitively, matching the per-line test below — a model writes [[NEXT]] as often as
   // [[next]], and a guard stricter than the check it guards would silently skip half of them.
