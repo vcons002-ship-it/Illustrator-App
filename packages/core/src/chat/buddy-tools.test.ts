@@ -2367,16 +2367,23 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
      * Nothing caught it because the prompt and the schemas are asserted in different files and
      * neither asked whether they agree. This asks.
      */
-    it("advertises the series tool, which is the only way a native-tool-calling model can send one", () => {
-      const names = ollamaToolSchemas({}).map((s) => s.function.name);
-      expect(names, "a model on native tool-calling cannot send a series at all").toContain("send_message");
-    });
-
-    it("never gates it behind a toolset, which would put it back out of reach", () => {
-      // The failure mode is silent — the model just stops after one message — so this is checked in
-      // the most withheld configuration there is rather than the default one.
-      const names = ollamaToolSchemas({ loadedToolsets: [] }).map((s) => s.function.name);
-      expect(names).toContain("send_message");
+    /**
+     * THE SERIES TOOL IS RETIRED, AND ITS ABSENCE HERE IS THE POINT.
+     *
+     * It was added because keep_going was missing from this list — the prompt named a tool a
+     * native-tool-calling model could not emit. The fix was right and the tool was one mechanism too
+     * many: with the marker also available, the model used both, and a bubble on the reader's screen
+     * read "[[next]] 49 [[next]] 50" while separate numbered bubbles piled up above it from the tool.
+     *
+     * A series is one reply with markers now. Nothing per-message is offered, here or in the prompt,
+     * because a model that can see a second way will sometimes take it — and sometimes take both.
+     */
+    it("offers no per-message tool, so the marker is the only route a native model can find", () => {
+      for (const opts of [{}, { loadedToolsets: [] }, { canSearchFiles: true, canRunCommands: true, canWolfram: true }]) {
+        const names = ollamaToolSchemas(opts).map((s) => s.function.name);
+        expect(names, "the retired series tool is still advertised").not.toContain("send_message");
+        expect(names, "keep_going is back").not.toContain("keep_going");
+      }
     });
 
     it("every tool the prompt tells it to call for a series is one it can actually emit", () => {

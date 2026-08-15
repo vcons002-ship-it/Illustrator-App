@@ -1258,12 +1258,18 @@ export async function runBuddyTurn(opts: {
       if (call.tool === "send_message") {
         opts.onEvent?.({ kind: "tool", round, call });
         const text = call.text.trim();
-        // Nothing else publishes this. Prose written BEFORE a tool call becomes its own bubble
-        // through the host's streaming flush, but this message is an argument, not prose — the same
-        // reason a text checklist step needed its own flush, and the same event serves both.
-        opts.onEvent?.({ kind: "stepDone", text });
-        transcript.push({ role: "assistant", content: text });
-        sentThisTurn.push(text);
+        /**
+         * SPLIT THE ARGUMENT TOO. A model that reaches for this tool AND writes markers inside it
+         * published a bubble reading, literally, "[[next]] 49 [[next]] 50" — the marker on screen as
+         * text, which is the one thing it must never be. Every path that puts text in front of the
+         * reader resolves markers now, so no combination of the two can leak one.
+         */
+        const items = splitSeriesMessages(text);
+        for (const item of items) {
+          opts.onEvent?.({ kind: "stepDone", text: item });
+          transcript.push({ role: "assistant", content: item });
+          sentThisTurn.push(item);
+        }
         const result: BuddyToolResultPayload = { sent: true };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });

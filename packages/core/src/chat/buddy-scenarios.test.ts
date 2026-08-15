@@ -327,8 +327,8 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/ENDS the turn: give each its OWN step/);
   });
 
-  it("says why send_message cannot serve a run of renders", () => {
-    expect(prompt).toMatch(/send_message CANNOT do this/);
+  it("says why the marker cannot serve a run of renders", () => {
+    expect(prompt).toMatch(/\[\[next\]\] CANNOT do this/);
     expect(prompt, "never says WHY, so it reads as an arbitrary rule").toMatch(/a render ENDS the turn/);
   });
 
@@ -357,17 +357,29 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
    * there is no loop-that-isn't-running to warn about, and "not a real tool" has stopped being true.
    * What replaces them is not more prose — it is the two things the old design got wrong.
    */
-  it("gives the series tool a real argument, so the message cannot be separated from the call", () => {
-    // keep_going carried nothing: the message was prose beside it, and a reply that wrote the prose
-    // and forgot the token sent the message and ended the run. There is no second half to forget.
-    expect(prompt).toMatch(/\{"tool":"send_message","text":"…"\}/);
+  /**
+   * EXACTLY ONE WAY TO SEND A SERIES — asserted, because every version of this bug has been two.
+   *
+   * keep_going and send_message coexisted, and the model combined them: "I need to use send_message
+   * and include {{keep_going}} after each message's text." Then send_message and the marker coexisted,
+   * and it did it again — one bubble on the reader's screen read, literally, "[[next]] 49 [[next]] 50",
+   * with separate 1..5 bubbles above it from the tool. The reader's words: "very inconsistent, does
+   * something different every ask."
+   *
+   * It is not that either mechanism was wrong. It is that a model given two ways to do one thing will
+   * sometimes use both, and no wording fixes that — only removing one does.
+   */
+  it("names exactly one mechanism for a series, and it is the marker", () => {
+    expect(prompt, "the marker is not offered").toMatch(/\[\[next\]\]/);
+    expect(prompt, "says nothing about it being the only way, so a second is inferable").toMatch(
+      /the ONLY way to send a series; there is no per-message tool/,
+    );
   });
 
-  it("says the turn continues while it calls, and ends when it stops", () => {
-    // The polarity, stated once. Every published harness works this way and none of them has a tool
-    // for asking permission to carry on.
-    expect(prompt).toMatch(/STAY in the turn/);
-    expect(prompt).toMatch(/Turn ends when you stop/);
+  it("does not mention the retired per-message tool ANYWHERE the model can read", () => {
+    // Not in the guide, not in the catalog, not in a leftover parenthetical. A model that can see it
+    // will eventually reach for it, and then use both.
+    expect(prompt, "send_message is still discoverable in the prompt").not.toMatch(/send_message/);
   });
 
   /**
@@ -385,9 +397,7 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toMatch(/each becomes its own message/);
   });
 
-  it("still says WHEN the tool is the right one instead, so the two do not compete", () => {
-    expect(prompt).toMatch(/Use send_message only when real WORK separates them/);
-  });
+
 
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
     expect(prompt).toContain("use calculate for pure math");
