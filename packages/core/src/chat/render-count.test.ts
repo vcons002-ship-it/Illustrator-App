@@ -256,3 +256,43 @@ describe("the checklist tick reaches the turn", () => {
     expect(app, "the app never renders the step's message").toMatch(/e\.kind === "stepDone"/);
   });
 });
+
+
+/**
+ * THE GRAMMAR THE WORKER HANDS OVER — the half that was actually broken.
+ *
+ * The capability (resolve per round) is tested in buddy-session. This asserts the worker SUPPLIES a
+ * resolver reading the live workflow rather than a value snapshotted before the turn, which is the
+ * form the bug took: a checklist runs every step in one turn now, so a fixed grammar stayed pinned to
+ * step one's tool while the tick moved on.
+ */
+describe("the reply grammar is read from the live step", () => {
+  // Built rather than written as a literal: the body spans lines, and a newline inside a regex
+  // literal is a syntax error rather than a match on one.
+  const RESOLVER = new RegExp("const stepFormat = \\(\\)[\\s\\S]*?\\n {4}\\};");
+  const worker = readFileSync(
+    join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"),
+    "utf8",
+  );
+
+  it("is handed over as a resolver, not a fixed object", () => {
+    expect(worker, "the grammar is snapshotted before the turn again").toMatch(/toolFormat: stepFormat,/);
+    expect(worker).toMatch(/const stepFormat = \(\): Record<string, unknown> \| undefined =>/);
+  });
+
+  it("reads the workflow the tick advances, not the turn-start plan", () => {
+    const fn = RESOLVER.exec(worker)?.[0] ?? "";
+    expect(fn, "the resolver moved").toBeTruthy();
+    expect(fn, "it still reads only the pre-turn plan").toMatch(/wf \? activeStep\(wf\) : undefined/);
+  });
+
+  it("never locks onto a tool this session cannot call", () => {
+    // buildToolCallFormat reads the FULL schema list, ungated — so a step needing a deferred tool
+    // produced a grammar for something not loaded, and load_toolset (the one recovery) was itself
+    // forbidden by that grammar. A step like that has to be left unconstrained.
+    const fn = RESOLVER.exec(worker)?.[0] ?? "";
+    expect(fn, "a deferred tool can still be forced, with no way to load it").toMatch(
+      /isToolAvailable\(needs, loadedToolsets\)/,
+    );
+  });
+});
