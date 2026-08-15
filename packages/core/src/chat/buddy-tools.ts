@@ -1596,21 +1596,31 @@ export function buildBuddySystemPrompt(raw: {
   const planBlock = !hasPlan
     ? ""
     : opts.appManagedSteps
-      ? // EXECUTION mode: the APP runs the checklist and ticks steps from observed evidence. Show ONLY
-        // the current step so the model does exactly one thing; no complete_step (the app advances).
+      ? /**
+         * EXECUTION mode: the APP runs the checklist and ticks steps from observed evidence.
+         *
+         * This block used to name the position — "step 1 of 3" and a ▸ on the step it believed was
+         * current. It is built ONCE per turn, and a checklist now runs every step inside one turn, so
+         * from the second step onward it sat there asserting a position the executor had already
+         * moved past. The directive handed over each round is always right; this was the other voice.
+         *
+         * So it reports the checklist and says nothing about where the model is. A list that is a
+         * step behind merely includes something already finished — it cannot contradict "step 4 is
+         * now current" the way a claim to be on step 1 does. Refreshing it per round would work too
+         * and costs far more: it lives inside `cachePrefix`, so rebuilding it every round would
+         * invalidate the prompt cache every round instead of every turn.
+         */
         ((): string => {
           const plan = opts.activePlan!;
-          const done = plan.steps.filter((s) => s.status === "done").length;
-          const current = plan.steps.find((s) => s.status !== "done");
-          if (!current) return "";
+          if (!plan.steps.some((s) => s.status !== "done")) return "";
           return (
-            "YOUR CURRENT STEP (the app is running this checklist and will tick steps off itself from " +
-            "what actually happens — you do NOT track progress or call complete_step):\n" +
-            (plan.goal ? `Goal: ${plan.goal} — step ${done + 1} of ${plan.steps.length}.\n` : `Step ${done + 1} of ${plan.steps.length}.\n`) +
-            `▸ ${current.text}\n` +
-            "Do JUST this one step now — call the tool it needs (e.g. generate_image / write_file / " +
-            "search_web) or give the answer it asks for. Don't do later steps, don't announce the whole " +
-            "plan; the app gives you the next step automatically once this one's effect is observed.\n\n"
+            "THE CHECKLIST YOU ARE WORKING (the app runs it and ticks steps off from what actually " +
+            "happens — you do NOT track progress or call complete_step):\n" +
+            (plan.goal ? `Goal: ${plan.goal}\n` : "") +
+            `${renderPlanLines(plan, { markCurrent: false })}\n` +
+            "You are given ONE step at a time, in its own message — do that one, and not the ones " +
+            "after it. This list is context, not your position in it: the step you were just given is " +
+            "the current one.\n\n"
           );
         })()
       : "CURRENT CHECKLIST (your working plan for this conversation — RESUME from the first ▸ step, don't " +
@@ -1632,7 +1642,7 @@ export function buildBuddySystemPrompt(raw: {
       "send each one with send_message and the turn stays yours. A checklist there is overkill — but if " +
       "the reader ASKS for a plan, MAKE ONE: their request wins.\n"
     : opts.appManagedSteps
-      ? // App-managed mid-plan: the YOUR CURRENT STEP block already says do-one-step / no complete_step.
+      ? // App-managed mid-plan: the checklist block above already says do-one-step / no complete_step.
         ""
       : // Legacy mid-plan: terse checklist discipline (no verbose "narrate every step" mandate — that
         // made weak models write prose instead of calling the tool).
@@ -5035,12 +5045,18 @@ export function planQueueResumeFeedback(toolFeedback: string, plan: BuddyPlan): 
 
 /** Render a working checklist as ✓ done / ▸ current (first unfinished) / · pending lines for the model
  * and the prompt. Shared by formatBuddyToolResult and the prompt's CURRENT CHECKLIST block. */
-export function renderPlanLines(plan: BuddyPlan): string {
+export function renderPlanLines(plan: BuddyPlan, opts: { markCurrent?: boolean } = {}): string {
+  // `markCurrent: false` drops the ▸ … (current) marker, leaving a list that reports what is done and
+  // what is left WITHOUT claiming where the model is. App-managed runs need that: the app hands over
+  // the current step in its own message every round, and a second answer to the same question — built
+  // once per turn and then left behind as the tick advances — is a contradiction rather than a
+  // reminder. Defaults to true, so the model-driven path renders exactly as it always has.
+  const markCurrent = opts.markCurrent ?? true;
   let currentMarked = false;
   return plan.steps
     .map((s) => {
       if (s.status === "done") return `✓ ${s.text}${s.note ? ` — ${s.note}` : ""}`;
-      if (!currentMarked) {
+      if (markCurrent && !currentMarked) {
         currentMarked = true;
         return `▸ ${s.text} (current)`;
       }

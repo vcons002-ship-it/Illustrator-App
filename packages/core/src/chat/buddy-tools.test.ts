@@ -18,6 +18,7 @@ import {
   nativeToolCallsToText,
   normalizeBuddyPersona,
   ollamaToolSchemas,
+  renderPlanLines,
   parseBuddyToolCall,
   producedArtifactFrom,
   parseBuddyToolCalls,
@@ -702,21 +703,77 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toMatch(/just the distinctive NAME words plus the file TYPE/);
   });
 
-  it("app-managed steps: shows only the current step and withdraws complete_step", () => {
-    const plan = { goal: "make art", steps: [{ text: "Generate image A", status: "done" as const }, { text: "Generate image B", status: "pending" as const }] };
+  /**
+   * THE BLOCK USED TO NAME THE POSITION, AND IT IS BUILT ONCE PER TURN.
+   *
+   * It said "step 1 of 3" and put a ▸ on the step it believed was current. A checklist now runs every
+   * step inside ONE turn, so from the second step onward it sat there asserting a position the
+   * executor had already moved past, while the directive handed over each round said something else.
+   * The model has two answers to "where am I" and the stale one is in the system prompt.
+   *
+   * So it reports the checklist and says nothing about position. A list that is a step behind merely
+   * includes something already finished; it cannot contradict "step 4 is now current" the way a claim
+   * to be on step 1 does. Refreshing it per round would also work and costs far more — it lives
+   * inside `cachePrefix`, so that would invalidate the prompt cache every round instead of every turn.
+   */
+  it("app-managed steps: reports the checklist without claiming a position", () => {
+    const plan = {
+      goal: "make art",
+      steps: [
+        { text: "Generate image A", status: "done" as const },
+        { text: "Generate image B", status: "pending" as const },
+        { text: "Generate image C", status: "pending" as const },
+      ],
+    };
     const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan, appManagedSteps: true });
-    expect(prompt).toContain("YOUR CURRENT STEP");
-    expect(prompt).toContain("▸ Generate image B"); // the first not-done step
-    expect(prompt).not.toContain("Generate image A"); // earlier done step isn't shown
-    expect(prompt).not.toContain('"tool":"complete_step"'); // the meta-tool is withdrawn
-    expect(prompt).toContain('"needs"'); // set_plan is described with the contract annotation
+    const block = /THE CHECKLIST YOU ARE WORKING[\s\S]*?\n\n/.exec(prompt)?.[0] ?? "";
+    expect(block, "the checklist block is gone").toBeTruthy();
+    // The two claims that went stale, and the executor's directive is the only voice that makes them.
+    expect(block, "still asserts a step number that the tick moves past").not.toMatch(/step \d+ of \d+/i);
+    expect(block, "still points ▸ at a step it believes is current").not.toContain("▸");
+    // What it reports instead: finished work ticked, remaining work listed.
+    expect(block).toContain("✓ Generate image A");
+    expect(block).toContain("· Generate image B");
+    expect(block).toContain("· Generate image C");
+    // And it says outright which voice owns the position, so a step-behind list is read as context.
+    expect(block).toMatch(/This list is context, not your position/);
   });
 
+  it("app-managed steps: still withdraws the meta-tool and keeps the contract annotation", () => {
+    // Unchanged by the rewrite above — the app ticks, so the model must not.
+    const plan = { goal: "make art", steps: [{ text: "Generate image B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan, appManagedSteps: true });
+    expect(prompt).not.toContain('"tool":"complete_step"');
+    expect(prompt).toContain('"needs"');
+    expect(prompt).toMatch(/you do NOT track progress or call complete_step/);
+  });
+
+  it("app-managed steps: says nothing once every step is finished", () => {
+    const plan = { goal: "g", steps: [{ text: "A", status: "done" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan, appManagedSteps: true });
+    expect(prompt).not.toContain("THE CHECKLIST YOU ARE WORKING");
+  });
+
+  /**
+   * THE LEGACY PATH IS UNTOUCHED — asserted rather than assumed.
+   *
+   * Everything above is behind `appManagedSteps`. With the setting off the model drives its own
+   * checklist off `complete_step`, and it needs the ▸ marker precisely because nothing else tells it
+   * where it is: there is no executor handing over a step each round on that path.
+   */
   it("legacy mode still drives off the full checklist with complete_step", () => {
     const plan = { goal: "g", steps: [{ text: "A", status: "done" as const }, { text: "B", status: "pending" as const }] };
     const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
     expect(prompt).toContain("CURRENT CHECKLIST");
     expect(prompt).toContain('"tool":"complete_step"');
+  });
+
+  it("legacy mode keeps the ▸ marker, which is its ONLY source of position", () => {
+    const plan = { goal: "g", steps: [{ text: "A", status: "done" as const }, { text: "B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(prompt, "the model-driven path lost the only thing telling it where it is").toContain("▸ B (current)");
+    expect(prompt).toContain("✓ A");
+    expect(prompt).not.toContain("THE CHECKLIST YOU ARE WORKING");
   });
 
   it("lists the library with ids", () => {
@@ -3375,5 +3432,51 @@ describe("a checklist step is not a search query", () => {
     const steps = call?.tool === "schedule_task" ? (call.steps ?? []) : [];
     expect(steps.length, "the scheduled task parsed without its steps").toBeGreaterThan(0);
     expect(steps[0]?.do, "a scheduled task's steps are still cut at the query length").toBe(realStep);
+  });
+});
+
+
+/**
+ * ONE RENDERER, TWO PATHS — and the default must not move.
+ *
+ * The app-managed block needs a list that reports progress WITHOUT claiming a position, because the
+ * executor hands the current step over in its own message every round and a second answer built once
+ * per turn goes stale. The model-driven path has no such executor: the ▸ marker is the only thing
+ * telling it where it is, so removing it there would break the legacy setting outright.
+ */
+describe("renderPlanLines", () => {
+  const plan = {
+    goal: "g",
+    steps: [
+      { text: "A", status: "done" as const, note: "went fine" },
+      { text: "B", status: "pending" as const },
+      { text: "C", status: "pending" as const },
+    ],
+  };
+
+  it("marks the current step by DEFAULT, so no existing caller changes", () => {
+    // Byte-exact: three callers rely on this shape (the legacy prompt block and two tool feedbacks),
+    // and a silent change to any of them is a change to what every model on that path reads.
+    expect(renderPlanLines(plan)).toBe("✓ A — went fine\n▸ B (current)\n· C");
+  });
+
+  it("omits the marker when asked, leaving a list that cannot contradict a directive", () => {
+    expect(renderPlanLines(plan, { markCurrent: false })).toBe("✓ A — went fine\n· B\n· C");
+  });
+
+  it("an explicit true is the same as the default", () => {
+    expect(renderPlanLines(plan, { markCurrent: true })).toBe(renderPlanLines(plan));
+  });
+
+  it("still ticks finished work in both modes — that is the part both paths need", () => {
+    for (const opts of [{}, { markCurrent: false }]) {
+      expect(renderPlanLines(plan, opts)).toContain("✓ A");
+    }
+  });
+
+  it("a finished checklist renders as all ticks, with nothing marked current either way", () => {
+    const done = { steps: [{ text: "A", status: "done" as const }, { text: "B", status: "done" as const }] };
+    expect(renderPlanLines(done)).toBe("✓ A\n✓ B");
+    expect(renderPlanLines(done, { markCurrent: false })).toBe("✓ A\n✓ B");
   });
 });
