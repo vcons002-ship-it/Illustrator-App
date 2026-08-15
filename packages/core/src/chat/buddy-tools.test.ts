@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ALWAYS_GATED_TOOLS,
@@ -19,6 +21,9 @@ import {
   normalizeBuddyPersona,
   ollamaToolSchemas,
   renderPlanLines,
+  splitSeriesMessages,
+  stripSeriesMarkers,
+  SERIES_SPLIT,
   parseBuddyToolCall,
   producedArtifactFrom,
   parseBuddyToolCalls,
@@ -3517,5 +3522,106 @@ describe("renderPlanLines", () => {
     const done = { steps: [{ text: "A", status: "done" as const }, { text: "B", status: "done" as const }] };
     expect(renderPlanLines(done)).toBe("✓ A\n✓ B");
     expect(renderPlanLines(done, { markCurrent: false })).toBe("✓ A\n✓ B");
+  });
+});
+
+
+/**
+ * ONE RESPONSE, SEVERAL MESSAGES — the series with no moving parts.
+ *
+ * A recitation had been modelled as a run of tool calls: twenty-six rounds, each a fresh chance to
+ * lose the thread, and every failure this migration chased lived in one of them. The call written
+ * into the reasoning and discarded. The message written as prose, which ends a turn. The result that
+ * said "Send the NEXT one" and left a finished run unable to stop, then said "[Sent.]" and left one
+ * stopping after a single letter.
+ *
+ * The model knows the alphabet. It can write it once, and the renderer can do the splitting.
+ */
+describe("splitting one reply into several messages", () => {
+  it("splits on a line that is only the marker", () => {
+    expect(splitSeriesMessages(`A\n${SERIES_SPLIT}\nB\n${SERIES_SPLIT}\nC`)).toEqual(["A", "B", "C"]);
+  });
+
+  it("leaves an ordinary reply completely alone", () => {
+    // The safety property. Every reply in the app goes through this, so a false split turns a normal
+    // answer into nonsense — which is why the marker is not "---", "***" or a blank line.
+    const prose = "Here's the answer.\n\nIt has two paragraphs — and a dash, and ***bold***.\n\n---\n\nDone.";
+    expect(splitSeriesMessages(prose)).toEqual([prose]);
+  });
+
+  it("does not split on the marker INSIDE a line", () => {
+    // Explaining the marker, or quoting code that contains it, is text and not an instruction.
+    const said = `Put ${SERIES_SPLIT} between them and each becomes a message.`;
+    expect(splitSeriesMessages(said)).toEqual([said]);
+  });
+
+  it("tolerates the untidy shapes rather than publishing blanks", () => {
+    // A trailing marker, a leading one, two in a row: a model being sloppy must not become empty
+    // bubbles the reader scrolls past.
+    expect(splitSeriesMessages(`A\n${SERIES_SPLIT}\n${SERIES_SPLIT}\nB`)).toEqual(["A", "B"]);
+    expect(splitSeriesMessages(`A\n${SERIES_SPLIT}\n`)).toEqual(["A"]);
+    expect(splitSeriesMessages(`${SERIES_SPLIT}\nA`)).toEqual(["A"]);
+  });
+
+  it("never returns nothing, however the marker was abused", () => {
+    // A reply that is ALL markers still has to produce an answer — an empty array here would settle
+    // the turn with no message at all.
+    expect(splitSeriesMessages(SERIES_SPLIT)).toEqual([SERIES_SPLIT]);
+  });
+
+  it("keeps whitespace and indentation inside a part, trimming only its edges", () => {
+    expect(splitSeriesMessages(`  line one\n    indented\n${SERIES_SPLIT}\n  two  `)).toEqual([
+      "line one\n    indented",
+      "two",
+    ]);
+  });
+
+  it("is case-insensitive, because a model will capitalise it", () => {
+    expect(splitSeriesMessages("A\n[[NEXT]]\nB")).toEqual(["A", "B"]);
+  });
+
+  it("does the whole alphabet, which is the case it exists for", () => {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    expect(splitSeriesMessages(letters.join(`\n${SERIES_SPLIT}\n`))).toEqual(letters);
+  });
+});
+
+
+describe("the marker never reaches the reader's screen", () => {
+  it("is stripped from the live stream, where the split has not happened yet", () => {
+    // The split runs when the turn SETTLES. Without this the reader watches the marker pile up and
+    // then get replaced by bubbles, which reads as the app glitching.
+    expect(stripSeriesMarkers(`A\n${SERIES_SPLIT}\nB`)).toBe("A\nB");
+    expect(stripSeriesMarkers("A\n[[NEXT]]\nB")).toBe("A\nB");
+  });
+
+  it("leaves every other character exactly as the reader will keep it", () => {
+    const prose = "Here's the answer.\n\n  indented\n---\ndone.";
+    expect(stripSeriesMarkers(prose)).toBe(prose);
+  });
+
+  it("does not touch a mention inside a line, matching the splitter", () => {
+    const said = `Put ${SERIES_SPLIT} between them.`;
+    expect(stripSeriesMarkers(said)).toBe(said);
+  });
+});
+
+/**
+ * THE WIRING. A correct function nothing reaches is this migration's signature failure.
+ */
+describe("the series split is actually reached", () => {
+  it("runs when the turn settles", () => {
+    const session = readFileSync(join(__dirname, "buddy-session.ts"), "utf8");
+    expect(session, "the answer is never split into messages").toMatch(/const parts = splitSeriesMessages\(clean\)/);
+    expect(session, "the parts are never published as their own messages").toMatch(
+      /opts\.onEvent\?\.\(\{ kind: "stepDone", text: part \}\)/,
+    );
+  });
+
+  it("is hidden from the stream the reader is watching", () => {
+    const app = readFileSync(join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "App.tsx"), "utf8");
+    expect(app, "the marker streams to the screen before the split happens").toMatch(
+      /setBuddyStreaming\(stripSeriesMarkers\(/,
+    );
   });
 });

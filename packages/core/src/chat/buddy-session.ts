@@ -27,6 +27,7 @@ import {
   MAX_PLAN_STEPS,
   toolCallsInThinking,
   meantToSendMessage,
+  splitSeriesMessages,
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
@@ -1044,6 +1045,29 @@ export async function runBuddyTurn(opts: {
       if (lastTruncated && worthContinuing) {
         clean += '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up exactly where I left off.)_';
       }
+      /**
+       * ONE REPLY, SEVERAL MESSAGES — the marker path, and the cheapest way to run a series.
+       *
+       * A recitation does not need twenty-six rounds of tool calls to become twenty-six bubbles. The
+       * model writes it once with `[[next]]` between the items and the split happens here, at the
+       * point where an answer becomes chat. Every failure this migration chased lived in one of those
+       * rounds, and this has none of them: no position to track, no result to misread, nothing to
+       * forget to call.
+       *
+       * All but the LAST part are published through the same event a send_message uses, so the host
+       * needs no new plumbing; the last stays the turn's answer and takes the ordinary path, which is
+       * what keeps the thinking, the truncation notice and the empty-answer net attached to it.
+       *
+       * Self-gating: this only fires because the model emitted the marker. Nothing here reads the
+       * reader's wording to decide whether a series was wanted — that guess is what once turned
+       * "count from 15 to 25" into twenty-five messages.
+       */
+      const parts = splitSeriesMessages(clean);
+      for (const part of parts.slice(0, -1)) {
+        opts.onEvent?.({ kind: "stepDone", text: part });
+        transcript.push({ role: "assistant", content: part });
+      }
+      clean = parts[parts.length - 1]!;
       transcript.push({ role: "assistant", content: clean });
       // Safety net: never hand the reader stray tool-call JSON or an empty string.
       return withThinking({

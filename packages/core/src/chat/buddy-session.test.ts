@@ -645,6 +645,66 @@ describe("a tool call written inside the reasoning", () => {
   });
 });
 
+/**
+ * THE ALPHABET IN ONE REPLY — no tools, no rounds, nothing to forget.
+ *
+ * Reported over and over: the model reads the prompt correctly, decides correctly ("I need to call
+ * send_message 26 times for A through Z"), and then writes "A" as prose, which ends the turn. Or it
+ * writes the call into its reasoning where nothing runs it. Or the result tells it to keep going and
+ * it cannot stop. Every one of those failures lives in the ROUNDS — and a recitation does not need
+ * any. The model knows the alphabet; the renderer can do the splitting.
+ */
+describe("runBuddyTurn — a series written in one reply", () => {
+  it("turns one reply into a message each, with no tool call anywhere", async () => {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    const llm = scriptedLlm([letters.join("\n[[next]]\n")]);
+    const sent: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write the entire alphabet, one message per letter" }],
+      deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    // ONE model call for the whole alphabet, where the tool path took twenty-six.
+    expect(llm.calls, "it still costs a round per letter").toHaveLength(1);
+    expect(outcome.toolResults, "a tool was involved after all").toHaveLength(0);
+    // A–Y arrive as their own messages; Z is the turn's answer and takes the ordinary path, which is
+    // what keeps the thinking and the empty-answer net attached to it.
+    expect(sent).toEqual(letters.slice(0, 25));
+    expect(outcome.text.trim()).toBe("Z");
+    expect(outcome.transcript.map((t) => t.content)).toEqual(letters);
+  });
+
+  it("leaves an ordinary answer as one message", async () => {
+    // The safety property, end to end: every reply passes through the splitter.
+    const prose = "Paris.\n\nIt has been the capital since 987 — give or take a few interruptions.";
+    const sent: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm: scriptedLlm([prose]),
+      system: "sys",
+      history: [{ role: "user", content: "capital of France?" }],
+      deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    expect(sent, "an ordinary answer was chopped up").toEqual([]);
+    expect(outcome.text.trim()).toBe(prose);
+  });
+
+  it("works alongside real work in the same turn", async () => {
+    // The marker splits the ANSWER; a turn that also ran tools still returns their results.
+    const llm = scriptedLlm(['{"tool":"calculate","expression":"1+1"}', "two\n[[next]]\nthat's it"]);
+    const sent: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "what is 1+1" }], deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["calculate"]);
+    expect(sent).toEqual(["two"]);
+    expect(outcome.text.trim()).toBe("that's it");
+  });
+});
+
 describe("runBuddyTurn — a series driven by send_message", () => {
   /**
    * THE REPLACEMENT FOR keep_going, AND THE FOUR THINGS IT FIXES AT ONCE.
