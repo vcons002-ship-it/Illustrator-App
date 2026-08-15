@@ -8,6 +8,7 @@ import {
   toolsetsForNeeds,
   toolsetIndexBlock,
 } from "./toolsets.js";
+import { estimateTokens } from "./token-estimate.js";
 import { BUDDY_TOOL_NAMES, buildBuddySystemPrompt, formatBuddyToolResult, ollamaToolSchemas, parseBuddyToolCall, toolsetDoc } from "./buddy-tools.js";
 import { skillsIndexBlock } from "./skills.js";
 import { withBuiltinSkills } from "./builtin-skills.js";
@@ -31,7 +32,19 @@ const FULL = {
 };
 const build = (extra: Record<string, unknown> = {}) =>
   buildBuddySystemPrompt({ ...FULL, ...extra } as unknown as Parameters<typeof buildBuddySystemPrompt>[0]);
-const tok = (s: string) => Math.round(s.length / 4);
+/**
+ * WAS `Math.round(s.length / 4)`, which reported 4.00 chars/token for every format ever written.
+ *
+ * That is roughly right for English prose and wrong for everything else, and the error runs in BOTH
+ * directions at once: measured against o200k, this prompt's prose is ~4.76 chars/token (so chars/4
+ * OVER-counts it ~19%) while mermaid is ~3.26 and XML ~3.42 (UNDER-counted 15-19%). A structured
+ * rewrite of the routing rules could therefore have shown a large saving against this very assertion
+ * while costing more real tokens on every provider — a 36-point swing invented entirely by the ruler.
+ *
+ * `estimateTokens` counts BPE pre-tokens instead. On this prompt it lands at 4.31 chars/token against
+ * a measured 4.28 — within 1% — and it separates the formats, which is the property that was missing.
+ */
+const tok = estimateTokens;
 
 describe("the registry", () => {
   it("gives every tool at most one home", () => {
@@ -124,7 +137,16 @@ describe("the index", () => {
  * skill" look free when each move still costs a permanent index line. Measured with the shipped
  * built-ins and no reader skills — a fresh install's floor, not its ceiling.
  */
-const ALWAYS_ON_TOKEN_BUDGET = 5_800;
+/**
+ * RE-BASED when the ruler was replaced, and deliberately not re-argued.
+ *
+ * The old ceiling was 5,800 in `chars/4` units, where the text measured here came to 5,777 — 23
+ * spare. Under `estimateTokens` the same text is 5,364, so the number moves with it: 5,390 preserves
+ * that same ~26 tokens of headroom rather than silently handing the prompt 400 tokens of new room it
+ * was never granted. Everything the doc comment above says about WHY there is a ceiling is unchanged
+ * — this is a change of units, not of policy.
+ */
+const ALWAYS_ON_TOKEN_BUDGET = 5_390;
 
 describe("the prompt shrinks", () => {
   it("keeps the always-on prompt inside its token budget", () => {
