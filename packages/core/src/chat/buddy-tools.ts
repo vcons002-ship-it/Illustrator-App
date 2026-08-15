@@ -3565,6 +3565,32 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];
 }
 
+/**
+ * TOOL CALLS THE MODEL WROTE INSIDE ITS REASONING, WHERE NOTHING RUNS THEM.
+ *
+ * A reasoning model's first pass is often all thinking, and a thinking model that has decided what to
+ * do routinely writes the call out while deciding. The provider strips reasoning before returning the
+ * reply, so that call is discarded — correctly, because reasoning is where a model considers running
+ * `run_command rm -rf` and is not a mandate to run it. What was missing is that it was discarded
+ * SILENTLY: the app saw an empty reply, and answered a model mid-way through acting with "reply in
+ * plain text — no tool calls", which forbids the one move that would have recovered it.
+ *
+ * The model cannot see the difference either. Its own reasoning is in front of it, so a call it wrote
+ * there looks exactly like a call it made, and the sensible reading of no result is that the call
+ * failed — so it writes it again. That is the loop: the same first step attempted over and over
+ * inside one long think, and a second turn that works immediately because it starts from prose.
+ *
+ * This only REPORTS them. Nothing here is executed; the model is asked to re-issue as its reply.
+ *
+ * Unwraps the reasoning rather than stripping it, which is the whole difference from
+ * `parseBuddyToolCalls` — that deletes think blocks wholesale, which is right for a reply and exactly
+ * wrong when the block's content is the thing being looked for. PURE.
+ */
+export function toolCallsInThinking(thinking: string): BuddyToolCall[] {
+  if (!thinking.trim()) return [];
+  return parseBuddyToolCalls(thinking.replace(/<\/?think(?:ing)?>/gi, "\n"));
+}
+
 /** A stitch_videos clip ref ffmpeg would misread as an OPTION or a PROTOCOL rather than a plain file:
  *  - a leading "-" is parsed as an ffmpeg command-line flag (option injection);
  *  - a `scheme:` prefix (`concat:`, `http:`, `pipe:`, `file:`, …) opens a protocol/demuxer, not a file.
