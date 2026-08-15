@@ -26,6 +26,7 @@ import {
   type BuddyToolResultPayload,
   MAX_PLAN_STEPS,
   toolCallsInThinking,
+  meantToSendMessage,
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
@@ -860,18 +861,34 @@ export async function runBuddyTurn(opts: {
        * prose has decided against it, and nudging there would force a call nobody asked for. Empty
        * plus a call in the reasoning is the unambiguous case: it meant to act, and nothing happened.
        */
-      if (!clean && !calls.length && thoughtOnlyNudges < MAX_THOUGHT_ONLY_NUDGES && round < effectiveMax) {
-        const inThought = toolCallsInThinking(roundThinking);
-        if (inThought.length > 0) {
+      if (!calls.length && thoughtOnlyNudges < MAX_THOUGHT_ONLY_NUDGES && round < effectiveMax) {
+        const inThought = !clean ? toolCallsInThinking(roundThinking) : [];
+        /**
+         * THE SECOND SHAPE: THE CALL WAS NEVER WRITTEN DOWN AT ALL.
+         *
+         * Above, the model wrote a real tool call into its reasoning and the reply came back empty.
+         * Here it wrote the INTENT in English — "I need to call send_message 26 times (for A through
+         * Z) in this turn" — and then emitted the letter as ordinary content. There is no JSON to
+         * find, and prose is what ends a turn, so the reader got one letter and had to ask again.
+         *
+         * Only send_message qualifies. It is the one tool whose whole job is to deliver text the
+         * model has already written, which is what makes prose a mistake here rather than a decision:
+         * for any other tool, reasoning about it and then answering IS the decision not to call it.
+         */
+        const wroteItInstead = clean.length > 0 && meantToSendMessage(roundThinking);
+        if (inThought.length > 0 || wroteItInstead) {
           thoughtOnlyNudges += 1;
           opts.onEvent?.({ kind: "activity", text: "Picking that back up…" });
           messages.push({ role: "assistant", content: reply });
           messages.push({
             role: "user",
-            content:
-              `[Your ${inThought[0]!.tool} call was inside your reasoning. Nothing runs there — only ` +
-              "your REPLY is executed, which is why no result came back. Send that same call again as " +
-              "the reply itself: the JSON object on its own, outside your thinking.]",
+            content: wroteItInstead
+              ? "[That text became your ANSWER, which ends the turn — it was not sent as one of the " +
+                'series. To send it as its own message and stay in the turn, call {"tool":"send_message",' +
+                '"text":"…"} with it. Send the one you just wrote, then carry on.]'
+              : `[Your ${inThought[0]!.tool} call was inside your reasoning. Nothing runs there — only ` +
+                "your REPLY is executed, which is why no result came back. Send that same call again as " +
+                "the reply itself: the JSON object on its own, outside your thinking.]",
           });
           continue;
         }

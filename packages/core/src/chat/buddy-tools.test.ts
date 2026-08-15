@@ -3342,7 +3342,7 @@ describe("launching something that stays up, and driving it", () => {
  */
 describe("telling a series where it has got to", () => {
   it("says nothing extra before anything has been sent", () => {
-    expect(seriesProgressNote([])).toBe("[Sent.]");
+    expect(seriesProgressNote([])).toBe("[Sent. Turn still open.]");
   });
 
   it("counts what has gone, and reads it back while the messages are short", () => {
@@ -3373,7 +3373,24 @@ describe("telling a series where it has got to", () => {
 
   it("carries the don't-repeat constraint as a FACT rather than a further instruction", () => {
     // Same information, no imperative: what already happened, not what to do about it.
-    expect(seriesProgressNote(["A", "B"])).toMatch(/already reached the reader/);
+    expect(seriesProgressNote(["A", "B"])).toMatch(/already delivered/);
+  });
+
+  /**
+   * NAMING ONE EXIT IS AS BAD AS COMMANDING IT — this went wrong in both directions.
+   *
+   * The first version said "go on — Send the NEXT one" and a run that had finished the alphabet kept
+   * sending: "That's the whole alphabet!", "All done.", "Bye!", "!", "1". Correcting it to a bare
+   * "[Sent.]" then read as terminal and a run stopped after one letter. Neither is a fact about the
+   * turn. The fact is that it stays open and the model chooses, so both ways out are named.
+   */
+  it("names BOTH ways the turn can go, so neither reads as the only one", () => {
+    for (const note of [seriesProgressNote([]), seriesProgressNote(["A"]), seriesProgressNote(["A", "B"])]) {
+      expect(note, "the receipt never says the turn is still the model's").toMatch(/Turn still open/);
+    }
+    const note = seriesProgressNote(["A"]);
+    expect(note, "continuing is not named as available").toMatch(/send_message again/);
+    expect(note, "stopping is not named as available").toMatch(/plain text when the task is done/);
   });
 
   it("gets the singular right, because 1 messages reads as a bug", () => {

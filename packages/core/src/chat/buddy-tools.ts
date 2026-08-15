@@ -2603,15 +2603,18 @@ export const SERIES_ECHO_MAX_TOTAL = 400;
  * where it belongs. PURE.
  */
 export function seriesProgressNote(sent: readonly string[]): string {
-  if (sent.length === 0) return "[Sent.]";
+  if (sent.length === 0) return "[Sent. Turn still open.]";
   const count = `${sent.length} message${sent.length === 1 ? "" : "s"} sent this turn`;
   const echoable =
     sent.every((s) => s.length <= SERIES_ECHO_MAX_ITEM) && sent.join(", ").length <= SERIES_ECHO_MAX_TOTAL;
-  // "already reached the reader" carries the don't-repeat constraint as a fact about what happened,
-  // rather than as one more thing the app is telling the model to do.
+  // BOTH EXITS, NAMED. The first version of this said only "Send the NEXT one" and the run could not
+  // stop; the correction said only "[Sent.]" and the run stopped after one. Neither is a fact about
+  // the turn — the fact is that it stays open and the model chooses. Saying so commands nothing and
+  // leaves no reading in which one direction is the only one available.
+  const state = "Turn still open: send_message again for the next, or plain text when the task is done.";
   return echoable
-    ? `[Sent. ${count}, in order: ${sent.map((s) => JSON.stringify(s)).join(", ")} — these have already reached the reader.]`
-    : `[Sent. ${count} — each has already reached the reader.]`;
+    ? `[Sent. ${count}, in order: ${sent.map((s) => JSON.stringify(s)).join(", ")} — already delivered. ${state}]`
+    : `[Sent. ${count} — each already delivered. ${state}]`;
 }
 
 /** How much reasoning rides from one ROUND to the next inside a turn. Shorter than the between-step
@@ -3609,6 +3612,30 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
 export function toolCallsInThinking(thinking: string): BuddyToolCall[] {
   if (!thinking.trim()) return [];
   return parseBuddyToolCalls(thinking.replace(/<\/?think(?:ing)?>/gi, "\n"));
+}
+
+/**
+ * THE MODEL SAID IT WOULD SEND A MESSAGE, AND THEN JUST WROTE ONE.
+ *
+ * Off the reader's screen, asked for the alphabet one letter per message: "The instructions say that
+ * for tasks that are the same small thing over and over, I should use send_message and NOT make a
+ * plan… I need to call send_message 26 times (for A through Z) in this turn." It then emitted `A` as
+ * ordinary content. No tool call, so the turn settled — one letter, and the reader had to ask again.
+ *
+ * That is the instinct the tool is fighting: writing the text IS sending it, as far as the model is
+ * concerned, and only the app knows that prose is what ENDS a turn. Every other tool asks the model
+ * to do something it could not do by writing; this one asks it to route something it can.
+ *
+ * `toolCallsInThinking` cannot catch this, because there is no JSON to find — the intent is stated in
+ * English. So this looks for the intent instead, and only ever for THIS tool: send_message is the one
+ * whose entire job is to deliver text the model has already written, which is what makes prose an
+ * unambiguous mistake rather than a decision. A mention of any other tool in reasoning is ordinary
+ * deliberation and is left alone. PURE.
+ */
+export function meantToSendMessage(thinking: string): boolean {
+  // Requires the tool NAMED — "I should send a message" is a description of intent that the model may
+  // perfectly well be carrying out in prose. "send_message" is a reference to this app's tool.
+  return /send_message/.test(thinking);
 }
 
 /** A stitch_videos clip ref ffmpeg would misread as an OPTION or a PROTOCOL rather than a plain file:

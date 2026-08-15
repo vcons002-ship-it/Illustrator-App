@@ -556,6 +556,64 @@ describe("a tool call written inside the reasoning", () => {
     expect(llm.calls.flat().map((m) => m.content).join("\n")).toMatch(/Your generate_image call was inside your reasoning/);
   });
 
+  /**
+   * "I NEED TO CALL send_message 26 TIMES (FOR A THROUGH Z) IN THIS TURN." — then it wrote "A".
+   *
+   * Verbatim from the reader's screen, with the memories and skills that could have taught an older
+   * recipe already deleted. The model read the prompt correctly, decided correctly, and then emitted
+   * the letter as ordinary content. No tool call, so the turn settled: one letter, and the reader had
+   * to ask again for every single one.
+   *
+   * That is the instinct this tool fights. Writing the text IS sending it, as far as the model is
+   * concerned, and only the app knows prose is what ENDS a turn. Every other tool asks for something
+   * the model could not do by writing; this one asks it to route something it can.
+   */
+  it("catches the message being WRITTEN instead of sent, and says what that did", async () => {
+    const llm = thinkingLlm([
+      { think: "I need to call send_message 26 times (for A through Z) in this turn.", reply: "A" },
+      { reply: '{"tool":"send_message","text":"A"}' },
+      { reply: "…and so on." },
+    ]);
+    const sent: string[] = [];
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write the entire alphabet, one message per letter" }],
+      deps: baseDeps,
+      onEvent: (e) => { if (e.kind === "stepDone") sent.push(e.text); },
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said, "the turn just ended on the first letter").toMatch(/became your ANSWER, which ends the turn/);
+    expect(sent, "the letter never actually got sent as a message").toEqual(["A"]);
+  });
+
+  it("only rescues send_message — reasoning about any OTHER tool and then answering is a decision", async () => {
+    // The scope that keeps this from forcing calls nobody asked for. Considering search_web and then
+    // answering from knowledge is ordinary; there is nothing to recover.
+    const llm = thinkingLlm([
+      { think: "Should I use search_web for this? No, I know the answer.", reply: "Paris." },
+    ]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "capital of France?" }], deps: baseDeps,
+    });
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).not.toMatch(/became your ANSWER/);
+  });
+
+  it("is bounded, so a model that keeps writing prose still finishes the turn", async () => {
+    const llm = thinkingLlm([
+      { think: "call send_message now", reply: "A" },
+      { think: "call send_message again, really", reply: "B" },
+      { think: "send_message, third time", reply: "C" },
+      { think: "send_message, fourth", reply: "D" },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "letters" }], deps: baseDeps,
+    });
+    const nudges = llm.calls[llm.calls.length - 1]!.map((m) => m.content).join("\n").match(/became your ANSWER/g) ?? [];
+    expect(nudges, "the correction repeats without end").toHaveLength(2);
+    expect(outcome.text.trim(), "the turn never produced an answer").not.toBe("");
+  });
+
   it("leaves a model that reasoned and then ANSWERED alone", async () => {
     // Considering a tool and deciding against it is ordinary. Nudging here would force a call nobody
     // asked for, which is why this is scoped to an empty reply rather than to "no tool ran".
