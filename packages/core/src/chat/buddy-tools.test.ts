@@ -22,6 +22,7 @@ import {
   ollamaToolSchemas,
   renderPlanLines,
   splitSeriesMessages,
+  shellPlatform,
   stripSeriesMarkers,
   SERIES_SPLIT,
   parseBuddyToolCall,
@@ -3630,5 +3631,88 @@ describe("the series split is actually reached", () => {
     expect(app, "the marker streams to the screen before the split happens").toMatch(
       /setBuddyStreaming\(stripSeriesMarkers\(/,
     );
+  });
+});
+
+
+/**
+ * EVERY FIRST COMMAND ON A WINDOWS BOX FAILED, AND IT LOOKED LIKE AMNESIA.
+ *
+ * Nothing told the model what machine it was on. The only hint in the whole prompt was a
+ * parenthetical — "run `pwd` (or `cd` on Windows)" — so it defaulted to Linux. From the reader's
+ * screen: `ls -lh ~/.cache/huggingface/hub/ … find / -name "*.gguf"` came back "The system cannot
+ * find the path specified", and `ls -la && echo "---" && du -sh *` came back "'ls' is not recognized
+ * as an internal or external command".
+ *
+ * It then re-planned and looked things up again, which reads from outside as the model having lost
+ * the conversation. It had not — it had lost a round to a shell it did not know it was in. The
+ * reader's own diagnosis was "the LLM doesn't seem to be able to see the chat context", which is what
+ * this failure looks like and not what it is.
+ */
+describe("knowing which shell the commands run in", () => {
+  it("reads Windows off a drive-lettered path", () => {
+    expect(shellPlatform("C:\\Users\\vcons\\VisualReader\\workspace")).toBe("windows");
+    expect(shellPlatform("d:/projects/thing")).toBe("windows");
+    expect(shellPlatform("\\\\server\\share\\work")).toBe("windows");
+  });
+
+  it("reads POSIX off an absolute or home path", () => {
+    expect(shellPlatform("/home/nic/VisualReader/workspace")).toBe("posix");
+    expect(shellPlatform("~/VisualReader/workspace")).toBe("posix");
+  });
+
+  it("says it does not know rather than guessing", () => {
+    // Telling a Linux machine it is Windows would break the case that currently works. Silence is the
+    // only safe answer when there is no path to read.
+    expect(shellPlatform(undefined)).toBeUndefined();
+    expect(shellPlatform("")).toBeUndefined();
+    expect(shellPlatform("   ")).toBeUndefined();
+    expect(shellPlatform("workspace")).toBeUndefined();
+    expect(shellPlatform("./relative/path")).toBeUndefined();
+  });
+
+  it("is not fooled by a URL, which also has a colon", () => {
+    expect(shellPlatform("https://example.com/x")).toBeUndefined();
+    expect(shellPlatform("file://host/share")).toBeUndefined();
+  });
+
+  it("puts the platform in the prompt, and names the commands that actually exist", () => {
+    const p = buildBuddySystemPrompt({
+      persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true,
+      loadedToolsets: ["coding"], workingDir: "C:\\Users\\vcons\\VisualReader\\workspace",
+    } as never);
+    expect(p).toContain("THIS IS A WINDOWS MACHINE");
+    expect(p, "does not say which shell, so cmd-only syntax is still a guess").toContain("cmd.exe");
+    // The exact commands it reached for, named as absent.
+    for (const nope of ["ls", "cat", "rm", "grep", "find", "du"]) {
+      expect(p, `${nope} is not named as unavailable`).toMatch(new RegExp(`NOT[^.]*\\b${nope}\\b`));
+    }
+    expect(p, "no Windows equivalent is offered, so it has nothing to switch to").toContain("`dir`");
+  });
+
+  it("says the opposite on a POSIX box, and nothing at all when unknown", () => {
+    const posix = buildBuddySystemPrompt({
+      persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true,
+      loadedToolsets: ["coding"], workingDir: "/home/nic/work",
+    } as never);
+    expect(posix).toContain("Unix-like machine");
+    expect(posix).not.toContain("WINDOWS MACHINE");
+
+    const unknown = buildBuddySystemPrompt({
+      persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true,
+      loadedToolsets: ["coding"],
+    } as never);
+    expect(unknown).not.toContain("WINDOWS MACHINE");
+    expect(unknown).not.toContain("Unix-like machine");
+  });
+
+  it("drops the guess it replaces", () => {
+    // "run `pwd` (or `cd` on Windows) first" was the old hedge. With the platform stated outright it
+    // is worse than nothing: it implies the model still has to work out where it is.
+    const p = buildBuddySystemPrompt({
+      persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true,
+      loadedToolsets: ["coding"], workingDir: "C:\\Users\\vcons\\work",
+    } as never);
+    expect(p).not.toContain("or `cd` on Windows");
   });
 });
