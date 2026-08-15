@@ -986,6 +986,43 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
 }
 
 /**
+ * What the assistant is ASKING to do, named. PURE.
+ *
+ * `describeBuddyToolActivity` describes work already in flight ("Running: npm test"). This describes
+ * the moment before that — the call has been made, and whether it runs or stops for a click is the
+ * host's decision, not known here.
+ *
+ * The distinction only matters for the handful of tools that reach the reader's own computer, and it
+ * matters most on a linked PHONE, where this line and the trace row it leaves behind are the entire
+ * view of that reach. "Proposing a command…" named nothing: there was no command to read before
+ * approving, and afterwards the trace kept a row that could have been any command ever run. Every
+ * branch here carries the payload, so the line is worth reading and the trace row is worth keeping.
+ *
+ * Anything else falls through to the in-flight description, which is already specific.
+ */
+export function describeToolProposal(call: BuddyToolCall): string {
+  const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n).trim()}…` : s);
+  switch (call.tool) {
+    case "run_command":
+      return `Proposing: ${clip(call.command, 80)}`;
+    case "write_file":
+      return `Proposing to write ${clip(call.path, 60)}`;
+    case "edit_file":
+      return `Proposing to edit ${clip(call.path, 60)}`;
+    case "find_files":
+      return `Proposing to search your files for “${clip(call.query, 50)}”`;
+    case "screenshot":
+      return call.window ? `Proposing to capture “${clip(call.window, 40)}”` : "Proposing to capture your screen";
+    case "browser_eval":
+      return `Proposing to run script in ${call.target ? clip(call.target, 40) : "the open page"}`;
+    case "delegate_coding_task":
+      return `Proposing a coding task: ${clip(call.task, 60)}`;
+    default:
+      return describeBuddyToolActivity(call);
+  }
+}
+
+/**
  * Whether a tool error reads as transient (network blip / timeout / rate limit) and is worth
  * exactly ONE automatic retry before the failure is surfaced to the model.
  */

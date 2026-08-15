@@ -267,6 +267,68 @@ is exactly what happened: three files reached the reader as one card. One fence 
 a file on disk can be re-read, edited and executed, while a big fenced block truncates and drops out
 of your context. Fences are for a set the reader wants handed to them.`;
 
+const LOCAL_MODELS = `# The AI models downloaded on this computer
+
+The local models this app talks to are managed by **Ollama**, through its \`ollama\` command. Every
+answer below is a \`run_command\` away — desktop only, and \`run_command\` lives in the \`coding\`
+toolset, so \`load_toolset\` it if it isn't in front of you.
+
+## The four commands
+
+\`\`\`
+ollama list          # every model on disk: NAME, ID, SIZE, MODIFIED
+ollama ps            # what is loaded in memory RIGHT NOW, and when it unloads
+ollama show <name>   # a model's parameters, context length, quantization, license
+ollama rm <name>     # delete it and reclaim its disk
+\`\`\`
+
+Names include the tag, and the tag is part of the identity: \`qwen3:8b\` and \`qwen3:8b-q4_K_M\` are two
+separate downloads. Copy the NAME column from \`ollama list\` verbatim — \`ollama rm qwen3\` removes
+\`qwen3:latest\` and nothing else, which is the usual reason "I deleted it and the space didn't come
+back".
+
+## Deleting: \`ollama rm\` is the only way
+
+Look for the files and you will not find them. Ollama stores models **content-addressed**, not as
+\`.gguf\` files you can pick out of a folder:
+
+\`\`\`
+<models>/manifests/registry.ollama.ai/library/<model>/<tag>   # a small JSON file listing digests
+<models>/blobs/sha256-<64 hex chars>                          # the actual weights, unnamed
+\`\`\`
+
+where \`<models>\` is \`%USERPROFILE%\\.ollama\\models\` on Windows, \`~/.ollama/models\` on macOS, and on
+Linux \`~/.ollama/models\` or \`/usr/share/ollama/.ollama/models\` when it runs as the system service.
+An \`OLLAMA_MODELS\` environment variable overrides all of these — check it before believing a path.
+
+**Blobs are SHARED.** Two tags of one model, or a model and a fine-tune of it, commonly point at the
+same layers, and a blob is only freed when the last manifest referencing it goes. So:
+
+- Deleting a blob by hand silently corrupts every other model that referenced it, and the damage
+  shows up later as a load failure with no obvious cause. Never do it.
+- \`ollama rm\` removes the manifest and then the blobs nothing else needs. It is the ONLY safe
+  delete, and it is why "how much will I get back?" has no answer before the fact — \`SIZE\` in
+  \`ollama list\` counts shared layers once per model.
+
+To measure the real total on disk, size the models directory itself (\`du -sh\` / PowerShell
+\`Get-ChildItem -Recurse | Measure-Object -Sum Length\`), not the sum of the SIZE column.
+
+## Before you remove anything
+
+Deleting is not undoable — the model has to be downloaded again, which is minutes to hours.
+
+1. Run \`ollama list\` and SHOW the reader the list first.
+2. Say which exact names you are about to remove and how big they are, and let them confirm.
+3. Check the model the app is currently set to use for chat (and \`ollama ps\` for what is loaded).
+   Removing the model that is answering right now leaves the chat unable to reply until another one
+   is picked in Settings — say so plainly rather than doing it quietly.
+
+## Getting one back, or getting a new one
+
+\`ollama pull <name>\` downloads it; \`ollama list\` afterwards confirms it landed. If \`ollama\` isn't a
+recognised command at all, Ollama either isn't installed or isn't on PATH — say that rather than
+reporting the models as missing.`;
+
 /**
  * The shipped playbooks. `at` is 0 — they were never "written", and must never sort as newer than
  * something the reader saved.
@@ -295,6 +357,17 @@ export const BUILTIN_SKILLS: readonly Skill[] = [
     description:
       "Make an invitation, flyer, poster, greeting card, menu or certificate — a laid-out page the app generates the pictures for",
     body: DESIGNED_DOCUMENTS,
+    at: 0,
+  },
+  // Written in the words the ASK arrives in — "how much space", "delete the model", "which models
+  // do I have" — because the reader hits this at the point of running out of disk, not while
+  // thinking about Ollama. The body exists mostly to stop one specific wrong answer: hunting for
+  // `.gguf` files to delete, which the storage layout makes both impossible and destructive.
+  {
+    name: "manage-local-models",
+    description:
+      "See which AI models are downloaded on this computer, how much space they take, and delete the ones the reader doesn't want",
+    body: LOCAL_MODELS,
     at: 0,
   },
   {
