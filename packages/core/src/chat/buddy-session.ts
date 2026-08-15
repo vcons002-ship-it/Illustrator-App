@@ -1286,6 +1286,29 @@ export async function runBuddyTurn(opts: {
       // WHAT it depicts, so that render is unusable and gets thrown away. Stopping here is what makes
       // "now do ONLY step 1 of 3" the first thing that happens, instead of the second.
       if (opts.deps.appManagedSteps && call.tool === "set_plan" && !result.error) {
+        /**
+         * LEAVE THE RECORD BEHIND, OR THE NEXT TURN CANNOT TELL THE PLAN WAS EVER MADE.
+         *
+         * Reported from use: on the first turn after a multi-step plan, it loops inside its reasoning
+         * trying the same tool call over and over, and only gets going on a later attempt.
+         *
+         * The model's REPLY is already in the transcript — that push happens before the dispatch loop.
+         * What this return skipped is the tool RESULT, which every other call leaves behind and which
+         * lands after the loop. So the step-1 turn opened on a history reading: the reader's request,
+         * an assistant turn calling set_plan, and then a checklist directive arriving in the reader's
+         * voice. The one thing missing was any confirmation the call had worked.
+         *
+         * A tool call with no result is a call that did not land — that is what the absence means
+         * everywhere else in this same transcript, because everywhere else the result is there. So
+         * the model has just called set_plan, seen nothing come back, and is being told about a
+         * checklist. Trying the call again is a reasonable thing to do with that, and looping on it
+         * is what the reader watched.
+         *
+         * Only the result is added here; the reply is already recorded above.
+         */
+        const planned = feedbacks.join("\n\n");
+        if (planned.trim()) transcript.push({ role: "user", content: planned });
+
         return withThinking({ text: "", transcript, toolResults });
       }
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
