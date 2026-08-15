@@ -1835,6 +1835,46 @@ describe("app-managed steps: compiling the checklist is the whole turn", () => {
     '{"tool":"generate_image","prompt":"the tractor"}', // what it would have done unprompted
   ];
 
+  /**
+   * "ON THE FIRST TURN AFTER MAKING A MULTI-STEP PLAN IT COULDN'T SEEM TO SEND THE TOOL CALL —
+   * IT LOOPED WITHIN REASONING TRYING THE SAME ONE OVER AND OVER."
+   *
+   * The early return above jumps out of the dispatch loop before the tool RESULT is recorded. The
+   * model's reply is already in the transcript (that push happens earlier), so the step-1 turn opened
+   * on a history reading: the request, an assistant turn calling set_plan, then a checklist directive
+   * in the reader's voice — with no confirmation anywhere that the call had worked.
+   *
+   * Everywhere else in that same transcript a call is followed by its result, so its absence here
+   * means what absence means everywhere else: the call did not land. The model has called set_plan,
+   * seen nothing come back, and is being told a checklist exists. Trying again is reasonable.
+   */
+  it("leaves the plan in the transcript, so the next turn can tell it was made", async () => {
+    const outcome = await runBuddyTurn({
+      llm: scriptedLlm(script),
+      system: "sys",
+      history: [{ role: "user", content: "make me three images" }],
+      ...planHarness(),
+    });
+    const record = outcome.transcript.map((t) => t.content).join("\n");
+    expect(record, "the turn whose whole job was set_plan leaves no record of it").toContain("plan");
+    expect(outcome.transcript.length, "nothing at all was recorded").toBeGreaterThan(0);
+  });
+
+  it("records the RESULT after the call, the way every other tool does", async () => {
+    // The specific asymmetry: the call was there, its outcome was not. A call with nothing after it
+    // is, everywhere else in this transcript, a call that failed.
+    const outcome = await runBuddyTurn({
+      llm: scriptedLlm(script),
+      system: "sys",
+      history: [{ role: "user", content: "make me three images" }],
+      ...planHarness(),
+    });
+    const roles = outcome.transcript.map((t) => t.role);
+    const callAt = outcome.transcript.findIndex((t) => t.content.includes('"tool":"set_plan"'));
+    expect(callAt, "the call itself is missing").toBeGreaterThanOrEqual(0);
+    expect(roles.slice(callAt + 1), "nothing follows the call, so it reads as having failed").toContain("user");
+  });
+
   it("settles the moment the plan compiles, before the model can act on it", async () => {
     const rendered: string[] = [];
     const outcome = await runBuddyTurn({
