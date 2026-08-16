@@ -52,7 +52,11 @@ export function usePointerFeedback(): void {
       if (!target?.closest) return;
 
       const card = target.closest(".vr-card");
-      if (card instanceof HTMLElement && e.pointerType !== "mouse") {
+      // Never while the element is still playing its own entrance. `is-tap` sets `animation`, so
+      // applying it mid-entrance cancels that entrance and removing it starts the entrance over —
+      // the replay that made a touched bubble look like it was reloading. A message still landing
+      // is not waiting for feedback anyway.
+      if (card instanceof HTMLElement && e.pointerType !== "mouse" && !card.classList.contains("vr-msg--arriving")) {
         place(card, e);
         card.classList.remove("is-tap");
         void card.offsetWidth; // restart the animation when the same card is tapped again
@@ -73,9 +77,17 @@ export function usePointerFeedback(): void {
       }, PRESS_HOLD_MS);
     };
 
-    /** The tap animation cleans up after itself, so a card never keeps the class. */
+    /**
+     * The tap animation cleans up after itself, so a card never keeps the class.
+     *
+     * BOTH halves are listened for, because a message bubble only plays one of them: it takes the
+     * glow and refuses the lift (a paragraph that jumps under the finger about to drag-select it is
+     * interference, not feedback — see `.vr-msg.vr-card.is-tap`). Waiting on the lift alone left
+     * every tapped bubble wearing `is-tap` for good. The glow runs on `::before`, so the event
+     * arrives with `pseudoElement` set and `target` still the host.
+     */
     const onAnimationEnd = (e: AnimationEvent): void => {
-      if (e.animationName === "vr-tap-lift" && e.target instanceof HTMLElement) {
+      if ((e.animationName === "vr-tap-lift" || e.animationName === "vr-tap-glow") && e.target instanceof HTMLElement) {
         e.target.classList.remove("is-tap");
       }
     };
