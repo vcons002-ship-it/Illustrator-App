@@ -144,6 +144,19 @@
   animation: vr-tap-glow 700ms var(--vr-ease) both;
 }
 
+/* A BUBBLE DOES NOT LIFT. The same reasoning as its gentler glow, one step further: a card is an
+ * object you pick up, and a paragraph is something you read, scroll past and drag-select. Moving it
+ * 4px under the finger that is about to do one of those is interference, not feedback. The glow
+ * still blooms from the touch point — the half that says "I felt that" without moving the text.
+ *
+ * `none`, not a shorter lift: the finger has to be able to land on a message without the message
+ * reacting as though it were being picked up. Safe to declare here only because the entrance is no
+ * longer a standing claim on `animation` (see `.vr-msg--arriving`) — before that, this rule would
+ * have cancelled the arrival and put it back, which is the bug it is written under. */
+.vr-msg.vr-card.is-tap {
+  animation: none;
+}
+
 /* ---- Modals -----------------------------------------------------------------------
  * ModalShell is the single chokepoint for a dozen modals, so one rule here gives all of them
  * a real enter AND exit. @starting-style + allow-discrete means no keeping components mounted
@@ -268,11 +281,28 @@
  * The chat is where the reader spends their time, and until now it had no motion at all —
  * messages appeared, the model thought invisibly, and sending felt like nothing happened. */
 
-/* Every message rises into place. `both` holds the start frame, so a message cannot flash at
- * full opacity for one frame before the animation takes hold. */
-/* 560ms, not 340: a spring that overshoots needs room to be seen doing it. */
-.vr-msg {
+/**
+ * A SETTLED BUBBLE OWNS NO ANIMATION. This is the rule, and it is worth more than it looks.
+ *
+ * The entrance used to be a standing declaration on `.vr-msg`, which made it a landmine, because
+ * `animation` is ONE property and the last rule to set it wins. `.vr-card.is-tap` — the touch
+ * feedback, which every bubble matches, at higher specificity — also sets it. So a finger on a
+ * message cancelled the entrance, and lifting the finger put it BACK: the bubble replayed its whole
+ * arrival, fading up from blurred and translated. Reported as a bubble flickering "like it's
+ * refreshing" on every touch. `.vr-msg--solidify` did the same thing one message later, when the
+ * class came off the previous reply.
+ *
+ * So the entrance lives on a class the bubble sheds the moment it finishes (`onAnimationEnd` in
+ * ChatPanel). Nothing can restart what is no longer declared, and that holds for any rule added
+ * later, not just the two that caused this.
+ */
+/* `both` holds the start frame, so a message cannot flash at full opacity for one frame before the
+ * animation takes hold. 560ms, not 340: a spring that overshoots needs room to be seen doing it. */
+.vr-msg--arriving {
   animation: vr-msg-in 560ms var(--vr-spring) both;
+}
+
+.vr-msg {
   position: relative;
   /* The message list is a flex column, and `overflow: hidden` (which .vr-card sets, so the sheen
    * and the glow are clipped to the bubble) replaces the automatic minimum size of `auto` with 0.
@@ -282,13 +312,15 @@
 
 /* The user's message arrives from their own side. Selected by alignment rather than a second
  * class, so the component decides where a message sits and the sheet follows it. */
-.vr-msg[data-from="user"] {
+.vr-msg--arriving[data-from="user"] {
   animation-name: vr-msg-in-user;
 }
 
 /* A band of light crosses each message as it lands. `overflow: hidden` comes from .vr-card, which
- * every bubble also carries, so the band is clipped to the bubble's own rounded shape. */
-.vr-msg::after {
+ * every bubble also carries, so the band is clipped to the bubble's own rounded shape. Scoped to
+ * the arrival for the same reason it is: a one-shot effect that outlives its moment is a one-shot
+ * effect waiting to be replayed by something else. */
+.vr-msg--arriving::after {
   content: "";
   position: absolute;
   inset: 0;

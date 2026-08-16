@@ -65,8 +65,11 @@ export const cx = {
   isPress: "is-press",
   isTap: "is-tap",
 
-  /** A chat message, arriving. */
+  /** A chat message. */
   msg: "vr-msg",
+  /** This message is still playing its entrance. Carried ONLY until that finishes — see
+   * `.vr-msg--arriving` in components.css for why a settled bubble must own no animation. */
+  arriving: "vr-msg--arriving",
   /** The model is reasoning — a highlight travels along the text. */
   thinking: "vr-thinking",
   /** The model is producing words — a caret at the end of the streamed text. */

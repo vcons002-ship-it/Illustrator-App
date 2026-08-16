@@ -84,6 +84,54 @@ describe("following the conversation", () => {
   });
 });
 
+/**
+ * A SETTLED BUBBLE OWNS NO ANIMATION.
+ *
+ * `animation` is one property. A class that declares it holds a claim on the element for as long as
+ * it is present, so anything else that sets that property cancels the animation on the way in and
+ * RESTARTS it on the way out. `.vr-card.is-tap` — the touch feedback, which every bubble matches, at
+ * higher specificity — did exactly that: a finger on a message replayed its whole entrance, and the
+ * bubble faded up from blurred and translated as if it were reloading. `.vr-msg--solidify` did the
+ * same one message later, when the class came off the previous reply.
+ *
+ * Putting the entrance back on the base class would bring both straight back, so the invariant is
+ * the thing worth pinning: the animation lives only on classes a bubble sheds when it finishes.
+ */
+describe("the message entrance", () => {
+  const css = readFileSync(join(import.meta.dirname, "styles", "components.css"), "utf8");
+  const block = (sel: string): string => new RegExp(`\\${sel} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+
+  it("is declared only on the class the bubble sheds", () => {
+    expect(block(".vr-msg--arriving")).toMatch(/animation:\s*vr-msg-in/);
+    expect(block(".vr-msg"), ".vr-msg claims `animation` again").not.toMatch(/animation/);
+  });
+
+  it("takes the user variant and the sheen with it", () => {
+    expect(css).toContain('.vr-msg--arriving[data-from="user"]');
+    expect(css).toContain(".vr-msg--arriving::after");
+    expect(css).not.toMatch(/\.vr-msg\[data-from="user"\] \{[^}]*animation/);
+  });
+
+  it("keeps a bubble from lifting under a finger, and still cleans up after itself", () => {
+    expect(block(".vr-msg.vr-card.is-tap")).toMatch(/animation:\s*none/);
+    // Refusing the lift means `vr-tap-lift` never ends on a bubble — waiting only on that left every
+    // tapped message wearing `is-tap` for good. The glow it DOES play has to clear it instead.
+    const hook = readFileSync(join(import.meta.dirname, "usePointerFeedback.ts"), "utf8");
+    expect(hook).toContain('e.animationName === "vr-tap-glow"');
+    // And nothing gets tap feedback mid-entrance: that would cancel the entrance and restart it.
+    expect(hook).toContain('!card.classList.contains("vr-msg--arriving")');
+  });
+
+  it("is shed by the panel when the entrance ends", () => {
+    const panel = readFileSync(join(import.meta.dirname, "ChatPanel.tsx"), "utf8");
+    expect(panel).toContain("onAnimationEnd");
+    // Not a child's animation, and not the ::after sheen — either would end the entrance early.
+    expect(panel).toContain("e.target === e.currentTarget && !e.pseudoElement");
+    // The condense carries the same claim, so it comes off with the same flag.
+    expect(panel).toContain("justFinished && arriving");
+  });
+});
+
 describe("the generic card's read-out", () => {
   it("names every argument except the tool itself", () => {
     expect(describeCallArgs({ tool: "control_ui", action: "click", window: "Notepad", target: "Save" })).toBe(

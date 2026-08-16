@@ -738,7 +738,9 @@ describe("decoration cannot break layout or interaction", () => {
     );
   });
 
-  it.each([".vr-card::before", ".vr-msg::after", ".vr-live::before"])(
+  // The sheen moved to `.vr-msg--arriving::after` when the entrance became a class the bubble sheds
+  // — see the note on `.vr-msg--arriving`. It is still an overlay covering its whole host.
+  it.each([".vr-card::before", ".vr-msg--arriving::after", ".vr-live::before"])(
     "%s is decoration, not a hit target",
     (sel) => {
       // Each covers its whole host. Without this the layer eats every click underneath it, and the

@@ -822,15 +822,33 @@ export const MessageBubble = memo(function MessageBubble({
   // prose. Stops a research doc full of examples from shattering into one "file" card per fence.
   const blockKinds = blocks ? classifyBlocks(blocks) : undefined;
   const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
+  /**
+   * THE ENTRANCE IS OVER — drop the classes that carry it.
+   *
+   * `animation` is one property, so a class that declares it is a claim on the element for as long
+   * as it is present, and whatever else sets that property (the `.vr-card.is-tap` touch feedback
+   * does) cancels it on the way in and RESTARTS it on the way out. Leaving the entrance declared on
+   * a settled bubble is what made a touch replay it — the bubble faded up from blurred and
+   * translated under the reader's finger, which read as the message reloading.
+   *
+   * Cleared on the first animation that ends ON THIS ELEMENT (not a child, and not the `::after`
+   * sheen), which covers all four entrances — arrive, arrive-user, solidify, solidify-user — without
+   * naming any of them.
+   */
+  const [arriving, setArriving] = useState(true);
   return (
     <div
+      onAnimationEnd={(e) => {
+        if (arriving && e.target === e.currentTarget && !e.pseudoElement) setArriving(false);
+      }}
       className={
         // While streaming there is no bubble at all — `forming` strips the pane so the letters
         // arrive straight onto the field. `solidify` runs once, on the message that replaces the
         // streaming one, which is a fresh mount and therefore plays its animation exactly once.
         `${cx.msg} ${cx.card} ${cx.msgFloat}` +
+        (arriving ? ` ${cx.arriving}` : "") +
         (streaming ? ` ${cx.typing} ${cx.live} ${cx.forming}` : "") +
-        (justFinished ? ` ${cx.solidify}` : "")
+        (justFinished && arriving ? ` ${cx.solidify}` : "")
       }
       data-from={isUser ? "user" : "assistant"}
       // The gather aims at this, not at `.vr-solidify`. A ref set in an effect does not re-render,
