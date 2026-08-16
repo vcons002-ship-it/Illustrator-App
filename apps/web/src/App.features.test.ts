@@ -378,3 +378,34 @@ describe("the live activity line", () => {
     expect(APP).not.toContain("Asking to see your screen…");
   });
 });
+
+/**
+ * THE IN-TURN CHECKLIST TICK CARRIES THE HOST'S GUARDS, NOT JUST ITS SHAPE.
+ *
+ * Steps used to be one per TURN, judged by the host's executor in App.tsx. When they moved inside
+ * the round loop, the worker grew its own tick — and copied the free nudge without either of the two
+ * things that make a free nudge safe. It had no MAX_STEP_REMINDERS bound, so a model that kept
+ * narrating was asked the same thing until the round budget ran out and the step never parked; and
+ * it dropped `needsTool`, which is the only text that says a file step is satisfied by an actual
+ * write_file call rather than by a description of one — precisely the confusion the nudge answers.
+ */
+describe("the worker's in-turn tick", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("bounds its free nudges per step, so a stuck step can still park", () => {
+    expect(WORKER).toContain("MAX_STEP_REMINDERS");
+    expect(WORKER).toMatch(/tickNudges\s*=\s*\{\s*stepId:\s*step\.id,\s*count:\s*used\s*\+\s*1\s*\}/);
+    // A real attempt or an advance restores the budget — otherwise a long, healthy run exhausts it.
+    expect(WORKER).toMatch(/tickNudges\s*=\s*\{\s*stepId:\s*"",\s*count:\s*0\s*\}/);
+  });
+
+  it("names the tool the step needs, the same as the host's nudge does", () => {
+    expect(WORKER).toMatch(/stepDirective\(wf!, step, "nudge", need \? \{ needsTool: need \} : \{\}\)/);
+  });
+
+  it("shares one bound with the host rather than keeping a second copy", () => {
+    // Two copies of a limit drift; the host's used to be the only one, in App.tsx.
+    expect(APP_RAW).not.toMatch(/const MAX_STEP_REMINDERS\s*=/);
+    expect(APP_RAW).toContain("MAX_STEP_REMINDERS");
+  });
+});

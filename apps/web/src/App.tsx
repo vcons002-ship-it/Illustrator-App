@@ -49,6 +49,7 @@ import {
   pngSize,
   uiAutomationCommand,
   parseUiAutomationOutput,
+  MAX_STEP_REMINDERS,
   describeBuddyToolActivity,
   describeToolProposal,
   isLiveControlTool,
@@ -680,9 +681,8 @@ const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 /** Per-attachment text cap for a chat-attached document — generous (a long report) but bounded
  * so several attachments can't blow the chat's context budget. */
 const ATTACH_DOC_MAX_CHARS = 30_000;
-/** App-managed steps: how many times to re-nudge the model toward a step's tool when it produced NO
- * genuine attempt (narrated / tried to check the box) before letting the step retry/park normally. */
-const MAX_STEP_REMINDERS = 3;
+// MAX_STEP_REMINDERS moved to core (workflow.ts), beside the directive it bounds — the in-turn tick
+// in the worker needs the same bound and had grown its own nudge without one.
 
 /**
  * If a message is really a request to just SHOW a web image (a bare image link, or

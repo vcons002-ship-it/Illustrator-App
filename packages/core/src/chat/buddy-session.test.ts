@@ -732,6 +732,104 @@ describe("a reply that spent its whole budget thinking", () => {
     expect(last.match(/still thinking/g) ?? [], "the correction repeats without end").toHaveLength(1);
     expect(outcome.text.trim(), "the turn never produced anything").not.toBe("");
   });
+
+  /**
+   * THE SECOND SHAPE, AND THE ONE THAT WAS REPORTED. "I asked the LLM to code an html page. it just
+   * tried to do it all in the thinking block… it never actually writes any output so it never gets
+   * anywhere."
+   *
+   * Identical loss, opposite truncation flag. The model does not run out of room — it finishes
+   * deliberating comfortably inside the budget, having composed the whole page in its reasoning, and
+   * emits no content at all. `lastTruncated` is FALSE, so the recovery whose words fit was skipped
+   * and it fell to the wrap-up, which asks for a BRIEF note about what it did. A model that has
+   * already written the page reads that as "summarise and stop", and the run ends by claiming a page
+   * that does not exist.
+   */
+  function thinkerLlm(script: { thinking: string; reply: string }[]): ChatCapable & { calls: ChatTurn[][] } {
+    const calls: ChatTurn[][] = [];
+    return {
+      calls,
+      async chat(messages, opts) {
+        calls.push([...messages]);
+        const turn = script[Math.min(calls.length - 1, script.length - 1)]!;
+        const o = opts as { onThinking?: (t: string) => void; onComplete?: (m: { truncated: boolean }) => void } | undefined;
+        if (turn.thinking) o?.onThinking?.(turn.thinking);
+        o?.onComplete?.({ truncated: false });
+        return turn.reply;
+      },
+    };
+  }
+
+  const PAGE = `<!DOCTYPE html>\n<html><head><title>Tides</title><style>body { margin: 0; }</style></head>\n<body><h1>Tide times</h1><p>High tide is at 06:12.</p></body></html>`;
+
+  it("catches a model that FINISHED thinking and emitted nothing, not just one that ran out", async () => {
+    const llm = thinkerLlm([
+      { thinking: `The reader wants a page. Here it is:\n${PAGE}`, reply: "" },
+      { thinking: "", reply: `Here you go:\n\n\`\`\`html\n${PAGE}\n\`\`\`` },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said, "nothing told the model its reply came back empty").toMatch(/the reply came back empty/);
+    // Not the wrap-up, which asks for a BRIEF note — the exact instruction that loses a deliverable.
+    expect(said).not.toMatch(/briefly say what you did or found/);
+    expect(outcome.text, "the page never reached the reader").toContain("<h1>Tide times</h1>");
+  });
+
+  it("hands the severed reasoning back, because the model no longer has it", async () => {
+    // The empty reply is what gets pushed onto the round history and the provider strips thinking,
+    // so without this the model is asked to redo — from a blank context — the work whose first
+    // attempt is the reason we are here.
+    const llm = thinkerLlm([
+      { thinking: `Working it out:\n${PAGE}`, reply: "" },
+      { thinking: "", reply: "done" },
+    ]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+    });
+    const second = llm.calls[1]!.map((m) => m.content).join("\n");
+    expect(second, "the reasoning holding the page was not handed back").toContain("<h1>Tide times</h1>");
+    // Framed as its own scratchpad. Its own words quoted at it as if the reader had said them is the
+    // reading that once made a model audit its transcript as a "simulation" and stop mid-series.
+    expect(second).toContain("your own scratchpad, not the reader speaking");
+  });
+
+  it("keeps the severed reasoning on the settled turn, so the reader can still get at the work", async () => {
+    // `lastThinking` is replace-per-round: the recovery round's own reasoning used to overwrite the
+    // round that held the page, and the collapsible — the reader's last manual escape hatch — showed
+    // the recovery instead of the work.
+    const llm = thinkerLlm([
+      { thinking: `Composing:\n${PAGE}`, reply: "" },
+      { thinking: "Right, I will summarise.", reply: "Here is a page." },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+    });
+    expect(outcome.thinking ?? "", "the round that held the page was overwritten").toContain("<h1>Tide times</h1>");
+  });
+
+  it("leaves an ordinary empty reply to the wrap-up", async () => {
+    // No reasoning means no evidence of where the output went, and claiming to know would be a guess.
+    const llm = thinkerLlm([{ thinking: "", reply: "" }, { thinking: "", reply: "hello" }]);
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "hi" }], deps: baseDeps,
+    });
+    const said = llm.calls.flat().map((m) => m.content).join("\n");
+    expect(said).not.toMatch(/the reply came back empty/);
+    expect(said, "the ordinary wrap-up stopped firing").toMatch(/Now reply to the reader in plain text/);
+  });
+
+  it("does not fire when the round produced prose, however much it thought first", async () => {
+    // Reasoning then answering is a decision, not a loss. Nudging there would tell a model that is
+    // working fine that it failed.
+    const llm = thinkerLlm([{ thinking: `Long deliberation:\n${PAGE}`, reply: "The tide is at 06:12." }]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "when is high tide?" }], deps: baseDeps,
+    });
+    expect(llm.calls, "it went back for a recovery that was not needed").toHaveLength(1);
+    expect(outcome.text).toContain("06:12");
+  });
 });
 
 describe("runBuddyTurn — a series written in one reply", () => {
@@ -2262,7 +2360,14 @@ describe("an app-managed checklist runs inside one turn", () => {
       tick(evidence: { text: string }): AppManagedNext {
         this.seen.push(evidence.text);
         done += 1;
-        return done < steps ? { kind: "continue", directive: `[Now do step ${done + 1} of ${steps}.]` } : { kind: "stop" };
+        // `advanced` matters now: the turn publishes a round's prose as a step's message only when
+        // the checklist actually MOVED ON. Without the flag this stub modelled a host that ticks
+        // every step off and never says so — and a nudge (which is the app saying "not done") would
+        // have had its narration published as if it were the step's output. Every tick here is a
+        // real advance, so it says so, like the worker's own tick does.
+        return done < steps
+          ? { kind: "continue", directive: `[Now do step ${done + 1} of ${steps}.]`, advanced: true }
+          : { kind: "stop" };
       },
     };
   }
@@ -2343,6 +2448,40 @@ describe("an app-managed checklist runs inside one turn", () => {
     // becomes the TURN'S ANSWER and is delivered by the ordinary path. Emitting it here as well
     // would put the final letter on screen twice.
     expect(steps).toEqual(["A", "B"]);
+  });
+
+  /**
+   * A ROUND THAT PRODUCED NOTHING MUST NOT BE PUBLISHED AS A STEP'S OUTPUT.
+   *
+   * Both halves came out of the same run. A thinking-only round has no prose, and publishing it put
+   * an EMPTY bubble in the chat and an empty assistant turn into the stored transcript — a column of
+   * blanks behind a run that was reasoning, and empty turns the model reads back next request. A
+   * NUDGE is the app saying "this step is not done", so the round's narration is not the step's
+   * output either: that is how "I've created the HTML page", written by a model that had created
+   * nothing, became a step's recorded result.
+   */
+  it("publishes a step's prose only when there IS prose and the checklist moved on", async () => {
+    const ticks: string[] = [];
+    const llm = scriptedLlm(["", "narrating about it", "A"]);
+    const steps: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "write A" }],
+      deps: baseDeps,
+      appManagedTick: (e) => {
+        ticks.push(e.text);
+        if (ticks.length === 1) return { kind: "continue", directive: "[Do the step.]" }; // empty round
+        if (ticks.length === 2) return { kind: "continue", directive: "[Not done — do it.]" }; // nudge
+        return { kind: "stop" };
+      },
+      onEvent: (e) => {
+        if (e.kind === "stepDone") steps.push(e.text);
+      },
+    });
+    expect(steps, "an empty round or a nudge was published as a completed step").toEqual([]);
+    const said = outcome.transcript.filter((m) => m.role === "assistant").map((m) => m.content);
+    expect(said, "an empty assistant turn was written into the record").not.toContain("");
   });
 
   it("delivers the last step as the answer, exactly once", async () => {

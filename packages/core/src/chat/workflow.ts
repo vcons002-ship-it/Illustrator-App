@@ -519,6 +519,21 @@ export type DirectiveKind =
  *
  * Every kind names the step and its position, so no step can be reached anonymously again. PURE.
  */
+/**
+ * HOW MANY TIMES A STEP MAY BE RE-NUDGED before it goes back on the normal retry/park path.
+ *
+ * A nudge is what the app sends when the model produced NO genuine attempt at a step — it narrated,
+ * or tried to tick the box itself. Spending one of the step's few attempts on that would march a
+ * merely confused model into a premature "⏸ Stuck", so the nudge is free. Free and UNBOUNDED is a
+ * different thing: a step that can never be satisfied then never parks either.
+ *
+ * It lived in App.tsx, where the host's executor was the only thing that nudged. Then steps moved
+ * inside the turn and the in-turn tick grew its own nudge without the bound — so a run whose model
+ * kept narrating spun to the round cap, producing nothing and never parking. It lives here now,
+ * beside the directive it bounds, because both callers need it and only one of them had it.
+ */
+export const MAX_STEP_REMINDERS = 3;
+
 export function stepDirective(
   wf: Workflow,
   step: WorkflowStep,

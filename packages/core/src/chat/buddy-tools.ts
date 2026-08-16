@@ -2529,23 +2529,30 @@ export function buildBuddySystemPrompt(raw: {
     // so it stays always-on; the manual doesn't have to.
     "DOCUMENTS (PDF / WORD): a polished document to keep or send is create_document (load `documents`), NEVER a bare " +
     "```markdown block — fenced blocks are for code/snippets they'll read or run.\n" +
-    "CREATING FILES: when the reader asks you to make a file, webpage, spreadsheet, or code (e.g. 'create a " +
-    "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single fenced " +
-    "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
-    "Save button on that block so the reader keeps it as a real file — and a ▶ Preview that renders " +
-    "an ```html/```svg block right in the chat, and a ▶ Run that EXECUTES a ```python/```js/```sh block " +
-    "on their machine and shows its output inline. So put the whole, ready-to-use content in the block " +
-    "(not a snippet) and make code COMPLETE + self-contained (a script they can run as-is, a page that " +
-    "works on its own), and keep your prose around it short." +
+    // ONE ROUTE PER DELIVERABLE. This block used to end, with commands available, on "Keep the plain
+    // fenced block for when they only want the code to read or keep" — while the routing rule above
+    // says a page the reader KEEPS is write_file. Same word, opposite instruction, and this one is
+    // ~26,000 characters later, so it is the one the model reads last. "Code me a landing page" was
+    // the worked example on the fenced-block side. A model with a big deliverable and two routes has
+    // a reason to compose it inline and then stall on a block it cannot fit.
+    "CREATING FILES: " +
     (opts.canRunCommands
-      ? " BUT a fenced block only HANDS the reader code — it RUNS nothing by itself, and the Save button just " +
-        "exports a copy. So whenever the reader wants the code RUN / TESTED / EXECUTED (they say 'and run it', " +
-        "'test it', it's a simulation or calculation, or they ask for its OUTPUT), do NOT stop at a fenced block " +
-        "or a promise: write_file the script into the workspace and run_command it in the SAME turn, then answer " +
-        "FROM its real output. Keep the plain fenced block for when they only want the code to read or keep. NEVER " +
-        "say you'll save or run something and then end your reply without the write_file / run_command call — that " +
-        "leaves it UNDONE (the reader sees a promise, not a result)."
-      : "") +
+      ? "a file the reader KEEPS — a webpage, a script, a spreadsheet, a document (e.g. 'code me a landing " +
+        "page', 'make a CSV of…') — is a write_file call, NOT a fenced block. It saves whole on disk (chunk a " +
+        "big one with append:true), so you can re-read it, run it and revise it; a big fenced block truncates " +
+        "and drops out of your context. Fenced blocks are for what the reader only READS: a short illustrative " +
+        "snippet, or something small enough to try inline (```html/```svg get a ▶ Preview, ```python/```js/```sh " +
+        "a ▶ Run that executes on their machine). Whenever they want it RUN / TESTED (they say 'and run it', " +
+        "'test it', or ask for its OUTPUT), write_file then run_command in the SAME turn and answer FROM the real " +
+        "output. NEVER say you'll save or run something and then end your reply without the call — that leaves it " +
+        "UNDONE (the reader sees a promise, not a result)."
+      : "when the reader asks you to make a file, webpage, spreadsheet, or code (e.g. 'create a " +
+        "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single " +
+        "fenced code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). " +
+        "The app shows a Save button on that block so the reader keeps it as a real file — and a ▶ Preview that " +
+        "renders an ```html/```svg block right in the chat. So put the whole, ready-to-use content in the block " +
+        "(not a snippet) and make code COMPLETE + self-contained (a page that works on its own), and keep your " +
+        "prose around it short.") +
     "\n" +
     // DESIGNED DOCUMENTS and the MULTI-FILE naming convention are now the `designed-documents` and
     // `multi-file-projects` skills — recognisable jobs with long, exact procedures, which is the shape
@@ -2804,6 +2811,46 @@ export function roundThinkingRecap(thinking: string | undefined, maxChars = ROUN
   return (
     "[Your own reasoning just before that call — carry on from it rather than working it out again, " +
     `and drop it if the results below change things: ${tail}]`
+  );
+}
+
+/**
+ * How much severed reasoning is handed back when a round produced nothing but thought.
+ *
+ * An order of magnitude above `ROUND_THINKING_MAX_CHARS`, because this carries a DELIVERABLE and
+ * that one carries an intention. 400 characters is the right size for "what I was about to do with
+ * these results"; an HTML page is 4,000–10,000, and handing back its last 400 characters is handing
+ * back a closing `</html>`. Paid at most once per turn (the recovery latches), unlike the round
+ * recap, which is paid every round of a tool loop.
+ */
+export const SEVERED_THINKING_MAX_CHARS = 12_000;
+
+/**
+ * THE WORK IT DID IN ITS HEAD, HANDED BACK — because the app is the only thing that still has it.
+ *
+ * Reported as: asked for an HTML page, the model wrote the whole thing inside its reasoning and
+ * emitted no content at all. Nothing recovered it. Every thought-aware recovery in the turn loop
+ * looks for a tool CALL in the reasoning, and a document is not a tool call.
+ *
+ * Simply asking again does not work, and this is the part that makes the helper necessary rather
+ * than nice: by the time the app can ask, the reasoning is GONE from the model's own context. The
+ * empty reply is what gets pushed onto the round history, the provider strips thinking from what it
+ * returns, and so the next round starts from a blank where the page used to be. Asked to "give the
+ * answer now" it would write the page a second time, out of the same budget that could not hold it
+ * the first time — which is the loop the reader watched.
+ *
+ * CONTEXT-ONLY, like `roundThinkingRecap`, and framed as the model's own severed scratchpad rather
+ * than as a separate turn — a `role:"user"` push of the model's own words reads to it as the reader
+ * quoting it back, which is the reading that once made a model audit its own transcript as a
+ * "simulation" and stop mid-series. PURE.
+ */
+export function severedThinkingBlock(thinking: string | undefined, maxChars = SEVERED_THINKING_MAX_CHARS): string {
+  const tail = thinkingTail(thinking, maxChars);
+  if (!tail) return "";
+  return (
+    "\n\nHere is that reasoning back — it is your own scratchpad, not the reader speaking, and it is " +
+    "gone from your context otherwise. Take what you already finished out of it verbatim rather than " +
+    `working it out a second time:\n${tail}`
   );
 }
 

@@ -453,9 +453,26 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toContain("faster than delegating");
   });
   it("run-it: code the reader wants RUN goes to write_file + run_command, not a fenced block + promise", () => {
-    expect(prompt).toContain("write_file the script into the workspace and run_command it in the SAME turn");
+    expect(prompt).toContain("write_file then run_command in the SAME turn");
     // Anti-empty-promise: don't say you'll run it and then end without the tool call.
-    expect(prompt).toContain("end your reply without the write_file / run_command call");
+    expect(prompt).toContain("end your reply without the call");
+  });
+
+  /**
+   * ONE ROUTE PER DELIVERABLE, and this pair is why the test exists.
+   *
+   * With the shell available, CREATING FILES used to end on "Keep the plain fenced block for when
+   * they only want the code to read or keep" — while the routing rule ~26,000 characters earlier
+   * says a page the reader KEEPS is `write_file`. Same word, opposite instruction, and the fenced
+   * one came last. "Code me a landing page" was the worked example on the losing side.
+   */
+  it("keeps: a file the reader keeps has exactly one route, and it is write_file", () => {
+    expect(prompt).toContain("is a write_file call, NOT a fenced block");
+    expect(prompt, "the fenced-block route came back for a file the reader keeps").not.toContain(
+      "when they only want the code to read or keep",
+    );
+    // The fenced block keeps a real job — what the reader only READS, and what previews/runs inline.
+    expect(prompt).toContain("Fenced blocks are for what the reader only READS");
   });
   it("checklist: a multi-action ask (several images) is told to set_plan first, one step per action", () => {
     // Lean no-plan guidance: a 2+ action task plans first; a single action just calls its tool.
