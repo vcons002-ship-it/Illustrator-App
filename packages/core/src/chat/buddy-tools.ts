@@ -2907,9 +2907,22 @@ export function buildCreativeIdlePrompt(recent: string[] = [], switchNow = false
     "a short list — if a new note supersedes an older one, forget the old one first (about:\"self\") " +
     "instead of stacking near-duplicates. Never write to the reader's memories about themselves here; " +
     "you haven't spoken to them.\n\n" +
-    "In this mode you can ONLY search, read, write a document, and keep your own notes. No commands, " +
-    "no files, no email, no calendar, no images — those are off here regardless of other settings, " +
-    "and trying them just wastes the run. Work within it.\n\n" +
+    // THE CLOSED LIST HAS TO INCLUDE THE LOADER, and leaving it out cost a round of every run.
+    //
+    // "ONLY search, read, write a document, and keep your own notes" reads as a complete inventory,
+    // so a model that had just been told (by the toolset index, in this same prompt) to load
+    // `documents` before writing one now had two instructions that contradicted each other. It
+    // reasoned its way out — "I need to use create_document directly instead of trying to load it
+    // through load_toolset, since that's what the instructions specify" — and it happened to guess
+    // right. That is a coin toss on every unattended run, spent before any work begins.
+    //
+    // Naming the loader costs one clause and removes the contradiction at its source. Saying WHY it
+    // is exempt is what stops the next reader of this prompt from trimming it back out.
+    "In this mode you can ONLY search, read, write a document, and keep your own notes. Loading a " +
+    "toolset still works and always will — load_toolset hands you instructions, not new powers, so " +
+    "`load_toolset documents` before create_document is the normal route here, not a workaround. No " +
+    "commands, no files, no email, no calendar, no images — those are off here regardless of other " +
+    "settings, and trying them just wastes the run. Work within it.\n\n" +
     // No "remember this as explored: …" instruction any more: the host records the topic from the
     // document that was actually created (see creative-log.ts). Asking the model to keep its own
     // ledger meant no ledger at all whenever it forgot, and each note it did write evicted one of
