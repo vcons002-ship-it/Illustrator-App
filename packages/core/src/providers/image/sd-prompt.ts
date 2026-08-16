@@ -1,4 +1,4 @@
-import { catalogModelFamily } from "../catalog.js";
+import { catalogModelFamily, detectCheckpointFamily } from "../catalog.js";
 
 /**
  * Stable-Diffusion prompt shaping, applied by the LOCAL backends only (ComfyUI /
@@ -197,15 +197,9 @@ export function hiresTarget(
  * "xl" → sdxl) because users have a manual override when it guesses wrong.
  */
 export function detectModelFamily(name: string): ModelFamily {
-  const n = (name || "").toLowerCase();
-  if (/hi[\s._-]?dream/.test(n)) return "hidream"; // hidream_i1_full_fp16, HiDream-O1, …
-  if (/z[\s._-]?image/.test(n)) return "zimage"; // z_image_turbo, z-image, …
-  if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
-  if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
-  if (n.includes("flux")) return "flux";
-  if (n.includes("xl")) return "sdxl"; // sdxl, sd_xl, realvisxl, juggernautxl, …
-  if (/(^|[^0-9])1[._-]?5|v1-5|sd15|sd1\.5/.test(n)) return "sd15";
-  return "unknown";
+  // The ladder itself moved to catalog.ts — the VRAM estimate there needs the same answer, and
+  // catalog.ts is the leaf module (sd-prompt imports from it, never the other way round).
+  return detectCheckpointFamily(name) ?? "unknown";
 }
 
 /**

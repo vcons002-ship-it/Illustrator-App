@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   chatImageVramFit,
   comfyUrlForVideo,
+  detectCheckpointFamily,
+  imageModelVramCostGb,
   defaultLoadedWindow,
   resolveLoadedContextTokens,
   shouldDeferLocalEngineAutostart,
@@ -155,5 +157,76 @@ describe("staleA1111UrlToFree (free a leftover A1111's VRAM before a ComfyUI vid
   });
   it("does nothing when the A1111 URL is the same server as ComfyUI", () => {
     expect(staleA1111UrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy, a1111: comfy } })).toBeUndefined();
+  });
+});
+
+/**
+ * THE CATALOG IS NOT THE WORLD.
+ *
+ * `imageModelVramCostGb` used to answer only for models the app itself downloads. Every VRAM
+ * decision reads 0 as "unknown" and unknown as "keep both models resident" — so switching the image
+ * backend to AUTOMATIC1111, whose checkpoints are never in the catalog, silently turned the entire
+ * chat-LLM/image-model hand-off off. The chat model was never freed before a render, and it then
+ * failed to load back onto a GPU an SDXL checkpoint had claimed.
+ */
+describe("imageModelVramCostGb outside the managed catalog", () => {
+  it("still uses the catalog's own figure when it has one", () => {
+    expect(imageModelVramCostGb("sd_xl_base_1.0.safetensors")).toBeGreaterThan(0);
+  });
+
+  it("sizes an AUTOMATIC1111 checkpoint from its title, hash suffix and all", () => {
+    // A1111 reports models by `title`, which carries a bracketed hash and no size at all.
+    expect(imageModelVramCostGb("juggernautXL_v9Rundiffusion.safetensors [c9e3e68f]")).toBe(7);
+    expect(imageModelVramCostGb("realisticVisionV60B1_v51VAE.safetensors [15012c538f]")).toBe(4);
+    expect(imageModelVramCostGb("flux1-dev-fp8.safetensors [4610115bb0]")).toBe(12);
+  });
+
+  it("sizes a ComfyUI checkpoint the reader installed themselves", () => {
+    expect(imageModelVramCostGb("myFavouriteXLMerge.safetensors")).toBe(7);
+    expect(imageModelVramCostGb("qwen_image_custom.safetensors")).toBe(20);
+  });
+
+  it("still says 0 when the name genuinely says nothing", () => {
+    // 0 is "unknown", and callers keep both models resident on unknown. A name with no family in it
+    // is the one case where that is still the honest answer.
+    expect(imageModelVramCostGb("model.safetensors")).toBe(0);
+    expect(imageModelVramCostGb("")).toBe(0);
+  });
+
+  it("lets the fit math actually reach a verdict on an A1111 checkpoint", () => {
+    // The reported setup: a ~27B local chat model beside SDXL. Before this, imageGb was 0, the fit
+    // was "unknown", and nothing was ever freed.
+    const imageGb = imageModelVramCostGb("juggernautXL_v9.safetensors [abc12345]");
+    expect(chatImageVramFit({ gpuVramMb: 24_000, imageGb, chatGb: 18 })).toBe("nofit");
+    expect(chatImageVramFit({ gpuVramMb: 48_000, imageGb, chatGb: 18 })).toBe("fit");
+  });
+});
+
+describe("detectCheckpointFamily", () => {
+  it("reads the family off a filename, and admits when it can't", () => {
+    expect(detectCheckpointFamily("HiDream-I1-Full.safetensors")).toBe("hidream");
+    expect(detectCheckpointFamily("z_image_turbo.safetensors")).toBe("zimage");
+    expect(detectCheckpointFamily("qwen-image.safetensors")).toBe("qwenimage");
+    expect(detectCheckpointFamily("flux.2-klein.safetensors")).toBe("flux2");
+    expect(detectCheckpointFamily("flux1-schnell.safetensors")).toBe("flux");
+    expect(detectCheckpointFamily("realvisxlV40.safetensors")).toBe("sdxl");
+    expect(detectCheckpointFamily("v1-5-pruned-emaonly.safetensors")).toBe("sd15");
+    expect(detectCheckpointFamily("mystery.safetensors")).toBeUndefined();
+  });
+
+  it("has an entry in the size table for every family it can return", () => {
+    // A family added to the ladder without a size would fall back to 0 — the exact silent
+    // "unknown, so keep both resident" this whole section exists to remove.
+    for (const name of [
+      "HiDream.safetensors",
+      "z-image.safetensors",
+      "qwen_image.safetensors",
+      "flux2.safetensors",
+      "flux1.safetensors",
+      "sdxl.safetensors",
+      "sd15.safetensors",
+    ]) {
+      expect(imageModelVramCostGb(name), name).toBeGreaterThan(0);
+    }
   });
 });

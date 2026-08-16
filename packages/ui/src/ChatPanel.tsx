@@ -29,6 +29,7 @@ import {
 import { cx } from "./design/classes.js";
 import { ModalShell } from "./ModalShell.js";
 import { ArrivingImage } from "./ArrivingImage.js";
+import { useStickToBottom } from "./useStickToBottom.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -416,20 +417,14 @@ export interface ChatPanelProps {
 export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Follow the conversation: stick to the bottom as messages/tokens arrive — but only
-  // while the reader is already near it, so scrolling up to re-read isn't yanked back.
-  // "Was near bottom" is captured in the onScroll handler: the effect runs AFTER render,
-  // when scrollHeight has already grown, so it can't measure the pre-update position.
-  const nearBottomRef = useRef(true);
-  const trackNearBottom = (): void => {
-    const el = scrollRef.current;
-    if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [props.messages.length, props.streamingText, props.pendingTool, props.activity]);
+  // Follow the conversation — the same behaviour the buddy panel has, from the same hook rather
+  // than a second hand-maintained copy of it (this one had already fallen a few deps behind).
+  const { ref: scrollRef, onScroll: trackNearBottom } = useStickToBottom([
+    props.messages.length,
+    props.streamingText,
+    props.pendingTool,
+    props.activity,
+  ]);
 
   const send = () => {
     const text = draft.trim();
