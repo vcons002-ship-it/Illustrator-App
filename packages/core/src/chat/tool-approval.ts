@@ -69,8 +69,32 @@ export type ToolAutoRoute =
  * screenshot, find_files), anything outward-facing (send_email, draft_email, calendar/task writes,
  * prep_order), and anything that spends GPU or money (image/video generation) is absent — including
  * tools the reader has separately allowed elsewhere. Adding to this list is a deliberate act.
+ *
+ * The test of whether something belongs here is what CALLING it does, not what it is filed under.
+ * `load_toolset` is the case that made the distinction matter — see its own note below.
  */
 export const CREATIVE_IDLE_TOOLS: ReadonlySet<string> = new Set([
+  /**
+   * THE LOADER IS NOT A CAPABILITY, AND LEAVING IT OUT COST THE RUN ITS DOCUMENTATION.
+   *
+   * `load_toolset` returns a page of instructions. It grants nothing: every tool inside the set it
+   * loads is checked against this very list on the next round, so loading `coding` in a creative run
+   * still cannot run a command. Refusing the loader removed no power at all — it removed the manual.
+   *
+   * And it removed the manual for tools this list itself permits. `create_document`, `edit_document`
+   * and `read_document` ARE the `documents` toolset, all three are allowed below, and the toolset
+   * index in the prompt tells the model to load `documents` before using them. So an idle run read
+   * the index, asked for the page, and was told: "load_toolset can't run while you're exploring on
+   * your own — stay with searching, reading, and create_document." Refused the manual for a tool it
+   * was being told to use in the same sentence.
+   *
+   * Observed exactly that way, in the reasoning: "I can't load the documents tool, but I should
+   * double-check whether create_document is actually available… maybe I have direct access without
+   * needing to load a toolset first." It guessed right — the auto-load-on-miss further down the
+   * dispatch hands back the page when an unloaded tool is called — but it spent a round of an
+   * unattended turn working around a contradiction this list created.
+   */
+  "load_toolset",
   "search_web",
   "search_books",
   "search_images",

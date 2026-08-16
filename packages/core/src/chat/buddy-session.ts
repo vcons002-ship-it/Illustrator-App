@@ -1144,8 +1144,14 @@ export async function runBuddyTurn(opts: {
       if (opts.creativeIdle && !allowedInCreativeIdle(call)) {
         const result: BuddyToolResultPayload = {
           error:
-            `${call.tool} can't run while you're exploring on your own — these runs are limited to reading and ` +
-            "writing things up. Stay with searching, reading, and create_document; don't try to work around it.",
+            // A STATEMENT OF WHAT IS TRUE, plus what IS open. The old wording ended "don't try to
+            // work around it", which is an instruction rather than a fact — and it gave the model
+            // the frame it then reasoned in ("maybe I have direct access without needing to load a
+            // toolset first"). Naming the alternatives is what actually stops the workaround.
+            `${call.tool} isn't available while you're exploring on your own — these runs are limited to ` +
+            "looking things up and writing them up. What is open: searching the web, books and images, " +
+            "reading pages, calculating, load_toolset, create_document / edit_document / read_document, " +
+            "and remembering what you found.",
         };
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });

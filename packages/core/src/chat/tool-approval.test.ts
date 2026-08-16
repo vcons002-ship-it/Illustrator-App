@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { allowedInCreativeIdle, isLiveControlTool, routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
+import { CREATIVE_IDLE_TOOLS, allowedInCreativeIdle, isLiveControlTool, routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
+import { toolsetForTool } from "./toolsets.js";
 
 const OFF: ToolAutoFlags = {
   fileAccessGranted: false,
@@ -74,6 +75,40 @@ describe("creative idle: what an unattended run may touch", () => {
   it("allows only look-things-up-and-write-them-up", () => {
     for (const t of ["search_web", "read_url", "read", "create_document", "edit_document", "remember", "calculate"]) {
       expect(allowedInCreativeIdle({ tool: t })).toBe(true);
+    }
+  });
+
+  /**
+   * The loader returns instructions, not power — every tool inside the set it loads is checked
+   * against this same list on the next round. Blocking it took the manual away from tools this list
+   * ALLOWS: create_document, edit_document and read_document are the `documents` toolset, and the
+   * index in the prompt tells the model to load it before using them. The run was refused the page
+   * for a tool it was being told to use in the same sentence, and had to guess its way around it.
+   */
+  it("allows the toolset loader, whose absence took the manual from tools it permits", () => {
+    expect(allowedInCreativeIdle({ tool: "load_toolset" })).toBe(true);
+    for (const t of ["create_document", "edit_document", "read_document"]) {
+      expect(allowedInCreativeIdle({ tool: t }), t).toBe(true);
+    }
+  });
+
+  /**
+   * The invariant that would have caught this without anyone noticing it in a screenshot: if the
+   * list permits a tool that lives behind a toolset, it has to permit the loader too. Otherwise the
+   * run is allowed to call something whose instructions it cannot fetch — which is not a smaller
+   * capability, it is the same capability with the documentation removed.
+   */
+  it("permits the loader for every allowed tool that lives behind a toolset", () => {
+    const gated = [...CREATIVE_IDLE_TOOLS].filter((t) => toolsetForTool(t));
+    expect(gated.length, "no allowed tool is toolset-gated — this test has stopped testing anything").toBeGreaterThan(0);
+    expect(allowedInCreativeIdle({ tool: "load_toolset" }), `${gated.join(", ")} need their manual`).toBe(true);
+  });
+
+  it("still refuses what a loaded set would contain — loading is not permission", () => {
+    // The whole reason the loader is safe: `load_toolset coding` hands over a page of instructions
+    // and changes nothing about what the next round is allowed to do.
+    for (const t of ["run_command", "write_file", "edit_file"]) {
+      expect(allowedInCreativeIdle({ tool: t }), t).toBe(false);
     }
   });
 
