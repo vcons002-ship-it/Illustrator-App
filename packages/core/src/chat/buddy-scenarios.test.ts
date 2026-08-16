@@ -636,7 +636,7 @@ describe("scenario: chains run in order and each result feeds the next round", (
     // The turn did NOT suspend — a pendingTool here would mean the command reached the host.
     expect(outcome.pendingTool).toBeUndefined();
     const command = outcome.toolResults.find((r) => r.call.tool === "run_command");
-    expect(command?.result.error).toMatch(/can't run while you're exploring on your own/);
+    expect(command?.result.error).toMatch(/isn't available while you're exploring on your own/);
     // And it carried on and did the creative work rather than stalling on the refusal.
     expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["run_command", "search_web", "create_document"]);
     expect(outcome.text).toContain("tardigrades");
@@ -683,7 +683,7 @@ describe("scenario: chains run in order and each result feeds the next round", (
     // The reader's own memories are never reachable from an unattended run, whatever it asks for.
     expect(forgot).toEqual([]);
     const refused = outcome.toolResults.find((r) => r.call.tool === "forget");
-    expect(refused?.result.error).toMatch(/can't run while you're exploring on your own/);
+    expect(refused?.result.error).toMatch(/isn't available while you're exploring on your own/);
   });
 
   it("the creative brief asks for research and a written-up document", () => {
