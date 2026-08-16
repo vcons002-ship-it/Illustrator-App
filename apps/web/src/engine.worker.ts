@@ -54,6 +54,7 @@ import {
   planHasPendingStep,
   compileWorkflow,
   activeStep,
+  MAX_STEP_REMINDERS,
   doneWhenToNeeds,
   isToolAvailable,
   evaluateStep,
@@ -6047,6 +6048,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * on the next one — that boundary is real, because the host genuinely has to run it.
      */
     let wf = msg.appManagedSteps && planHasPendingStep(msg.plan) ? compileWorkflow(msg.plan!) : undefined;
+    // The nudge budget, per step. "Exactly as the host's executor does" was true of the free nudge
+    // and false of everything around it: the host BOUNDS its nudges (MAX_STEP_REMINDERS) and names
+    // the tool the step needs. This copy had neither, and inside a 50-round turn that is the
+    // difference between a step that eventually parks and one that spins the whole budget being
+    // asked the same thing. Per-step, so a run that is actually progressing never accumulates.
+    let tickNudges = { stepId: "", count: 0 };
     const appManagedTick = wf
       ? (evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }) => {
           const step = activeStep(wf);
@@ -6055,8 +6062,22 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           // The model narrated instead of doing the step: nudge without spending an attempt, exactly
           // as the host's executor does, so a confused model is not marched into a premature park.
           if (!outcome.done && !outcome.parks && !attemptedStepWork(step, evidence)) {
-            return { kind: "continue" as const, directive: stepDirective(wf!, step, "nudge") };
+            const used = tickNudges.stepId === step.id ? tickNudges.count : 0;
+            if (used < MAX_STEP_REMINDERS) {
+              tickNudges = { stepId: step.id, count: used + 1 };
+              // `needsTool` is the only text that says a file step is satisfied by an actual
+              // write_file call and not by a description of one — the host passes it and this
+              // dropped it, which is precisely the confusion the nudge is answering.
+              const need = doneWhenToNeeds(step.doneWhen);
+              return {
+                kind: "continue" as const,
+                directive: stepDirective(wf!, step, "nudge", need ? { needsTool: need } : {}),
+              };
+            }
+            // Budget spent — fall through to the normal retry/park path. A genuinely stuck run has
+            // to be able to end, and an unbounded free nudge is what stopped it ending.
           }
+          tickNudges = { stepId: "", count: 0 }; // a real attempt or an advance restores the budget
           const adv = advanceWorkflow(wf!, outcome);
           wf = adv.workflow;
           plan = workflowToPlan(wf);

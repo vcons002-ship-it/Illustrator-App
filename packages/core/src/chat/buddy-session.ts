@@ -28,6 +28,7 @@ import {
   HOST_TOOLS,
   type HostToolName,
   toolCallsInThinking,
+  severedThinkingBlock,
   meantToSendMessage,
   splitSeriesMessages,
 } from "./buddy-tools.js";
@@ -596,6 +597,23 @@ export async function runBuddyTurn(opts: {
    */
   let stepEvidenceFrom = 0;
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
+  /**
+   * THE REASONING FROM A ROUND THAT PRODUCED NOTHING ELSE — kept, because it is the only copy.
+   *
+   * `lastThinking` is replace-per-round by contract (the provider streams the full reasoning so far
+   * and this holds the latest). That is right while every round also produces a reply: the reasoning
+   * belongs to the answer beside it. It is wrong for a round whose reply came back EMPTY, because
+   * then the reasoning is the only thing the round made — and the very next round overwrites it.
+   *
+   * Reported as: asked for an HTML page, the model composed the whole thing in its reasoning and
+   * emitted no content. The recovery below asks it to answer; that round's two sentences of
+   * reasoning then replaced the round that held the page, and the reader's collapsible — their last
+   * manual way to get at the work — showed the two sentences.
+   *
+   * So a severed round's reasoning is held aside. Longest wins, and it only ever competes with
+   * `lastThinking`: this is a rescue, not a second history.
+   */
+  let severedThinking = "";
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
   // Guard: say "you ran out of room thinking" once per turn. A model that does it twice is not going
   // to be talked out of it, and each attempt costs another full generation.
@@ -760,11 +778,17 @@ export async function runBuddyTurn(opts: {
     const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
     // Every finished outcome funnels through here, so it is also where the turn reports which
     // toolsets ended up loaded — the host keeps them for the session rather than re-paying next turn.
-    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome => ({
-      ...out,
-      ...(deferring ? { loadedToolsets } : {}),
-      ...(lastThinking.trim() ? { thinking: lastThinking.trim() } : {}),
-    });
+    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome => {
+      // The severed round's reasoning beats the latest when it is bigger — see `severedThinking`.
+      // A recovery round's "I'll summarise now" must not be what the reader is left holding when
+      // the round before it contained the entire deliverable.
+      const keep = severedThinking.length > lastThinking.length ? severedThinking : lastThinking;
+      return {
+        ...out,
+        ...(deferring ? { loadedToolsets } : {}),
+        ...(keep.trim() ? { thinking: keep.trim() } : {}),
+      };
+    };
     if (calls.length === 0) {
       // Hit the per-turn budget with the model STILL trying to call a tool → this is a "keep going?"
       // checkpoint (cloud pause / backstop), not a natural finish. Flag it so the host offers Continue.
@@ -791,6 +815,9 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       let clean = stripToolCallJson(reply).trim();
+      // An empty reply means this round's reasoning is the only thing it produced. Hold the biggest
+      // one aside before anything below overwrites it (see `severedThinking`).
+      if (!clean && roundThinking.trim().length > severedThinking.length) severedThinking = roundThinking;
       /**
        * THE CALL WAS IN THE REASONING. SAY SO, BEFORE FORBIDDING TOOL CALLS.
        *
@@ -869,16 +896,57 @@ export async function runBuddyTurn(opts: {
        * instead — the monologue then lands in the chat as the reader's answer. Words are the only
        * lever here.
        */
-      if (lastTruncated && !clean && !calls.length && !ranOutThinking && round < effectiveMax) {
+      /**
+       * …AND THE SAME THING HAPPENS WHEN IT DOESN'T RUN OUT.
+       *
+       * The guard above used to be `lastTruncated && …`, which diagnosed the failure by the wrong
+       * fact. `lastTruncated` is `done_reason === "length"` — it distinguishes "stopped mid-thought"
+       * from "finished thinking", and the loss is identical either way: the reply is empty and the
+       * round's entire output is reasoning the reader will never see.
+       *
+       * Reported as the second shape: asked for an HTML page, the model composed the whole page in
+       * its reasoning, finished comfortably inside the budget, and emitted nothing. Truncation was
+       * false, so the one recovery whose words fit ("You have already worked this out — give the
+       * answer now") was skipped, and it fell to the wrap-up, which asks for a BRIEF note about what
+       * it did. A model that has already written the page reads that as "summarise and stop", and
+       * the run ends having produced a sentence claiming a page that does not exist.
+       *
+       * So the guard is now the state that actually matters: nothing came out, and there is
+       * reasoning that explains where it went. Which of the two it was still changes the wording,
+       * because "you ran out of room" and "you finished and emitted nothing" call for different
+       * corrections, and telling a model it ran out of room when it did not invites it to trim work
+       * that was never too long.
+       *
+       * And the reasoning is handed BACK. Without that this asks the model to redo, from a blank
+       * context, the work whose first attempt is the reason we are here — see `severedThinkingBlock`.
+       *
+       * The two halves need different evidence, which is why this is an OR and not a single test.
+       * Truncation is self-evident: `lastTruncated` with an empty reply can only be a generation that
+       * ran out mid-thought, and the reasoning is often not even available — some providers hand back
+       * nothing at all when they cut a thinking model off, which is the case the original diagnosed.
+       * A reply that finished normally and came back empty is more ambiguous, so it needs the
+       * reasoning to exist before this claims to know where the output went; without it, an ordinary
+       * empty reply belongs to the wrap-up, exactly as before.
+       */
+      if (!clean && !calls.length && (lastTruncated || roundThinking.trim()) && !ranOutThinking && round < effectiveMax) {
         ranOutThinking = true;
         opts.onEvent?.({ kind: "activity", text: "Wrapping that up…" });
         messages.push({ role: "assistant", content: reply });
         messages.push({
           role: "user",
           content:
-            "[That reply hit its length limit while you were still thinking, so nothing came out at " +
-            "all. You have already worked this out — give the answer now, in the reply itself and " +
-            "briefly. If it needs a tool, make the call. Do not re-check anything.]",
+            (lastTruncated
+              ? "[That reply hit its length limit while you were still thinking, so nothing came out " +
+                "at all. You have already worked this out — give the answer now, in the reply itself. " +
+                "If it needs a tool, make the call. Do not re-check anything."
+              : // NOT "briefly". The wrap-up says brief and that is right for a summary; here the
+                // deliverable itself may be the answer, and asking for brevity is asking the model
+                // to describe the page instead of writing it.
+                "[You finished thinking and the reply came back empty, so nothing reached the reader " +
+                "at all. Only your REPLY is delivered — reasoning is not. Put the actual work in the " +
+                "reply now: if you already wrote something out (a page, a file, a document, an " +
+                "answer), emit it in full rather than describing it, and if it belongs in a file, " +
+                "make that tool call. Do not re-derive anything.") + severedThinkingBlock(roundThinking) + "]",
         });
         continue;
       }
@@ -955,8 +1023,22 @@ export async function runBuddyTurn(opts: {
           // The step's work is this round's prose, and it is a message in its own right. Nothing
           // else flushes it: the host flushes streamed prose when a TOOL CALL follows it, and a text
           // step has none — the same reason the last letter of a series went missing once already.
-          opts.onEvent?.({ kind: "stepDone", text: clean });
-          transcript.push({ role: "assistant", content: clean });
+          //
+          // TWO CONDITIONS, BOTH LEARNED FROM THE SAME RUN. It used to publish unconditionally.
+          //
+          // `clean` — a thinking-only round has no prose, and publishing it put an EMPTY bubble in
+          // the chat and an empty assistant turn into the stored transcript. A run that spends
+          // several rounds reasoning left a column of blank bubbles behind it, and the model reads
+          // its own empty turns back on the next request.
+          //
+          // `next.advanced` — a nudge is the app saying "this step is NOT done". Publishing that
+          // round's prose as a completed step's message credits the step with the narration that
+          // failed to satisfy it, which is how "I've created the HTML page" — written by a model
+          // that had created nothing — became a step's recorded output.
+          if (clean && next.advanced) {
+            opts.onEvent?.({ kind: "stepDone", text: clean });
+            transcript.push({ role: "assistant", content: clean });
+          }
           messages.push({ role: "assistant", content: reply });
           messages.push({ role: "user", content: next.directive });
           // Whatever satisfied THIS step is spent. A nudge is not an advance and keeps the window
