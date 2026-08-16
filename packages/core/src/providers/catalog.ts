@@ -397,13 +397,68 @@ export function catalogModelFamily(name: string): CatalogModelFamily | undefined
 }
 
 /**
+ * The family of a checkpoint the catalog has never seen, read from its FILENAME. `undefined` when
+ * the name says nothing recognisable. PURE.
+ *
+ * Lives here, in the leaf module, rather than beside the prompt shaping that used to own it: the
+ * VRAM estimate below needs it too, and catalog.ts imports nothing (sd-prompt.ts imports FROM here,
+ * so the reverse would be a cycle). `detectModelFamily` now delegates to this, unchanged.
+ */
+export function detectCheckpointFamily(name: string): CatalogModelFamily | undefined {
+  const n = (name || "").toLowerCase();
+  if (/hi[\s._-]?dream/.test(n)) return "hidream"; // hidream_i1_full_fp16, HiDream-O1, …
+  if (/z[\s._-]?image/.test(n)) return "zimage"; // z_image_turbo, z-image, …
+  if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
+  if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
+  if (n.includes("flux")) return "flux";
+  if (n.includes("xl")) return "sdxl"; // sdxl, sd_xl, realvisxl, juggernautxl, …
+  if (/(^|[^0-9])1[._-]?5|v1-5|sd15|sd1\.5/.test(n)) return "sd15";
+  return undefined;
+}
+
+/**
+ * Typical resident size (GB) by family, for a checkpoint the catalog doesn't list. Deliberately
+ * coarse and on the generous side: the number decides whether two models are given the GPU at once,
+ * and under-estimating that is an OOM while over-estimating it is a reload.
+ */
+const FAMILY_VRAM_GB: Record<CatalogModelFamily, number> = {
+  sd15: 4,
+  sdxl: 7,
+  flux: 12,
+  flux2: 20,
+  zimage: 12,
+  qwenimage: 20,
+  hidream: 20,
+};
+
+/**
  * Rough resident VRAM cost (GB) of a local image model — its total file size (diffusion
  * model + text encoder + VAE), which for the fp8 catalog files ≈ what sits in memory.
- * Returns 0 when the model isn't in the catalog, so callers don't force memory offload
- * for an unknown model. Used to decide whether ComfyUI needs `--lowvram` on a given card.
+ *
+ * THE CATALOG IS NOT THE WORLD, and assuming it was silently disabled every VRAM decision in the
+ * app for anyone not using an app-downloaded model. The catalog lists what the app can fetch for
+ * its managed ComfyUI. An AUTOMATIC1111 checkpoint is never in it — A1111 reports its models by
+ * `title` ("juggernautXL_v9.safetensors [1a2b3c4d]"), and `Automatic1111Backend.listModels` even
+ * stamps `sizeGB: 0` because the API doesn't report one — and neither is a ComfyUI checkpoint the
+ * reader installed themselves.
+ *
+ * Returning 0 there does not mean "small", it means "unknown", and every caller reads unknown as
+ * `chatImageVramFit` → "unknown" → keep both models resident. So switching the image backend to
+ * AUTOMATIC1111 turned the whole chat-LLM/image-model hand-off off: the LLM was never freed before
+ * a render, the image model was never handed back before a chat turn, and the engine was started
+ * beside the LLM at boot. On A1111 that is the worst case rather than a neutral one — it picks its
+ * VRAM/shared-RAM split at LOAD time from whatever is free, so loading beside a resident 20GB chat
+ * model permanently strands half the checkpoint in shared RAM, and the chat model that comes back
+ * to a full GPU fails to load at all.
+ *
+ * So: the catalog's own figure when we have it, a family estimate from the filename when we don't,
+ * and 0 only when the name really says nothing.
  */
 export function imageModelVramCostGb(name: string): number {
-  return catalogEntryForModel(name)?.sizeGB ?? 0;
+  const exact = catalogEntryForModel(name)?.sizeGB;
+  if (exact !== undefined && exact > 0) return exact;
+  const family = detectCheckpointFamily(name);
+  return family ? FAMILY_VRAM_GB[family] : 0;
 }
 
 /**

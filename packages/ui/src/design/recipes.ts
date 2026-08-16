@@ -124,6 +124,12 @@ export const chatScrollStyle: CSSProperties = {
   flexDirection: "column",
   gap: 8,
   padding: 12,
+  // The browser's scroll anchoring is a SECOND owner of this element's scrollTop: when content
+  // above the viewport changes size — a bubble settling out of its arrival animation, a thinking
+  // block collapsing, a picture arriving — it moves the scroll position to hold its chosen anchor
+  // node still, which pushes the view up and off the newest message. `useStickToBottom` owns this
+  // scroller's position; two owners produced the drift reported as "it keeps jumping higher".
+  overflowAnchor: "none",
 };
 
 export const chatInputRowStyle: CSSProperties = {

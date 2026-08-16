@@ -56,6 +56,34 @@ describe("the approval dock", () => {
   });
 });
 
+/**
+ * ONE OWNER FOR THE SCROLL POSITION.
+ *
+ * Both chat panels had their own copy of "scroll to the bottom when these props change", and the
+ * browser's scroll anchoring was quietly adjusting the same scrollTop underneath them — so content
+ * settling above the viewport drifted the view up and nothing pulled it back. Reported as the chat
+ * jumping higher. The hook is the only owner now; a panel re-growing its own copy, or the
+ * `overflow-anchor` opt-out going missing, brings the drift straight back.
+ */
+describe("following the conversation", () => {
+  const panels = ["ChatBuddyPanel.tsx", "ChatPanel.tsx"] as const;
+
+  it("leaves the scroll position to useStickToBottom in both panels", () => {
+    for (const f of panels) {
+      const src = readFileSync(join(import.meta.dirname, f), "utf8");
+      expect(src, f).toContain("useStickToBottom(");
+      // Its own copy would be a second owner again. (ThinkingBlock scrolls its OWN <pre>;
+      // that is a different element and not the conversation.)
+      expect(src, f).not.toContain("nearBottomRef");
+    }
+  });
+
+  it("keeps the browser out of it", () => {
+    const recipes = readFileSync(join(import.meta.dirname, "design", "recipes.ts"), "utf8");
+    expect(recipes).toMatch(/chatScrollStyle[\s\S]*?overflowAnchor: "none"/);
+  });
+});
+
 describe("the generic card's read-out", () => {
   it("names every argument except the tool itself", () => {
     expect(describeCallArgs({ tool: "control_ui", action: "click", window: "Notepad", target: "Save" })).toBe(

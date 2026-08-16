@@ -49,6 +49,7 @@ import {
 } from "./ParticleField.js";
 import { useSharedParticleField } from "./ParticleBackdrop.js";
 import { StepQueue } from "./StepQueue.js";
+import { useStickToBottom } from "./useStickToBottom.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -281,23 +282,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     () => buddySlashCommands((props.desktop ?? false) || (props.remote ?? false)),
     [props.desktop, props.remote],
   );
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Stick to the bottom as messages/tokens arrive — but only while the reader is already
-  // near it, so scrolling up to re-read isn't yanked back. "Was near bottom" is captured
-  // in the onScroll handler: the effect runs AFTER render, when scrollHeight has already
-  // grown, so it can't measure the pre-update position.
-  const nearBottomRef = useRef(true);
-  const trackNearBottom = (): void => {
-    const el = scrollRef.current;
-    if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
-    // Every element rendered INTO the scroll area must be a dep, or its growth leaves the view stranded
-    // above the newest content: the thinking disclosure, the plan checklist, and the live step log all
-    // grow the column but were missing here (U5).
-  }, [
+  // Follow the conversation. The list below is no longer load-bearing on its own — `useStickToBottom`
+  // observes the column and the viewport, which covers the growth no dependency list can predict
+  // (a picture finishing its load, a card measuring itself) — but these fire in the same commit as
+  // the content, a frame earlier than a resize callback, so they stay.
+  const { ref: scrollRef, onScroll: trackNearBottom } = useStickToBottom([
     props.messages.length,
     props.streamingText,
     props.activity,
