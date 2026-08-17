@@ -84,6 +84,27 @@ export interface ChatOptions {
    * tool call is genuinely required (it forbids a plain prose reply). Ignored by cloud providers and on
    * the non-Ollama path. See `buildToolCallFormat`. */
   toolFormat?: Record<string, unknown>;
+  /**
+   * CUT A RUNAWAY DELIBERATION — the maximum characters of REASONING the model may produce before it
+   * has emitted a single character of content. Streaming, local (Ollama) only; unset = no limit.
+   *
+   * Reasoning and reply come out of the same `num_predict`, so a model that deliberates long enough
+   * ends its generation inside the thinking block and returns an EMPTY string. The app can only react
+   * once that has happened, and its reaction is another generation, which the model spends the same
+   * way. Reported exactly like that: "it would think until it couldn't, run out of budget, then
+   * restart."
+   *
+   * Asking for less thinking does not work and the attempt is on record: `reasoningEffort: "none"`
+   * reaches Ollama as `think: false`, and a thinking model told not to think does not deliberate less
+   * — it stops emitting `<think>` tags, so `stripThink` finds nothing and the monologue is published
+   * to the reader as their answer. That revert's own conclusion was that cutting deliberation on a
+   * local model has to be done some other way. This is the other way: the app stops READING rather
+   * than asking the model to stop thinking, which needs no cooperation from the model at all.
+   *
+   * Only ever applied while the reply is still empty. A model that has started writing is never cut —
+   * the budget is a bound on deliberating INSTEAD of answering, never on answering at length.
+   */
+  thinkingBudgetChars?: number;
 }
 
 /** One native tool definition (Ollama / OpenAI `/api/chat` `tools` entry). */

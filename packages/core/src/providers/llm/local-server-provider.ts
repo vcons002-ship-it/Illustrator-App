@@ -631,7 +631,21 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     const withTools = await this.nativeToolsEnabled(opts);
     const toolCalls: NativeToolCall[] = [];
     const format = opts.toolFormat ?? (json ? (opts.jsonSchema ?? "json") : undefined);
-    await streamOllamaLines(
+    /**
+     * THE RUNAWAY-DELIBERATION CUT. See `thinkingBudgetChars` on ChatOptions for why this is a read
+     * being stopped rather than a request for less thinking.
+     *
+     * Its own controller, composed with the caller's, so aborting here is distinguishable from the
+     * reader pressing Stop: one is a normal outcome this method recovers from, the other has to
+     * propagate. `truncated` is set alongside, because that is precisely what happened from the
+     * turn loop's point of view — the generation ended with the reply still empty.
+     */
+    const cut = new AbortController();
+    let cutForThinking = false;
+    const thinkingCap = opts.thinkingBudgetChars;
+    const signal = opts.signal ? AbortSignal.any([opts.signal, cut.signal]) : cut.signal;
+    try {
+      await streamOllamaLines(
       this.fetchImpl,
       `${ollamaRoot(this.baseUrl)}/api/chat`,
       {
@@ -652,6 +666,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       },
       this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
       (line) => {
+        // Aborting the socket does not un-read what has already been buffered, and a fast local
+        // server delivers many frames per chunk — so the cut has to stop the READING too, or it only
+        // takes effect at the next network boundary and the bound means nothing on a quick model.
+        if (cutForThinking) return;
         const l = line as OllamaChatLine;
         if (l.done_reason === "length") truncated = true;
         if (l.message?.tool_calls?.length) toolCalls.push(...l.message.tool_calls);
@@ -661,6 +679,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         if (l.message?.thinking) {
           thinking += l.message.thinking;
           opts.onThinking?.(thinking);
+          // `full` empty is the whole condition: a model that has started writing is never cut, so
+          // this can only ever stop deliberation that is happening INSTEAD of an answer.
+          if (thinkingCap && !full && thinking.length > thinkingCap && !cutForThinking) {
+            cutForThinking = true;
+            truncated = true;
+            cut.abort();
+          }
         }
         const delta = l.message?.content;
         if (!delta) return;
@@ -674,8 +699,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
           opts.onThinking?.(reasoningSoFar(full));
         }
       },
-      opts.signal,
-    );
+        signal,
+      );
+    } catch (err) {
+      // Only OUR abort is an outcome; the reader's Stop is still an error and must propagate. The
+      // reasoning gathered so far has already reached `onThinking`, so nothing it produced is lost.
+      if (!cutForThinking) throw err;
+    }
     opts.onComplete?.({ truncated });
     // Append any native tool_calls as the app's text protocol so parseBuddyToolCalls runs them.
     const tail = toolCalls.length ? nativeToolCallsToText(toolCalls) : "";

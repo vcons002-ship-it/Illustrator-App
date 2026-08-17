@@ -6178,6 +6178,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
+      /**
+       * HOW LONG IT MAY DELIBERATE BEFORE WRITING ANYTHING, in characters (~4 per token, so this is
+       * half the reply budget).
+       *
+       * Reasoning and reply share one `num_predict` on Ollama, so a model that deliberates past this
+       * was going to end its generation inside the thinking block and return an empty string anyway
+       * — the app just stops reading first, while there is still a turn left to do something with.
+       * Reported as "it would think until it couldn't, run out of budget, then restart."
+       *
+       * Local only: on a cloud provider reasoning does not come out of the reply's budget, so there
+       * is nothing here to bound.
+       */
+      ...(llm.id === "local-server" ? { thinkingBudgetChars: budgets.reply * 2 } : {}),
       contextChars: budgets.input,
       loadedToolsets,
       ...(appManagedTick ? { appManagedTick } : {}),
