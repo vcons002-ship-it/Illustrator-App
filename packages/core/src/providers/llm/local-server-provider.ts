@@ -666,24 +666,21 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       },
       this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
       (line) => {
-        // Aborting the socket does not un-read what has already been buffered, and a fast local
-        // server delivers many frames per chunk — so the cut has to stop the READING too, or it only
-        // takes effect at the next network boundary and the bound means nothing on a quick model.
-        if (cutForThinking) return;
         const l = line as OllamaChatLine;
         if (l.done_reason === "length") truncated = true;
         if (l.message?.tool_calls?.length) toolCalls.push(...l.message.tool_calls);
         // Separated reasoning (think:true) streams in `message.thinking` as DELTAS — accumulate and
         // emit the FULL reasoning so far (onThinking is replace-semantics, like the SSE path's
         // reasoningSoFar). Older builds inline a `<think>` block in `content`, handled below.
-        if (l.message?.thinking) {
+        // Further REASONING is dropped once the cut has fired — that is the thing being stopped. The
+        // frame is not skipped wholesale, because a frame can carry content too.
+        if (l.message?.thinking && !cutForThinking) {
           thinking += l.message.thinking;
           opts.onThinking?.(thinking);
           // `full` empty is the whole condition: a model that has started writing is never cut, so
           // this can only ever stop deliberation that is happening INSTEAD of an answer.
-          if (thinkingCap && !full && thinking.length > thinkingCap && !cutForThinking) {
+          if (thinkingCap && !full && thinking.length > thinkingCap) {
             cutForThinking = true;
-            truncated = true;
             cut.abort();
           }
         }
@@ -706,7 +703,22 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       // reasoning gathered so far has already reached `onThinking`, so nothing it produced is lost.
       if (!cutForThinking) throw err;
     }
-    opts.onComplete?.({ truncated });
+    /**
+     * A CUT IS ONLY A TRUNCATION IF NOTHING CAME OF IT — and getting this wrong made the cut worse
+     * than the bug it was for.
+     *
+     * The first version skipped every frame after the cut and reported `truncated` unconditionally.
+     * An abort does not always stop the stream: this provider is handed a custom `fetchImpl`, and on
+     * the desktop that is a Tauri bridge, which is under no obligation to honour a signal. So the
+     * model went on and wrote the entire page, every byte of it was discarded by the skip, and the
+     * turn reported an empty truncated reply. Reported as "every time the thinking is stopped it
+     * just freezes where it is and accomplishes nothing" — the freeze was the app waiting out a
+     * generation whose output it had already decided to throw away.
+     *
+     * Content that arrives after the cut is the OUTCOME WE WANTED: the model stopped deliberating
+     * and started writing. It is kept, and the generation is not a truncation.
+     */
+    opts.onComplete?.({ truncated: truncated || (cutForThinking && !full) });
     // Append any native tool_calls as the app's text protocol so parseBuddyToolCalls runs them.
     const tail = toolCalls.length ? nativeToolCallsToText(toolCalls) : "";
     return [stripThink(full).trim(), tail].filter(Boolean).join("\n");

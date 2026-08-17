@@ -639,6 +639,9 @@ export async function runBuddyTurn(opts: {
    * better ending than a loop.
    */
   const MAX_RAN_OUT_THINKING = 2;
+  /** The tightened bound never goes below this — ~2k tokens, enough to read the handed-back notes and
+   * decide a layout. Below it the cut stops being a bound on rumination and becomes one on thought. */
+  const MIN_TIGHTENED_THINKING_CHARS = 8_000;
   let ranOutThinking = 0;
   /** How many deliberations the app has cut this turn — tightens the next round's bound. */
   let thinkingCuts = 0;
@@ -779,12 +782,18 @@ export async function runBuddyTurn(opts: {
        * out, and a model that spends that round deliberating again is in the loop the reader
        * described: "it would think until it couldn't, run out of budget, then restart."
        *
-       * A quarter, not zero: it still has to decide HOW to lay the answer out, and a cut at zero
-       * would fire on every model on every round. Cheap enough to be worth repeating — the whole
-       * point of cutting early is that an attempt no longer costs a full generation.
+       * HALVED, not quartered, and never below a floor. A quarter of an already-generous bound is a
+       * few hundred tokens, which is not "less deliberation" — it is a cut that fires before the
+       * model has finished reading its own handed-back notes, on every round after the first. The
+       * point is a smaller allowance for a round that has less to decide, not a hostile one.
        */
       ...(opts.thinkingBudgetChars
-        ? { thinkingBudgetChars: thinkingCuts > 0 ? Math.max(600, Math.floor(opts.thinkingBudgetChars / 4)) : opts.thinkingBudgetChars }
+        ? {
+            thinkingBudgetChars:
+              thinkingCuts > 0
+                ? Math.max(MIN_TIGHTENED_THINKING_CHARS, Math.floor(opts.thinkingBudgetChars / 2))
+                : opts.thinkingBudgetChars,
+          }
         : {}),
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
