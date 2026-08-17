@@ -820,6 +820,45 @@ describe("a reply that spent its whole budget thinking", () => {
     expect(said, "the ordinary wrap-up stopped firing").toMatch(/Now reply to the reader in plain text/);
   });
 
+  /**
+   * A CUT-OFF WRITE IS SAVED, NOT THROWN AWAY — the other half of "it never writes any output".
+   *
+   * The reply stops mid-JSON-string, so nothing parses and every character is discarded, and the app
+   * then asks for the file again in chunks out of the same budget. The prefix is the exact opening of
+   * the file and `append:true` exists to add to it, so it goes out as a real host tool call — which
+   * suspends the turn, so the continuation is a FRESH turn with a FRESH budget. That is the
+   * turn-by-turn chunking the old one-step-per-turn flow got by accident, made structural.
+   */
+  it("saves the prefix of a write that ran out of room, instead of asking for the file again", async () => {
+    const cut = '{"tool":"write_file","path":"index.html","content":"<!DOCTYPE html>\\n<html><h1>Tides<';
+    const llm = truncatedLlm([{ truncated: true, reply: cut }]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+    });
+    expect(outcome.pendingTool, "the salvaged write never reached the host").toBeDefined();
+    const call = outcome.pendingTool as { tool: string; path: string; content: string; truncated?: boolean };
+    expect(call.tool).toBe("write_file");
+    expect(call.path).toBe("index.html");
+    expect(call.content).toBe("<!DOCTYPE html>\n<html><h1>Tides<");
+    // The host reads this as "more is coming" and answers with the resume note, so a partial file is
+    // never reported as a finished one.
+    expect(call.truncated, "a partial write would be reported as a completed file").toBe(true);
+    // One generation: the turn suspends on the host tool rather than nudging for a rewrite.
+    expect(llm.calls).toHaveLength(1);
+  });
+
+  it("still nudges when the cut-off call was not a file write", async () => {
+    const llm = truncatedLlm([
+      { truncated: true, reply: '{"tool":"run_command","command":"npm run build -- --very-long' },
+      { truncated: false, reply: "done" },
+    ]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "build it" }], deps: baseDeps,
+    });
+    expect(outcome.pendingTool, "a truncated command was salvaged as if it were a file").toBeUndefined();
+    expect(llm.calls.flat().map((m) => m.content).join("\n")).toMatch(/cut off at the length limit/);
+  });
+
   it("does not fire when the round produced prose, however much it thought first", async () => {
     // Reasoning then answering is a decision, not a loss. Nudging there would tell a model that is
     // working fine that it failed.

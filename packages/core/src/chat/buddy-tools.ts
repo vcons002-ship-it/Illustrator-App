@@ -1794,11 +1794,24 @@ export function buildBuddySystemPrompt(raw: {
       "the same for the barn\" — because you are given one step at a time without the others in front of you. " +
       'A step can also name the exact files it must produce ("produces":["a.py","b.py"] — the app verifies they ' +
       'exist) and a check command ("verify":"pytest -q" — the app runs it and won\'t pass the step until it exits ' +
-      "0). For a LONG DOCUMENT or many code files, plan it as an OUTLINE first, then ONE step per section/file " +
-      "(each writes its part with write_file/append) — don't try to emit the whole thing in one step. " +
-      "For a job too big for a single plan (a whole app, a long multi-part report), FIRST write the brief " +
-      "to durable artifacts — REQUIREMENTS.md (what to build) and TASKS.md (the checklist) via write_file — " +
-      "then work the tasks plan-by-plan, updating TASKS.md as you finish each, so nothing is lost between turns.\n"
+      "0). " +
+      // ADVERTISE-THEN-REFUSE, which the toolsets file explicitly forbids. This whole passage plans
+      // around write_file, and it was ungated — so on a phone or the web app, where there is no shell
+      // and `coding` is not even in the toolset index, the model was told to build its checklist out
+      // of a tool it cannot see, cannot load and cannot call, while a rule further down told it to
+      // put the whole thing in one fenced block. Three instructions for one page, and the only place
+      // to resolve them for free is the thinking block.
+      (opts.canRunCommands
+        ? "For a LONG DOCUMENT or many code files, plan it as an OUTLINE first, then ONE step per section/file " +
+          "(each writes its part with write_file/append) — don't try to emit the whole thing in one step. Each " +
+          "step is its own turn with its own room, so several small writes always beat one big one, and a write " +
+          "that runs out of room is saved and continued rather than lost. " +
+          "For a job too big for a single plan (a whole app, a long multi-part report), FIRST write the brief " +
+          "to durable artifacts — REQUIREMENTS.md (what to build) and TASKS.md (the checklist) via write_file — " +
+          "then work the tasks plan-by-plan, updating TASKS.md as you finish each, so nothing is lost between turns."
+        : "For a LONG DOCUMENT, plan it as an OUTLINE first, then ONE step per section — each step writes its " +
+          "own part, and they are assembled for the reader. Don't try to emit the whole thing in one step.") +
+      "\n"
     : '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
       "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
       "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
@@ -2811,6 +2824,104 @@ export function roundThinkingRecap(thinking: string | undefined, maxChars = ROUN
   return (
     "[Your own reasoning just before that call — carry on from it rather than working it out again, " +
     `and drop it if the results below change things: ${tail}]`
+  );
+}
+
+/**
+ * A WRITE THAT WAS CUT OFF MID-ARGUMENT — KEPT, INSTEAD OF THROWN AWAY. PURE.
+ *
+ * `write_file` carries the whole file in one JSON string argument, so a long file's call is the one
+ * thing in the protocol guaranteed to outgrow a generation: the reply stops mid-string, the JSON
+ * never closes, `parseBuddyToolCalls` yields nothing, and everything the model wrote is discarded.
+ * The app then asked it to write the file again in chunks — out of the same budget, from a context
+ * that no longer holds the attempt. Which is how "it never actually writes any output" happens to a
+ * model that wrote a complete page every single round.
+ *
+ * The bytes are RIGHT THERE. Nothing about a truncated call makes its prefix wrong — it is the exact
+ * opening of the file, and `append: true` exists precisely to add to it. So the prefix is salvaged
+ * and written, and the model is asked to continue from where it stopped. The turn suspends on the
+ * host tool as it always does, so each continuation is a fresh turn with a fresh budget: the
+ * turn-by-turn chunking that used to happen by luck, made structural.
+ *
+ * Deliberately narrow. It only fires on an UNPARSEABLE call — a call that parsed is a call that was
+ * complete — and only for the two tools whose argument is a file body. Everything is read out of
+ * `content` up to the cut; a dangling `\` at the very end is dropped rather than guessed at, since
+ * the next chunk supplies whatever it was going to escape.
+ */
+export interface SalvagedWrite {
+  path: string;
+  content: string;
+  append: boolean;
+}
+
+export function salvageTruncatedWrite(reply: string): SalvagedWrite | undefined {
+  const text = stripFences(stripThink(reply));
+  // The LAST write_file opener wins: prose or an earlier completed call may precede it, and the one
+  // that ran out of room is by definition the final thing in the reply.
+  const open = text.lastIndexOf('"write_file"');
+  if (open === -1) return undefined;
+  const brace = text.lastIndexOf("{", open);
+  if (brace === -1) return undefined;
+  const obj = text.slice(brace);
+  // A call that closes is a call that parsed; this is only for the one that did not.
+  try {
+    if (JSON.parse(obj)) return undefined;
+  } catch {
+    /* expected — it was cut off */
+  }
+  const path = /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(obj)?.[1];
+  if (!path) return undefined; // the cut landed before the path — nothing to write TO
+  const append = /"append"\s*:\s*true/.test(obj);
+  const at = obj.search(/"content"\s*:\s*"/);
+  if (at === -1) return undefined;
+  const body = obj.slice(obj.indexOf('"', obj.indexOf(":", at) + 1) + 1);
+  // Walk the string exactly as JSON would, stopping at the cut. An unterminated escape at the very
+  // end is dropped: guessing what `\` was about to become is how a salvage corrupts a file.
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (c === "\\") {
+      const n = body[i + 1];
+      if (n === undefined) break;
+      i += 1;
+      if (n === "n") out += "\n";
+      else if (n === "t") out += "\t";
+      else if (n === "r") out += "\r";
+      else if (n === "b") out += "\b";
+      else if (n === "f") out += "\f";
+      else if (n === "u") {
+        const hex = body.slice(i + 1, i + 5);
+        if (hex.length < 4) break; // cut mid-escape
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 4;
+      } else out += n; // \" \\ \/ and anything else stands for itself
+      continue;
+    }
+    if (c === '"') break; // the string closed after all — not a truncation we should touch
+    out += c;
+  }
+  return out ? { path, content: out, append } : undefined;
+}
+
+/** How much of the salvaged tail to quote back so the model can see where to resume. Enough to
+ * recognise its own position (a whole tag or line), short enough not to invite a re-send. */
+const RESUME_TAIL_CHARS = 240;
+
+/**
+ * The note that turns a salvaged partial write into a continuation the model can finish.
+ *
+ * Says three things, because the model has none of them: how much landed, that the file is REAL on
+ * disk now, and the exact text to carry on from — its own attempt is gone from its context, so
+ * without the tail it can only start the file again. PURE.
+ */
+export function resumeWriteNote(path: string, written: number, tail: string): string {
+  const shown = tail.length > RESUME_TAIL_CHARS ? tail.slice(tail.length - RESUME_TAIL_CHARS) : tail;
+  return (
+    `[That write ran past the length limit, so I saved the ${written} character${written === 1 ? "" : "s"} that ` +
+    `arrived — ${path} exists and holds them. Nothing is lost and nothing needs rewriting. Continue the file ` +
+    `from exactly where it stops, with {"tool":"write_file","path":"${path}","append":true,"content":"…"} — the ` +
+    `next part only. Repeat that for as many parts as it takes; a shorter chunk each time is fine and safer. ` +
+    `It currently ends:\n${shown}]`
   );
 }
 
@@ -5589,6 +5700,11 @@ function formatBuddyToolResultBody(
     const w = result.writeFile;
     if (!w) return `[write_file "${call.path}" did not run]`;
     if (!w.ok) return `[write_file "${call.path}" failed: ${w.error ?? "unknown error"}. Fix the path/content and retry.]`;
+    // A SALVAGED PARTIAL is not a finished file, and must never read like one. The turn loop writes
+    // the prefix of a call that ran out of room mid-argument (see salvageTruncatedWrite) and marks it
+    // `truncated`; without a different note here the model would read "saved to …" and move on,
+    // leaving a page that stops mid-tag on disk and a run that believes it is done.
+    if (call.truncated) return resumeWriteNote(w.path, call.content.length, call.content);
     return call.append
       ? `[write_file APPENDED this chunk to ${w.path}. If more of the file remains, send the NEXT chunk with append:true; once it's all written, run_command it.]`
       : `[write_file saved to ${w.path}. (For a file too big for one reply, send the rest in more write_file calls with "append":true.) You can now run_command it (e.g. python/node it, or run tests).]`;

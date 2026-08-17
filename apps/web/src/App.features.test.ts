@@ -409,3 +409,50 @@ describe("the worker's in-turn tick", () => {
     expect(APP_RAW).toContain("MAX_STEP_REMINDERS");
   });
 });
+
+/**
+ * THE TWO NUMBERS THAT DECIDED WHETHER A LONG FILE COULD EXIST AT ALL.
+ *
+ * Reasoning tokens and reply tokens come out of the same `num_predict` on Ollama. At 30% of a
+ * conservative 8,192-token window that was 2,457 for both, and a qwen3-class model spends 800–3,000
+ * of them thinking before it writes a character — so the generation ended inside the thinking block
+ * every round, and the round loop bought nothing, because round 20 faced the identical wall as round
+ * 0. A fraction of the window was the wrong rule: the input is bounded separately, so the only real
+ * constraint is that the two fit together.
+ */
+describe("the local reply budget", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("has a floor a thinking model can actually answer inside", () => {
+    expect(WORKER).toMatch(/const MIN_LOCAL_REPLY_TOKENS = 4096/);
+    expect(WORKER).toMatch(/Math\.max\(MIN_LOCAL_REPLY_TOKENS, Math\.floor\(usable \* LOCAL_REPLY_FRACTION\)\)/);
+  });
+
+  it("never lets the floor eat the context on a small window", () => {
+    // Half the window to each side is what makes a floor safe at 8,192 tokens.
+    expect(WORKER).toMatch(/Math\.floor\(usable \/ 2\)/);
+  });
+});
+
+/**
+ * THE CHECKLIST KEEPS ITS PLACE ACROSS TURNS.
+ *
+ * `compileWorkflow` hardcodes every step to `pending` and activates step 1 — it is for a checklist
+ * that has just been written. The worker called it on every turn, so the in-turn tick believed step
+ * 1 was current on turn four and pushed step 1's instruction into the turn. The host's own copy is
+ * protected, so the card kept showing the real position while the model rewrote a finished file:
+ * it reads as a stall and is actually a rewind.
+ */
+describe("the worker's checklist", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("adopts the progress the host sent instead of resetting to step 1", () => {
+    expect(WORKER).toMatch(/adoptPlanProgress\(compileWorkflow\(msg\.plan!\), msg\.plan!\)/);
+  });
+
+  it("does not compile a running checklist from scratch", () => {
+    expect(WORKER, "a bare compileWorkflow(msg.plan) resets every step to pending").not.toMatch(
+      /\?\s*compileWorkflow\(msg\.plan!\)\s*:/,
+    );
+  });
+});
