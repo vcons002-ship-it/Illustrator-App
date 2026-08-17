@@ -500,6 +500,39 @@ describe("the thinking bound", () => {
   const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
 
   it("is generous, and local-only", () => {
-    expect(WORKER).toMatch(/llm\.id === "local-server" \? \{ thinkingBudgetChars: budgets\.reply \* 3 \}/);
+    expect(WORKER).toMatch(/thinkingBudgetChars: Math\.floor\(budgets\.reply \* 1\.5\)/);
+  });
+});
+
+/**
+ * A CANCELLATION IS AN OUTCOME, NOT A FAULT.
+ *
+ * Pressing Stop aborts the fetch, and the rejection is a DOMException whose message is whatever the
+ * browser felt like saying — "BodyStreamBuffer was aborted". Four handlers posted `err.message`
+ * unclassified, so that string became the reader's error. Worse, `interruptedRunNote` writes the same
+ * reason into a DURABLE model-facing turn that is replayed as history on every later turn of the
+ * chat, so a small local model spends the rest of the session being told its last attempt died of a
+ * Blink internal.
+ */
+describe("pressing Stop", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("is reported as a stop, not as the browser's internal error text", () => {
+    expect(WORKER).toMatch(/const stopOrError = \(ac: AbortController, err: unknown\): string =>/);
+    expect(WORKER).toMatch(/err instanceof Error && err\.name === "AbortError"/);
+    expect(WORKER).toContain('"Stopped."');
+  });
+
+  it("covers every handler whose error the reader reads as a chat message", () => {
+    // The four registered in `chatAborts` — the only ones a Stop can reach. Every other post in this
+    // file is for an operation that has no Stop, so a raw message there is the right thing.
+    for (const kind of ["buddyError", "chatError", "planned", "polished"]) {
+      // The multi-line `post({ type: "x", … })` shape a catch uses — `planned` and `polished` also
+      // have single-line SUCCESS posts earlier in the file, which are not what this is about.
+      expect(
+        new RegExp(`type: "${kind}",[\\s\\S]{0,160}?stopOrError\\(ac, err\\)`).test(WORKER),
+        `${kind} still posts the browser's raw error text on a Stop`,
+      ).toBe(true);
+    }
   });
 });

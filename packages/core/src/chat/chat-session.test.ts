@@ -314,6 +314,56 @@ describe("jsonGatedTokenSink", () => {
     expect(out.join("")).not.toContain("{");
   });
 
+  /**
+   * A LANGUAGE-TAGGED FENCE IS NOT A TOOL CALL, and treating it as one hid every file the assistant
+   * wrote. `mute` is terminal — nothing clears it — so a reply shaped "here is your page:\n```html\n…"
+   * streamed the sentence and then went silent for the whole generation. The reader watched a cursor
+   * under one paragraph for minutes with the entire document arriving behind it. Reported as "it
+   * stopped here, and then just did nothing".
+   */
+  it("streams a code block the reader asked for, fence and all", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    const reply = "Here's your page:\n```html\n<!DOCTYPE html>\n<h1>Hi</h1>\n```";
+    for (const ch of reply) sink(ch);
+    expect(out.join(""), "the file was muted as if it were a tool call").toContain("<!DOCTYPE html>");
+    expect(out.join("")).toContain("<h1>Hi</h1>");
+  });
+
+  it("streams a code block that opens the reply, with no prose in front of it", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    for (const lang of ["html", "python", "css", "ts"]) {
+      const out: string[] = [];
+      const sink = jsonGatedTokenSink((t) => out.push(t));
+      for (const ch of "```" + lang + "\nBODY\n```") sink(ch);
+      expect(out.join(""), `a \`\`\`${lang} reply was muted`).toContain("BODY");
+    }
+  });
+
+  /**
+   * The protection that must survive: a tool call is a bare object or a bare/```json fence, and it
+   * must never type itself into the bubble. Being wrong in the permissive direction costs a moment of
+   * raw JSON the settle then replaces; being wrong the other way costs the file.
+   */
+  it("still mutes a bare fence and a ```json fence, which is what a tool call looks like", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    for (const opener of ["```\n{\"tool\":\"list_tasks\"}", "```json\n{\"tool\":\"list_tasks\"}"]) {
+      const out: string[] = [];
+      const sink = jsonGatedTokenSink((t) => out.push(t));
+      for (const ch of opener) sink(ch);
+      expect(out.join(""), `${opener.slice(0, 8)} leaked`).not.toContain("tool");
+    }
+  });
+
+  it("still mutes a fenced tool call appended after prose", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    for (const ch of 'Looking that up.\n```json\n{"tool":"search_web","query":"x"}\n```') sink(ch);
+    expect(out.join("").trim()).toBe("Looking that up.");
+  });
+
   it("still streams prose that merely contains balanced braces", async () => {
     const { jsonGatedTokenSink } = await import("./chat-session.js");
     const out: string[] = [];

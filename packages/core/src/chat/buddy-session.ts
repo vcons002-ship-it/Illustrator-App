@@ -706,17 +706,28 @@ export async function runBuddyTurn(opts: {
     // chat went quiet"). Tick a transient activity event with elapsed seconds every few seconds
     // until the first token (or thinking) shows up — this only feeds the watchdog, never caps the
     // reply. Cleared the instant any real content streams or the call settles.
-    let sawContent = false;
+    /**
+     * A LATCH ANSWERED THE WRONG QUESTION. This was `sawContent`, set once and never cleared, so the
+     * heartbeat covered a slow FIRST token and nothing after it. But the silence that actually
+     * stranded a reader came later: the gate goes quiet part-way through a long generation, and from
+     * the host's side a turn writing a large file is indistinguishable from one that has wedged —
+     * for minutes, until the 120s watchdog kills a turn that was working perfectly.
+     *
+     * A timestamp answers the question the latch was standing in for: when did we last hear
+     * anything? Silence anywhere in the generation is reported, and a stream that is talking never
+     * sees a tick.
+     */
     const startedAt = Date.now();
+    let lastHeard = startedAt;
     const heartbeat = opts.onEvent
       ? setInterval(() => {
-          if (sawContent) return;
+          if (Date.now() - lastHeard < HEARTBEAT_MS) return;
           const secs = Math.round((Date.now() - startedAt) / 1000);
           opts.onEvent?.({ kind: "activity", text: `Still working… (${secs}s — large models can be slow to start)` });
         }, HEARTBEAT_MS)
       : undefined;
     const noteContent = () => {
-      sawContent = true;
+      lastHeard = Date.now();
     };
     // Re-bound before every call: the loop below appends tool results, and a single large
     // one can exceed the whole window. Pins the system prompt and the request that started
@@ -745,10 +756,26 @@ export async function runBuddyTurn(opts: {
       },
       ...(opts.onEvent
         ? {
-            onToken: jsonGatedTokenSink((text) => {
-              noteContent();
-              opts.onEvent?.({ kind: "token", text });
-            }),
+            /**
+             * LIVENESS IS MEASURED ON THE RAW STREAM, NOT ON WHAT REACHES THE SCREEN.
+             *
+             * `noteContent` used to sit INSIDE the gated sink, so it only fired for tokens the gate
+             * let through. The gate mutes for the rest of a generation the moment it decides the
+             * reply has turned into a tool call — and while muted it emits nothing, so the app heard
+             * nothing, so it could not tell "writing a large file" from "wedged". A 12k-token
+             * document produced zero host events for its entire duration and the reader had a
+             * cursor and a spinner to go on.
+             *
+             * The gate decides what is SHOWN. Whether the model is alive is a different question
+             * with a different answer, and it is answered here, on every delta.
+             */
+            onToken: ((): ((delta: string) => void) => {
+              const gated = jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text }));
+              return (delta: string) => {
+                noteContent();
+                gated(delta);
+              };
+            })(),
           }
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
