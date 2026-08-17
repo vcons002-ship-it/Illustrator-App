@@ -723,14 +723,47 @@ describe("a reply that spent its whole budget thinking", () => {
     expect(said, "the ordinary wrap-up stopped firing").toMatch(/Now reply to the reader in plain text/);
   });
 
-  it("says it once, so a model that does it twice still ends the turn", async () => {
+  /**
+   * TWICE, AND THEN IT STOPS. It used to be once, on the reasoning that a model which does it twice
+   * will not be talked out of it and each attempt costs a whole generation. The second half of that
+   * stopped being true: `thinkingBudgetChars` cuts a runaway deliberation as it happens, so an
+   * attempt costs a fraction of a generation — and the bound tightens each time, so the second
+   * attempt is not the first one repeated. What must not change is that it ENDS.
+   */
+  it("corrects twice at most, so a model that keeps doing it still ends the turn", async () => {
     const llm = truncatedLlm([{ truncated: true, reply: "" }]);
     const outcome = await runBuddyTurn({
       llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps,
     });
     const last = llm.calls[llm.calls.length - 1]!.map((m) => m.content).join("\n");
-    expect(last.match(/still thinking/g) ?? [], "the correction repeats without end").toHaveLength(1);
+    expect((last.match(/still thinking/g) ?? []).length, "the correction repeats without end").toBeLessThanOrEqual(2);
+    expect(llm.calls.length, "the turn never stopped asking").toBeLessThanOrEqual(4);
     expect(outcome.text.trim(), "the turn never produced anything").not.toBe("");
+  });
+
+  it("tightens the bound after a round that produced nothing but thought", async () => {
+    // The second attempt is not the first repeated: a round handed its own reasoning back and told
+    // to emit it has nothing left to work out, so it gets a fraction of the deliberation.
+    const caps: (number | undefined)[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(messages, opts) {
+        this.calls.push([...messages]);
+        const o = opts as { thinkingBudgetChars?: number; onThinking?: (t: string) => void; onComplete?: (m: { truncated: boolean }) => void };
+        caps.push(o.thinkingBudgetChars);
+        o.onThinking?.("deliberating at length ".repeat(40));
+        o.onComplete?.({ truncated: true });
+        return this.calls.length >= 3 ? "here it is" : "";
+      },
+    };
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+      thinkingBudgetChars: 8000,
+    });
+    expect(caps[0], "the first round was not allowed a real deliberation").toBe(8000);
+    expect(caps[1]!, "the second round got the same allowance as the first").toBeLessThan(caps[0]!);
+    // Not zero: it still has to decide how to lay the answer out.
+    expect(caps[1]!).toBeGreaterThan(0);
   });
 
   /**

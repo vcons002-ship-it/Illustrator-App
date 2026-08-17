@@ -501,6 +501,16 @@ export async function runBuddyTurn(opts: {
   deps: BuddyDeps;
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
+  /**
+   * Characters of REASONING a round may produce before it has written anything, after which the app
+   * stops reading (Ollama streaming only — see `thinkingBudgetChars` on ChatOptions).
+   *
+   * The turn tightens it after each round that produced nothing but thought, so a model that has
+   * been handed its own reasoning and told to emit it cannot spend the next round deliberating
+   * again. Unset ⇒ no bound, which is the right default for a provider where reasoning does not come
+   * out of the reply's budget.
+   */
+  thinkingBudgetChars?: number;
   onEvent?: (e: BuddyTurnEvent) => void;
   /** Run `spawn_agents` subtasks as concurrent read-only sub-agents (host-provided so it owns the
    * concurrency cap + which model tier the sub-agents use). Absent ⇒ the tool reports unavailable. */
@@ -616,9 +626,22 @@ export async function runBuddyTurn(opts: {
    */
   let severedThinking = "";
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
-  // Guard: say "you ran out of room thinking" once per turn. A model that does it twice is not going
-  // to be talked out of it, and each attempt costs another full generation.
-  let ranOutThinking = false;
+  /**
+   * HOW MANY TIMES THE TURN SAYS "nothing came out — give me the answer".
+   *
+   * It was once, on the reasoning that a model which does it twice is not going to be talked out of
+   * it and each attempt costs another full generation. The second half of that stopped being true:
+   * with `thinkingBudgetChars` the app cuts a runaway deliberation as it happens, so an attempt now
+   * costs a fraction of a generation rather than all of one — and the bound TIGHTENS each time, so
+   * the second attempt is not the first attempt repeated.
+   *
+   * Two, not more. A third would be the same correction a third time, and the wrap-up below is a
+   * better ending than a loop.
+   */
+  const MAX_RAN_OUT_THINKING = 2;
+  let ranOutThinking = 0;
+  /** How many deliberations the app has cut this turn — tightens the next round's bound. */
+  let thinkingCuts = 0;
   // How many times this turn the model has been told its call was in its reasoning. Bounded because
   // a model that keeps doing it is not going to be talked out of it, and the wrap-up below is a
   // better ending than an unbounded loop of the same correction.
@@ -742,8 +765,27 @@ export async function runBuddyTurn(opts: {
        * `ollamaThink` is binary besides — there is no "low" — so on a local model this knob offers
        * exactly two settings: think, or think in public. Neither is a smaller budget. Anything that
        * wants to cut deliberation here has to do it some other way.
+       *
+       * `thinkingBudgetChars` below IS that other way, and it is per-round precisely because this one
+       * could not be: the app stops READING at a bound instead of asking the model to think less, so
+       * nothing about the model's behaviour has to change for it to work.
        */
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      /**
+       * THE BOUND TIGHTENS AFTER A CUT, because the second round is not the first.
+       *
+       * Round one is allowed a real deliberation — the task may genuinely need it. But a round that
+       * has just been handed its own severed reasoning and told to emit it has nothing left to work
+       * out, and a model that spends that round deliberating again is in the loop the reader
+       * described: "it would think until it couldn't, run out of budget, then restart."
+       *
+       * A quarter, not zero: it still has to decide HOW to lay the answer out, and a cut at zero
+       * would fire on every model on every round. Cheap enough to be worth repeating — the whole
+       * point of cutting early is that an attempt no longer costs a full generation.
+       */
+      ...(opts.thinkingBudgetChars
+        ? { thinkingBudgetChars: thinkingCuts > 0 ? Math.max(600, Math.floor(opts.thinkingBudgetChars / 4)) : opts.thinkingBudgetChars }
+        : {}),
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
       ...(opts.tools?.length ? { tools: opts.tools } : {}),
@@ -963,8 +1005,17 @@ export async function runBuddyTurn(opts: {
        * reasoning to exist before this claims to know where the output went; without it, an ordinary
        * empty reply belongs to the wrap-up, exactly as before.
        */
-      if (!clean && !calls.length && (lastTruncated || roundThinking.trim()) && !ranOutThinking && round < effectiveMax) {
-        ranOutThinking = true;
+      if (
+        !clean &&
+        !calls.length &&
+        (lastTruncated || roundThinking.trim()) &&
+        ranOutThinking < MAX_RAN_OUT_THINKING &&
+        round < effectiveMax
+      ) {
+        ranOutThinking += 1;
+        // Every empty-and-thinking round tightens the next one's bound, whether the app cut it or the
+        // provider's own token limit did — both mean the same thing: deliberation instead of output.
+        thinkingCuts += 1;
         opts.onEvent?.({ kind: "activity", text: "Wrapping that up…" });
         messages.push({ role: "assistant", content: reply });
         messages.push({

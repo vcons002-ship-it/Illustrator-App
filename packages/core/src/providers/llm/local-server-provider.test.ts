@@ -318,6 +318,76 @@ describe("LocalServerLLMProvider Ollama native path (numCtx)", () => {
     expect(text).toBe('Hello\n{"tool":"create_task","title":"x"}');
   });
 
+  /**
+   * CUTTING A RUNAWAY DELIBERATION — the "some other way" the think:false revert concluded was needed.
+   *
+   * Reasoning and reply share one `num_predict` on Ollama, so a model that deliberates long enough
+   * ends its generation inside the thinking block and returns an empty string. Reported as "it would
+   * think until it couldn't, run out of budget, then restart." Asking for less thinking is not
+   * available — `reasoningEffort: "none"` reaches Ollama as `think: false`, which makes a thinking
+   * model reason in plain content and publish its monologue as the reader's answer. So the app stops
+   * READING instead, which needs no cooperation from the model at all.
+   */
+  describe("the runaway-deliberation cut", () => {
+    /** A stream that never stops thinking — the exact shape that burns a whole generation. */
+    const ruminating = (deltas: number, then: string[] = []) =>
+      [
+        ...Array.from({ length: deltas }, () => JSON.stringify({ message: { thinking: "x".repeat(100) } })),
+        ...then,
+        JSON.stringify({ done: true, done_reason: "stop" }),
+      ].join("\n");
+
+    it("stops reading once the reasoning passes the bound with nothing written", async () => {
+      const { fetchImpl } = streamingFetch([ruminating(50)]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      let truncated: boolean | undefined;
+      let thinking = "";
+      const text = await p.chat([{ role: "user", content: "code me an html page" }], {
+        onToken: () => {},
+        onThinking: (t) => (thinking = t),
+        onComplete: (m) => (truncated = m.truncated),
+        thinkingBudgetChars: 500,
+      });
+      expect(text, "the cut invented an answer").toBe("");
+      // The turn loop's existing empty-and-truncated recovery is what this hands off to.
+      expect(truncated, "the cut did not report itself as a truncation").toBe(true);
+      // Everything it thought before the cut still reached the app — that is what gets handed back.
+      expect(thinking.length).toBeGreaterThanOrEqual(500);
+      expect(thinking.length, "it kept reading long past the bound").toBeLessThan(5000);
+    });
+
+    it("never cuts a model that has started writing, however long it thinks afterwards", async () => {
+      // The bound is on deliberating INSTEAD of answering. Once a character of the reply exists the
+      // model is working, and interleaved reasoning after that is not a runaway — cutting there
+      // would truncate a real answer, which is worse than the bug.
+      const lines = [
+        JSON.stringify({ message: { thinking: "brief" } }),
+        JSON.stringify({ message: { content: "<!DOCTYPE html>" } }),
+        // Far past the bound, and irrelevant now: `full` is no longer empty.
+        ...Array.from({ length: 50 }, () => JSON.stringify({ message: { thinking: "x".repeat(100) } })),
+        JSON.stringify({ message: { content: "<body></body>" } }),
+        JSON.stringify({ done: true, done_reason: "stop" }),
+      ].join("\n");
+      const { fetchImpl } = streamingFetch([lines]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      let truncated: boolean | undefined;
+      const text = await p.chat([{ role: "user", content: "hi" }], {
+        onToken: () => {},
+        onComplete: (m) => (truncated = m.truncated),
+        thinkingBudgetChars: 200,
+      });
+      expect(text, "a reply that had begun was cut off").toBe("<!DOCTYPE html><body></body>");
+      expect(truncated).toBe(false);
+    });
+
+    it("does nothing at all when no bound is set", async () => {
+      const { fetchImpl } = streamingFetch([ruminating(50, [JSON.stringify({ message: { content: "done" } })])]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      const text = await p.chat([{ role: "user", content: "hi" }], { onToken: () => {} });
+      expect(text).toBe("done");
+    });
+  });
+
   it("streams separated `thinking` deltas to onThinking without leaking them into the reply", async () => {
     const lines = [
       JSON.stringify({ message: { thinking: "let me" } }),
