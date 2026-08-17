@@ -707,13 +707,12 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
      * A CUT IS ONLY A TRUNCATION IF NOTHING CAME OF IT — and getting this wrong made the cut worse
      * than the bug it was for.
      *
-     * The first version skipped every frame after the cut and reported `truncated` unconditionally.
-     * An abort does not always stop the stream: this provider is handed a custom `fetchImpl`, and on
-     * the desktop that is a Tauri bridge, which is under no obligation to honour a signal. So the
-     * model went on and wrote the entire page, every byte of it was discarded by the skip, and the
-     * turn reported an empty truncated reply. Reported as "every time the thinking is stopped it
-     * just freezes where it is and accomplishes nothing" — the freeze was the app waiting out a
-     * generation whose output it had already decided to throw away.
+     * The first version skipped every frame after the cut and reported `truncated` unconditionally,
+     * discarding anything the model went on to produce. On the buddy chat the abort does land — that
+     * path uses the real global `fetch` — so the window is narrow there. It is not narrow everywhere:
+     * `fetchImpl` is injected for sub-agents and for the extension's proxied transport, and neither
+     * is obliged to honour a signal, so on those the model writes a whole answer into a stream the
+     * app has already decided to ignore.
      *
      * Content that arrives after the cut is the OUTCOME WE WANTED: the model stopped deliberating
      * and started writing. It is kept, and the generation is not a truncation.

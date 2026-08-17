@@ -3544,7 +3544,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     post({
       type: "chatError",
       requestId: msg.requestId,
-      message: err instanceof Error ? err.message : String(err),
+      message: stopOrError(ac, err),
     });
   } finally {
     chatAborts.delete(msg.requestId);
@@ -3882,7 +3882,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       type: "planned",
       requestId: msg.requestId,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: stopOrError(ac, err),
     });
   } finally {
     chatAborts.delete(msg.requestId);
@@ -4544,12 +4544,34 @@ async function handlePolish(msg: Extract<MainToWorker, { type: "polish" }>): Pro
       requestId: msg.requestId,
       stage: msg.stage,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: stopOrError(ac, err),
     });
   } finally {
     chatAborts.delete(msg.requestId);
   }
 }
+
+/**
+ * A CANCELLATION IS AN OUTCOME, NOT A FAULT — and rendering it as one put Chrome's internals into
+ * the reader's chat AND into the model's history.
+ *
+ * Pressing Stop aborts the fetch, and the rejection that comes back is a DOMException whose message
+ * is whatever the browser felt like saying: "BodyStreamBuffer was aborted". Four handlers posted
+ * `err.message` unclassified, so that string became the error the host reports. `interruptedRunNote`
+ * then writes it into a DURABLE model-facing turn — "[That run STOPPED before it finished —
+ * BodyStreamBuffer was aborted…]" — which is replayed as history on every later turn of that chat,
+ * so a 30k-window local model spends the rest of the session being told its last attempt died of a
+ * Blink internal.
+ *
+ * This file already knew: `handleChatTool` classifies the same abort and says "Image generation
+ * stopped." The handlers that feed the reader's own chat were the ones that did not.
+ */
+const stopOrError = (ac: AbortController, err: unknown): string =>
+  ac.signal.aborted || (err instanceof Error && err.name === "AbortError")
+    ? "Stopped."
+    : err instanceof Error
+      ? err.message
+      : String(err);
 
 // --- Landing-page buddy -------------------------------------------------------
 
@@ -6227,16 +6249,21 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
        * and demands output from it — "the budget you gave for thinking is not nearly large enough."
        *
        * The honest bound is the point past which there was never going to be an answer anyway.
-       * Reasoning and reply share one `num_predict`, so a deliberation at 3/4 of the whole allowance
-       * has already spent what the answer needed; nothing is being taken away by stopping there.
-       * Below that the right response to a big deliverable is to SPLIT it, not to cut the thinking.
+       * Reasoning and reply share one `num_predict`, so a deliberation that has run well past what
+       * the answer needs has already spent it; nothing is taken away by stopping there. Below that,
+       * the right response to a big deliverable is to SPLIT it, not to cut the thinking.
+       *
+       * ×1.5, not the ×3 first tried. At ×3 on a 30k window the bound sits around 9k tokens of pure
+       * deliberation — more than the reply budget itself — so it can never fire on a model that was
+       * going to answer, and never fires on one that was not either. That is not a bound, it is a
+       * formality. ×1.5 is still a long think and actually trips.
        *
        * Local only: on a cloud provider reasoning does not come out of the reply's budget. Anthropic
        * has a real knob for this — `thinking.budget_tokens`, set alongside `max_tokens` — which ends
        * the thinking phase and lets the same generation continue into the answer. Ollama's
        * `num_predict` is one undifferentiated number, so this is the nearest available thing.
        */
-      ...(llm.id === "local-server" ? { thinkingBudgetChars: budgets.reply * 3 } : {}),
+      ...(llm.id === "local-server" ? { thinkingBudgetChars: Math.floor(budgets.reply * 1.5) } : {}),
       contextChars: budgets.input,
       loadedToolsets,
       ...(appManagedTick ? { appManagedTick } : {}),
@@ -6436,7 +6463,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     post({
       type: "buddyError",
       requestId: msg.requestId,
-      message: err instanceof Error ? err.message : String(err),
+      message: stopOrError(ac, err),
     });
   } finally {
     chatAborts.delete(msg.requestId);
