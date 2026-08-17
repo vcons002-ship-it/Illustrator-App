@@ -456,3 +456,50 @@ describe("the worker's checklist", () => {
     );
   });
 });
+
+/**
+ * A STEP IS NOT A ROUND.
+ *
+ * Every round that did not satisfy a step's contract was read as a failed attempt: `advanceWorkflow`
+ * with `done:false` spends one of the step's few attempts, and after `maxAttempts` the step parks at
+ * "⏸ Stuck". That is right for a step whose work is one act — render this image, run this command —
+ * and wrong for one whose deliverable does not fit a single reply. "Write index.html" is several
+ * rounds of appending on a local model whose budget cannot hold the file, and under the old reading
+ * each of those rounds was a failure rather than progress.
+ */
+describe("a checklist step that takes more than one round", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("continues a step that is visibly progressing instead of failing it", () => {
+    expect(WORKER).toMatch(/stepDirective\(wf!, step, "continue"/);
+    // Progress is MEASURED from the app's own observation of the round, never claimed by the model —
+    // the same standard the collar holds everywhere else.
+    expect(WORKER).toMatch(/evidence\.toolResults\.length > tickProgress\.tools/);
+    expect(WORKER).toMatch(/evidence\.text\.length > tickProgress\.chars/);
+  });
+
+  it("bounds it, so a trickle still reaches the retry and park path", () => {
+    expect(WORKER).toContain("MAX_STEP_ROUNDS");
+    expect(WORKER).toMatch(/progressRounds < MAX_STEP_ROUNDS/);
+  });
+
+  it("starts the next step's allowance fresh", () => {
+    // Carried over, a long step would spend the next step's rounds before it began.
+    expect(WORKER).toMatch(/tickProgress = \{ stepId: "", tools: -1, chars: -1, rounds: 0 \}/);
+  });
+});
+
+/**
+ * THE CUT IS A LAST RESORT, NOT A LEASH. Half the reply budget fired on a model that was legitimately
+ * planning, handed back a half-formed plan and demanded output from it. The honest bound is the point
+ * past which there was never going to be an answer anyway: reasoning and reply share one
+ * `num_predict`, so a deliberation at three quarters of the whole allowance has already spent what
+ * the answer needed.
+ */
+describe("the thinking bound", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("is generous, and local-only", () => {
+    expect(WORKER).toMatch(/llm\.id === "local-server" \? \{ thinkingBudgetChars: budgets\.reply \* 3 \}/);
+  });
+});

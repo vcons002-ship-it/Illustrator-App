@@ -505,7 +505,21 @@ export type DirectiveKind =
   | "start" // the checklist was just compiled — drive its first step
   | "advance" // the previous step is settled; do the next one
   | "retry" // the attempt didn't satisfy the contract
-  | "nudge"; // the model didn't attempt this step's work at all
+  | "nudge" // the model didn't attempt this step's work at all
+  /**
+   * The step is BIGGER THAN ONE ROUND, and this round moved it along.
+   *
+   * A step and a round were treated as the same thing: every round that did not satisfy the contract
+   * was an attempt that failed, spending one of the step's few attempts and marching it toward
+   * "⏸ Stuck". That is right for a step whose work is one act — render this image, run this command —
+   * and wrong for one whose deliverable is bigger than a single generation. "Write index.html" is
+   * three rounds of appending on a local model whose reply budget cannot hold the file, and under the
+   * old reading those three rounds were three failures.
+   *
+   * So a round that produced something NEW toward the step continues it instead of failing it. Only a
+   * round that added nothing counts against the step.
+   */
+  | "continue";
 
 /**
  * The instruction the model is given for a step — the executor's whole control surface, in one place.
@@ -533,6 +547,18 @@ export type DirectiveKind =
  * beside the directive it bounds, because both callers need it and only one of them had it.
  */
 export const MAX_STEP_REMINDERS = 3;
+
+/**
+ * HOW MANY ROUNDS ONE STEP MAY TAKE while it is still visibly progressing.
+ *
+ * A step whose deliverable does not fit a single reply — a file on a local model whose budget cannot
+ * hold it — needs several rounds, and each of those rounds is progress rather than a failed attempt.
+ * Bounded anyway: a model emitting a trickle forever would otherwise never reach the retry/park path
+ * that exists to end a run that has stopped working.
+ *
+ * Six is roughly a large file in chunks. Beyond that the step is not big, it is stuck.
+ */
+export const MAX_STEP_ROUNDS = 6;
 
 export function stepDirective(
   wf: Workflow,
@@ -575,13 +601,18 @@ export function stepDirective(
       ? `Checklist ready — ${total} step${total === 1 ? "" : "s"}. Current position: ${where}.`
       : kind === "advance"
         ? `Checklist: ${where} is now current.`
-        : kind === "retry"
-          ? `Checklist: ${where} is still open${extra.reason ? ` — ${extra.reason}` : ""}.`
-          : `Checklist: ${where} has no work recorded against it yet.${
+        : kind === "continue"
+          ? // A statement of where the work stands, and nothing else. It must not read as a
+            // correction: this round did what it was supposed to, there is simply more of it.
+            `Checklist: ${where} is under way and not finished${extra.reason ? ` — ${extra.reason}` : ""}. ` +
+            "Carry on from where you stopped rather than starting it again."
+          : kind === "retry"
+            ? `Checklist: ${where} is still open${extra.reason ? ` — ${extra.reason}` : ""}.`
+            : `Checklist: ${where} has no work recorded against it yet.${
               extra.checklistMeta
                 ? " The app ticks steps off itself from what it observes — complete_step and re-planning are not needed."
                 : ""
-            }${extra.needsTool ? ` Its contract is satisfied by an actual ${extra.needsTool} call, not by a description of one.` : ""}`;
+              }${extra.needsTool ? ` Its contract is satisfied by an actual ${extra.needsTool} call, not by a description of one.` : ""}`;
   // The step's own text still has to be handed over — it is the one thing the model cannot look up.
   const tail = "This step only; the next one follows on its own.";
   return `[${lead} ${step.instruction}.${context} ${tail}]`;

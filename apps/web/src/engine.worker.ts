@@ -55,6 +55,7 @@ import {
   compileWorkflow,
   activeStep,
   MAX_STEP_REMINDERS,
+  MAX_STEP_ROUNDS,
   adoptPlanProgress,
   doneWhenToNeeds,
   isToolAvailable,
@@ -6098,11 +6099,50 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // difference between a step that eventually parks and one that spins the whole budget being
     // asked the same thing. Per-step, so a run that is actually progressing never accumulates.
     let tickNudges = { stepId: "", count: 0 };
+    /**
+     * A STEP IS NOT A ROUND, and treating them as the same thing failed every step bigger than one
+     * generation.
+     *
+     * Every round that did not satisfy the contract was read as a failed attempt: `advanceWorkflow`
+     * with `done:false` spends one of the step's few attempts, and after `maxAttempts` the step parks
+     * at "⏸ Stuck". That is right for a step whose work is one act — render this image, run this
+     * command — and wrong for one whose deliverable does not fit a single reply. "Write index.html"
+     * is several rounds of appending on a local model whose budget cannot hold the file, and under
+     * the old reading those rounds were failures rather than progress.
+     *
+     * So a round that produced something NEW toward the step CONTINUES it — no attempt spent, no
+     * advance, the step stays current. Only a round that added nothing counts against it. Bounded, so
+     * a model emitting a trickle forever still reaches the normal retry/park path.
+     *
+     * Progress is measured, not claimed: more tool results than last round, or more text. Both come
+     * from the app's own observation of the round, which is the same standard the collar holds
+     * everywhere else.
+     */
+    let tickProgress = { stepId: "", tools: -1, chars: -1, rounds: 0 };
     const appManagedTick = wf
       ? (evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }) => {
           const step = activeStep(wf);
           if (!step) return { kind: "stop" as const };
           const outcome = evaluateStep(step, evidence);
+          const sameStep = tickProgress.stepId === step.id;
+          const grew =
+            !sameStep ||
+            evidence.toolResults.length > tickProgress.tools ||
+            evidence.text.length > tickProgress.chars;
+          const progressRounds = sameStep ? tickProgress.rounds : 0;
+          tickProgress = {
+            stepId: step.id,
+            tools: evidence.toolResults.length,
+            chars: evidence.text.length,
+            rounds: grew ? progressRounds + 1 : progressRounds,
+          };
+          // The step is under way and this round moved it along — carry on rather than judging it.
+          if (!outcome.done && !outcome.parks && grew && attemptedStepWork(step, evidence) && progressRounds < MAX_STEP_ROUNDS) {
+            return {
+              kind: "continue" as const,
+              directive: stepDirective(wf!, step, "continue", outcome.reason ? { reason: outcome.reason } : {}),
+            };
+          }
           // The model narrated instead of doing the step: nudge without spending an attempt, exactly
           // as the host's executor does, so a confused model is not marched into a premature park.
           if (!outcome.done && !outcome.parks && !attemptedStepWork(step, evidence)) {
@@ -6122,6 +6162,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             // to be able to end, and an unbounded free nudge is what stopped it ending.
           }
           tickNudges = { stepId: "", count: 0 }; // a real attempt or an advance restores the budget
+          tickProgress = { stepId: "", tools: -1, chars: -1, rounds: 0 }; // and the next step starts fresh
           const adv = advanceWorkflow(wf!, outcome);
           wf = adv.workflow;
           plan = workflowToPlan(wf);
@@ -6179,18 +6220,23 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       history,
       maxTokens: budgets.reply,
       /**
-       * HOW LONG IT MAY DELIBERATE BEFORE WRITING ANYTHING, in characters (~4 per token, so this is
-       * half the reply budget).
+       * HOW LONG IT MAY DELIBERATE BEFORE WRITING ANYTHING, in characters (~4 per token).
        *
-       * Reasoning and reply share one `num_predict` on Ollama, so a model that deliberates past this
-       * was going to end its generation inside the thinking block and return an empty string anyway
-       * — the app just stops reading first, while there is still a turn left to do something with.
-       * Reported as "it would think until it couldn't, run out of budget, then restart."
+       * A LAST RESORT, NOT A LEASH. This started at half the reply budget and that was wrong: at
+       * that size it fires on a model that is legitimately planning, hands back a half-formed plan,
+       * and demands output from it — "the budget you gave for thinking is not nearly large enough."
        *
-       * Local only: on a cloud provider reasoning does not come out of the reply's budget, so there
-       * is nothing here to bound.
+       * The honest bound is the point past which there was never going to be an answer anyway.
+       * Reasoning and reply share one `num_predict`, so a deliberation at 3/4 of the whole allowance
+       * has already spent what the answer needed; nothing is being taken away by stopping there.
+       * Below that the right response to a big deliverable is to SPLIT it, not to cut the thinking.
+       *
+       * Local only: on a cloud provider reasoning does not come out of the reply's budget. Anthropic
+       * has a real knob for this — `thinking.budget_tokens`, set alongside `max_tokens` — which ends
+       * the thinking phase and lets the same generation continue into the answer. Ollama's
+       * `num_predict` is one undifferentiated number, so this is the nearest available thing.
        */
-      ...(llm.id === "local-server" ? { thinkingBudgetChars: budgets.reply * 2 } : {}),
+      ...(llm.id === "local-server" ? { thinkingBudgetChars: budgets.reply * 3 } : {}),
       contextChars: budgets.input,
       loadedToolsets,
       ...(appManagedTick ? { appManagedTick } : {}),

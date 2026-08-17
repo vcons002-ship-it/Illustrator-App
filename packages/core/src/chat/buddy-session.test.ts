@@ -758,12 +758,36 @@ describe("a reply that spent its whole budget thinking", () => {
     };
     await runBuddyTurn({
       llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
-      thinkingBudgetChars: 8000,
+      thinkingBudgetChars: 40_000,
     });
-    expect(caps[0], "the first round was not allowed a real deliberation").toBe(8000);
+    expect(caps[0], "the first round was not allowed a real deliberation").toBe(40_000);
     expect(caps[1]!, "the second round got the same allowance as the first").toBeLessThan(caps[0]!);
-    // Not zero: it still has to decide how to lay the answer out.
-    expect(caps[1]!).toBeGreaterThan(0);
+    // Halved, not slashed. A round that has to read its own handed-back notes and decide a layout
+    // needs room to do it — a cut that fires before it has finished reading is not a smaller
+    // allowance, it is a bound on thought.
+    expect(caps[1]!).toBe(20_000);
+  });
+
+  it("never tightens the bound below a floor, however small the turn's budget", async () => {
+    // On a small context window the starting bound is already modest; halving it repeatedly would
+    // reach a few hundred tokens, which cuts every model on every round after the first.
+    const caps: (number | undefined)[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(messages, opts) {
+        this.calls.push([...messages]);
+        const o = opts as { thinkingBudgetChars?: number; onThinking?: (t: string) => void; onComplete?: (m: { truncated: boolean }) => void };
+        caps.push(o.thinkingBudgetChars);
+        o.onThinking?.("thinking ".repeat(20));
+        o.onComplete?.({ truncated: true });
+        return this.calls.length >= 3 ? "done" : "";
+      },
+    };
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "x" }], deps: baseDeps,
+      thinkingBudgetChars: 6000,
+    });
+    expect(caps[1]!, "halving took the bound below what a round needs to think at all").toBeGreaterThanOrEqual(6000);
   });
 
   /**

@@ -380,6 +380,54 @@ describe("LocalServerLLMProvider Ollama native path (numCtx)", () => {
       expect(truncated).toBe(false);
     });
 
+    /**
+     * THE CUT MUST NEVER COST AN ANSWER, and getting this wrong made it worse than the bug.
+     *
+     * The first version skipped every frame after the cut and reported truncated unconditionally. An
+     * abort does not always stop the stream — this provider is handed a custom `fetchImpl`, and on
+     * the desktop that is a Tauri bridge under no obligation to honour a signal. So the model went on
+     * and wrote the whole page, every byte was discarded, and the turn reported an empty truncated
+     * reply. Reported as "every time the thinking is stopped it just freezes where it is and
+     * accomplishes nothing".
+     */
+    it("keeps content that arrives after the cut — the model started writing, which is the point", async () => {
+      const lines = [
+        ...Array.from({ length: 20 }, () => JSON.stringify({ message: { thinking: "x".repeat(100) } })),
+        // The abort did not take: a proxied fetch ignored it and the model wrote the answer anyway.
+        JSON.stringify({ message: { content: "<!DOCTYPE html>" } }),
+        JSON.stringify({ message: { content: "<body>the whole page</body>" } }),
+        JSON.stringify({ done: true, done_reason: "stop" }),
+      ].join("\n");
+      const { fetchImpl } = streamingFetch([lines]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      let truncated: boolean | undefined;
+      const text = await p.chat([{ role: "user", content: "code me an html page" }], {
+        onToken: () => {},
+        onComplete: (m) => (truncated = m.truncated),
+        thinkingBudgetChars: 500,
+      });
+      expect(text, "the cut threw away the answer it was supposed to make room for").toBe(
+        "<!DOCTYPE html><body>the whole page</body>",
+      );
+      expect(truncated, "a generation that produced the answer was reported as truncated").toBe(false);
+    });
+
+    it("stops accumulating reasoning after the cut, so a stream that ignores the abort is still bounded", async () => {
+      const lines = [
+        ...Array.from({ length: 40 }, () => JSON.stringify({ message: { thinking: "x".repeat(100) } })),
+        JSON.stringify({ done: true, done_reason: "stop" }),
+      ].join("\n");
+      const { fetchImpl } = streamingFetch([lines]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      let thinking = "";
+      await p.chat([{ role: "user", content: "hi" }], {
+        onToken: () => {},
+        onThinking: (t) => (thinking = t),
+        thinkingBudgetChars: 500,
+      });
+      expect(thinking.length, "it kept reading reasoning long past the bound").toBeLessThan(2000);
+    });
+
     it("does nothing at all when no bound is set", async () => {
       const { fetchImpl } = streamingFetch([ruminating(50, [JSON.stringify({ message: { content: "done" } })])]);
       const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
