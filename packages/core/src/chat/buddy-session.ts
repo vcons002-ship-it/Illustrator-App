@@ -28,6 +28,7 @@ import {
   HOST_TOOLS,
   type HostToolName,
   toolCallsInThinking,
+  salvageTruncatedWrite,
   severedThinkingBlock,
   meantToSendMessage,
   splitSeriesMessages,
@@ -797,6 +798,40 @@ export async function runBuddyTurn(opts: {
       // dumped to the reader as prose (that's the raw-JSON-in-chat bug). Nudge the model to
       // re-issue it properly; otherwise it's a normal plain-text answer.
       if (round < effectiveMax && looksLikeToolJson(reply)) {
+        /**
+         * A CUT-OFF WRITE IS SAVED, NOT THROWN AWAY.
+         *
+         * `write_file` carries the whole file in one JSON string, so a long file's call is the one
+         * thing in the protocol guaranteed to outgrow a generation. It stops mid-string, the JSON
+         * never closes, nothing parses, and every character the model wrote was discarded — after
+         * which it was told to write the file again in chunks, out of the same budget, from a
+         * context that no longer held the attempt. A model producing a complete page every round
+         * therefore produced no file at all, which is what "it never actually writes any output"
+         * turned out to mean.
+         *
+         * The prefix is not wrong, it is just short: it is the exact opening of the file, and
+         * `append:true` exists to add to it. So it is written as a real host tool call — which
+         * suspends the turn, so the continuation arrives as a FRESH turn with a FRESH budget. That
+         * is the turn-by-turn chunking the old one-step-per-turn flow got by accident, made
+         * structural: the app drives it, not the model's judgement about its own token budget.
+         *
+         * Placed before the nudge because it is strictly better than one: the nudge asks for work
+         * that has already been done.
+         */
+        const salvaged = lastTruncated ? salvageTruncatedWrite(reply) : undefined;
+        if (salvaged) {
+          const call: BuddyToolCall = {
+            tool: "write_file",
+            path: salvaged.path,
+            content: salvaged.content,
+            ...(salvaged.append ? { append: true } : {}),
+            // The host reads this as "there is more coming" and feeds back the resume note rather
+            // than a plain "saved", so the run does not read a partial file as a finished one.
+            truncated: true,
+          };
+          opts.onEvent?.({ kind: "tool", round, call });
+          return withThinking({ text: "", transcript, pendingTool: call, toolResults });
+        }
         // Keep the malformed attempt + the re-issue nudge in the MODEL's context ONLY — pushing
         // them to `transcript` persists them as chat history, which leaked the internal directive
         // into the conversation as a "user" message.

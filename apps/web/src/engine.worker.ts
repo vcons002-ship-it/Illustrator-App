@@ -55,6 +55,7 @@ import {
   compileWorkflow,
   activeStep,
   MAX_STEP_REMINDERS,
+  adoptPlanProgress,
   doneWhenToNeeds,
   isToolAvailable,
   evaluateStep,
@@ -3097,8 +3098,26 @@ const MAX_LOCAL_INPUT_CHARS = 480_000;
  * tokens is impractically slow to decode and tends to drift, and the loop AUTO-CONTINUES past it
  * with the Stop button able to interrupt between passes — so the cap bounds one *generation*, not
  * the total output. */
-const LOCAL_REPLY_FRACTION = 0.3;
+const LOCAL_REPLY_FRACTION = 0.4;
 const MAX_LOCAL_REPLY_TOKENS = 32_768;
+/**
+ * THE FLOOR, AND WHY A FRACTION ALONE WAS THE WRONG SHAPE.
+ *
+ * Reasoning tokens and reply tokens come out of the SAME `num_predict` on Ollama. At 30% of a
+ * conservative 8,192-token window that was 2,457 tokens for both — and a qwen3-class model spends
+ * 800–3,000 of them thinking before it writes a character. So the generation ended inside the
+ * thinking block, every round, and the round loop bought nothing: round 20 faced the identical wall
+ * as round 0. Reported as "it just thought forever and never gave anything".
+ *
+ * A fraction of the window was never the right rule anyway. `num_predict` does not have to be
+ * carved out of `num_ctx` proportionally — the INPUT is bounded separately (see `inputChars`), so
+ * the only real constraint is that the two together fit. A floor plus a half-the-window ceiling says
+ * that directly: the reply always has room to be an answer, and the input always keeps half.
+ *
+ * 4,096 because that is roughly a thinking model's deliberation plus a page of real output — below
+ * it, a long deliverable is not merely tight, it is impossible however many rounds are spent on it.
+ */
+const MIN_LOCAL_REPLY_TOKENS = 4096;
 /** Per-reply budget for CLOUD models — kept moderate because cloud APIs REJECT a max_tokens above
  * the model's own output ceiling (Claude/Gemini ≈ 8k). They rarely truncate at this; if they do, the
  * loop continues just like local. */
@@ -3129,7 +3148,13 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
   }
   if (ctxTokens && ctxTokens > 0) {
     const usable = Math.min(ctxTokens, MAX_TRUSTED_CONTEXT_TOKENS);
-    const replyTokens = Math.min(MAX_LOCAL_REPLY_TOKENS, Math.max(512, Math.floor(usable * LOCAL_REPLY_FRACTION)));
+    const replyTokens = Math.min(
+      MAX_LOCAL_REPLY_TOKENS,
+      // The input always keeps half the window. This is what makes the floor safe on a small one:
+      // an 8,192-token window gives 4,096 to each side rather than a floor that eats the context.
+      Math.floor(usable / 2),
+      Math.max(MIN_LOCAL_REPLY_TOKENS, Math.floor(usable * LOCAL_REPLY_FRACTION)),
+    );
     // What is left for INPUT after the reply, not an arbitrary fraction of the whole window.
     //
     // 45% was too small to be a bound on anything: on a 32k-token model it allowed 58,982 characters
@@ -6047,7 +6072,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * Only reached when a round produced no tool call. A render still suspends the turn and resumes
      * on the next one — that boundary is real, because the host genuinely has to run it.
      */
-    let wf = msg.appManagedSteps && planHasPendingStep(msg.plan) ? compileWorkflow(msg.plan!) : undefined;
+    /**
+     * COMPILE, THEN PUT THE PROGRESS BACK. `compileWorkflow` hardcodes every step to `pending` and
+     * makes step 1 active — it is for a checklist that has just been WRITTEN, and this is a
+     * checklist that has been running for four turns.
+     *
+     * Without the second half, every turn's in-turn tick believed step 1 was current. The host's own
+     * copy is protected (its `origin:"app"` posts go through `adoptPlanProgress`, which only ever
+     * upgrades a step to done), so the card kept showing the real position while the directives
+     * pushed into the turn named a step that finished three turns ago — the model rewrote the same
+     * file and the run never reached the rest. It reads as a stall and is actually a rewind, which
+     * is why "it used to hand turns back and forth and that seems to be lost" is the exact symptom.
+     *
+     * `msg.plan` does carry the progress: `workflowToPlan` emits `status: "done"` per finished step
+     * and the host sends the live projection every turn. `adoptPlanProgress` is positional and fails
+     * closed on any mismatch — here the two cannot mismatch, since `prev` is the fresh compile of
+     * that same plan.
+     */
+    let wf = msg.appManagedSteps && planHasPendingStep(msg.plan)
+      ? adoptPlanProgress(compileWorkflow(msg.plan!), msg.plan!)
+      : undefined;
     // The nudge budget, per step. "Exactly as the host's executor does" was true of the free nudge
     // and false of everything around it: the host BOUNDS its nudges (MAX_STEP_REMINDERS) and names
     // the tool the step needs. This copy had neither, and inside a 50-round turn that is the

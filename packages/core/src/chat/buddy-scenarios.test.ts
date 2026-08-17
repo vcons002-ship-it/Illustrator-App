@@ -474,6 +474,25 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     // The fenced block keeps a real job — what the reader only READS, and what previews/runs inline.
     expect(prompt).toContain("Fenced blocks are for what the reader only READS");
   });
+  /**
+   * ADVERTISE-THEN-REFUSE, which the toolsets file explicitly forbids. The checklist guidance plans
+   * around `write_file`, and it was ungated — so on a phone or the web app, where there is no shell
+   * and `coding` is not in the toolset index at all, the model was told to build its checklist out
+   * of a tool it cannot see, cannot load and cannot call.
+   */
+  it("checklist: plans around write_file only where write_file exists", () => {
+    const managed = (canRunCommands: boolean) =>
+      buildBuddySystemPrompt({ persona: "assistant", library: [], appManagedSteps: true, canRunCommands });
+    expect(managed(true), "the shell-enabled prompt lost its chunked-write guidance").toContain(
+      "each writes its part with write_file/append",
+    );
+    expect(managed(false), "a no-shell session is told to plan around a tool it cannot reach").not.toContain(
+      "each writes its part with write_file/append",
+    );
+    // It still gets the outline-first rule, which is the part that does not need a shell.
+    expect(managed(false)).toContain("plan it as an OUTLINE first");
+  });
+
   it("checklist: a multi-action ask (several images) is told to set_plan first, one step per action", () => {
     // Lean no-plan guidance: a 2+ action task plans first; a single action just calls its tool.
     expect(prompt).toMatch(/several images/);
