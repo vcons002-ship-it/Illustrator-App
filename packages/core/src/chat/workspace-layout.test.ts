@@ -8,6 +8,7 @@ import {
   codeFileNameFor,
   kindForFile,
   mergeWorkspaceReadme,
+  readmeChatId,
   workspacePathFor,
 } from "./workspace-layout.js";
 
@@ -189,5 +190,34 @@ describe("codeFileNameFor", () => {
   it("sorts into the kind folder once it has an extension — the point of having one", () => {
     expect(workspacePathFor(codeFileNameFor("Solar System Page", "html"))).toBe("code/solar-system-page.html");
     expect(workspacePathFor(codeFileNameFor("Tide Report", "markdown"))).toBe("documents/tide-report.md");
+  });
+});
+
+/**
+ * A FOLDER HAS TO SAY WHOSE IT IS. Folders are named after the conversation, and the name a reader
+ * sees for an unnamed chat is its POSITION in the list — so deleting an earlier chat makes "Chat 13"
+ * come round again, and without an owner marker the second one would move into the first one's files.
+ */
+describe("chat ownership markers", () => {
+  it("round-trips the owning chat id", () => {
+    const readme = buildWorkspaceReadme("Tide report", [{ path: "code/a.js" }], "buddy-msxr09vq");
+    expect(readmeChatId(readme)).toBe("buddy-msxr09vq");
+  });
+
+  it("survives a merge, so a reader's own notes cannot strip the folder's identity", () => {
+    const first = buildWorkspaceReadme("Tide report", [], "buddy-abc");
+    const edited = `# My notes\n\nI keep the CSVs here.\n\n${first.slice(first.indexOf(README_BEGIN))}`;
+    const merged = mergeWorkspaceReadme(edited, buildWorkspaceReadme("Tide report", [{ path: "data/t.csv" }], "buddy-abc"));
+    expect(readmeChatId(merged)).toBe("buddy-abc");
+    expect(merged).toContain("I keep the CSVs here.");
+    expect(merged).toContain("data/t.csv");
+  });
+
+  it("reports no owner for a folder made by hand, or before the marker existed", () => {
+    expect(readmeChatId("# Just a folder\n\nnotes")).toBeUndefined();
+    expect(readmeChatId(undefined)).toBeUndefined();
+    // An unmarked folder must be treated as free rather than stranded, so this returning undefined
+    // is what lets an older workspace keep being used.
+    expect(readmeChatId(buildWorkspaceReadme("No id", []))).toBeUndefined();
   });
 });

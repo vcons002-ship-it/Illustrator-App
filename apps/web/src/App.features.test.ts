@@ -664,6 +664,34 @@ describe("the per-chat workspace layout", () => {
     expect(WORKER).toContain("hostWorkingDir = msg.workingDir;");
   });
 
+  it("names the folder what the reader sees, not the session id", () => {
+    // A chat only carries a stored `label` when something named it, so an ordinary conversation had
+    // none and the folder fell all the way back to the session id — `buddy-msxr09vq`, which tells a
+    // person looking at their own workspace nothing at all. The picker's positional fallback
+    // ("Chat 13") now lives in one place that both the picker and the folder read.
+    expect(APP_RAW).toContain("const displayLabel = useCallback((id: string): string =>");
+    expect(APP_RAW).toContain("const label = displayLabel(id);");
+    expect(APP_RAW).not.toMatch(/const label = buddySessionsRef\.current\.find\(\(x\) => x\.id === id\)\?\.label;/);
+  });
+
+  it("will not let a second chat move into the first one's folder", () => {
+    // "Chat 13" is a POSITION, so deleting an earlier chat makes the name come round again.
+    expect(APP_RAW).toContain("const owner = held2?.exists ? readmeChatId(held2.text) : undefined;");
+    expect(APP_RAW).toContain("if (owner && owner !== id) folder =");
+    // The owner is recorded when the folder is created.
+    expect(APP_RAW).toContain("buildWorkspaceReadme(label.trim() || folder, [], id)");
+  });
+
+  it("names the folder actually in use in the bar, instead of claiming the default", () => {
+    const PANEL = readFileSync(join(__dirname, "../../../packages/ui/src/ChatBuddyPanel.tsx"), "utf8");
+    // The bar said "Default workspace" while the chat was writing, searching and running commands in
+    // its own folder — telling the reader their files were somewhere they were not.
+    expect(PANEL).toContain("chatFolder ? `This chat's folder (${chatFolder})`");
+    expect(APP_RAW).toContain("...(chatFolder ? { chatFolder } : {}),");
+    // The ref alone cannot drive a render, which is why there is state beside it.
+    expect(APP_RAW).toContain("if (id === activeBuddyIdRef.current) setChatFolder(dir);");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
