@@ -513,19 +513,37 @@ describe("historyBudget (what the conversation actually gets)", () => {
 });
 
 describe("trimChatHistory", () => {
+  const turns = [
+    { role: "user" as const, content: "a".repeat(100) },
+    { role: "assistant" as const, content: "b".repeat(100) },
+    { role: "user" as const, content: "c".repeat(100) },
+  ];
+
   it("keeps the newest whole turns within budget, always at least the last", async () => {
-    const { trimChatHistory } = await import("./chat-session.js");
-    const turns = [
-      { role: "user" as const, content: "a".repeat(100) },
-      { role: "assistant" as const, content: "b".repeat(100) },
-      { role: "user" as const, content: "c".repeat(100) },
-    ];
-    expect(trimChatHistory(turns, 1000)).toEqual(turns); // fits → untouched
-    expect(trimChatHistory(turns, 250)).toEqual(turns.slice(1)); // oldest dropped
-    expect(trimChatHistory(turns, 150)).toEqual(turns.slice(2));
+    const { trimChatHistory, HISTORY_TRIMMED_MARKER } = await import("./chat-session.js");
+    const marker = { role: "user" as const, content: HISTORY_TRIMMED_MARKER };
+    expect(trimChatHistory(turns, 1000)).toEqual(turns); // fits → untouched, no marker
+    expect(trimChatHistory(turns, 250)).toEqual([marker, ...turns.slice(1)]); // oldest dropped
+    expect(trimChatHistory(turns, 150)).toEqual([marker, ...turns.slice(2)]);
     // The newest turn survives even when it alone exceeds the budget.
-    expect(trimChatHistory(turns, 10)).toEqual(turns.slice(2));
+    expect(trimChatHistory(turns, 10)).toEqual([marker, ...turns.slice(2)]);
     expect(trimChatHistory([], 100)).toEqual([]);
+  });
+
+  /**
+   * The cut used to leave NOTHING — no marker, no count, no log. So a model handed a conversation
+   * that begins in the middle had every reason to read that as the whole of it, and the prompt
+   * elsewhere positively instructs it to answer questions about the conversation from the transcript
+   * in front of it. The reader's report is what that looks like from outside: hours of work on a
+   * file, then "I don't have the earlier context", with nothing anywhere saying why.
+   */
+  it("says so when it cuts, and says nothing when it does not", async () => {
+    const { trimChatHistory, HISTORY_TRIMMED_MARKER } = await import("./chat-session.js");
+    expect(trimChatHistory(turns, 250)[0]!.content, "the cut is still silent").toBe(HISTORY_TRIMMED_MARKER);
+    expect(trimChatHistory(turns, 1000).some((t) => t.content === HISTORY_TRIMMED_MARKER)).toBe(false);
+    // It must not read as "this turn was trimmed" — that is a different cut with a different marker.
+    expect(HISTORY_TRIMMED_MARKER).toContain("conversation");
+    expect(HISTORY_TRIMMED_MARKER).toContain("do not assume the conversation began here");
   });
 });
 

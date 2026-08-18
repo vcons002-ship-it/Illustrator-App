@@ -333,7 +333,7 @@ export interface EngineWorkerApi {
   /** Update the worker's workspace project-guide text (AGENTS.md / CONVENTIONS.md) injected each turn. */
   setProjectGuide: (text: string) => void;
   /** Set/clear the document the reader is viewing so the buddy can discuss + revise it (uploaded docs). */
-  setActiveDocument: (doc?: { title: string; content: string }) => void;
+  setActiveDocument: (doc?: { title: string; content: string }, sessionId?: string) => void;
   /** Have the chat's vision model describe a captured screenshot — or, with `locate`, say WHERE one
    * thing is in it, as pixel coordinates (the targeting ladder's bottom rung). */
   assessImage: (
@@ -387,6 +387,9 @@ export interface EngineWorkerApi {
     scheduledTaskId?: string,
     /** The previous step's reasoning, carried only while a checklist is in flight. */
     lastThinking?: string,
+    /** Which conversation this turn belongs to — see `sessionId` on the buddyChat message. Without
+     * it the worker's per-conversation state has no key and becomes app-wide by default. */
+    sessionId?: string,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -1716,9 +1719,9 @@ export function useEngineWorker(
 
   /** Set/clear the document the reader is viewing (e.g. one they uploaded) so the buddy can discuss +
    * revise it. create_document sets this itself worker-side; this is for host-opened/uploaded docs. */
-  const setActiveDocument = useCallback((doc?: { title: string; content: string }) => {
+  const setActiveDocument = useCallback((doc?: { title: string; content: string }, sessionId?: string) => {
     if (remoteRef.current) return;
-    send({ type: "activeDocument", ...(doc ? { doc } : {}) });
+    send({ type: "activeDocument", ...(doc ? { doc } : {}), ...(sessionId ? { sessionId } : {}) });
   }, []);
 
   useEffect(() => {
@@ -2232,6 +2235,7 @@ export function useEngineWorker(
        * which task the reader is inside and the model can revise it. */
       scheduledTaskId?: string,
       lastThinking?: string,
+      sessionId?: string,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -2262,7 +2266,7 @@ export function useEngineWorker(
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}), ...(scheduledTaskId ? { scheduledTaskId } : {}), ...(lastThinking ? { lastThinking } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}), ...(creativeSession ? { creativeSession: true } : {}), ...(storySoulCast ? { storySoulCast } : {}), ...(scheduledTaskId ? { scheduledTaskId } : {}), ...(lastThinking ? { lastThinking } : {}), ...(sessionId ? { sessionId } : {}) });
       }),
     [],
   );

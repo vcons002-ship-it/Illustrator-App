@@ -73,7 +73,14 @@ export type MainToWorker =
   | { type: "projectGuide"; text: string }
   /** The document the reader is currently viewing (e.g. one they uploaded/opened), so the buddy can
    * discuss + revise it. `doc` absent ⇒ clear the active document. create_document sets it itself. */
-  | { type: "activeDocument"; doc?: { title: string; content: string } }
+  | {
+      type: "activeDocument";
+      doc?: { title: string; content: string };
+      /** Which conversation the document belongs to. Absent ⇒ the shared slot, which is what a
+       * host with no session in hand should get — an upload belongs to the chat it was dropped
+       * into, not to every chat at once. */
+      sessionId?: string;
+    }
   | { type: "open"; book: BookSource }
   /** Patch the open book's edited data table(s) in place (no re-init), so the chat's
    * analyze_data sees edits made in the grid. Lightweight sibling of "open". */
@@ -347,6 +354,16 @@ export type MainToWorker =
       /** This conversation is the dedicated Creative window. It remains true for reader-authored
        * turns there, while `creativeIdle` only marks the unattended run itself. */
       creativeSession?: boolean;
+      /**
+       * WHICH CONVERSATION THIS TURN BELONGS TO.
+       *
+       * The worker held several pieces of per-conversation state as module globals — the active
+       * document, the last email draft, the loaded toolsets — because it had no way to tell one chat
+       * from another: the only session-ish thing on this message was the `creativeSession` boolean.
+       * So an unattended Creative run's essay became "the active document" in the reader's own chat,
+       * pinned into its system prompt, evicting the conversation it was pinned alongside.
+       */
+      sessionId?: string;
       /**
        * Trusted host control data for a Story-setup "You & me" start. It is deliberately outside
        * user/model-authored `/story` JSON so a custom cast cannot opt itself into either Soul.

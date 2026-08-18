@@ -1121,13 +1121,36 @@ let imageRefLedger: string[] = [];
 /** The workspace's AGENTS.md / CONVENTIONS.md text (pushed from the host); injected as durable project
  * conventions into the buddy prompt. Empty when there's no such file. */
 let projectGuide = "";
+/**
+ * PER-CONVERSATION STATE, KEYED BY CONVERSATION. This was two module globals, and "global" was never
+ * a decision — the worker simply had no way to tell one chat from another, so everything it held
+ * belonged to all of them.
+ *
+ * What that cost, reported: an unattended ✨ Creative run wrote an essay about lambda phage; every
+ * turn afterwards, in the reader's OWN chat, opened with "the active document — a long essay…". Not
+ * just confusing. The excerpt is pinned system text budgeted at 40% of the history allowance, so on
+ * a 30k window it was ~7,800 characters of somebody else's work sitting in front of a conversation
+ * it then pushed out of the window — the reader came back hours later to an assistant that could not
+ * remember the code it had written with them.
+ *
+ * A turn with no session id falls back to one shared slot, which is exactly the old behaviour: the
+ * only callers without one are internal, and none of them is a second conversation.
+ */
+const NO_SESSION = "";
 /** The document the reader is currently viewing — set by create_document, or pushed from the host
  * (`activeDocument` message) when they open/upload one. Injected (bounded) AFTER the cache prefix so
  * the buddy can discuss + revise the REAL text without a read_file round-trip. */
-let activeDocument: { title: string; content: string } | undefined;
+const activeDocumentBySession = new Map<string, { title: string; content: string }>();
 /** The last email draft saved or edited this session — surfaced every turn so a follow-up revision
- * edits it instead of drafting a second copy (see buildActiveDraftBlock). */
-let lastDraft: { id: string; to: string[]; subject: string } | undefined;
+ * edits it instead of drafting a second copy (see buildActiveDraftBlock).
+ *
+ * Keyed for a sharper reason than the document: `lastDraft` carries a live Gmail draft id, and the
+ * prompt tells the model to `edit_draft` it. Shared, a draft written in one chat is a draft another
+ * chat is invited to rewrite — in the reader's actual mailbox. */
+const lastDraftBySession = new Map<string, { id: string; to: string[]; subject: string }>();
+/** The conversation the turn being served belongs to. Set at the top of every buddy turn; read by the
+ * tool handlers, which run inside it and have no other way to know. */
+let turnSessionId = NO_SESSION;
 /** Ceiling on ONE read_document reply — matches the read_file ceiling. This is an on-demand read, not
  * the per-turn excerpt, so it can be generous: it's paid once, when the model actually asks. */
 const MAX_DOCUMENT_READ_CHARS = 60_000;
@@ -1812,7 +1835,10 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "activeDocument":
       // The host set/cleared the document the reader is viewing (e.g. one they uploaded) so the buddy
       // can discuss + revise it. create_document sets this itself; this is for host-opened docs.
-      activeDocument = msg.doc;
+      // Against the session the host names, or the shared slot when it names none — an upload belongs
+      // to the chat it was dropped into, not to every chat.
+      if (msg.doc) activeDocumentBySession.set(msg.sessionId ?? NO_SESSION, msg.doc);
+      else activeDocumentBySession.delete(msg.sessionId ?? NO_SESSION);
       break;
     case "open":
       void handleOpen(msg.book);
@@ -4788,27 +4814,28 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               // instead of adding another. Only the target is compared, never the body — the body is
               // what a revision changes. A genuinely different email (new recipient, new subject)
               // drafts normally, and the result says which happened so the model can tell.
-              if (lastDraft && sameDraftTarget(lastDraft, d)) {
-                const updated = await editDraft(transport, await tok(), lastDraft.id, {
+              const held = lastDraftBySession.get(turnSessionId);
+              if (held && sameDraftTarget(held, d)) {
+                const updated = await editDraft(transport, await tok(), held.id, {
                   to: d.to,
                   subject: d.subject,
                   body: d.body,
                   ...(d.cc ? { cc: d.cc } : {}),
                   ...(d.bcc ? { bcc: d.bcc } : {}),
                 });
-                lastDraft = { id: updated.id, to: updated.to, subject: updated.subject };
+                lastDraftBySession.set(turnSessionId, { id: updated.id, to: updated.to, subject: updated.subject });
                 return { id: updated.id, updatedExisting: true };
               }
               const r = await createDraft(transport, await tok(), d);
               // Remember it for the DRAFT IN PROGRESS block: the id would otherwise survive only in
               // this one tool result, and a later "make it warmer" would draft a second copy.
-              if (r.id) lastDraft = { id: r.id, to: d.to, subject: d.subject };
+              if (r.id) lastDraftBySession.set(turnSessionId, { id: r.id, to: d.to, subject: d.subject });
               return r;
             },
             listDrafts: async (max) => listDrafts(transport, await tok(), max),
             editDraft: async (draftId, patch) => {
               const d = await editDraft(transport, await tok(), draftId, patch);
-              lastDraft = { id: d.id, to: d.to, subject: d.subject };
+              lastDraftBySession.set(turnSessionId, { id: d.id, to: d.to, subject: d.subject });
               return d;
             },
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string; query?: string }) =>
@@ -5319,7 +5346,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const id = `doc-${++documentCounter}-${slug}`;
         const path = `documents/${slug}.md`;
         const words = call.content.trim() ? call.content.trim().split(/\s+/).length : 0;
-        activeDocument = { title: call.title, content: call.content };
+        activeDocumentBySession.set(turnSessionId, { title: call.title, content: call.content });
         post({
           type: "documentCreated",
           requestId: msg.requestId,
@@ -5335,6 +5362,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Edits land on the FULL stored text, NOT on the bounded excerpt the model sees in its prompt.
         // That's the whole point: a document can be revised correctly without the model ever holding
         // all of it, so a long one can no longer lose the part that didn't fit.
+        const activeDocument = activeDocumentBySession.get(turnSessionId);
         if (!activeDocument) {
           return { ok: false, title: "", applied: 0, failures: 0, words: 0, summary: "", error: "no document is open" };
         }
@@ -5359,7 +5387,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(ambiguous ? { ambiguous } : {}),
           };
         }
-        activeDocument = { title: doc.title, content: up.text };
+        activeDocumentBySession.set(turnSessionId, { title: doc.title, content: up.text });
         const slug =
           (doc.title || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
           "document";
@@ -5385,8 +5413,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       },
       readDocument: async (section) => {
-        if (!activeDocument) return { title: "", text: "", total: 0, found: false };
-        const { title, content } = activeDocument;
+        const viewing = activeDocumentBySession.get(turnSessionId);
+        if (!viewing) return { title: "", text: "", total: 0, found: false };
+        const { title, content } = viewing;
         const body = section ? extractSection(content, section) : content;
         if (section && body === undefined) {
           return { title, text: "", total: content.length, found: false, outline: documentOutline(content).join(" › ") };
@@ -5861,7 +5890,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // "the task this chat is working" — it appears and disappears mid-thread, so keying on it reset
     // the loaded set twice per task, in the middle of one continuous chat, for no reason the reader
     // could see.
-    const sessionKey = "buddy";
+    //
+    // …and until the message carried a session id, "the conversation" was the string "buddy": one
+    // entry for every chat in the app. An unattended Creative run may load a toolset — `load_toolset`
+    // is the first thing its allowlist permits — and that documentation was then welded onto every
+    // other conversation's setup, inside the cache prefix, for the rest of the page's life.
+    const sessionKey = msg.sessionId ?? NO_SESSION;
+    // The tool handlers below run inside this turn and have no other way to know whose it is.
+    turnSessionId = sessionKey;
     // THE CHECKLIST'S OWN TOOLSETS, IN FRONT OF IT BEFORE IT ASKS. A run whose step says
     // needs:"read_file" is a run that will want the `files` docs, and making it discover that costs
     // a round trip it may not spend: reported as a scheduled run searching the WEB for "how to read
@@ -6014,25 +6050,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       story?.mode === "roleplay"
         ? roleplayStoryTurnPrompt(msg.userText, story.play)
         : msg.userText;
-    // As above: the buddy chat has no book section at all, so a fixed 30%-to-history split
-    // reserved most of the window for something that isn't there and left the conversation with a
-    // few hundred words. What the setup didn't use is the conversation's.
-    const history = trimChatHistory(
-      [...msg.history, { role: "user", content: modelFacingUserText }],
-      historyBudget(budgets.input, setup.length),
-    );
-    post({
-      type: "chatContextUsage",
-      requestId: msg.requestId,
-      usage: measureContextUsage(
-        [
-          { key: "instructions", label: "Assistant setup & tools", text: setup },
-          { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
-          { key: "message", label: "Your message", text: msg.userText },
-        ],
-        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
-      ),
-    });
     const thinking = thinkingNotifier((text) =>
       post({ type: "buddyThinking", requestId: msg.requestId, text }),
     );
@@ -6061,8 +6078,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // model with a 200k window to a 4k local model's excerpt for no reason. Whatever doesn't fit is
     // reachable with read_document and editable with edit_document, so the cap costs nothing but a
     // round-trip now.
-    const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
-    const draftBlock = buildActiveDraftBlock(lastDraft);
+    const activeDocBlock = buildActiveDocumentBlock(activeDocumentBySession.get(sessionKey), activeDocBudget(budgets.history));
+    const draftBlock = buildActiveDraftBlock(lastDraftBySession.get(sessionKey));
     /**
      * "GENERATE 3 IMAGES" CAME BACK AS ONE PICTURE, THREE PROMPT FIXES RUNNING.
      *
@@ -6076,6 +6093,42 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * sitting in a standing instruction competing with forty others.
      */
     const rendersBlock = requestedRendersNote(msg.userText ?? "", planHasPendingStep(msg.plan));
+    /**
+     * THE PROMPT'S LIVE BLOCKS ARE PART OF THE PROMPT — and pretending otherwise is what turned a
+     * leaked document into lost work.
+     *
+     * The history was trimmed to `input − setup`, with `setup` measured BEFORE these blocks existed.
+     * So the conversation was sized generously against a prompt that then grew by everything below,
+     * the total overshot the window at send time, and `trimTurnMessages` clawed the difference back
+     * by dropping the OLDEST turns — silently, behind the reader, every turn. On the reported
+     * session the active-document excerpt alone is budgeted at ~7,800 characters, and the overshoot
+     * was about that: an essay nobody asked for, evicting the conversation it was pinned beside.
+     *
+     * They are assembled here, ahead of the trim, so the history is sized for the prompt that is
+     * actually sent. And they are metered, because the readout said "53% of window" while the real
+     * prompt was larger — the one number the reader had to go on did not include them.
+     */
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
+    // As above: the buddy chat has no book section at all, so a fixed 30%-to-history split
+    // reserved most of the window for something that isn't there and left the conversation with a
+    // few hundred words. What the setup didn't use is the conversation's.
+    const history = trimChatHistory(
+      [...msg.history, { role: "user", content: modelFacingUserText }],
+      historyBudget(budgets.input, setup.length + volatile.length),
+    );
+    post({
+      type: "chatContextUsage",
+      requestId: msg.requestId,
+      usage: measureContextUsage(
+        [
+          { key: "instructions", label: "Assistant setup & tools", text: setup },
+          { key: "live", label: "Documents & working state", text: volatile },
+          { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
+          { key: "message", label: "Your message", text: msg.userText },
+        ],
+        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
+      ),
+    });
     /**
      * APP-MANAGED CHECKLISTS RUN INSIDE THE TURN NOW.
      *
@@ -6201,7 +6254,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           return { kind: "stop" as const };
         }
       : undefined;
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, imageRefBlock, scheduledBlock, activeDocBlock, draftBlock, thinkingBlock, rendersBlock].filter(Boolean).join("\n\n");
     /**
      * G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
      * demands, so a stubborn small model can't narrate instead of acting. Only for a concrete tool

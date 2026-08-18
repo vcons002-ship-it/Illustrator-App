@@ -536,3 +536,68 @@ describe("pressing Stop", () => {
     }
   });
 });
+
+/**
+ * ONE CONVERSATION'S STATE MUST NOT APPEAR IN ANOTHER'S.
+ *
+ * The worker held per-conversation state as module globals, and "global" was never a decision — the
+ * buddyChat message carried no session id, so there was nothing to key on. What it cost: an
+ * unattended ✨ Creative run wrote an essay, `create_document` put it in the single `activeDocument`
+ * slot, and every later turn in the reader's OWN chat opened with "the active document — a long
+ * essay…". The excerpt is pinned system text budgeted at 40% of the history allowance, so on a 30k
+ * window it was ~7,800 characters of someone else's work evicting the conversation it sat beside.
+ */
+describe("per-conversation state in the worker", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+  const PROTOCOL = readFileSync(join(__dirname, "worker-protocol.ts"), "utf8");
+
+  it("carries a session id on the turn, which is what makes keying possible at all", () => {
+    expect(PROTOCOL).toMatch(/sessionId\?: string;/);
+    expect(readFileSync(join(__dirname, "App.tsx"), "utf8")).toContain(
+      "activeScheduledTaskId(), carriedThinking, activeBuddyIdRef.current)",
+    );
+    expect(WORKER).toMatch(/const sessionKey = msg\.sessionId \?\? NO_SESSION;/);
+  });
+
+  it("keys the document and the draft by conversation, with no global left behind", () => {
+    expect(WORKER).toContain("activeDocumentBySession");
+    expect(WORKER).toContain("lastDraftBySession");
+    // A bare `activeDocument =` / `lastDraft =` assignment is the shape that leaked.
+    expect(WORKER, "a global document assignment came back").not.toMatch(/^\s*let activeDocument\b/m);
+    expect(WORKER, "a global draft assignment came back").not.toMatch(/^\s*let lastDraft\b/m);
+  });
+
+  it("stops keying the loaded toolsets on a string literal shared by every chat", () => {
+    // `load_toolset` is the first tool an unattended creative run is allowed, and its documentation
+    // rides inside the cache prefix — welded onto every other conversation's setup for the page's life.
+    expect(WORKER).not.toMatch(/const sessionKey = "buddy"/);
+  });
+});
+
+/**
+ * THE PROMPT'S LIVE BLOCKS ARE PART OF THE PROMPT. The history was sized against `setup` alone,
+ * measured before those blocks existed — so the conversation was budgeted generously against a
+ * prompt that then grew, the total overshot at send time, and `trimTurnMessages` clawed the
+ * difference back by dropping the oldest turns behind the reader. The readout said "53% of window"
+ * while the real prompt was larger, because it metered the same three sections and not the blocks.
+ */
+describe("the context budget and its readout", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+
+  it("charges the live blocks to the history budget", () => {
+    expect(WORKER).toMatch(/historyBudget\(budgets\.input, setup\.length \+ volatile\.length\)/);
+  });
+
+  it("shows them in the readout, so the same thing cannot hide again", () => {
+    expect(WORKER).toMatch(/key: "live", label: "Documents & working state", text: volatile/);
+  });
+
+  it("assembles them BEFORE the trim, or the budget is sized for a prompt that is not sent", () => {
+    const built = WORKER.indexOf("const volatile = [storyStateBlock");
+    expect(built, "the buddy turn's volatile assembly is gone").toBeGreaterThan(-1);
+    // Searched FROM the assembly: the reader-side chat path has its own trim earlier in the file,
+    // and matching that one would pass no matter which order the buddy path used.
+    const trimmed = WORKER.indexOf("const history = trimChatHistory(", built);
+    expect(trimmed, "the buddy turn trims history before the blocks it must be sized against exist").toBeGreaterThan(built);
+  });
+});
