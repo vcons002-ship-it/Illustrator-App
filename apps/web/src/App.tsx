@@ -53,6 +53,7 @@ import {
   buildWorkspaceReadme,
   chatFolderName,
   codeFileNameFor,
+  readmeChatId,
   mergeWorkspaceReadme,
   workspacePathFor,
   describeBuddyToolActivity,
@@ -1921,6 +1922,30 @@ export function App() {
   /** Chat id → its absolute workspace folder, once created. Per page load: the folder itself is
    * durable on disk, and re-deriving it is one cheap write of a README that merges. */
   const chatWorkspaceRef = useRef(new Map<string, string>());
+  /** The same value, as STATE, purely so the folder bar can render it — a ref changing does not
+   * re-render, and the bar telling the reader "Default workspace" while their files went somewhere
+   * else is the thing being fixed. */
+  const [chatFolder, setChatFolder] = useState<string | undefined>(undefined);
+  /**
+   * WHAT THIS CHAT IS CALLED ON SCREEN.
+   *
+   * A session only carries a stored `label` when something named it — a task, a rename — so an
+   * ordinary conversation has none and the picker falls back to its POSITION ("Chat 13"). That
+   * fallback used to live only in the render, so the workspace folder, which reads the stored label,
+   * saw undefined and named itself after the session id. One definition now, so the folder in the
+   * file browser and the name in the app cannot drift apart.
+   */
+  const displayLabel = useCallback((id: string): string => {
+    const list = buddySessionsRef.current;
+    const i = list.findIndex((s) => s.id === id);
+    const s = i === -1 ? undefined : list[i];
+    return (
+      s?.label?.trim() ||
+      (id === BUDDY_CHAT_ID ? "Assistant chat" : "") ||
+      (s?.workingDir ? lastPathSegment(s.workingDir) : "") ||
+      `Chat ${i + 1}`
+    );
+  }, []);
   // Live mirrors: a turn dispatched right after opening a task runs before the async
   // refreshTaskPlans lands AND through a useCallback whose deps omit these — reading the
   // refs resolves the active plan from FRESH state instead of a stale captured closure.
@@ -1928,6 +1953,10 @@ export function App() {
   taskPlansRef.current = taskPlans;
   const activeBuddyIdRef = useRef(activeBuddyId);
   activeBuddyIdRef.current = activeBuddyId;
+  // Switching chats switches which folder the bar should name.
+  useEffect(() => {
+    setChatFolder(chatWorkspaceRef.current.get(activeBuddyId));
+  }, [activeBuddyId]);
   /**
    * THE CHAT'S OWN FOLDER, MADE THE FIRST TIME IT WRITES SOMETHING.
    *
@@ -1955,24 +1984,39 @@ export function App() {
     const id = activeBuddyIdRef.current;
     const held = chatWorkspaceRef.current.get(id);
     if (held) return held;
-    const label = buddySessionsRef.current.find((x) => x.id === id)?.label;
-    const folder = chatFolderName(label, id);
+    // THE NAME THE READER SEES, not the one stored on the session. A chat is only given a stored
+    // `label` when something names it — a task, a rename — so an ordinary conversation had none, and
+    // the folder fell all the way back to the session id: `buddy-msxr09vq`, which tells a person
+    // looking at their own workspace precisely nothing. `displayLabel` is the same fallback the chat
+    // picker shows, so the folder in the file browser matches the name in the app.
+    const label = displayLabel(id);
     try {
+      // A DISPLAY NAME CAN COLLIDE, because "Chat 13" is a POSITION in the list — delete an earlier
+      // chat and the number comes round again. So the first candidate is the plain name, and if a
+      // folder is already there wearing another chat's id, this one takes a suffixed name rather
+      // than moving into someone else's files. A folder with no marker at all is treated as free:
+      // it predates the marker, and joining it is better than stranding its contents.
+      const base = chatFolderName(label, id);
+      let folder = base;
+      const held2 = await readWorkspaceFile(`${base}/README.md`).catch(() => undefined);
+      const owner = held2?.exists ? readmeChatId(held2.text) : undefined;
+      if (owner && owner !== id) folder = `${base}-${id.replace(/[^a-z0-9]+/gi, "").slice(-6).toLowerCase()}`;
       // The README both names the folder and creates it. Merged, so a reader who has written their
       // own notes in there keeps them.
-      const readme = buildWorkspaceReadme(label?.trim() || folder, []);
+      const readme = buildWorkspaceReadme(label.trim() || folder, [], id);
       const saved = await writeWorkspaceFile(`${folder}/README.md`, readme);
       // `saved` is the absolute path of the README; its directory is the workspace.
       const dir = saved.slice(0, Math.max(saved.lastIndexOf("/"), saved.lastIndexOf("\\")));
       if (!dir) return undefined;
       chatWorkspaceRef.current.set(id, dir);
+      if (id === activeBuddyIdRef.current) setChatFolder(dir);
       return dir;
     } catch {
       // Best-effort: a workspace we could not create must not stop the write. It falls back to the
       // shared root, which is exactly where it used to go.
       return undefined;
     }
-  }, [isRemoteClient]);
+  }, [isRemoteClient, displayLabel]);
   /** The folder to work in for this chat: the reader's own choice first, else the chat's — CREATING
    * the chat's folder if this is the first time it's needed. */
   const workspaceForWrite = useCallback(
@@ -2000,18 +2044,20 @@ export function App() {
     const id = activeBuddyIdRef.current;
     const dir = chatWorkspaceRef.current.get(id);
     if (!dir || buddyWorkingDirRef.current) return;
-    const label = buddySessionsRef.current.find((x) => x.id === id)?.label;
+    // The same name the folder was made under, and the same one the picker shows.
+    const label = displayLabel(id);
     try {
       const existing = await readWorkspaceFile("README.md", dir);
       const generated = buildWorkspaceReadme(
-        label?.trim() || chatFolderName(label, id),
+        label.trim() || chatFolderName(label, id),
         createdFilesRef.current.map((f) => ({ path: f.path })),
+        id,
       );
       await writeWorkspaceFile("README.md", mergeWorkspaceReadme(existing.exists ? existing.text : undefined, generated), dir);
     } catch {
       // Best-effort: a README we couldn't refresh must never fail the write it describes.
     }
-  }, []);
+  }, [displayLabel]);
   // Starting a "story as you go" spins up a fresh dedicated session; this remembers the session we
   // came from so exiting the story book returns there. The switch fn is held in a ref because
   // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
@@ -10264,6 +10310,7 @@ export function App() {
       {...((isDesktop || isRemoteClient) && settings.allowCommands
         ? {
             workingDir: buddyWorkingDir,
+            ...(chatFolder ? { chatFolder } : {}),
             onSetWorkingDir: setWorkingDir,
             // The native folder-picker dialog is desktop-only; the phone types the path (it's
             // relayed with each command/file tool so they run in that folder on the desktop).

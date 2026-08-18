@@ -137,6 +137,26 @@ export const README_BEGIN = "<!-- visual-reader:files -->";
 export const README_END = "<!-- /visual-reader:files -->";
 
 /**
+ * WHICH CHAT OWNS THIS FOLDER, written into its README.
+ *
+ * Folders are named after the conversation, and two conversations can easily want the same name —
+ * "Chat 13" is a POSITION in the list, so deleting an earlier chat makes the number come round
+ * again. Without a way to tell whose folder a directory is, the second one would quietly move into
+ * the first one's files. The id is in the README rather than a dotfile because the README already
+ * has to exist, already gets written on creation, and a marker in a file the reader can see is
+ * easier to reason about than one hidden from them.
+ */
+export function chatIdMarker(sessionId: string): string {
+  return `<!-- visual-reader:chat ${sessionId} -->`;
+}
+
+/** The chat id recorded in a README, or undefined if it carries none (a folder made by hand, or by
+ * a version of the app older than the marker). */
+export function readmeChatId(text: string | undefined): string | undefined {
+  return /<!--\s*visual-reader:chat\s+(\S+?)\s*-->/.exec(text ?? "")?.[1];
+}
+
+/**
  * THE WORKSPACE, DESCRIBED IN THE WORKSPACE. PURE.
  *
  * A folder structure says what KIND each file is and says nothing about what any of it was FOR. The
@@ -148,7 +168,7 @@ export const README_END = "<!-- /visual-reader:files -->";
  * Only the marked section is generated. Anything the reader writes above or below it is theirs, and
  * `mergeWorkspaceReadme` puts it back.
  */
-export function buildWorkspaceReadme(title: string, entries: readonly WorkspaceEntry[]): string {
+export function buildWorkspaceReadme(title: string, entries: readonly WorkspaceEntry[], sessionId?: string): string {
   const byKind = new Map<string, WorkspaceEntry[]>();
   for (const e of entries) {
     const dir = e.path.includes("/") ? e.path.slice(0, e.path.indexOf("/")) : "";
@@ -170,7 +190,10 @@ export function buildWorkspaceReadme(title: string, entries: readonly WorkspaceE
   }
   // An empty workspace says so rather than showing a bare heading: "nothing here yet" is information.
   const body = sections.length ? sections.join("\n\n") : "_Nothing saved here yet._";
-  return `# ${title}\n\n${README_BEGIN}\n${body}\n${README_END}\n`;
+  // The owner marker sits INSIDE the generated block, so mergeWorkspaceReadme carries it forward with
+  // the rest of it and a reader editing around the block can't accidentally strip the folder's identity.
+  const owner = sessionId ? `${chatIdMarker(sessionId)}\n` : "";
+  return `# ${title}\n\n${README_BEGIN}\n${owner}${body}\n${README_END}\n`;
 }
 
 /**

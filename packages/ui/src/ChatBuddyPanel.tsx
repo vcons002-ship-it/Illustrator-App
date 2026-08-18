@@ -198,6 +198,9 @@ export interface ChatBuddyPanelProps {
   onUseImageAsReference?: (item: { full: string; title?: string }) => void;
   /** The session's working folder ("" = default workspace). Present → show the picker. */
   workingDir?: string;
+  /** The chat's OWN workspace folder, once it has made one — shown when the reader has chosen none,
+   * so the bar names where the files are actually going. */
+  chatFolder?: string;
   /** Set the working folder run_command/find_files operate in ("" resets to default). */
   onSetWorkingDir?: (dir: string) => void;
   /** Native folder picker (desktop); resolves to a path or undefined on cancel. */
@@ -839,6 +842,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       {props.onSetWorkingDir && !minimized && (
         <WorkingFolderBar
           workingDir={props.workingDir ?? ""}
+          {...(props.chatFolder ? { chatFolder: props.chatFolder } : {})}
           onSet={props.onSetWorkingDir}
           {...(props.onPickFolder ? { onPick: props.onPickFolder } : {})}
         />
@@ -1506,16 +1510,24 @@ const sessionSelectStyle = {
 /** Desktop: shows/sets the folder the assistant's commands + file search run in. */
 function WorkingFolderBar({
   workingDir,
+  chatFolder,
   onSet,
   onPick,
 }: {
   workingDir: string;
+  /** The chat's OWN folder, once it has written something. Not the reader's choice — theirs is
+   * `workingDir` and always wins. */
+  chatFolder?: string;
   onSet: (dir: string) => void;
   onPick?: () => Promise<string | undefined>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workingDir);
-  const label = workingDir || "Default workspace (~/VisualReader/workspace)";
+  // NAME THE FOLDER ACTUALLY IN USE. This showed "Default workspace" whenever the reader hadn't
+  // chosen one — including after the chat had made its own folder and was writing, searching and
+  // running commands inside it. Someone reading the bar was told their files were somewhere they
+  // were not, and had no way to find where they had gone.
+  const label = workingDir || (chatFolder ? `This chat's folder (${chatFolder})` : "Default workspace (~/VisualReader/workspace)");
   const tinyBtn = { ...smallButtonStyle, padding: "2px 8px", fontSize: 11 } as const;
   const browse = async () => {
     const p = await onPick?.();
