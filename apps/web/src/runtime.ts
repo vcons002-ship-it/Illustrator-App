@@ -636,7 +636,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     if (r.code === 0) beforeSha = r.stdout.trim();
     // What was ALREADY uncommitted before the agent ran, so the folder's existing mess is not
     // reported as its doing. Read-only — see the diff step for why nothing here stages or commits.
-    dirtyBefore = (await run("git status --porcelain -- .")).stdout;
+    // `-uall` lists the FILES inside an untracked directory instead of collapsing it to one `dir/`
+    // entry — the collapsed form cannot be excluded by path and cannot be shown to the reader.
+    dirtyBefore = (await run("git status --porcelain -uall -- .")).stdout;
   } catch {
     repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
@@ -700,9 +702,10 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
     names = agentChangedFiles({
       dirtyBefore,
-      dirtyAfter: (await run("git status --porcelain -- .")).stdout,
+      dirtyAfter: (await run("git status --porcelain -uall -- .")).stdout,
       committed: (await run(`git diff --name-only${range} -- .`)).stdout,
-      exclude: [CODING_TASK_FILE, `${CODEX_HOME_DIR}/config.toml`],
+      exclude: [CODING_TASK_FILE],
+      excludeDirs: [CODEX_HOME_DIR],
     });
   } catch {
     /* diff is best-effort */
@@ -732,11 +735,26 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     ? `\n${label} was STOPPED at the ${Math.round(AGENT_TIMEOUT_SECS / 60)}-minute deadline, so whatever it had ` +
       `done so far is what is on disk. Split the job into smaller delegated tasks rather than retrying this one.`
     : "";
+  // NAME THE FILES, ALWAYS. "changed 1 file(s)" is a claim with nothing behind it, and a reader —
+  // human or model — has no way to notice it is wrong. It was wrong: an untracked directory of our
+  // own leaked into the count, an agent that had done nothing looked like it had produced a project,
+  // and the assistant went hunting for files that were never written. A list can be checked; a
+  // number cannot. `--stat` covers only what was COMMITTED, so the names go beside it, not instead.
+  const fileList = names.length ? `\nFiles: ${names.join(", ")}` : "";
+  // SHOW WHAT THE AGENT SAID whenever the run did not cleanly succeed — not only when it changed
+  // nothing. An agent that failed halfway explains itself in its own output, and that explanation
+  // used to be dropped in exactly the case where it mattered most.
+  const tail = (agent.stdout + agent.stderr).trim().slice(-1200);
+  const tailLine = ok || !tail ? "" : `\n${label} output (tail):\n${tail}`;
   const summary = changed
-    ? `[delegate_coding_task: ${label} changed ${names.length} file(s):\n${stat || names.join("\n")}${timedOutLine}${verifyLine}${repoNote}` +
-      `\nReview the diff; if something's off, fix it with edit_file or delegate again with a sharper task.]`
-    : `[delegate_coding_task: ${label} ran but changed no files (exit ${agent.code}).${timedOutLine} Output tail:\n` +
-      `${(agent.stdout + agent.stderr).trim().slice(-1200)}${verifyLine}${repoNote}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
+    ? `[delegate_coding_task: ${label} changed ${names.length} file(s).${fileList}${stat ? `\n${stat}` : ""}` +
+      `${timedOutLine}${verifyLine}${tailLine}${repoNote}` +
+      `\nCHECK the files above actually contain the work before reporting success — an agent's claim is ` +
+      `not evidence. If something's off, fix it with edit_file or delegate again with a sharper task.]`
+    : `[delegate_coding_task: ${label} ran but changed NO files (exit ${agent.code}).${timedOutLine}` +
+      `\n${label} output (tail):\n${tail}${verifyLine}${repoNote}` +
+      `\nNothing was written, so there is nothing to review. Do the change yourself with ` +
+      `write_file/edit_file, or delegate again with a clearer task.]`;
   return { ok, installed: true, summary, files: names };
 }
 
