@@ -19,9 +19,11 @@
  *     workspace/
  *       landing-page/
  *         README.md          ← what this workspace is and what is in it
- *         code/index.html
+ *         index.html         ← code stays at the top, where run_command runs
+ *         app.js
  *         notes/brief.md
  *       tide-report/
+ *         tides.py
  *         documents/report.md
  *         data/tides.csv
  *         images/chart.png
@@ -38,10 +40,20 @@ export type WorkspaceKind = (typeof WORKSPACE_KINDS)[number];
 /** Extensions that decide a file's kind. Deliberately small: an unknown extension gets no folder
  * rather than a wrong one, because a file in the wrong place is harder to find than one at the top. */
 const KIND_BY_EXT: Readonly<Record<string, WorkspaceKind>> = {
-  // code — anything meant to be run, rendered or imported
-  html: "code", htm: "code", css: "code", js: "code", mjs: "code", cjs: "code", ts: "code", tsx: "code",
-  jsx: "code", py: "code", rb: "code", go: "code", rs: "code", java: "code", c: "code", h: "code",
-  cpp: "code", cs: "code", sh: "code", bash: "code", ps1: "code", sql: "code", svg: "code",
+  // NO `code` ENTRIES, AND THAT IS THE RULE: sort what is only ever READ, and leave what is RUN
+  // where it runs. Source files used to sort into `code/`, which quietly broke every project of more
+  // than one file — a shell command runs in the workspace ROOT, so a model that wrote `main.py` with
+  // write_file (sorted into `code/`) and `test_main.py` with a shell redirect (left at the root) got
+  // two files in two directories and a test that could not import the module it was testing. Nothing
+  // in the run looked wrong; the checklist went green.
+  //
+  // The app cannot sort what the shell writes, so the only way for the two to agree is for neither
+  // to move anything. Prose, data, pictures and notes are never `cd`-ed into, imported, or passed to
+  // an interpreter, so filing those costs nothing and is most of the readability anyway.
+  //
+  // `code/` stays a KIND, so a path the model places there itself is honoured and the README still
+  // groups it — this only stops the app from putting files there behind the shell's back.
+  //
   // documents — prose a person reads
   md: "documents", markdown: "documents", txt: "documents", pdf: "documents", docx: "documents",
   rtf: "documents", odt: "documents",
@@ -74,9 +86,8 @@ function extensionOf(path: string): string {
 /**
  * Which folder a file belongs in, or `undefined` for the workspace root. PURE.
  *
- * `index.html` is the interesting case and it is deliberately a ROOT file: it is the entry point of
- * whatever the workspace holds, the thing a reader double-clicks. A single-page deliverable should
- * be the first thing in the folder, not one level down among its parts.
+ * SOURCE FILES ALWAYS RETURN UNDEFINED — see KIND_BY_EXT for why: anything that runs has to sit
+ * where commands run, and commands run in the workspace root.
  */
 export function kindForFile(path: string): WorkspaceKind | undefined {
   const base = (path.split(/[/\\]/).pop() ?? "").toLowerCase();

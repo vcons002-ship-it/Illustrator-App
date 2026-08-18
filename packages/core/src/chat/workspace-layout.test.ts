@@ -20,10 +20,25 @@ import {
  */
 describe("kindForFile", () => {
   it("sorts a file by what it IS, not by who made it", () => {
-    expect(kindForFile("app.js")).toBe("code");
     expect(kindForFile("report.md")).toBe("documents");
     expect(kindForFile("sales.csv")).toBe("data");
     expect(kindForFile("chart.png")).toBe("images");
+  });
+
+  /**
+   * SOURCE FILES STAY WHERE COMMANDS RUN. This used to answer "code", and that quietly broke every
+   * project of more than one file: a shell command runs in the workspace ROOT, so `main.py` written
+   * with write_file (sorted into `code/`) and `test_main.py` made with a shell redirect (left at the
+   * root) ended up in two directories, and the test could not import the module it was testing.
+   * Nothing in the run looked wrong and the checklist went green.
+   *
+   * The app cannot sort what the shell writes, so the only way for the two to agree is for neither
+   * to move anything. Changed deliberately; this is the rule, not an oversight.
+   */
+  it("never files something that RUNS, because the shell would not find it there", () => {
+    for (const f of ["app.js", "main.py", "page.html", "style.css", "build.sh", "lib.rs"]) {
+      expect(kindForFile(f), `${f} was filed away from where commands run`).toBeUndefined();
+    }
   });
 
   /**
@@ -51,12 +66,15 @@ describe("kindForFile", () => {
 
 describe("workspacePathFor", () => {
   it("places a bare filename in its folder", () => {
-    expect(workspacePathFor("app.js")).toBe("code/app.js");
     expect(workspacePathFor("notes.md")).toBe("documents/notes.md");
+    expect(workspacePathFor("sales.csv")).toBe("data/sales.csv");
+    // …but never source, which has to stay beside the shell that runs it.
+    expect(workspacePathFor("app.js")).toBe("app.js");
   });
 
   it("leaves a path the model already placed alone", () => {
-    // Re-prefixing `code/app.js` to `code/code/app.js` would be worse than doing nothing.
+    // `code/` is still a kind, so a path the model chooses is honoured and the README groups it —
+    // what changed is only that the app stops putting files there behind the shell's back.
     expect(workspacePathFor("code/app.js")).toBe("code/app.js");
     expect(workspacePathFor("src/lib/util.ts")).toBe("src/lib/util.ts");
   });
@@ -68,7 +86,7 @@ describe("workspacePathFor", () => {
 
   it("cannot be talked out of the workspace", () => {
     expect(workspacePathFor("../../etc/passwd")).toBe("etc/passwd");
-    expect(workspacePathFor("./app.js")).toBe("code/app.js");
+    expect(workspacePathFor("./app.js")).toBe("app.js");
   });
 });
 
@@ -187,8 +205,10 @@ describe("codeFileNameFor", () => {
     expect(codeFileNameFor("../../etc/passwd", "sh")).not.toContain("/");
   });
 
-  it("sorts into the kind folder once it has an extension — the point of having one", () => {
-    expect(workspacePathFor(codeFileNameFor("Solar System Page", "html"))).toBe("code/solar-system-page.html");
+  it("produces a name the layout then handles correctly — the point of having an extension", () => {
+    // A code book lands beside whatever runs it…
+    expect(workspacePathFor(codeFileNameFor("Solar System Page", "html"))).toBe("solar-system-page.html");
+    // …and prose is still filed.
     expect(workspacePathFor(codeFileNameFor("Tide Report", "markdown"))).toBe("documents/tide-report.md");
   });
 });

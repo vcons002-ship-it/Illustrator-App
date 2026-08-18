@@ -1339,11 +1339,11 @@ export function buildBuddySystemPrompt(raw: {
       // and a directory listing said nothing about what belonged to what. The folders cost nothing
       // (write_file creates them) and they are the whole difference between a workspace you can read
       // and one you have to excavate.
-      ".html page, a report. `path` is workspace-relative and cannot escape the workspace. SORT WHAT YOU " +
-      "WRITE: `code/` for anything that runs or renders (.py .js .html .css .sh), `documents/` for prose " +
-      "(.md .txt), `data/` for structured files (.csv .json .xlsx), `images/` for pictures and charts, " +
-      "`notes/` for working notes — so `code/particles.js`, `documents/report.md`, `data/tides.csv`. A " +
-      "project's ENTRY POINT and its config stay at the top: `index.html`, `README.md`, `package.json`. " +
+      ".html page, a report. `path` is workspace-relative and cannot escape the workspace. The app FILES " +
+      "what you write: prose to `documents/`, structured files to `data/`, pictures to `images/`, notes to " +
+      "`notes/`. CODE AND ANYTHING ELSE THAT RUNS STAYS AT THE TOP, beside run_command — which always runs " +
+      "in the workspace root — so `main.py` and `test_main.py` sit together and import each other. Give a " +
+      "path yourself (`src/lib/util.ts`) and it is used exactly as written. " +
       "Name files for what they are, in words, with no dates or version numbers — `tide-report.md`, not " +
       "`2026-08-20-tide-report-v2.md` — and rewrite the same path when you revise something. Saving needs " +
       "NO approval click. Prefer this over a fenced ```code``` " +
