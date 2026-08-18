@@ -760,3 +760,46 @@ describe("everything created lands in the workspace", () => {
     expect(APP_RAW).toContain("await writeWorkspaceFile(workspacePathFor(call.path), call.content, dir, call.append)");
   });
 });
+
+/**
+ * TWO FAILURES A LINKED PHONE HITS AND A DESKTOP NEVER DOES.
+ */
+describe("file cards on a linked phone", () => {
+  it("saves the text the card is holding instead of going to the desktop's disk for it", () => {
+    // Every file the assistant writes produces a card carrying BOTH the text and the path it was
+    // saved to. The path was tried first, so Download went to disk for text already in hand — and on
+    // a phone that disk is on another machine, so it failed with "Desktop bridge unavailable" while
+    // the content sat right there in the card.
+    const order = APP_RAW.indexOf("const data: Uint8Array | string = ref.bytes");
+    expect(order, "the download handler's source order changed shape").toBeGreaterThan(-1);
+    const block = APP_RAW.slice(order, order + 400);
+    expect(block.indexOf("ref.content !== undefined")).toBeLessThan(block.indexOf("ref.path"));
+    // An APPENDED file deliberately carries no content, and a found PC file only a path, so the disk
+    // read has to survive as the fallback.
+    expect(block).toContain("readLocalFile(ref.path)");
+  });
+
+  it("says where a file it cannot reach actually is", () => {
+    expect(APP_RAW).toContain("isRemoteClient && ref.path");
+    expect(APP_RAW).toContain("lives on the desktop");
+  });
+});
+
+/**
+ * A menu that opens BEHIND the message below it.
+ */
+describe("the file card's More menu escapes its bubble", () => {
+  const CSS = readFileSync(join(__dirname, "../../../packages/ui/src/styles/components.css"), "utf8");
+
+  it("raises the bubble, because the menu's own z-index cannot win", () => {
+    // Every bubble sets backdrop-filter, which creates a stacking context — so the menu can only
+    // compete inside its own bubble and the next one paints over it however high it goes.
+    expect(CSS).toContain(".vr-msg:has(details[open])");
+    expect(CSS).toMatch(/\.vr-msg:has\(details\[open\]\)\s*\{[^}]*z-index:\s*30/);
+  });
+
+  it("raises it ONLY while the menu is open", () => {
+    // A bubble permanently lifted above its neighbours would win every other overlap too.
+    expect(CSS).not.toMatch(/^\.vr-msg\s*\{[^}]*z-index:/m);
+  });
+});

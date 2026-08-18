@@ -1047,6 +1047,8 @@ const fileChipStyle = {
 
 const fileMenuStyle = {
   position: "absolute",
+  // Above anything inside the same bubble. Escaping the BUBBLE is a different problem entirely and
+  // no z-index here can solve it — see `.vr-msg:has(details[open])` in components.css.
   zIndex: 5,
   marginTop: 4,
   display: "flex",

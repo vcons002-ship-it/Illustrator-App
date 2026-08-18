@@ -5409,16 +5409,33 @@ export function App() {
     () => ({
       download: async (ref0) => {
         const ref = await withFetchedBytes(ref0);
-        // A found PC file carries only a path — read its bytes off disk so "Save a copy" works for it
-        // too (in-chat content/bytes save directly).
-        const data: Uint8Array | string = ref.path
-          ? new Uint8Array(await (await readLocalFile(ref.path)).arrayBuffer())
-          : ref.bytes
-            ? new Uint8Array(ref.bytes)
-            : (ref.content ?? "");
+        // WHAT WE ALREADY HOLD BEATS WHAT WE'D HAVE TO FETCH. The path came first here, so a card
+        // carrying BOTH the text and the path it was saved to — which is every file the assistant
+        // writes — went to disk for text it was already holding. On a linked phone that disk is on
+        // another machine, so the one thing a reader most wants to do with a file the assistant just
+        // wrote, save it, failed with "Desktop bridge unavailable" while the content sat in the card.
+        //
+        // A found PC file still carries only a path, and an APPENDED file deliberately carries none
+        // (its card must show the whole file, not the last chunk), so the disk read stays as the
+        // fallback it should always have been.
+        const data: Uint8Array | string = ref.bytes
+          ? new Uint8Array(ref.bytes)
+          : ref.content !== undefined
+            ? ref.content
+            : ref.path
+              ? new Uint8Array(await (await readLocalFile(ref.path)).arrayBuffer())
+              : "";
         // Refuse rather than write an empty file. This is what a card whose bytes couldn't be found
         // used to do silently — you got a 0-byte PDF and no hint that anything had gone wrong.
-        if (data.length === 0) throw new Error(`“${ref.name}” has no content on this device any more`);
+        if (data.length === 0)
+          throw new Error(
+            // Say WHERE it is, on the device that can't reach it. A phone holding only a path is not
+            // broken — the file is real, just on the desktop — and "no content on this device" reads
+            // like the work was lost.
+            isRemoteClient && ref.path
+              ? `“${ref.name}” lives on the desktop (${ref.path}) — open it there, or ask me to show it here`
+              : `“${ref.name}” has no content on this device any more`,
+          );
         const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
         return saved; // undefined ⇒ the reader cancelled the name prompt; the card says nothing
       },
