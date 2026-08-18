@@ -2548,6 +2548,12 @@ struct CommandResult {
 
 /// Hard ceilings so an approved command can't hang the UI or flood it with output.
 const COMMAND_TIMEOUT_SECS: u64 = 240;
+/// The longest a caller may ASK for. Four minutes suits the ordinary `run_command` (a build, a
+/// test run) but is nowhere near enough for a delegated coding agent: an external agent editing
+/// several files against a local 27B model routinely runs for tens of minutes, and being killed at
+/// four leaves a half-finished edit and a report that nothing changed. A caller that knows it is
+/// waiting on one of those may raise its own deadline up to this ceiling; nothing may run forever.
+const COMMAND_MAX_TIMEOUT_SECS: u64 = 3 * 60 * 60;
 const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
 
 /// Result of the Google OAuth loopback: the consent code + the exact redirect_uri it
@@ -2714,8 +2720,16 @@ async fn run_command(
     cwd: Option<String>,
     shell: Option<String>,
     detach: Option<bool>,
+    timeout_secs: Option<u64>,
 ) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // A caller that knows it is waiting on something long (a delegated coding agent) may raise
+        // its own deadline, CLAMPED both ways: never below the ordinary ceiling, so this can only
+        // ever extend the wait and never shorten one, and never above COMMAND_MAX_TIMEOUT_SECS, so
+        // "no timeout" stays impossible.
+        let timeout = timeout_secs
+            .unwrap_or(COMMAND_TIMEOUT_SECS)
+            .clamp(COMMAND_TIMEOUT_SECS, COMMAND_MAX_TIMEOUT_SECS);
         // The session's chosen working folder when it's a real, APPROVED directory (see
         // resolve_approved_cwd); otherwise the default sandbox workspace (created on demand).
         let dir = match resolve_approved_cwd(&app, cwd)? {
@@ -2806,7 +2820,7 @@ async fn run_command(
             buf
         });
 
-        let deadline = Instant::now() + Duration::from_secs(COMMAND_TIMEOUT_SECS);
+        let deadline = Instant::now() + Duration::from_secs(timeout);
         let mut timed_out = false;
         let status = loop {
             match child.try_wait() {
