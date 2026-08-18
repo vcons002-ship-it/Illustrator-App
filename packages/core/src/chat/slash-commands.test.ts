@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBuddySlashCommand, parseChatSlashCommand } from "./slash-commands.js";
+import { buddySlashCommands, parseBuddySlashCommand, parseChatSlashCommand } from "./slash-commands.js";
 import type { BookSummary } from "../storage/store.js";
 
 const library: BookSummary[] = [
@@ -207,5 +207,36 @@ describe("/reference — adopting a picture without asking the model to agree", 
   it("shows usage rather than adopting nothing", () => {
     const r = parseBuddySlashCommand("/reference", []) as { error: string };
     expect(r.error).toContain("/reference");
+  });
+});
+
+/**
+ * `/code` — THE PART THAT CANNOT BE TALKED OUT OF RUNNING.
+ *
+ * `delegate_coding_task` is a tool the model MAY choose, and asking for it in plain language turned
+ * out not to be the same as getting it: told in so many words to use it, a model wrote one file with
+ * write_file, made another with a shell redirect, and ticked its own checklist green. A reader who
+ * has decided should not also have to persuade.
+ */
+describe("the /code command", () => {
+  it("is offered only where the agent can actually run", () => {
+    expect(buddySlashCommands(false, false).some((c) => c.name === "code")).toBe(false);
+    expect(buddySlashCommands(true, false).some((c) => c.name === "code")).toBe(false);
+    // Not on the web, even with delegation enabled — the agent is a process on the desktop.
+    expect(buddySlashCommands(false, true).some((c) => c.name === "code")).toBe(false);
+    expect(buddySlashCommands(true, true).some((c) => c.name === "code")).toBe(true);
+  });
+
+  it("keeps every other command exactly where it was", () => {
+    const before = buddySlashCommands(true).map((c) => c.name);
+    expect(buddySlashCommands(true, true).map((c) => c.name)).toEqual([...before, "code"]);
+  });
+
+  it("is a MAIN-THREAD command, so the worker's parser does not claim it", () => {
+    // Same as /find: it never routes through the LLM worker. If the parser answered it, the model
+    // would be back in the loop — which is the thing being removed.
+    expect(parseBuddySlashCommand("/code build a thing", [])).toEqual({
+      error: expect.stringContaining("Unknown command /code"),
+    });
   });
 });

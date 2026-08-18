@@ -100,6 +100,22 @@ appeared on disk. With the leak above fixed, a repeat will say "changed NO files
 own output, which is the evidence needed to tell a sandbox/working-directory problem from a model
 that simply narrated work it never did.
 
+## Forcing it: the `/code` command
+
+`delegate_coding_task` is a tool the model MAY choose, and asking for it in plain language is not the
+same as getting it. Told in so many words to "use delegate_coding_task", a model wrote one file with
+`write_file`, made another with a shell redirect, ticked its own checklist green, and never went near
+the agent. The turn looked reasonable throughout. Persuasion is the wrong instrument for a decision
+the reader has already made.
+
+`/code <what to build or change>` is the deterministic path, in the same shape as `/find`: the
+reader's words become the agent's task, the host runs it on the main thread, and the model is not
+consulted about whether to. It is offered only on the desktop with delegation enabled — a command
+that answers "the agent isn't set up" is worse than one never offered.
+
+The model still speaks afterwards, reporting what came back. What it no longer does is decide whether
+the agent runs at all.
+
 ## Caveats (need a real-box pass)
 
 Everything pure is unit-tested, but the runtime path can't be exercised in CI here:

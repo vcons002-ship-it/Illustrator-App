@@ -201,6 +201,8 @@ export interface ChatBuddyPanelProps {
   /** The chat's OWN workspace folder, once it has made one — shown when the reader has chosen none,
    * so the bar names where the files are actually going. */
   chatFolder?: string;
+  /** The external coding agent is installed and enabled, so `/code` is worth offering. */
+  canDelegateCoding?: boolean;
   /** Set the working folder run_command/find_files operate in ("" resets to default). */
   onSetWorkingDir?: (dir: string) => void;
   /** Native folder picker (desktop); resolves to a path or undefined on cancel. */
@@ -283,8 +285,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
   const [toolsOpen, setToolsOpen] = useState(false);
   const commands = useMemo(
-    () => buddySlashCommands((props.desktop ?? false) || (props.remote ?? false)),
-    [props.desktop, props.remote],
+    () => buddySlashCommands((props.desktop ?? false) || (props.remote ?? false), props.canDelegateCoding ?? false),
+    [props.desktop, props.remote, props.canDelegateCoding],
   );
   // Follow the conversation. The list below is no longer load-bearing on its own — `useStickToBottom`
   // observes the column and the viewport, which covers the growth no dependency list can predict

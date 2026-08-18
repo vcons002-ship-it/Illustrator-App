@@ -8123,6 +8123,20 @@ export function App() {
         await dispatchBuddyTurn([], story, bubble);
         return;
       }
+      // `/code` — STRAIGHT to the external coding agent, with no model turn in front of it.
+      //
+      // Delegation is a tool the model MAY choose, and asking for it in plain language turned out not
+      // to be the same as getting it: told in so many words to use delegate_coding_task, the model
+      // wrote one file with write_file, made another with a shell redirect, and ticked its own
+      // checklist green — a reasonable-looking turn that never went near the agent. A reader who has
+      // decided should not have to also persuade. Same shape as `/find` below: the reader's words
+      // become the task, the host runs it, and the model is not asked whether to.
+      const code = /^\/code\s+([\s\S]+)$/i.exec(text.trim());
+      if (code) {
+        appendBuddy({ role: "user", text });
+        await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() });
+        return;
+      }
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
       // routes through the LLM worker, so no web page / book text can trigger it.
       const find = /^\/find\s+(.+)$/i.exec(text.trim());
@@ -10328,6 +10342,10 @@ export function App() {
         ? {
             workingDir: buddyWorkingDir,
             ...(chatFolder ? { chatFolder } : {}),
+            // `/code` is desktop-only, like the delegation it runs: the agent is a process on this
+            // machine, and offering the command where it cannot run would be a worse answer than not
+            // offering it.
+            ...(isDesktop && settings.delegateCoding ? { canDelegateCoding: true } : {}),
             onSetWorkingDir: setWorkingDir,
             // The native folder-picker dialog is desktop-only; the phone types the path (it's
             // relayed with each command/file tool so they run in that folder on the desktop).
