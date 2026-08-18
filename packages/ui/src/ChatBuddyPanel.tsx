@@ -1,5 +1,6 @@
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type Ref } from "react";
+import { growTextarea } from "./growTextarea.js";
 import {
   CommandHelp,
   MessageBubble,
@@ -538,6 +539,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     // field looked inert exactly when you were the one making something happen.
     fieldRef.current?.emit(x, y, 4);
     fieldRef.current?.pulse(x, y, 2.6);
+  }, [draft]);
+
+  // Grow the field with what's in it (see growTextarea): a pasted file used to show two lines of
+  // itself and look truncated.
+  useEffect(() => {
+    growTextarea(textareaRef.current);
   }, [draft]);
 
   /**

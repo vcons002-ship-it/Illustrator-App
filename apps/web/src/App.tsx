@@ -52,6 +52,7 @@ import {
   MAX_STEP_REMINDERS,
   buildWorkspaceReadme,
   chatFolderName,
+  codeFileNameFor,
   mergeWorkspaceReadme,
   workspacePathFor,
   describeBuddyToolActivity,
@@ -3295,12 +3296,19 @@ export function App() {
     },
     [assessImage],
   );
+  /** The code-book workspace saver, held in a ref: `onUpload` is defined far above where the saver
+   * can be (it needs `codeFileName`), and naming it directly in the dep array is a TDZ. */
+  const saveCodeToWorkspaceRef = useRef<(b: BookSource, source: string) => void>(() => {});
   const onUpload = useCallback(
     async (file: File, handler: FileHandler = "auto") => {
       try {
         const imported = await importBookFile(file, handler);
         if (imported.kind === "book") {
           openBook(imported.book);
+          // An uploaded SOURCE file goes straight to the workspace under its own name, so the thing
+          // the reader just handed over is a thing the assistant can read_file. Handing back a page
+          // it wrote and having it see nothing is the failure this closes.
+          if (imported.book.contentMode === "code") saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "");
         } else if (imported.kind === "image") {
           // A picture isn't a book — open it in the photo-transform (img2img) panel.
           setPhotoInitial({ name: imported.name, bytes: imported.bytes, mimeType: imported.mimeType });
@@ -6051,7 +6059,7 @@ export function App() {
     async (call: BuddyToolCall, cwdOverride?: string): Promise<BuddyToolResultPayload> => {
       // A linked phone relays its OWN chosen working folder (cwdOverride) so commands/files run where
       // the phone pointed them; the desktop's own session folder is the fallback.
-      const dir = cwdOverride || buddyWorkingDir || undefined;
+      const dir = cwdOverride || workspaceDirNow();
       try {
         if (call.tool === "find_files") {
           const ranked = rankLocalFiles(call.query, await searchLocalFiles(call.query, dir), 15);
@@ -6071,7 +6079,9 @@ export function App() {
         }
         if (call.tool === "write_file") {
           try {
-            const saved = await writeWorkspaceFile(call.path, call.content, dir, call.append);
+            // Sorted the same way the desktop's own handler sorts it, so a phone-relayed write and a
+            // desktop write of the same name are the same file.
+            const saved = await writeWorkspaceFile(workspacePathFor(call.path), call.content, dir, call.append);
             // If this (possibly phone-relayed) write targets the file open in the code window, keep the
             // open code book's source authoritative HERE — the book change-effect then re-mirrors the
             // latest to the phone's editor (vrsync:book), so its window refreshes. (Skip append chunks.)
@@ -6127,7 +6137,7 @@ export function App() {
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [buddyWorkingDir, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
+    [workspaceDirNow, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
   );
   useEffect(() => {
     runHostToolForRemoteRef.current = runHostToolForRemote;
@@ -6201,12 +6211,58 @@ export function App() {
       b.code ?? b.pages.flatMap((p) => p.paragraphs.map((para) => para.text)).join("\n\n"),
     [],
   );
-  // A safe, run_command-findable filename for the open code book (its title, sanitised, at the
-  // working-folder root so `python <name>` finds it). Falls back to a generic name.
-  const codeFileName = useCallback((b: BookSource): string => {
-    const safe = (b.title || "code").trim().replace(/[^\w.-]+/g, "_").slice(0, 80);
-    return safe.replace(/^_+|_+$/g, "") || "code.txt";
-  }, []);
+  /**
+   * The workspace path the open code book's SOURCE lives at.
+   *
+   * It used to be the title with every non-word character turned into `_` and nothing else, so
+   * "Solar System Page" became `Solar_System_Page` — a file with no extension, which nothing
+   * downstream could work with: no kind to sort by, no interpreter for run_command, no type for the
+   * browser to render, and a file the reader's own computer refused to open. `codeFileNameFor` gives
+   * it a real extension from the book's language and `workspacePathFor` files it under `code/`.
+   */
+  const codeFileName = useCallback(
+    (b: BookSource): string => workspacePathFor(codeFileNameFor(b.title, b.language)),
+    [],
+  );
+
+  /**
+   * ANYTHING THE ASSISTANT MAKES LANDS IN THE WORKSPACE.
+   *
+   * `open_code` and a pasted HTML page opened a code window and persisted to the library — and that
+   * was the whole of it. The source existed only inside the app's own database, so a reader could
+   * work on a page for an hour and find nothing on disk afterwards, and the assistant could not read
+   * back a file it had "written" because there was no file: once the conversation scrolled past the
+   * code block, the work was gone from every place either of them could look.
+   *
+   * A code book is a deliverable. It goes to disk, into the chat's folder, under a real filename, and
+   * into the file ledger — which is the pointer that survives the history being trimmed.
+   */
+  const saveCodeToWorkspace = useCallback(
+    async (b: BookSource, source: string, opts?: { onlyIfMissing?: boolean }): Promise<void> => {
+      if ((!isDesktop && !isRemoteClient) || !source.trim()) return;
+      const path = codeFileName(b);
+      try {
+        // OPENING a book must never overwrite the file. The library copy goes stale the moment the
+        // assistant edits the file on disk while the code window is closed, so re-opening the book
+        // later would push that stale copy back over the newer source. Opening only has to guarantee
+        // the file EXISTS; keeping it current is the draft-change save's job, and edit_file's.
+        if (opts?.onlyIfMissing && isDesktop && !isRemoteClient) {
+          const held = await readWorkspaceFile(path, workspaceDirNow()).catch(() => undefined);
+          if (held?.exists && held.text.trim()) {
+            recordCreatedFile(path, held.text.split("\n").length, false);
+            return;
+          }
+        }
+        await execHostTool({ tool: "write_file", path, content: source });
+        recordCreatedFile(path, source.split("\n").length, false);
+        void refreshWorkspaceReadme();
+      } catch {
+        // Best-effort: the code window keeps working even when the disk write doesn't.
+      }
+    },
+    [codeFileName, isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme, workspaceDirNow],
+  );
+  saveCodeToWorkspaceRef.current = (b, source) => void saveCodeToWorkspace(b, source);
 
   // Load the editor when a (different) code book opens; clear it otherwise. Gated on the book id so
   // persisting an edit back into `book` (same id) doesn't yank the draft out from under the typist.
@@ -6261,12 +6317,13 @@ export function App() {
       codeSaveTimer.current = setTimeout(() => {
         setBook((prev) => (prev && prev.id === id ? { ...prev, code: text } : prev));
         void libraryStore.putBook({ ...b, code: text }).catch(persistWarn);
-        if ((isDesktop || isRemoteClient) && settings.allowCommands) {
-          void execHostTool({ tool: "write_file", path: codeFileName(b), content: text }).catch(() => {});
-        }
+        // NOT gated on command access any more. Saving a file into the app's own workspace folder is
+        // not "running a command", and gating it there meant a reader with commands off edited code
+        // that never existed outside the browser's database.
+        void saveCodeToWorkspace(b, text);
       }, 700);
     },
-    [libraryStore, isDesktop, isRemoteClient, settings.allowCommands, execHostTool, codeFileName],
+    [libraryStore, saveCodeToWorkspace],
   );
 
   // ▶ Run the code book: write the current draft to the workspace and run it with the matching
@@ -7463,6 +7520,10 @@ export function App() {
             .map(({ turns: _turns, ...m }) => m);
           bookRef.current = e.book; // dedupe a same-turn re-emit before the render refreshes the ref
           openBook(e.book);
+          // A code book IS a file the assistant just made — open_code, or an HTML/SVG page routed
+          // through openPastedText. Both only ever opened a window and saved to the library, so the
+          // source lived nowhere the assistant could read it back from once the chat scrolled past.
+          if (e.book.contentMode === "code") void saveCodeToWorkspace(e.book, codeSourceOf(e.book), { onlyIfMissing: true });
           if (e.visuals) startGeneration();
           setShowChat(true);
         }
@@ -11559,6 +11620,9 @@ export function App() {
                 ...(pasteInitial?.dataSheets ? { dataSheets: pasteInitial.dataSheets } : {}),
                 ...(pasteInitial?.tree !== undefined ? { tree: pasteInitial.tree } : {}),
               });
+              // Pasted code is a file too: it goes to the workspace so the assistant can read it —
+              // which is the whole reason a person pastes a page in here.
+              if (created.contentMode === "code") void saveCodeToWorkspace(created, text, { onlyIfMissing: true });
               setShowPasteText(false);
               setPasteInitial(undefined);
             } catch (err) {

@@ -670,3 +670,65 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).not.toMatch(/const guideDir = await workspaceForWrite\(\)/);
   });
 });
+
+/**
+ * WHAT IT MAKES, IT SAVES.
+ *
+ * The assistant wrote an HTML page, the reader worked on it and improved it — and nothing was ever
+ * on disk. `open_code` and a pasted HTML page opened a code window and persisted to the library, and
+ * that was the whole of it. The source existed only inside the browser's own database, so once the
+ * conversation scrolled past the code block the work was gone from every place either of them could
+ * look: not in the chat, not in the file ledger, not in the workspace, not readable by read_file.
+ *
+ * Three separate holes led to the same place, and all three are gated here.
+ */
+describe("everything created lands in the workspace", () => {
+  const IMPORT = readFileSync(join(__dirname, "import-file.ts"), "utf8");
+
+  it("saves a code book to disk the moment it opens, however it was made", () => {
+    expect(APP_RAW).toContain("const saveCodeToWorkspace = useCallback");
+    // open_code / a pasted HTML page arriving from the worker.
+    expect(APP_RAW).toContain('if (e.book.contentMode === "code") void saveCodeToWorkspace(e.book, codeSourceOf(e.book), { onlyIfMissing: true });');
+    // The reader's own paste, through the paste modal.
+    expect(APP_RAW).toContain('if (created.contentMode === "code") void saveCodeToWorkspace(created, text, { onlyIfMissing: true });');
+    // An uploaded source file.
+    expect(APP_RAW).toContain('saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "");');
+  });
+
+  it("never lets OPENING a book overwrite a newer file on disk", () => {
+    // The library copy goes stale as soon as the assistant edits the file with the code window shut;
+    // re-opening the book would then push that stale copy back over the newer source.
+    expect(APP_RAW).toContain("if (opts?.onlyIfMissing && isDesktop && !isRemoteClient) {");
+    expect(APP_RAW).toContain("if (held?.exists && held.text.trim()) {");
+  });
+
+  it("stops gating the code window's disk write on command access", () => {
+    // Saving a file into the app's OWN workspace folder is not "running a command"; gating it there
+    // meant a reader with commands off edited code that never existed outside the browser.
+    expect(APP_RAW).not.toMatch(/isRemoteClient\) && settings\.allowCommands\) \{\s*void execHostTool\(\{ tool: "write_file"/);
+    expect(APP_RAW).toContain("void saveCodeToWorkspace(b, text);");
+  });
+
+  it("gives the saved file a real name, so it can be sorted, run and opened", () => {
+    // "Solar System Page" used to become `Solar_System_Page` — no extension at all.
+    expect(APP_RAW).toContain("workspacePathFor(codeFileNameFor(b.title, b.language))");
+    expect(APP_RAW).not.toMatch(/replace\(\/\[\^\\w\.-\]\+\/g, "_"\)/);
+  });
+
+  it("keeps the SOURCE of an uploaded code file instead of stripping it to prose", () => {
+    // `.html` routed to the reader, which runs htmlToText — so handing back a page the assistant had
+    // just written showed it the rendered text with every tag gone.
+    expect(IMPORT).toContain("if (CODE_EXTS.has(e)) return \"code\";");
+    expect(IMPORT).toMatch(/const CODE_EXTS: ReadonlySet<string> = new Set\(\[\s*"html",/);
+    expect(IMPORT).toContain('return { kind: "book", book: bookFromCode(title, await file.text(), ext) };');
+    // The reader can still import a saved article as prose deliberately.
+    expect(IMPORT).toContain('{ id: "code", label: "⟨⟩ Code / source file" }');
+    // …but `auto` must no longer send html down the reader route.
+    expect(IMPORT).not.toMatch(/e === "rtf" \|\| e === "html"/);
+  });
+
+  it("relays a phone's write into the same folder, sorted the same way", () => {
+    expect(APP_RAW).toContain("const dir = cwdOverride || workspaceDirNow();");
+    expect(APP_RAW).toContain("await writeWorkspaceFile(workspacePathFor(call.path), call.content, dir, call.append)");
+  });
+});

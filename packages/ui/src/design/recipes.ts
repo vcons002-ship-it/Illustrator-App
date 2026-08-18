@@ -142,7 +142,11 @@ export const chatInputRowStyle: CSSProperties = {
 
 export const chatTextareaStyle: CSSProperties = {
   flex: 1,
+  // `resize: none` because the field sizes ITSELF now (growTextarea) — a manual grip would fight the
+  // measurement on every keystroke. The min/max are the floor and ceiling of that growth.
   resize: "none",
+  minHeight: 52,
+  maxHeight: "35vh",
   background: t.fill.subtle,
   color: "inherit",
   border: `1px solid ${t.border.input}`,

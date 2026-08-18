@@ -5,6 +5,7 @@ import {
   WORKSPACE_KINDS,
   buildWorkspaceReadme,
   chatFolderName,
+  codeFileNameFor,
   kindForFile,
   mergeWorkspaceReadme,
   workspacePathFor,
@@ -157,5 +158,36 @@ describe("mergeWorkspaceReadme", () => {
   it("round-trips, so repeated writes do not grow the file", () => {
     const once = mergeWorkspaceReadme(undefined, generated);
     expect(mergeWorkspaceReadme(once, generated)).toBe(once);
+  });
+});
+
+describe("codeFileNameFor", () => {
+  it("gives a titled code book a real extension, which is what the old rule never did", () => {
+    // "Solar System Page" used to become `Solar_System_Page` — no extension, so nothing could sort,
+    // run, render or open it.
+    expect(codeFileNameFor("Solar System Page", "html")).toBe("solar-system-page.html");
+    expect(codeFileNameFor("tide chart", "python")).toBe("tide-chart.py");
+    expect(codeFileNameFor("Auth Service", "typescript")).toBe("auth-service.ts");
+  });
+
+  it("leaves a name that already carries one alone", () => {
+    expect(codeFileNameFor("particles.js", "html")).toBe("particles.js");
+    expect(codeFileNameFor("index.html")).toBe("index.html");
+  });
+
+  it("falls back to .txt rather than guessing an extension it doesn't know", () => {
+    expect(codeFileNameFor("scratch", "brainfuck")).toBe("scratch.txt");
+    expect(codeFileNameFor("scratch")).toBe("scratch.txt");
+  });
+
+  it("never produces an empty or unsafe name", () => {
+    expect(codeFileNameFor("", "js")).toBe("code.js");
+    expect(codeFileNameFor("///", "js")).toBe("code.js");
+    expect(codeFileNameFor("../../etc/passwd", "sh")).not.toContain("/");
+  });
+
+  it("sorts into the kind folder once it has an extension — the point of having one", () => {
+    expect(workspacePathFor(codeFileNameFor("Solar System Page", "html"))).toBe("code/solar-system-page.html");
+    expect(workspacePathFor(codeFileNameFor("Tide Report", "markdown"))).toBe("documents/tide-report.md");
   });
 });

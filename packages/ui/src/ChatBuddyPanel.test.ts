@@ -154,3 +154,18 @@ describe("the generic card's read-out", () => {
     expect(line).toContain("…");
   });
 });
+
+/**
+ * A pasted file has to be VISIBLE before it is sent. The field was two fixed rows.
+ */
+describe("the composer grows with what is in it", () => {
+  const SRC = readFileSync(join(import.meta.dirname, "ChatBuddyPanel.tsx"), "utf8");
+  const BOOK = readFileSync(join(import.meta.dirname, "ChatPanel.tsx"), "utf8");
+
+  it("re-measures both chat composers on every draft change", () => {
+    for (const [name, src] of [["buddy", SRC], ["book", BOOK]] as const) {
+      expect(src, `${name} composer does not grow`).toContain("growTextarea(textareaRef.current);");
+      expect(src, `${name} composer has no ref to measure`).toContain("ref={textareaRef}");
+    }
+  });
+});
