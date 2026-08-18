@@ -5974,7 +5974,9 @@ export function App() {
         textServerUrl: serverUrl,
         ...(call.files ? { files: call.files } : {}),
         ...(call.verify ? { verify: call.verify } : {}),
-        ...(buddyWorkingDir ? { cwd: buddyWorkingDir } : {}),
+        // The chat's own folder, like every other file tool — a delegated job that edited somewhere
+        // other than where write_file/edit_file work would be editing a different copy of the code.
+        ...((() => { const d = workspaceDirNow(); return d ? { cwd: d } : {}; })()),
         ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
         ...(settings.commandShell ? { shell: settings.commandShell } : {}),
       });
@@ -5984,7 +5986,9 @@ export function App() {
         role: "tool",
         text: r.installed
           ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}`
-          : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
+          : (settings.codingAgentBackend ?? "aider") === "codex"
+            ? "🤝 Codex isn't installed — install it (npm i -g @openai/codex) to delegate coding jobs."
+            : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
         turns: [],
       });
     } catch (err) {

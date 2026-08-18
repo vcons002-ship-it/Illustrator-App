@@ -642,8 +642,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   }
 
   // 3) Build + run the agent against the local model. Aider takes the prompt via --message-file;
-  //    Codex `exec -` reads it from STDIN (we redirect the same staged file in). Each gets the Ollama
-  //    base via its own env var (Aider: OLLAMA_API_BASE; Codex: OLLAMA_HOST).
+  //    Codex `exec -` reads it from STDIN (we redirect the same staged file in). They are pointed at
+  //    the local server differently: Aider by env var (OLLAMA_API_BASE), Codex by a generated config
+  //    file we select with CODEX_HOME — it reads no env var for this.
   const base = ollamaApiBase(opts.textServerUrl);
   const isWin = opts.shell === "cmd" || opts.shell === "powershell";
   let command: string;
