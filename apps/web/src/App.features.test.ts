@@ -803,3 +803,25 @@ describe("the file card's More menu escapes its bubble", () => {
     expect(CSS).not.toMatch(/^\.vr-msg\s*\{[^}]*z-index:/m);
   });
 });
+
+/**
+ * `/code` runs the agent with NO model turn in front of it.
+ */
+describe("forcing a job through the external coding agent", () => {
+  it("intercepts on the main thread and calls the runner directly", () => {
+    expect(APP_RAW).toMatch(/const code = \/\^\\\/code/);
+    expect(APP_RAW).toContain('await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() });');
+  });
+
+  it("is intercepted BEFORE anything that would start a model turn", () => {
+    // If the worker saw it first, the model would be back in the loop — the thing being removed.
+    const codeAt = APP_RAW.indexOf("const code = /^\\/code");
+    const findAt = APP_RAW.indexOf("const find = /^\\/find");
+    expect(codeAt).toBeGreaterThan(-1);
+    expect(codeAt).toBeLessThan(findAt);
+  });
+
+  it("offers the command only where the agent can run", () => {
+    expect(APP_RAW).toContain("...(isDesktop && settings.delegateCoding ? { canDelegateCoding: true } : {}),");
+  });
+});

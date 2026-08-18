@@ -67,9 +67,33 @@ export const FIND_FILES_COMMAND: SlashCommandInfo = {
   description: "Search your computer for a book/PDF/text file to open",
 };
 
-/** Buddy commands shown for the given platform (desktop adds local-file search). */
-export function buddySlashCommands(desktop: boolean): SlashCommandInfo[] {
-  return desktop ? [...BUDDY_SLASH_COMMANDS, FIND_FILES_COMMAND] : BUDDY_SLASH_COMMANDS;
+/**
+ * `/code` — hand a job STRAIGHT to the external coding agent, with no model turn in front of it.
+ *
+ * `delegate_coding_task` is a tool the model MAY choose, and asking for it in plain language is not
+ * the same as getting it: told in so many words to "use delegate_coding_task", a model wrote one
+ * file with `write_file`, made another with a shell redirect, and ticked its own checklist green —
+ * a reasonable-looking turn that never went near the agent. Persuasion is the wrong instrument for
+ * a decision the reader has already made.
+ *
+ * So this is a main-thread command, like `/find`: the reader's words become the agent's task, the
+ * host runs it, and the model is not consulted about whether to. That is the whole point.
+ */
+export const DELEGATE_CODING_COMMAND: SlashCommandInfo = {
+  name: "code",
+  args: "<what to build or change>",
+  description: "Hand the job straight to the external coding agent (Aider/Codex) — no model in between",
+};
+
+/** Buddy commands shown for the given platform (desktop adds local-file search + delegation). */
+export function buddySlashCommands(desktop: boolean, canDelegateCoding = false): SlashCommandInfo[] {
+  return [
+    ...BUDDY_SLASH_COMMANDS,
+    ...(desktop ? [FIND_FILES_COMMAND] : []),
+    // Only when it can actually run: a command that answers "the agent isn't set up" is worse than
+    // one the reader never sees offered.
+    ...(desktop && canDelegateCoding ? [DELEGATE_CODING_COMMAND] : []),
+  ];
 }
 
 /** "/web foo bar" → { name: "web", args: "foo bar" }; undefined for non-slash text. */

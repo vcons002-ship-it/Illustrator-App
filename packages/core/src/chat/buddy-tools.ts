@@ -1391,7 +1391,8 @@ export function buildBuddySystemPrompt(raw: {
         "that would take many edit_file/write_file rounds (refactor across files, implement a feature touching several " +
         "modules). Put the FULL spec in `task` (it doesn't see this chat); name known starting `files`; give a `verify` " +
         "build/test command so success is checked, not assumed. For a small one- or two-line change, just edit_file it " +
-        "yourself — this has real startup cost.\n"
+        "yourself — this has real startup cost. If the reader ASKS for this tool by name, USE IT: writing the files " +
+        "yourself instead is not the same job, however well it turns out.\n"
       : "";
   const commandTool = opts.canRunCommands
     ? '- {"tool":"run_command","command":"…"} — run ONE shell command in the reader\'s VisualReader workspace ' +
