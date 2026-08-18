@@ -1334,8 +1334,19 @@ export function buildBuddySystemPrompt(raw: {
   const writeFileTool = opts.canRunCommands
     ? '- {"tool":"write_file","path":"script.py","content":"…"} — SAVE a file straight into the workspace ' +
       "yourself: a script or data file to run, OR any sizable thing the reader KEEPS — a long document/.md, an " +
-      ".html page, a report. `path` is workspace-relative (e.g. `analysis.py`, `dragon.html`, `notes.md`) and " +
-      "cannot escape the workspace folder. Saving needs NO approval click. Prefer this over a fenced ```code``` " +
+      // THE WORKED EXAMPLES ARE THE CONVENTION. They used to be `analysis.py`, `dragon.html`,
+      // `notes.md` — all bare filenames — so every chat's files landed together in one flat folder
+      // and a directory listing said nothing about what belonged to what. The folders cost nothing
+      // (write_file creates them) and they are the whole difference between a workspace you can read
+      // and one you have to excavate.
+      ".html page, a report. `path` is workspace-relative and cannot escape the workspace. SORT WHAT YOU " +
+      "WRITE: `code/` for anything that runs or renders (.py .js .html .css .sh), `documents/` for prose " +
+      "(.md .txt), `data/` for structured files (.csv .json .xlsx), `images/` for pictures and charts, " +
+      "`notes/` for working notes — so `code/particles.js`, `documents/report.md`, `data/tides.csv`. A " +
+      "project's ENTRY POINT and its config stay at the top: `index.html`, `README.md`, `package.json`. " +
+      "Name files for what they are, in words, with no dates or version numbers — `tide-report.md`, not " +
+      "`2026-08-20-tide-report-v2.md` — and rewrite the same path when you revise something. Saving needs " +
+      "NO approval click. Prefer this over a fenced ```code``` " +
       "block for anything substantial: the file is saved WHOLE on disk and you can read it back next turn (read with "
       + 'source:"file"), ' +
       "whereas a big pasted block gets cut off AND scrolls out of your context (you forget what you wrote). Never " +

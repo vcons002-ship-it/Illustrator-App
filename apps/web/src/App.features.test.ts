@@ -601,3 +601,72 @@ describe("the context budget and its readout", () => {
     expect(trimmed, "the buddy turn trims history before the blocks it must be sized against exist").toBeGreaterThan(built);
   });
 });
+
+/**
+ * THE WORKSPACE HAS A SHAPE NOW.
+ *
+ * Every conversation wrote into one flat `workspace/` directory, so weeks of unrelated work piled
+ * into a single listing with no way — for the reader OR the model — to tell which file belonged to
+ * which chat or what any of it was for. The convention is a folder per conversation, kind folders
+ * inside it, and a README that keeps saying what's in there.
+ *
+ * The gate that matters most here is SYMMETRY: a path the model can write is a path the model can
+ * read back. Sorting writes into subfolders while reads still resolve somewhere else would turn a
+ * tidier directory into a file the model can never open again.
+ */
+describe("the per-chat workspace layout", () => {
+  const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+  const HOOK = readFileSync(join(__dirname, "useEngineWorker.ts"), "utf8");
+
+  it("gives each chat its own folder, created lazily by the first file it writes", () => {
+    expect(APP_RAW).toContain("const ensureChatWorkspace = useCallback");
+    // The README is the bootstrap: writing it through the ordinary workspace writer creates the
+    // directory and hands back its absolute path — no new Rust command, no new approval.
+    expect(APP_RAW).toMatch(/writeWorkspaceFile\(`\$\{folder\}\/README\.md`, readme\)/);
+    // A folder the reader chose themselves is never overridden.
+    expect(APP_RAW).toContain("buddyWorkingDirRef.current || (await ensureChatWorkspace())");
+  });
+
+  it("sorts a written file into its kind folder", () => {
+    expect(APP_RAW).toContain("const path = workspacePathFor(call.path);");
+    expect(APP_RAW).toContain("await writeWorkspaceFile(path, call.content, await workspaceForWrite(), call.append)");
+  });
+
+  it("ledgers and reports the SAME relative path it wrote, not the absolute one", () => {
+    // The ledger is the model's durable pointer to its own work; an absolute path there is a
+    // pointer it cannot follow, because read_file/edit_file resolve against the chat's folder.
+    expect(APP_RAW).toMatch(/recordCreatedFile\(path, call\.content/);
+    expect(APP_RAW).toContain("payload = { path, ok: true };");
+  });
+
+  it("resolves a workspace-relative read through the same door that wrote it", () => {
+    expect(WORKER).toContain("let hostWorkingDir: string | undefined;");
+    expect(WORKER).toMatch(/hostFile\(\{ op: "read", path, \.\.\.\(hostWorkingDir \? \{ cwd: hostWorkingDir \} : \{\}\) \}\)/);
+    expect(HOOK).toContain("if (!ABSOLUTE_PATH.test(path)) {");
+    expect(HOOK).toContain("const r = await readWorkspaceFile(path, msg.cwd);");
+  });
+
+  it("reads and edits in the chat's folder too, not just writes", () => {
+    expect(APP_RAW).toContain("const dir = await workspaceForWrite();\n      const file = await readWorkspaceFile(call.path, dir);");
+    expect(APP_RAW).toContain('let g = await readWorkspaceFile("AGENTS.md", guideDir);');
+    expect(APP_RAW).toContain("const r = await readWorkspaceFile(p, workspaceDirNow());");
+  });
+
+  it("keeps a README describing the folder, merged so a reader's own notes survive", () => {
+    expect(APP_RAW).toContain("const refreshWorkspaceReadme = useCallback");
+    expect(APP_RAW).toMatch(/mergeWorkspaceReadme\(existing\.exists \? existing\.text : undefined, generated\)/);
+    // Never into a folder the reader chose — their project is theirs.
+    expect(APP_RAW).toContain("if (!dir || buddyWorkingDirRef.current) return;");
+  });
+
+  it("sends the chat's folder as the turn's working folder, so the worker resolves reads there", () => {
+    expect(APP_RAW).toContain("}, workspaceDirNow(), activeTaskPlanId(),");
+    expect(WORKER).toContain("hostWorkingDir = msg.workingDir;");
+  });
+
+  it("does not grow a folder for a chat that only ever talks", () => {
+    // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
+    expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
+    expect(APP_RAW).not.toMatch(/const guideDir = await workspaceForWrite\(\)/);
+  });
+});
