@@ -105,6 +105,18 @@ describe("the delegation runtime's failure modes", () => {
     expect(HOST).toMatch(/const COMMAND_MAX_TIMEOUT_SECS: u64 = 3 \* 60 \* 60;/);
   });
 
+  it("lists untracked files individually, so they can be excluded and shown", () => {
+    expect(RUNTIME).toContain('git status --porcelain -uall -- .');
+    expect(RUNTIME).toContain("excludeDirs: [CODEX_HOME_DIR]");
+  });
+
+  it("names the changed files instead of only counting them", () => {
+    // "changed 1 file(s)" is a claim with nothing behind it; a list can be checked, a number cannot.
+    expect(RUNTIME).toContain("const fileList = names.length ? `\\nFiles: ${names.join(\", \")}` : \"\";");
+    // And the agent's own output is shown whenever the run did not cleanly succeed.
+    expect(RUNTIME).toContain("const tailLine = ok || !tail ?");
+  });
+
   it("reports what changed WITHOUT staging or committing anything", () => {
     // `git diff <sha> HEAD` compared two COMMITS, so it saw nothing unless the agent committed — and
     // Codex, unlike Aider, edits the working tree and leaves committing to you. The obvious repair,
@@ -113,10 +125,10 @@ describe("the delegation runtime's failure modes", () => {
     expect(RUNTIME).not.toMatch(/\$\{beforeSha\} HEAD/);
     expect(RUNTIME, "the delegation runner must never stage").not.toMatch(/run\("git add -A"\)/);
     expect(RUNTIME, "the delegation runner must never commit").not.toMatch(/git commit -m "before delegate/);
-    expect(RUNTIME).toContain('await run("git status --porcelain -- .")');
+    expect(RUNTIME).toContain('await run("git status --porcelain -uall -- .")');
     expect(RUNTIME).toContain("names = agentChangedFiles({");
     // Our own scaffolding is not the agent's work.
-    expect(RUNTIME).toContain("exclude: [CODING_TASK_FILE, `${CODEX_HOME_DIR}/config.toml`]");
+    expect(RUNTIME).toContain("exclude: [CODING_TASK_FILE],");
   });
 
   it("pins Codex to the reader's own Ollama server through a config file it owns", () => {
@@ -246,6 +258,31 @@ describe("agentChangedFiles", () => {
     expect(
       agentChangedFiles({ dirtyBefore: " M notes.md", dirtyAfter: " M notes.md\n?? page.html", committed: "" }),
     ).toEqual(["page.html"]);
+  });
+
+  it("excludes a whole directory of ours, including git's COLLAPSED form of it", () => {
+    // git reports an untracked DIRECTORY as one `?? dir/` entry rather than listing what is inside,
+    // so an exact-path exclusion of `dir/file` never matched — and our own generated Codex config
+    // was counted as the agent's one changed file. One leaked entry was enough to make the assistant
+    // believe a run had produced a project and go hunting for files that were never written.
+    expect(
+      agentChangedFiles({ dirtyBefore: "", dirtyAfter: "?? .vr-codex/", committed: "", excludeDirs: [".vr-codex"] }),
+    ).toEqual([]);
+    // …and the expanded form `-uall` produces.
+    expect(
+      agentChangedFiles({
+        dirtyBefore: "",
+        dirtyAfter: "?? .vr-codex/config.toml\n?? main.py",
+        committed: "",
+        excludeDirs: [".vr-codex"],
+      }),
+    ).toEqual(["main.py"]);
+  });
+
+  it("does not mistake a similarly-named file for the excluded directory", () => {
+    expect(
+      agentChangedFiles({ dirtyBefore: "", dirtyAfter: "?? .vr-codex-notes.md", committed: "", excludeDirs: [".vr-codex"] }),
+    ).toEqual([".vr-codex-notes.md"]);
   });
 
   it("never reports our own scaffolding as the agent's work", () => {

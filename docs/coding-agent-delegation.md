@@ -76,6 +76,30 @@ a green test suite: the pure builders were checked against themselves, never aga
   an enclosing repo when there is one, so a folder inside the reader's own project is joined rather
   than re-initialized.
 
+## What the SECOND real run taught us
+
+The fixes above got Codex as far as running. What came back was worse than a clean failure: the app
+reported "changed 1 file(s)", the assistant believed a project had been produced, went looking for
+`main.py` and `test_main.py`, found only a `README.md`, and reported the wrong problem entirely.
+
+- **The one changed file was ours.** `git status --porcelain` reports an untracked DIRECTORY as a
+  single `?? dir/` entry rather than listing its contents, so excluding `.vr-codex/config.toml` by
+  exact path never matched the `?? .vr-codex/` git actually printed. Fixed with `-uall` (which lists
+  the files) plus a directory-aware exclusion, belt and braces — the collapsed form is what git emits
+  by default and the expanded form is what we now ask for.
+- **A count is not evidence.** The summary said "changed N file(s)" and named nothing, so neither the
+  assistant nor the reader could see that the one file was scaffolding. It now always lists the
+  paths, and tells the model to check their contents before reporting success — an agent's claim
+  about its own work is not evidence that the work exists.
+- **The agent's output was dropped exactly when it mattered.** The tail was shown only when NOTHING
+  changed; a run that half-worked, failed verify, or errored after touching one file lost the one
+  explanation it had produced. It is now included whenever the run did not cleanly succeed.
+
+Still open after that run, and NOT yet explained: Codex reported creating two files that never
+appeared on disk. With the leak above fixed, a repeat will say "changed NO files" and carry Codex's
+own output, which is the evidence needed to tell a sandbox/working-directory problem from a model
+that simply narrated work it never did.
+
 ## Caveats (need a real-box pass)
 
 Everything pure is unit-tested, but the runtime path can't be exercised in CI here:

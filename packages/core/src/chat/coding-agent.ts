@@ -171,14 +171,24 @@ export function agentChangedFiles(input: {
   committed: string;
   /** Scaffolding of our own that must never be reported as the agent's work. */
   exclude?: readonly string[];
+  /** Whole DIRECTORIES of our own, named with their trailing slash. Needed because git collapses an
+   * untracked directory to a single `?? dir/` entry rather than listing what is inside it — so an
+   * exact-path exclusion of `dir/file` never matches, and our own generated config was reported as
+   * the agent's one changed file. That one leaked entry was enough to make the assistant believe a
+   * run had produced a project, go looking for files that were never written, and report a failure
+   * of the wrong thing entirely. */
+  excludeDirs?: readonly string[];
 }): string[] {
   const before = new Set(parsePorcelainPaths(input.dirtyBefore));
   const skip = new Set(input.exclude ?? []);
+  const skipDirs = (input.excludeDirs ?? []).map((d) => (d.endsWith("/") ? d : `${d}/`));
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (p: string): void => {
     const path = p.trim();
     if (!path || skip.has(path) || seen.has(path)) return;
+    // Both the collapsed directory entry (`dir/`) and anything under it.
+    if (skipDirs.some((d) => path === d || path === d.slice(0, -1) || path.startsWith(d))) return;
     seen.add(path);
     out.push(path);
   };
