@@ -443,6 +443,25 @@
   border-top: none;
 }
 
+/*
+ * A FILE CARD'S "⋯ More" MENU HAS TO ESCAPE ITS BUBBLE.
+ *
+ * The menu is absolutely positioned with a z-index, which reads like enough and is not: every
+ * bubble below sets `backdrop-filter`, and backdrop-filter CREATES A STACKING CONTEXT. So the menu
+ * can only compete inside its own bubble, and the next bubble — later in the document, its own
+ * context — paints over it however high the menu's z-index goes. It opened behind the message
+ * underneath it, which is exactly what you would expect once you know that, and inexplicable until
+ * you do.
+ *
+ * Raising the whole bubble is the fix, and only while its menu is open: a bubble permanently lifted
+ * above its neighbours would win every other overlap too. `:has()` degrades to the old behaviour
+ * where it is unsupported, which is no worse than today.
+ */
+.vr-msg:has(details[open]) {
+  position: relative;
+  z-index: 30;
+}
+
 .vr-msg-float {
   background: rgb(var(--vr-fg-rgb) / 0.055);
   backdrop-filter: blur(14px) saturate(1.25);
