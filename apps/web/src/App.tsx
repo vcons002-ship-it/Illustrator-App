@@ -50,6 +50,10 @@ import {
   uiAutomationCommand,
   parseUiAutomationOutput,
   MAX_STEP_REMINDERS,
+  buildWorkspaceReadme,
+  chatFolderName,
+  mergeWorkspaceReadme,
+  workspacePathFor,
   describeBuddyToolActivity,
   describeToolProposal,
   isLiveControlTool,
@@ -1904,6 +1908,18 @@ export function App() {
   const [buddySessions, setBuddySessions] = useState<BuddySession[]>([{ id: BUDDY_CHAT_ID, workingDir: "" }]);
   const [activeBuddyId, setActiveBuddyId] = useState(BUDDY_CHAT_ID);
   const buddyWorkingDir = buddySessions.find((s) => s.id === activeBuddyId)?.workingDir ?? "";
+  /**
+   * Refs for the per-chat workspace helper, which runs inside an async tool handler and so cannot
+   * read render-time state without lagging a commit behind — the same reason every other handler in
+   * this file works off refs.
+   */
+  const buddySessionsRef = useRef(buddySessions);
+  buddySessionsRef.current = buddySessions;
+  const buddyWorkingDirRef = useRef(buddyWorkingDir);
+  buddyWorkingDirRef.current = buddyWorkingDir;
+  /** Chat id → its absolute workspace folder, once created. Per page load: the folder itself is
+   * durable on disk, and re-deriving it is one cheap write of a README that merges. */
+  const chatWorkspaceRef = useRef(new Map<string, string>());
   // Live mirrors: a turn dispatched right after opening a task runs before the async
   // refreshTaskPlans lands AND through a useCallback whose deps omit these — reading the
   // refs resolves the active plan from FRESH state instead of a stale captured closure.
@@ -1911,6 +1927,90 @@ export function App() {
   taskPlansRef.current = taskPlans;
   const activeBuddyIdRef = useRef(activeBuddyId);
   activeBuddyIdRef.current = activeBuddyId;
+  /**
+   * THE CHAT'S OWN FOLDER, MADE THE FIRST TIME IT WRITES SOMETHING.
+   *
+   * Every conversation shared `~/VisualReader/workspace`, so weeks of unrelated work piled into one
+   * directory listing and neither the reader nor the assistant could tell which files belonged to
+   * which chat, or what any of it was for. A folder per conversation, named after the conversation,
+   * is the half of that a file browser can answer on its own; the kind-folders inside it
+   * (`code/`, `documents/`, …) are the other half.
+   *
+   * LAZY, so a chat that never writes a file never grows an empty folder — and bootstrapped by the
+   * README, which is the neatest part: writing `<chat>/README.md` through the ordinary workspace
+   * writer CREATES the directory and hands back its absolute path, so there is no new Rust command
+   * and no new approval. The workspace root is already an approved root, so everything under it is
+   * reachable the moment it exists.
+   *
+   * Resolving one WORKING FOLDER — rather than prefixing paths at each call site — is what keeps it
+   * SYMMETRIC. write_file, edit_file, read_file, run_command and the turn's own `workingDir` all
+   * resolve against this single value, so a file written here is a file readable here. A prefix
+   * applied to writes and forgotten on reads is the exact shape of bug this app keeps paying for.
+   *
+   * A folder the reader chose themselves is never overridden.
+   */
+  const ensureChatWorkspace = useCallback(async (): Promise<string | undefined> => {
+    if (!isDesktop || isRemoteClient) return undefined;
+    const id = activeBuddyIdRef.current;
+    const held = chatWorkspaceRef.current.get(id);
+    if (held) return held;
+    const label = buddySessionsRef.current.find((x) => x.id === id)?.label;
+    const folder = chatFolderName(label, id);
+    try {
+      // The README both names the folder and creates it. Merged, so a reader who has written their
+      // own notes in there keeps them.
+      const readme = buildWorkspaceReadme(label?.trim() || folder, []);
+      const saved = await writeWorkspaceFile(`${folder}/README.md`, readme);
+      // `saved` is the absolute path of the README; its directory is the workspace.
+      const dir = saved.slice(0, Math.max(saved.lastIndexOf("/"), saved.lastIndexOf("\\")));
+      if (!dir) return undefined;
+      chatWorkspaceRef.current.set(id, dir);
+      return dir;
+    } catch {
+      // Best-effort: a workspace we could not create must not stop the write. It falls back to the
+      // shared root, which is exactly where it used to go.
+      return undefined;
+    }
+  }, [isRemoteClient]);
+  /** The folder to work in for this chat: the reader's own choice first, else the chat's — CREATING
+   * the chat's folder if this is the first time it's needed. */
+  const workspaceForWrite = useCallback(
+    async (): Promise<string | undefined> => buddyWorkingDirRef.current || (await ensureChatWorkspace()),
+    [ensureChatWorkspace],
+  );
+  /** The same folder, but WITHOUT creating one. For the reads that happen on every turn (the project
+   * guide, the plan's file check): a chat that only ever talks must not grow a folder on disk. */
+  const workspaceDirNow = useCallback(
+    (): string | undefined => buddyWorkingDirRef.current || chatWorkspaceRef.current.get(activeBuddyIdRef.current) || undefined,
+    [],
+  );
+  /**
+   * KEEP THE CHAT FOLDER'S README DESCRIBING WHAT'S IN IT.
+   *
+   * A directory listing gives you filenames; the README says what the files are FOR and groups them
+   * by kind, which is the half a reader actually needs when they open the folder a week later.
+   * Rebuilt from the file ledger after each write, and MERGED — only the generated block between the
+   * markers is replaced, so anything the reader typed in there themselves survives.
+   *
+   * Never writes into a folder the READER chose: their project is theirs, and dropping an unasked-for
+   * README into a real repository is exactly the kind of surprise this app should not spring.
+   */
+  const refreshWorkspaceReadme = useCallback(async (): Promise<void> => {
+    const id = activeBuddyIdRef.current;
+    const dir = chatWorkspaceRef.current.get(id);
+    if (!dir || buddyWorkingDirRef.current) return;
+    const label = buddySessionsRef.current.find((x) => x.id === id)?.label;
+    try {
+      const existing = await readWorkspaceFile("README.md", dir);
+      const generated = buildWorkspaceReadme(
+        label?.trim() || chatFolderName(label, id),
+        createdFilesRef.current.map((f) => ({ path: f.path })),
+      );
+      await writeWorkspaceFile("README.md", mergeWorkspaceReadme(existing.exists ? existing.text : undefined, generated), dir);
+    } catch {
+      // Best-effort: a README we couldn't refresh must never fail the write it describes.
+    }
+  }, []);
   // Starting a "story as you go" spins up a fresh dedicated session; this remembers the session we
   // came from so exiting the story book returns there. The switch fn is held in a ref because
   // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
@@ -3216,10 +3316,13 @@ export function App() {
           setActiveDocument({ title: docTitle, content: imported.text }, activeBuddyIdRef.current);
           if (isDesktop) {
             const slug = docTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "document";
+            // Reader-supplied files keep their own folder: knowing which files you dropped in and
+            // which the assistant wrote is worth more here than sorting both by extension.
             const wsPath = `uploads/${slug}.md`;
             try {
-              await writeWorkspaceFile(wsPath, imported.text);
+              await writeWorkspaceFile(wsPath, imported.text, await workspaceForWrite());
               recordCreatedFile(wsPath, imported.text.split("\n").length, false);
+              void refreshWorkspaceReadme();
             } catch {
               /* workspace write best-effort (no desktop bridge / disk error) */
             }
@@ -3248,7 +3351,7 @@ export function App() {
         setLocalError(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openBook, setActiveDocument, recordCreatedFile],
+    [openBook, setActiveDocument, recordCreatedFile, workspaceForWrite, refreshWorkspaceReadme],
   );
 
   // Map the active paragraph back to its page and steer the predictive buffer.
@@ -5392,7 +5495,7 @@ export function App() {
       r = await runCommand(
         call.command,
         settings.keys?.github || undefined,
-        buddyWorkingDir || undefined,
+        await workspaceForWrite(),
         settings.commandShell,
         // Start it and leave it running — for anything meant to stay up, which the waiting path
         // would hold the turn for and then kill at the deadline.
@@ -5700,15 +5803,26 @@ export function App() {
       appendBuddy({ role: "assistant", text: "```\n" + call.content.slice(0, 8000) + "\n```" });
       return;
     }
+    // SORT IT. A bare `app.js` lands in `code/`, `notes.md` in `documents/` — so the folder is
+    // readable at a glance without the model having to remember the convention every time. A path the
+    // model already placed itself (`code/app.js`, or an entry point like `index.html`) is left alone,
+    // and the function is idempotent, so re-writing the same file never nests it deeper.
+    const path = workspacePathFor(call.path);
     setBuddyBusy(true);
-    setBuddyActivity(`Writing ${call.path}…`);
+    setBuddyActivity(`Writing ${path}…`);
     let payload: { path: string; ok: boolean; error?: string };
     try {
-      const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
-      payload = { path: saved, ok: true };
-      // Ledger it (keyed by the workspace-relative path the model used, so it can read_file it back) so
-      // the model stays aware of the file across history trimming.
-      recordCreatedFile(call.path, call.content ? call.content.split("\n").length : 0, !!call.append);
+      const saved = await writeWorkspaceFile(path, call.content, await workspaceForWrite(), call.append);
+      // The MODEL is told the workspace-relative path it can address again (read_file/edit_file
+      // resolve against the chat's folder); the READER's card below gets the absolute one, which is
+      // what "Open on PC" needs. Handing the model the absolute path was how it lost track of files
+      // it had just written.
+      payload = { path, ok: true };
+      // Ledger it (keyed by the SORTED workspace-relative path — the one actually on disk, so
+      // read_file/edit_file with it resolve to the same file) so the model stays aware of the file
+      // across history trimming.
+      recordCreatedFile(path, call.content ? call.content.split("\n").length : 0, !!call.append);
+      void refreshWorkspaceReadme();
       // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
       // Download), not just a "saved" line.
       //
@@ -5773,16 +5887,18 @@ export function App() {
     setBuddyActivity(`Editing ${call.path}…`);
     let payload: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
     try {
-      const file = await readWorkspaceFile(call.path, buddyWorkingDir || undefined);
+      const dir = await workspaceForWrite();
+      const file = await readWorkspaceFile(call.path, dir);
       if (!file.exists) {
         payload = { path: call.path, ok: false, error: "file not found — write_file it first, or check the path" };
         appendBuddy({ role: "tool", text: `⚠ edit_file: ${call.path} doesn't exist yet.`, turns: [] });
       } else {
         const r = applyFileEdits(file.text, call.edits);
         const summary = summarizeFileEdits(call.path, r);
-        if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, buddyWorkingDir || undefined);
+        if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
         payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
         recordCreatedFile(call.path, r.content.split("\n").length, false);
+        void refreshWorkspaceReadme();
         appendBuddy({
           role: "tool",
           text: r.failures.length === 0 ? `✏️ Edited ${call.path} (${r.applied} edit${r.applied === 1 ? "" : "s"})` : `✏️ ${call.path}: ${r.applied} applied, ${r.failures.length} failed`,
@@ -6958,7 +7074,7 @@ export function App() {
       const checks = await Promise.all(
         step.doneWhen.paths.map(async (p) => {
           try {
-            const r = await readWorkspaceFile(p, buddyWorkingDir || undefined);
+            const r = await readWorkspaceFile(p, workspaceDirNow());
             return { path: p, ok: r.exists && r.text.trim().length > 0 };
           } catch {
             return { path: p, ok: false };
@@ -7106,8 +7222,9 @@ export function App() {
     // conventions ride every turn. Desktop only (the model can read/update it via read_file/write_file).
     if (isDesktop && !isRemoteClient) {
       try {
-        let g = await readWorkspaceFile("AGENTS.md", buddyWorkingDir || undefined);
-        if (!g.exists) g = await readWorkspaceFile("CONVENTIONS.md", buddyWorkingDir || undefined);
+        const guideDir = workspaceDirNow();
+        let g = await readWorkspaceFile("AGENTS.md", guideDir);
+        if (!g.exists) g = await readWorkspaceFile("CONVENTIONS.md", guideDir);
         setProjectGuide(g.exists ? g.text : "");
       } catch {
         setProjectGuide("");
@@ -7422,8 +7539,13 @@ export function App() {
           // read_file / revise it later. Best-effort: a miss doesn't break the card.
           if (isDesktop) {
             try {
-              await writeWorkspaceFile(doc.path, doc.content);
-              recordCreatedFile(doc.path, doc.content.split("\n").length, false);
+              // Same folder and same sorting as write_file, so a document the assistant authored sits
+              // beside the code and notes for the SAME conversation instead of in a shared root, and
+              // the path the ledger keeps is the path that reads it back.
+              const docPath = workspacePathFor(doc.path);
+              await writeWorkspaceFile(docPath, doc.content, await workspaceForWrite());
+              recordCreatedFile(docPath, doc.content.split("\n").length, false);
+              void refreshWorkspaceReadme();
             } catch {
               /* workspace write best-effort */
             }
@@ -7602,7 +7724,9 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking, activeBuddyIdRef.current);
+      // The chat's OWN folder is the turn's working folder once it exists, so the worker's host reads
+      // resolve a workspace-relative path (`code/app.js`) in the same place write_file put it.
+    }, workspaceDirNow(), activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking, activeBuddyIdRef.current);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     /**

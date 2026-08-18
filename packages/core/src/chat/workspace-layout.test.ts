@@ -1,0 +1,161 @@
+import { describe, expect, it } from "vitest";
+import {
+  README_BEGIN,
+  README_END,
+  WORKSPACE_KINDS,
+  buildWorkspaceReadme,
+  chatFolderName,
+  kindForFile,
+  mergeWorkspaceReadme,
+  workspacePathFor,
+} from "./workspace-layout.js";
+
+/**
+ * Every chat wrote into one flat folder, because that is the default working directory and nothing
+ * ever suggested otherwise — the prompt's worked examples are `analysis.py`, `dragon.html`,
+ * `notes.md`. Weeks of unrelated conversations land in one listing and neither the reader nor the
+ * assistant can tell which files belong together or what any of it was for.
+ */
+describe("kindForFile", () => {
+  it("sorts a file by what it IS, not by who made it", () => {
+    expect(kindForFile("app.js")).toBe("code");
+    expect(kindForFile("report.md")).toBe("documents");
+    expect(kindForFile("sales.csv")).toBe("data");
+    expect(kindForFile("chart.png")).toBe("images");
+  });
+
+  /**
+   * The interesting case, and deliberately a ROOT file: `index.html` is the entry point of whatever
+   * the workspace holds — the thing a reader double-clicks. A single-page deliverable belongs at the
+   * top of the folder, not one level down among its parts.
+   */
+  it("keeps a project's entry point and its config at the root", () => {
+    for (const f of ["index.html", "README.md", "package.json", "AGENTS.md", "Makefile", ".gitignore"]) {
+      expect(kindForFile(f), `${f} was buried in a subfolder`).toBeUndefined();
+    }
+  });
+
+  it("leaves an unknown extension at the root rather than guessing", () => {
+    // A file in the wrong folder is harder to find than one at the top.
+    expect(kindForFile("archive.xyz")).toBeUndefined();
+    expect(kindForFile("noextension")).toBeUndefined();
+    expect(kindForFile("")).toBeUndefined();
+  });
+
+  it("does not care about case or leading directories", () => {
+    expect(kindForFile("Deep/Nested/REPORT.MD")).toBe("documents");
+  });
+});
+
+describe("workspacePathFor", () => {
+  it("places a bare filename in its folder", () => {
+    expect(workspacePathFor("app.js")).toBe("code/app.js");
+    expect(workspacePathFor("notes.md")).toBe("documents/notes.md");
+  });
+
+  it("leaves a path the model already placed alone", () => {
+    // Re-prefixing `code/app.js` to `code/code/app.js` would be worse than doing nothing.
+    expect(workspacePathFor("code/app.js")).toBe("code/app.js");
+    expect(workspacePathFor("src/lib/util.ts")).toBe("src/lib/util.ts");
+  });
+
+  it("keeps a root file at the root", () => {
+    expect(workspacePathFor("index.html")).toBe("index.html");
+    expect(workspacePathFor("package.json")).toBe("package.json");
+  });
+
+  it("cannot be talked out of the workspace", () => {
+    expect(workspacePathFor("../../etc/passwd")).toBe("etc/passwd");
+    expect(workspacePathFor("./app.js")).toBe("code/app.js");
+  });
+});
+
+describe("chatFolderName", () => {
+  it("names the folder after what the reader calls the chat", () => {
+    expect(chatFolderName("Landing page", "s-1")).toBe("landing-page");
+    expect(chatFolderName("Tide report — August", "s-2")).toBe("tide-report-august");
+  });
+
+  it("falls back to the session id, because the files still have to go somewhere", () => {
+    expect(chatFolderName(undefined, "buddy-7")).toBe("buddy-7");
+    expect(chatFolderName("   ", "buddy-7")).toBe("buddy-7");
+    expect(chatFolderName("!!!", "!!!")).toBe("chat");
+  });
+
+  it("bounds the name so the path it prefixes does not become the problem", () => {
+    const name = chatFolderName("a".repeat(200), "s-1");
+    expect(name.length).toBeLessThanOrEqual(40);
+    expect(name.endsWith("-")).toBe(false);
+  });
+});
+
+/**
+ * A folder structure says what KIND each file is and nothing about what any of it was FOR. The
+ * README is the part a person can read six weeks later — and, because it is a file on disk rather
+ * than chat history, the part the assistant can still read after the conversation that created it
+ * has scrolled out of the context window.
+ */
+describe("buildWorkspaceReadme", () => {
+  const entries = [
+    { path: "index.html", note: "the page itself" },
+    { path: "code/app.js", note: "particle field" },
+    { path: "data/tides.csv" },
+    { path: "documents/brief.md", note: "what was asked for" },
+  ];
+
+  it("groups by folder, roots first, and carries what each file was for", () => {
+    const md = buildWorkspaceReadme("Landing page", entries);
+    expect(md.startsWith("# Landing page")).toBe(true);
+    expect(md).toContain("`index.html` — the page itself");
+    expect(md).toContain("`code/app.js` — particle field");
+    expect(md).toContain("`data/tides.csv`"); // no note is fine
+    expect(md.indexOf("In this folder")).toBeLessThan(md.indexOf("### code"));
+    expect(md.indexOf("### code")).toBeLessThan(md.indexOf("### data"));
+  });
+
+  it("says an empty workspace is empty, which is information", () => {
+    expect(buildWorkspaceReadme("New chat", [])).toContain("Nothing saved here yet");
+  });
+
+  it("fences the generated part so a reader's own words can survive beside it", () => {
+    const md = buildWorkspaceReadme("x", entries);
+    expect(md).toContain(README_BEGIN);
+    expect(md).toContain(README_END);
+  });
+
+  it("lists every kind it claims to sort into", () => {
+    const md = buildWorkspaceReadme("x", WORKSPACE_KINDS.map((k) => ({ path: `${k}/f.txt` })));
+    for (const k of WORKSPACE_KINDS) expect(md, `${k} has no section`).toContain(`### ${k}`);
+  });
+});
+
+describe("mergeWorkspaceReadme", () => {
+  const generated = buildWorkspaceReadme("Landing page", [{ path: "code/app.js" }]);
+
+  it("writes the whole thing when there is nothing there", () => {
+    expect(mergeWorkspaceReadme(undefined, generated)).toBe(generated);
+    expect(mergeWorkspaceReadme("   ", generated)).toBe(generated);
+  });
+
+  it("replaces only the generated section, keeping the reader's words on both sides", () => {
+    const prior = `# My project\n\nSome notes I wrote.\n\n${README_BEGIN}\nOLD LIST\n${README_END}\n\nMore of my notes.\n`;
+    const merged = mergeWorkspaceReadme(prior, generated);
+    expect(merged).toContain("Some notes I wrote.");
+    expect(merged).toContain("More of my notes.");
+    expect(merged).toContain("`code/app.js`");
+    expect(merged).not.toContain("OLD LIST");
+  });
+
+  it("appends rather than overwriting a README with no markers", () => {
+    // Overwriting a person's own notes to keep an index tidy is not a trade worth making.
+    const mine = "# Notes\n\nEverything here is mine.\n";
+    const merged = mergeWorkspaceReadme(mine, generated);
+    expect(merged.startsWith(mine.trimEnd())).toBe(true);
+    expect(merged).toContain("`code/app.js`");
+  });
+
+  it("round-trips, so repeated writes do not grow the file", () => {
+    const once = mergeWorkspaceReadme(undefined, generated);
+    expect(mergeWorkspaceReadme(once, generated)).toBe(once);
+  });
+});

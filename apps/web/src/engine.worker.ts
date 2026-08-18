@@ -1050,7 +1050,17 @@ function mcpStdioExchange(command: string, args: string[], input: string[]): Pro
 type HostFileReply = { ok: boolean; files?: { name: string; path: string }[]; text?: string; imageBase64?: string; mimeType?: string; name?: string; error?: string };
 const hostFilePending = new Map<number, (r: HostFileReply) => void>();
 let nextHostFileId = 1;
-function hostFile(req: { op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string }): Promise<HostFileReply> {
+/**
+ * The chat's working folder, mirrored from the latest buddy turn.
+ *
+ * read_file's job is to read back what write_file just wrote. write_file resolves a path against the
+ * chat's folder; read_file went to the open-file bridge, which only understands ABSOLUTE paths. So the
+ * file ledger — which records `code/app.js`, the path the model itself used — pointed at something the
+ * model could not open. Carrying the folder on the read request lets the main thread resolve a
+ * workspace-relative path through the same door that wrote it.
+ */
+let hostWorkingDir: string | undefined;
+function hostFile(req: { op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string; cwd?: string }): Promise<HostFileReply> {
   return new Promise((resolve) => {
     const callId = nextHostFileId++;
     const timeout = setTimeout(() => {
@@ -1987,6 +1997,8 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChat(msg);
       break;
     case "buddyChat":
+      // Mirror the turn's working folder so a host file READ resolves the same way its WRITE did.
+      hostWorkingDir = msg.workingDir;
       void handleBuddyChat(msg);
       break;
     case "runCodingAgents":
@@ -3669,7 +3681,7 @@ function fileResearchDeps(force = false): Partial<BuddyDeps> {
     ...(force || (settings?.autoPullFiles ?? true) || settings?.fullAutonomy
       ? {
           readFile: async (path: string) => {
-            const r = await hostFile({ op: "read", path });
+            const r = await hostFile({ op: "read", path, ...(hostWorkingDir ? { cwd: hostWorkingDir } : {}) });
             if (!r.ok) throw new Error(r.error ?? "couldn't read that file");
             return r.text ?? "";
           },

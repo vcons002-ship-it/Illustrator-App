@@ -385,7 +385,7 @@ export type WorkerToMain =
   /** Local-file op the worker can't do itself (Tauri bridge + pdfjs live on the main thread):
    * search the disk, read a file's text, or extract text from attachment PDF bytes. Answered by
    * `hostFileResult` with the same callId. */
-  | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string }
+  | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string; cwd?: string }
   /** Free or relaunch the bundled chat LLM's VRAM (Tauri lives on the main thread) so a burst of
    * local image renders gets the whole GPU. Answered by `llmVramResult` with the same callId. */
   | { type: "llmVram"; callId: number; action: "stop" | "ensure" }

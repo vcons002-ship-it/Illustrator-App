@@ -54,3 +54,4 @@ export * from "./file-edits.js";
 export * from "./coding-agent.js";
 export * from "./document-polish.js";
 export * from "./math-engine.js";
+export * from "./workspace-layout.js";

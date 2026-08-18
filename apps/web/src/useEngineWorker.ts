@@ -77,6 +77,7 @@ import {
   isDesktop,
   searchLocalFiles,
   readLocalFile,
+  readWorkspaceFile,
   stopLocalLlm,
   ensureLocalLlm,
   onLlmProgress,
@@ -97,6 +98,8 @@ import { pdfToText } from "./import-file.js";
  * own (which count from 1) in the shared worker's routing tables (H2). Also the marker the host-bridge
  * mirror uses to tell a phone-owned reply from a desktop-owned one (H5). */
 const PHONE_REQUEST_ID_BASE = 1_000_000_000;
+/** Windows drive letter, UNC share, or POSIX root — anything else is workspace-relative. */
+const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/;
 /** A healthy multi-pass Essence can run for hours on a small local model. Only a lack of any
  * load/pass/token progress is considered stuck; each progress event rearms this watchdog. */
 const SOUL_ESSENCE_STALL_TIMEOUT_MS = 10 * 60_000;
@@ -982,7 +985,20 @@ export function useEngineWorker(
                 const files = await searchLocalFiles(msg.query ?? "");
                 reply({ ok: true, files: files.slice(0, 20).map((f) => ({ name: f.name, path: f.path })) });
               } else if (msg.op === "read") {
-                const file = await readLocalFile(msg.path ?? "");
+                const path = msg.path ?? "";
+                // A WORKSPACE-RELATIVE path (`code/app.js` — what write_file records in the file
+                // ledger, and therefore what the model asks for) is resolved through the same
+                // workspace door that wrote it, in the chat's own folder. Only an absolute path goes
+                // to the open-file bridge, which is all it ever understood. Reading and writing have
+                // to agree on what a path means, or a durable pointer points at nothing.
+                if (!ABSOLUTE_PATH.test(path)) {
+                  const r = await readWorkspaceFile(path, msg.cwd);
+                  if (r.exists) {
+                    reply({ ok: true, text: r.text.slice(0, 200_000) });
+                    return;
+                  }
+                }
+                const file = await readLocalFile(path);
                 const bytes = new Uint8Array(await file.arrayBuffer());
                 const text = /\.pdf$/i.test(file.name) ? await pdfToText(bytes) : new TextDecoder().decode(bytes);
                 reply({ ok: true, text: text.slice(0, 200_000) });
