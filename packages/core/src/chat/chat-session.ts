@@ -216,6 +216,31 @@ export function historyBudget(inputChars: number, systemChars: number): number {
   return Math.max(MIN_HISTORY_CHARS, guaranteed, leftover);
 }
 
+/**
+ * Left where the CONVERSATION was cut, as opposed to {@link TRIMMED_MARKER}, which is for one turn's
+ * own messages. Different wording because it is a different claim: earlier exchanges are gone from
+ * this view, and the model must not read the oldest surviving turn as the start of the conversation.
+ */
+export const HISTORY_TRIMMED_MARKER =
+  "[Earlier exchanges in this conversation are no longer in view — they were trimmed to fit the " +
+  "context window. If the reader refers to something you cannot see, say so and ask, or re-read the " +
+  "file that holds it; do not assume the conversation began here.]";
+
+/**
+ * A CUT NOBODY WAS TOLD ABOUT. This dropped the oldest exchanges and left nothing behind — no
+ * marker, no count, no log — so a model handed a conversation that began in the middle had every
+ * reason to believe that was the whole of it, and the prompt elsewhere positively instructs it to
+ * answer questions about the conversation from the transcript it can see.
+ *
+ * The reader's report is what that looks like from outside: hours of work on a file, then "I don't
+ * have the earlier context". Nothing was broken and nothing said so. A marker makes the same
+ * incident a sentence instead of a forensic exercise, and gives the model the one thing it needs to
+ * answer honestly — that its view is partial.
+ *
+ * Note it is a wall, not a sieve: the walk stops at the first message that will not fit, so ONE
+ * large old message takes everything before it too. That is deliberate (a contiguous tail is the
+ * only kind a conversation reads correctly) and it is exactly why a big deliverable evicts itself.
+ */
 export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn[] {
   let used = 0;
   let start = history.length;
@@ -225,7 +250,8 @@ export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn
     used = next;
     start--;
   }
-  return start === 0 ? history : history.slice(start);
+  if (start === 0) return history;
+  return [{ role: "user", content: HISTORY_TRIMMED_MARKER }, ...history.slice(start)];
 }
 
 /** Marker left where messages were dropped, so the model knows its view is partial rather than

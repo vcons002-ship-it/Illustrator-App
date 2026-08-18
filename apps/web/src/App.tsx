@@ -3210,7 +3210,10 @@ export function App() {
           // buddy can find_files / read_file it, and make it the ACTIVE document so it can be discussed
           // right away — addressing "uploaded docs aren't saved to the workspace for use".
           const docTitle = imported.title || file.name.replace(/\.[^.]+$/, "") || "Document";
-          setActiveDocument({ title: docTitle, content: imported.text });
+          // Named to the chat it was dropped into. Unnamed it would land in the shared slot and be
+          // "the active document" in every conversation, which is the shape that leaked a Creative
+          // run's essay into the reader's own chat.
+          setActiveDocument({ title: docTitle, content: imported.text }, activeBuddyIdRef.current);
           if (isDesktop) {
             const slug = docTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "document";
             const wsPath = `uploads/${slug}.md`;
@@ -7599,7 +7602,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast, activeScheduledTaskId(), carriedThinking, activeBuddyIdRef.current);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     /**
