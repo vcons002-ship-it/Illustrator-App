@@ -8,7 +8,7 @@ import {
   type DataTable,
   type JsonValue,
 } from "@visual-reader/core";
-import { csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToWorkbook } from "@visual-reader/epub";
+import { bookFromCode, csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToWorkbook } from "@visual-reader/epub";
 
 /** Render a parsed cell grid as the " | "-separated text the reader/extraction reads. */
 function gridText(grid: string[][]): string {
@@ -30,15 +30,18 @@ function gridText(grid: string[][]): string {
  * file — an unknown type opens in the plain-text reader, and "Open as…" can re-route it. */
 export const IMPORT_ACCEPT =
   ".epub,.txt,.md,.markdown,.html,.htm,.pdf,.docx,.rtf,.csv,.tsv,.json,.xlsx," +
-  ".png,.jpg,.jpeg,.webp,.gif";
+  ".png,.jpg,.jpeg,.webp,.gif," +
+  // Source files, so a page or script the assistant wrote can be handed straight back to it.
+  ".js,.mjs,.cjs,.jsx,.ts,.tsx,.css,.svg,.py,.rb,.go,.rs,.java,.c,.h,.cpp,.cs,.sh,.ps1,.sql,.yaml,.yml,.toml";
 
 /** How to interpret a file. "auto" follows the extension; the rest are explicit "Open as…" choices
  * the reader can pick on open or afterward, re-routing the SAME bytes through a different reader. */
-export type FileHandler = "auto" | "reader" | "data" | "text" | "image";
+export type FileHandler = "auto" | "reader" | "data" | "text" | "image" | "code";
 
 /** The "Open as…" menu options (excludes "auto" — that's the default route). */
 export const FILE_HANDLER_OPTIONS: { id: Exclude<FileHandler, "auto">; label: string }[] = [
   { id: "reader", label: "📖 Reader (book / article)" },
+  { id: "code", label: "⟨⟩ Code / source file" },
   { id: "data", label: "📊 Spreadsheet / data grid" },
   { id: "text", label: "📝 Plain text" },
   { id: "image", label: "🖼 Image / photo" },
@@ -49,10 +52,22 @@ export function handlerForExt(ext: string): Exclude<FileHandler, "auto"> {
   const e = ext.toLowerCase();
   if (IMAGE_EXTS[e]) return "image";
   if (e === "xlsx" || e === "csv" || e === "tsv" || e === "json") return "data";
-  if (e === "epub" || e === "pdf" || e === "docx" || e === "rtf" || e === "html" || e === "htm" || e === "md" || e === "markdown")
+  // SOURCE FILES KEEP THEIR SOURCE. `.html` used to route to the reader, which runs it through
+  // `htmlToText` — so handing back a page the assistant had just written gave it the rendered
+  // PROSE with every tag stripped, and it could not see the code it was being asked about. Pasted
+  // HTML already opens as a code book for exactly this reason; an upload now agrees with it.
+  // "Open as… → Reader" is still there for someone importing a saved article.
+  if (CODE_EXTS.has(e)) return "code";
+  if (e === "epub" || e === "pdf" || e === "docx" || e === "rtf" || e === "md" || e === "markdown")
     return "reader";
   return "text"; // txt and any UNKNOWN type → the plain-text reader (never a dead end)
 }
+
+/** Extensions whose VALUE IS THE SOURCE — opened as a code book, never reduced to extracted text. */
+const CODE_EXTS: ReadonlySet<string> = new Set([
+  "html", "htm", "svg", "css", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs",
+  "java", "c", "h", "cpp", "cs", "sh", "bash", "ps1", "sql", "yaml", "yml", "toml",
+]);
 
 /** Image extensions routed to the photo-transform (img2img) path, not the book importer. */
 const IMAGE_EXTS: Record<string, string> = {
@@ -96,6 +111,11 @@ export async function importBookFile(file: File, handler: FileHandler = "auto"):
   // Explicit "Open as…" overrides (and the image-extension auto route) short-circuit the parse below.
   if (effective === "image") {
     return { kind: "image", name: file.name, bytes: await file.arrayBuffer(), mimeType: IMAGE_EXTS[ext] ?? "image/png" };
+  }
+  if (effective === "code") {
+    // A code book keeps the raw bytes in `book.code`, so the reader gets an editable window with a
+    // preview and the assistant gets the actual source.
+    return { kind: "book", book: bookFromCode(title, await file.text(), ext) };
   }
   if (effective === "text") {
     // Forced "Plain text" AND the unknown-type fallback: show the raw text in the reader, no mode/grid.

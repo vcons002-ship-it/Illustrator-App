@@ -187,3 +187,43 @@ export function mergeWorkspaceReadme(existing: string | undefined, generated: st
   if (from === -1 || to === -1 || to < from) return `${prior.trimEnd()}\n\n${section}`;
   return `${prior.slice(0, from)}${section.trimEnd()}\n${prior.slice(to + README_END.length).replace(/^\n/, "")}`;
 }
+
+/**
+ * Source language (or a bare extension) → the extension a code file should carry on disk.
+ *
+ * Small on purpose, same as `KIND_BY_EXT`: a language we don't know gets `.txt`, which is honest and
+ * still openable, rather than a guess that makes the file look like something it isn't.
+ */
+const EXT_BY_LANGUAGE: Readonly<Record<string, string>> = {
+  html: "html", htm: "html", svg: "svg", xml: "xml", css: "css",
+  js: "js", javascript: "js", jsx: "jsx", ts: "ts", typescript: "ts", tsx: "tsx",
+  py: "py", python: "py", rb: "rb", ruby: "rb", go: "go", golang: "go", rs: "rs", rust: "rs",
+  java: "java", c: "c", "c++": "cpp", cpp: "cpp", cs: "cs", csharp: "cs", php: "php", swift: "swift",
+  kt: "kt", kotlin: "kt", sh: "sh", bash: "sh", shell: "sh", zsh: "sh", ps1: "ps1", powershell: "ps1",
+  sql: "sql", json: "json", yaml: "yaml", yml: "yaml", toml: "toml", md: "md", markdown: "md",
+  txt: "txt", text: "txt",
+};
+
+/**
+ * THE FILENAME A CODE WINDOW'S SOURCE IS SAVED UNDER. PURE.
+ *
+ * The old rule was the book's title with every non-word character turned into `_` and NOTHING ELSE —
+ * so "Solar System Page" became `Solar_System_Page`, a file with no extension. Nothing downstream
+ * could work with that: the kind-sorter had no extension to read, `run_command` had no interpreter to
+ * infer, the browser had no type to render, and the reader saw a file their computer refused to open.
+ *
+ * A title that already ends in an extension is left alone — the model naming its own file
+ * (`particles.js`) is a decision, not an accident.
+ */
+export function codeFileNameFor(title: string, language?: string): string {
+  const safe =
+    (title || "code")
+      .trim()
+      .toLowerCase()
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "")
+      .slice(0, 80)
+      .replace(/[-.]+$/, "") || "code";
+  if (/\.[a-z0-9]{1,8}$/.test(safe)) return safe;
+  return `${safe}.${EXT_BY_LANGUAGE[(language ?? "").trim().toLowerCase()] ?? "txt"}`;
+}

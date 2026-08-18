@@ -2,6 +2,7 @@ export * from "./useScrollDepth.js";
 export * from "./useMediaQuery.js";
 export * from "./useReducedMotion.js";
 export * from "./usePointerFeedback.js";
+export * from "./growTextarea.js";
 // Design tokens + class names. Exported so apps/web (13k lines, previously unable to import
 // the internal tokens file) can finally use them instead of hard-coding every value.
 export * from "./design/index.js";
