@@ -421,6 +421,9 @@ export function runCommand(
    * anything meant to STAY UP (a game, a dev server, a browser with a debug port), which the normal
    * path would hold the turn for and then kill at the deadline. */
   detach?: boolean,
+  /** Raise this ONE command's deadline (seconds). The host clamps it to [240, 3h], so it can only
+   * ever extend the wait — for a delegated coding agent, which runs far past the ordinary ceiling. */
+  timeoutSecs?: number,
 ): Promise<CommandResult> {
   return invoke<CommandResult>("run_command", {
     command,
@@ -428,6 +431,7 @@ export function runCommand(
     ...(cwd ? { cwd } : {}),
     // Windows only: "powershell" runs the command via PowerShell instead of cmd /C.
     ...(shell ? { shell } : {}),
+    ...(timeoutSecs ? { timeoutSecs } : {}),
     ...(detach ? { detach: true } : {}),
   });
 }
@@ -568,6 +572,13 @@ export interface DelegateCodingOpts {
 
 /** Workspace-relative file the task prompt is written to (so it never has to be shell-escaped). */
 const CODING_TASK_FILE = ".vr-coding-task.md";
+/** How long a delegated agent may run. An external agent editing several files against a local model
+ * works for tens of minutes; the ordinary four-minute command ceiling killed it mid-edit. Still
+ * bounded — the host clamps this to its own three-hour maximum, so nothing runs forever. */
+const AGENT_TIMEOUT_SECS = 90 * 60;
+/** Where the generated Codex config lives, relative to the working folder. Kept inside the workspace
+ * (rather than written to the reader's `~/.codex`) so delegation never edits their own Codex setup. */
+const CODEX_HOME_DIR = ".vr-codex";
 
 /**
  * Run an external coding agent (Aider, or Codex CLI as the backup backend) headless on a coding task
@@ -581,8 +592,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAiderArgs, buildCodexArgs, quotePosixCommand, ollamaApiBase } = await import("@visual-reader/core");
-  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell);
+  const { buildAiderArgs, buildCodexArgs, buildCodexConfigToml, codexBaseUrl, agentChangedFiles, quotePosixCommand, ollamaApiBase } =
+    await import("@visual-reader/core");
+  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined);
 
   // 1) Is the chosen agent installed?
   try {
@@ -593,13 +605,40 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   }
 
   // 2) Stage the prompt as a file + record the pre-run commit (for the diff).
+  //
+  // THE FOLDER HAS TO BE A REPO, and this is not a nicety — the entire report of what the agent did
+  // is a `git diff`. The default workspace is a plain directory, so every delegated run in it used to
+  // come back "changed no files" no matter how well it went. `gitEnsureRepo` returns an enclosing
+  // repo when there is one (so a folder inside the reader's own project is left alone) and otherwise
+  // inits one with a base commit — which also hands the reader a real undo for whatever the agent
+  // does next.
   await writeWorkspaceFile(CODING_TASK_FILE, opts.task, opts.cwd);
+  let repoNote = "";
   let beforeSha = "";
+  let dirtyBefore = "";
+  let workDir = opts.cwd ?? "";
   try {
+    // `probe.cwd` is the folder the command ACTUALLY ran in, which is the one to work with —
+    // `opts.cwd` is optional and the host resolves its own default when it is absent, so trusting it
+    // alone would name the wrong folder or, more often, none at all.
+    const probe = await run("git rev-parse --show-toplevel");
+    workDir = probe.cwd || workDir;
+    if (probe.code !== 0) {
+      // A REPO IS NOT OPTIONAL HERE: the whole report of what the agent did is a git diff, so a plain
+      // directory (which the default workspace is) made every run come back "changed no files" no
+      // matter how well it went. It also earns Codex's trust — it refuses to touch a folder that
+      // isn't a repo it recognizes. gitEnsureRepo returns an ENCLOSING repo when there is one, so a
+      // folder inside the reader's own project is joined rather than re-initialized.
+      if (workDir) await gitEnsureRepo(workDir);
+      else repoNote = "\n(No git repo here, so the list of changed files may be incomplete.)";
+    }
     const r = await run("git rev-parse HEAD");
     if (r.code === 0) beforeSha = r.stdout.trim();
+    // What was ALREADY uncommitted before the agent ran, so the folder's existing mess is not
+    // reported as its doing. Read-only — see the diff step for why nothing here stages or commits.
+    dirtyBefore = (await run("git status --porcelain -- .")).stdout;
   } catch {
-    /* not a git repo / no commits yet — the agent may auto-init; we fall back to a working-tree diff */
+    repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
 
   // 3) Build + run the agent against the local model. Aider takes the prompt via --message-file;
@@ -609,10 +648,21 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const isWin = opts.shell === "cmd" || opts.shell === "powershell";
   let command: string;
   if (backend === "codex") {
+    // PIN THE MODEL, IN A FILE. Codex reads its config from `CODEX_HOME` (default `~/.codex`), and
+    // whatever is in the reader's own `~/.codex/config.toml` is what it uses — which for anyone who
+    // has ever run Codex normally means an OpenAI model. A local-only setup then quietly sent the
+    // job to the cloud and answered from `gpt-5.6`, which is exactly what happened on a real box.
+    // `OLLAMA_HOST`, set here before, is not a variable Codex reads at all.
+    await writeWorkspaceFile(
+      `${CODEX_HOME_DIR}/config.toml`,
+      buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) }),
+      opts.cwd,
+    );
+    const home = workDir ? `${workDir}/${CODEX_HOME_DIR}` : CODEX_HOME_DIR;
     const argv = ["codex", ...buildCodexArgs({ model: opts.model })];
     command = isWin
-      ? `set "OLLAMA_HOST=${base}" && ${argv.join(" ")} < ${CODING_TASK_FILE}`
-      : `OLLAMA_HOST=${base} ${quotePosixCommand(argv)} < ${quotePosixCommand([CODING_TASK_FILE])}`;
+      ? `set "CODEX_HOME=${home}" && ${argv.join(" ")} < ${CODING_TASK_FILE}`
+      : `CODEX_HOME=${quotePosixCommand([home])} ${quotePosixCommand(argv)} < ${quotePosixCommand([CODING_TASK_FILE])}`;
   } else {
     const argv = ["aider", ...buildAiderArgs({
       messageFile: CODING_TASK_FILE,
@@ -624,20 +674,39 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
       ? `set "OLLAMA_API_BASE=${base}" && ${argv.join(" ")}`
       : `OLLAMA_API_BASE=${base} ${quotePosixCommand(argv)}`;
   }
-  const agent = await run(command);
+  // An external agent editing several files against a local model runs for tens of minutes. The
+  // ordinary four-minute command ceiling killed it mid-edit and then reported that nothing changed —
+  // the worst of both, a half-applied change and a run that looked like a no-op. Only THIS call gets
+  // the long deadline; the version probe and the git plumbing above keep the normal one.
+  const agent = await runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, AGENT_TIMEOUT_SECS);
 
-  // 4) Summarize what changed (committed range when we have a base, else the working tree).
-  const range = beforeSha ? `${beforeSha} HEAD` : "";
+  // 4) Summarize what changed.
+  //
+  // AGAINST THE INDEX, not between two commits. `git diff <sha> HEAD` compares two COMMITS, so it saw
+  // nothing at all unless the agent committed — and Codex, unlike Aider, edits the working tree and
+  // leaves committing to you. A NEW file is worse still: untracked, so a plain `git diff` misses it
+  // whether or not anything was committed. Staging everything first and diffing the INDEX against the
+  // pre-run commit catches all three cases — committed, modified-not-committed, and brand new — with
+  // one formulation. Staging is not committing; the reader's tree is left as the agent made it.
   let stat = "";
   let names: string[] = [];
   try {
-    stat = (await run(`git diff --stat ${range}`)).stdout.trim();
-    const nm = (await run(`git diff --name-only ${range}`)).stdout.trim();
-    names = nm ? nm.split(/\r?\n/).filter(Boolean) : [];
+    const range = beforeSha ? ` ${beforeSha}` : "";
+    // Both halves are READ-ONLY, and that is deliberate. Staging (`git add -A`) reaches the whole
+    // repository from any subdirectory, so in a workspace that sits inside the reader's own project
+    // it would sweep up work that has nothing to do with this task — and a baseline commit would
+    // then bury it. Nothing here modifies the index or the tree.
+    stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
+    names = agentChangedFiles({
+      dirtyBefore,
+      dirtyAfter: (await run("git status --porcelain -- .")).stdout,
+      committed: (await run(`git diff --name-only${range} -- .`)).stdout,
+      exclude: [CODING_TASK_FILE, `${CODEX_HOME_DIR}/config.toml`],
+    });
   } catch {
     /* diff is best-effort */
   }
-  const changed = names.length > 0 || stat.length > 0;
+  const changed = names.length > 0;
 
   // 5) Optional verify (build/test) so success is checked, not assumed.
   let verifyLine = "";
@@ -654,12 +723,19 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     }
   }
 
-  const ok = (agent.code === 0 || changed) && verifyOk;
+  const ok = (agent.code === 0 || changed) && verifyOk && !agent.timedOut;
+  // A DEADLINE IS NOT A NO-OP, and saying so is the difference between a useful next step and a
+  // wasted one. "Changed no files" reads as "the task was wrong, rewrite it"; being stopped after
+  // three hours means the opposite — the task was too big, split it. It was silent before.
+  const timedOutLine = agent.timedOut
+    ? `\n${label} was STOPPED at the ${Math.round(AGENT_TIMEOUT_SECS / 60)}-minute deadline, so whatever it had ` +
+      `done so far is what is on disk. Split the job into smaller delegated tasks rather than retrying this one.`
+    : "";
   const summary = changed
-    ? `[delegate_coding_task: ${label} changed ${names.length} file(s):\n${stat || names.join("\n")}${verifyLine}` +
+    ? `[delegate_coding_task: ${label} changed ${names.length} file(s):\n${stat || names.join("\n")}${timedOutLine}${verifyLine}${repoNote}` +
       `\nReview the diff; if something's off, fix it with edit_file or delegate again with a sharper task.]`
-    : `[delegate_coding_task: ${label} ran but changed no files (exit ${agent.code}). Output tail:\n` +
-      `${(agent.stdout + agent.stderr).trim().slice(-1200)}${verifyLine}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
+    : `[delegate_coding_task: ${label} ran but changed no files (exit ${agent.code}).${timedOutLine} Output tail:\n` +
+      `${(agent.stdout + agent.stderr).trim().slice(-1200)}${verifyLine}${repoNote}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
   return { ok, installed: true, summary, files: names };
 }
 

@@ -21,11 +21,13 @@ integration. **"Option B" (ACP)** is the documented future upgrade — see the b
   when all hold; the runtime additionally checks Aider is on `PATH` and returns a clear
   "install Aider" message if not.
 - Pure command-building lives in `packages/core/src/chat/coding-agent.ts` (`buildAiderArgs`,
+  `buildCodexArgs`, `buildCodexConfigToml`, `codexBaseUrl`, `agentChangedFiles`,
   `quotePosixCommand`, `ollamaApiBase`) — unit-tested without a shell.
-- The desktop runner is `delegateCodingTask` in `apps/web/src/runtime.ts`: it detects Aider,
-  writes the task to a file (so the prompt never hits the shell), records the pre-run commit,
-  runs Aider headless against the **same local Ollama model** the chat uses, diffs to summarize
-  what changed, and runs the optional verify command.
+- The desktop runner is `delegateCodingTask` in `apps/web/src/runtime.ts`: it detects the agent,
+  writes the task to a file (so the prompt never hits the shell), makes sure the folder is a git
+  repo, records the pre-run commit and the already-dirty files, runs the agent headless against the
+  **same local Ollama model** the chat uses, reports what changed, and runs the optional verify
+  command.
 - Host wiring is `runDelegateCodingTask` in `apps/web/src/App.tsx` (mirrors `runEditFile`):
   it surfaces changed files into the file ledger and folds the run into the app-managed
   workflow as a command-style step (a clean run + verify pass satisfies the collar).
@@ -34,12 +36,56 @@ integration. **"Option B" (ACP)** is the documented future upgrade — see the b
   edits — Aider's most reliable local-model mode (this is the "G9" idea, realized by Aider
   rather than re-implemented in-app).
 
+## What a first real run taught us
+
+Everything below was found by running it on a real box, and every one of them produced the same
+misleading sentence — *"ran but changed no files"* — which reads as "your task was wrong, rewrite
+it" when the truth was the opposite each time. They are recorded here because each was invisible to
+a green test suite: the pure builders were checked against themselves, never against the CLI.
+
+- **`--local-provider` is not a Codex flag.** The argv passed `--oss --local-provider ollama`, and an
+  unknown flag makes `codex exec` exit on its own usage error before doing any work. Delegation via
+  Codex could never have succeeded.
+- **`OLLAMA_HOST` is not a variable Codex reads.** It was being set as the way to point Codex at the
+  local server, and had no effect at all — so Codex used whatever the reader's own
+  `~/.codex/config.toml` said, which for anyone who has ever run Codex normally is an OpenAI model.
+  A local-only machine quietly sent the job to the cloud and answered from `gpt-5.6`.
+  The fix is a generated `config.toml` in `<workspace>/.vr-codex`, selected with `CODEX_HOME` —
+  a file, so there is no TOML-inside-a-shell-argument quoting problem on either `sh` or `cmd`, and
+  written inside the workspace so delegation never edits the reader's own Codex setup.
+- **`base_url` keeps its `/v1` for Codex** and must NOT for Aider. Same setting, two shapes:
+  `ollamaApiBase` strips it (Aider appends the OpenAI path itself), `codexBaseUrl` keeps it.
+  `wire_api = "responses"` is the pairing Ollama documents for Codex.
+- **Four minutes was not a deadline, it was a guillotine.** `run_command` capped every command at
+  `COMMAND_TIMEOUT_SECS` (240s); an agent editing several files against a local 27B model runs for
+  tens of minutes, so it was killed mid-edit — a half-applied change AND a report of no change.
+  `run_command` now takes an optional per-call `timeout_secs`, clamped to `[240s, 3h]` by the host so
+  it can only ever EXTEND a wait; delegation asks for 90 minutes. A run stopped at the deadline now
+  says so, because "split the task" and "rewrite the task" are opposite next steps.
+- **The diff saw only committed work.** `git diff <sha> HEAD` compares two *commits*. Aider commits;
+  Codex edits the working tree and leaves committing to you, so its work was invisible — and a
+  brand-new file is untracked, so a plain diff missed it either way. The obvious repair, staging
+  first, is worse than the bug: `git add -A` reaches the whole repository from any subdirectory, so a
+  workspace inside the reader's own project would sweep up unrelated work, and a baseline commit
+  would bury it. `agentChangedFiles` instead unions `git diff --name-only <baseline>` (committed)
+  with `git status --porcelain` (modified + untracked), subtracting what was already dirty before the
+  run. Entirely read-only.
+- **The workspace was not a repo.** The whole report is a git diff, so a plain directory — which the
+  default workspace is — reported nothing regardless. It also earns Codex's trust, which refuses a
+  folder it doesn't recognize as a repo ("Not inside a trusted directory"). `gitEnsureRepo` returns
+  an enclosing repo when there is one, so a folder inside the reader's own project is joined rather
+  than re-initialized.
+
 ## Caveats (need a real-box pass)
 
 Everything pure is unit-tested, but the runtime path can't be exercised in CI here:
 
-- **Optional dependency:** the user must `pipx install aider-chat`. The app detect-and-offers;
-  it never assumes Aider is present.
+- **Optional dependency:** the user must `pipx install aider-chat` (or `npm i -g @openai/codex`).
+  The app detect-and-offers; it never assumes the agent is present.
+- **A local chat model must actually be installed.** Codex pinned to Ollama can only run a model
+  Ollama has. The generated config names the app's configured chat model, so if that model isn't
+  pulled, the run fails at the provider rather than falling back to a cloud model — which is the
+  intended behaviour, but the error comes from Codex and not from us.
 - **VRAM contention:** Aider hits the same Ollama server as the in-app chat model. With the
   architect/editor split that's potentially two models loaded; coordinate (or use one model)
   on a constrained GPU.
