@@ -1,3 +1,5 @@
+import { useLayoutEffect, type RefObject } from "react";
+
 /**
  * A COMPOSER THAT GROWS WITH WHAT'S IN IT.
  *
@@ -31,4 +33,36 @@ export function growTextarea(ta: HTMLTextAreaElement | null | undefined): void {
   const cap = composerMaxHeight(typeof window === "undefined" ? 800 : window.innerHeight);
   ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
   ta.style.overflowY = ta.scrollHeight > cap ? "auto" : "hidden";
+}
+
+/**
+ * Keep a composer sized to its draft.
+ *
+ * A LAYOUT effect, and that is the whole point rather than a detail. The buddy composer throws
+ * typing sparks from the caret, and it locates the caret by measuring the textarea's bounding rect —
+ * so if the resize ran in an ordinary effect, the sparks for the keystroke that WRAPPED a line were
+ * measured against the field's previous height. The composer is anchored to the bottom of the panel,
+ * so growing moves its top edge UP, and the sparks landed a line below the caret. That error is a
+ * small fraction of a tall desktop window and a very visible one on a phone, where the field is a
+ * large share of the screen and a narrow column wraps every few characters.
+ *
+ * `useLayoutEffect` runs before every `useEffect` regardless of which is declared first, so the
+ * measurement can no longer be ordered wrong by an edit somewhere else in the file.
+ *
+ * The resize listener is for the phone as well: opening the on-screen keyboard shrinks the viewport,
+ * and a field already at the old 35% cap would otherwise stay taller than the cap it is now allowed.
+ */
+export function useGrowTextarea(ref: RefObject<HTMLTextAreaElement | null>, value: string): void {
+  useLayoutEffect(() => {
+    growTextarea(ref.current);
+  }, [ref, value]);
+  useLayoutEffect(() => {
+    const onResize = (): void => growTextarea(ref.current);
+    window.addEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
+  }, [ref]);
 }

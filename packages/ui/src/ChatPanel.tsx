@@ -1,6 +1,6 @@
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { growTextarea } from "./growTextarea.js";
+import { useGrowTextarea } from "./growTextarea.js";
 import {
   CHAT_SLASH_COMMANDS,
   chartDatasetFromTable,
@@ -420,9 +420,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   // Grow the composer with what's in it (see growTextarea): a pasted file used to show two lines of
   // itself and look truncated.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  useEffect(() => {
-    growTextarea(textareaRef.current);
-  }, [draft]);
+  useGrowTextarea(textareaRef, draft);
   const [showHelp, setShowHelp] = useState(false);
   // Follow the conversation — the same behaviour the buddy panel has, from the same hook rather
   // than a second hand-maintained copy of it (this one had already fallen a few deps behind).

@@ -153,6 +153,11 @@ export const chatTextareaStyle: CSSProperties = {
   borderRadius: 6,
   padding: 8,
   fontSize: 13,
+  // EXPLICIT, because the typing sparks divide by it. `line-height: normal` computes to the string
+  // "normal", which parses to NaN, so the caret math fell back to a guessed 1.35em — an estimate
+  // that is wrong per font and wrong CUMULATIVELY down the field, drifting further from the caret
+  // with every wrapped line. A narrow phone column wraps constantly, which is where that showed.
+  lineHeight: 1.45,
   fontFamily: "inherit",
 };
 
