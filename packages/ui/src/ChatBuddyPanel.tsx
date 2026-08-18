@@ -1,6 +1,6 @@
 import { t } from "./design/tokens.js";
 import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type Ref } from "react";
-import { growTextarea } from "./growTextarea.js";
+import { useGrowTextarea } from "./growTextarea.js";
 import {
   CommandHelp,
   MessageBubble,
@@ -512,6 +512,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
    * fires per keystroke, so it has to be a nudge rather than a shove or holding a key down would
    * boil the field.
    */
+  // Sized BEFORE the spark effect below measures it — see useGrowTextarea. A layout effect always
+  // runs first, so the caret can no longer be located against the field's previous height.
+  useGrowTextarea(textareaRef, draft);
   useEffect(() => {
     if (!draft) return;
     const el = composerRef.current;
@@ -525,8 +528,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     const padL = parseFloat(cs.paddingLeft || "0") + parseFloat(cs.borderLeftWidth || "0");
     const padT = parseFloat(cs.paddingTop || "0") + parseFloat(cs.borderTopWidth || "0");
     const fs = parseFloat(cs.fontSize) || 13;
-    // "normal" is a valid computed line-height and parses to NaN; fall back rather than emit at NaN,
-    // which would place the burst nowhere and silently do nothing.
+    // The composer sets an explicit line-height precisely so this parses (see chatTextareaStyle): a
+    // computed "normal" is NaN, and the fallback below is an ESTIMATE whose error compounds down the
+    // field. Kept as a safety net for a field styled elsewhere, not as the normal path.
     const lh = parseFloat(cs.lineHeight) || fs * 1.35;
     // The caret, not the end of the value — you can type in the middle of what you have written.
     const before = draft.slice(0, ta.selectionStart ?? draft.length);
@@ -541,11 +545,6 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     fieldRef.current?.pulse(x, y, 2.6);
   }, [draft]);
 
-  // Grow the field with what's in it (see growTextarea): a pasted file used to show two lines of
-  // itself and look truncated.
-  useEffect(() => {
-    growTextarea(textareaRef.current);
-  }, [draft]);
 
   /**
    * WHICH message just condensed out of the stream.

@@ -164,8 +164,27 @@ describe("the composer grows with what is in it", () => {
 
   it("re-measures both chat composers on every draft change", () => {
     for (const [name, src] of [["buddy", SRC], ["book", BOOK]] as const) {
-      expect(src, `${name} composer does not grow`).toContain("growTextarea(textareaRef.current);");
+      expect(src, `${name} composer does not grow`).toContain("useGrowTextarea(textareaRef, draft);");
       expect(src, `${name} composer has no ref to measure`).toContain("ref={textareaRef}");
     }
+  });
+
+  it("resizes in a LAYOUT effect, so the typing sparks measure the field at its new height", () => {
+    // The composer is anchored to the bottom, so growing moves its top edge up. Resizing in an
+    // ordinary effect let the spark for the keystroke that WRAPPED a line be measured against the
+    // previous height, and the burst landed a line below the caret — a small error on a tall desktop
+    // window, a glaring one on a phone where the column wraps every few words.
+    const GROW = readFileSync(join(import.meta.dirname, "growTextarea.ts"), "utf8");
+    expect(GROW).toContain("useLayoutEffect(() => {\n    growTextarea(ref.current);");
+    expect(GROW).not.toMatch(/\buseEffect\(/);
+    // And it re-runs when the viewport changes: opening a phone keyboard shrinks the cap.
+    expect(GROW).toContain('window.visualViewport?.addEventListener("resize", onResize);');
+  });
+
+  it("gives the composer an explicit line-height, which the caret math divides by", () => {
+    // A computed "normal" parses to NaN, so the sparks fell back to a guessed 1.35em whose error
+    // compounds down the field.
+    const RECIPES = readFileSync(join(import.meta.dirname, "design/recipes.ts"), "utf8");
+    expect(RECIPES).toMatch(/chatTextareaStyle: CSSProperties = \{[\s\S]*?lineHeight: 1\.45,/);
   });
 });
