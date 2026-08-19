@@ -141,6 +141,41 @@ describe("applyFileEdits", () => {
     expect(summarizeFileEdits("a.ts", { content: "", applied: 2, failures: [] })).toContain("applied 2 edit");
     const s = summarizeFileEdits("a.ts", { content: "", applied: 1, failures: [{ index: 1, search: "x", reason: "ambiguous" }] });
     expect(s).toContain("1 applied, 1 FAILED");
-    expect(s).toContain("more surrounding context");
+    // Wording changed with the evidence: an ambiguous edit now names the LINES it matched, so the
+    // model can anchor on one instead of being told to add context somewhere unspecified.
+    expect(s).toContain("more surrounding text");
+  });
+
+  /**
+   * A MISS USED TO REPORT ONLY THAT IT MISSED, so the model's next move was to guess again — from
+   * the same information that produced the wrong guess. Real coding harnesses answer a failed patch
+   * with the surrounding text, because a bad anchor is nearly always off by indentation or one
+   * token, and one look at the real line ends it.
+   */
+  it("shows the closest real text when an anchor misses", () => {
+    const file = "function tick() {\n    const ready = 1;\n    return ready;\n}\n";
+    // The model reproduced the line with a tab where the file has spaces — the commonest miss there
+    // is, and one that no amount of re-guessing fixes without seeing the real thing.
+    const r = applyFileEdits(file, [{ search: "\tconst ready = 1;", replace: "\tconst ready = 2;" }]);
+    expect(r.applied).toBe(0);
+    expect(r.failures[0]!.nearest?.line).toBe(2);
+    expect(r.failures[0]!.nearest?.text).toContain("    const ready = 1;");
+    const summary = summarizeFileEdits("tick.js", r);
+    expect(summary).toContain("closest text in the file is at line 2");
+    expect(summary).toContain("character for character");
+  });
+
+  it("names the lines an ambiguous anchor matched", () => {
+    const file = "a();\nsame();\nb();\nsame();\n";
+    const r = applyFileEdits(file, [{ search: "same();", replace: "other();" }]);
+    expect(r.failures[0]!.at).toEqual([2, 4]);
+    expect(summarizeFileEdits("x.js", r)).toContain("lines 2, 4");
+  });
+
+  it("offers no nearest line when nothing in the file resembles the anchor", () => {
+    // Evidence or silence — a "closest" line that shares nothing is a guess dressed as evidence.
+    const r = applyFileEdits("alpha();\nbeta();\n", [{ search: "completely unrelated content here", replace: "x" }]);
+    expect(r.failures[0]!.nearest).toBeUndefined();
+    expect(summarizeFileEdits("x.js", r)).toContain("copy the `search` from it verbatim");
   });
 });
