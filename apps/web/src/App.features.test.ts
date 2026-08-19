@@ -819,9 +819,13 @@ describe("the per-chat workspace layout", () => {
     const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, displayLabel, execHostTool", at));
     // An unclosed fence is the whole signal.
     expect(body).toContain("const block = openBlockOf(text);");
-    // What is rescued is incomplete, so it can never land on a finished file.
-    expect(body).toContain("-part${n}");
-    expect(body).toContain("if (!held?.exists) break;");
+    // What is rescued is incomplete, so it never goes near a file that already exists — not even
+    // under a different name. A half-written duplicate beside a working file is worse than nothing:
+    // the next turn gets two candidates and the ledger advertises the wrong one.
+    expect(body).toContain("if (held?.exists) return undefined;");
+    // Comments stripped: the note explaining WHY the -part2 scheme was wrong obviously mentions it.
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code, "a rescue must never write a second copy of an existing file").not.toContain("-part");
     // And it goes in the ledger, which is what the next turn actually reads.
     expect(body).toContain("recordCreatedFile(path, block.body.split");
     // The follow-up turn is TOLD the path — this note is model-facing on purpose, unlike most.

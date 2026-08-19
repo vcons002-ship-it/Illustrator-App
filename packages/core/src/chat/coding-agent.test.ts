@@ -325,3 +325,66 @@ describe("what the delegated agent is told besides the job", () => {
     expect(buildDelegatedTask("   ")).toContain("NAME FILES FOR WHAT THEY DO");
   });
 });
+
+describe("our own scaffolding never counts as the agent's work", () => {
+  /**
+   * `git status --porcelain` and `git diff --name-only` print paths relative to the REPOSITORY ROOT,
+   * whatever directory they ran in — and the workspace usually is not that root (a chat folder inside
+   * an already-initialised workspace, or a folder inside the reader's own project). So the config we
+   * generate came back as `chat-21/.vr-codex/config.toml`, the prefix test against `.vr-codex/`
+   * failed, and a run that had done nothing reported "changed 1 file(s)" — naming a file the
+   * assistant then could not read, because it is outside the folders it may touch.
+   */
+  it("excludes our directory at any depth, not just at the root", async () => {
+    const { agentChangedFiles } = await import("./coding-agent.js");
+    expect(
+      agentChangedFiles({
+        dirtyBefore: "",
+        dirtyAfter: "?? chat-21/.vr-codex/config.toml\n M chat-21/flow3.html",
+        committed: "",
+        exclude: [".vr-coding-task.md"],
+        excludeDirs: [".vr-codex"],
+      }),
+    ).toEqual(["chat-21/flow3.html"]);
+  });
+
+  it("excludes the staged task file wherever git reports it from", async () => {
+    const { agentChangedFiles } = await import("./coding-agent.js");
+    expect(
+      agentChangedFiles({
+        dirtyBefore: "",
+        dirtyAfter: "?? work/chat-4/.vr-coding-task.md\n?? work/chat-4/tide-clock.py",
+        committed: "",
+        exclude: [".vr-coding-task.md"],
+        excludeDirs: [".vr-codex"],
+      }),
+    ).toEqual(["work/chat-4/tide-clock.py"]);
+  });
+
+  it("still works when the workspace IS the repository root", async () => {
+    const { agentChangedFiles } = await import("./coding-agent.js");
+    expect(
+      agentChangedFiles({
+        dirtyBefore: "",
+        dirtyAfter: "?? .vr-codex/\n M flow3.html",
+        committed: "",
+        exclude: [".vr-coding-task.md"],
+        excludeDirs: [".vr-codex"],
+      }),
+    ).toEqual(["flow3.html"]);
+  });
+
+  it("does not exclude a real file that merely shares a name with our folder", async () => {
+    const { agentChangedFiles } = await import("./coding-agent.js");
+    // `.vr-codex` is excluded as a DIRECTORY segment; a file called config.toml elsewhere is the
+    // reader's own and must survive.
+    expect(
+      agentChangedFiles({
+        dirtyBefore: "",
+        dirtyAfter: "?? config.toml",
+        committed: "",
+        excludeDirs: [".vr-codex"],
+      }),
+    ).toEqual(["config.toml"]);
+  });
+});
