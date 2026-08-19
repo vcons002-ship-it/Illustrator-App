@@ -5500,8 +5500,17 @@ export interface BuddyToolResultPayload {
   page?: { title?: string; text: string };
   /** Output of an approved run_command (fed back so the model can react/fix). */
   command?: { stdout: string; stderr: string; code: number; timedOut?: boolean; cwd?: string };
-  /** write_file outcome: the saved path (so the model can run_command it), or an error. */
-  writeFile?: { path: string; ok: boolean; error?: string };
+  /** write_file outcome: the saved path (so the model can run_command it), or an error. `totalLines`
+   * and `tail` are where the file NOW stands after an append — the anchor a continuation needs and
+   * was never given; `trimmedOverlap` counts duplicate characters removed at the join. */
+  writeFile?: {
+    path: string;
+    ok: boolean;
+    error?: string;
+    totalLines?: number;
+    tail?: string;
+    trimmedOverlap?: number;
+  };
   /** edit_file outcome: how many search/replace edits applied + a model-facing summary of any failures
    * (so the model can retry a missed/ambiguous edit with a better anchor). `ok` is false on a hard error
    * (file missing / not desktop). */
@@ -5775,8 +5784,24 @@ function formatBuddyToolResultBody(
     // `truncated`; without a different note here the model would read "saved to …" and move on,
     // leaving a page that stops mid-tag on disk and a run that believes it is done.
     if (call.truncated) return resumeWriteNote(w.path, call.content.length, call.content);
+    /**
+     * TELL IT WHERE THE FILE NOW ENDS.
+     *
+     * This used to say only "APPENDED this chunk", so a model writing a file in pieces continued from
+     * its own memory of what it had emitted — the one thing that is unreliable after a reply ran out
+     * mid-file, and that may not be in its context at all once history has been trimmed. A re-sent
+     * line duplicated silently and a skipped one left a hole, both producing a file that often still
+     * parses. The line count and the real last lines are cheap to report and turn a blind append into
+     * an anchored one.
+     */
     return call.append
-      ? `[write_file APPENDED this chunk to ${w.path}. If more of the file remains, send the NEXT chunk with append:true; once it's all written, run_command it.]`
+      ? `[write_file APPENDED to ${w.path}.` +
+        (w.trimmedOverlap
+          ? ` ${w.trimmedOverlap} characters at the join were ALREADY on disk and were dropped — you re-sent text that had been written.`
+          : "") +
+        (w.totalLines ? ` The file is now ${w.totalLines} lines.` : "") +
+        (w.tail ? `\nIt currently ENDS with:\n${w.tail}\nContinue from exactly there — do not repeat those lines.` : "") +
+        ` If more of the file remains, send the NEXT chunk with append:true; once it's all written, run_command it to check it.]`
       : `[write_file saved to ${w.path}. (For a file too big for one reply, send the rest in more write_file calls with "append":true.) You can now run_command it (e.g. python/node it, or run tests).]`;
   }
   if (call.tool === "edit_file") {

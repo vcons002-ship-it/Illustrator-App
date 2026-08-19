@@ -285,3 +285,53 @@ describe("whole-file rewrites of existing code are refused", () => {
     expect(wholeFileRewriteRefusal({ path: "src/lib/util.TS", exists: true, existingLines: 200 })).toBeTruthy();
   });
 });
+
+describe("stitching a file written in chunks", () => {
+  /**
+   * "Is it good at knowing where the previous code chunk stopped?" It had nothing to go on. The
+   * append protocol was a byte concatenation and the feedback said only "APPENDED this chunk" — no
+   * line count, no tail, no check on the join. So the model continued from its own memory of what it
+   * had emitted, which is exactly what is unreliable after a reply ran out mid-file, and which may
+   * not even be in context once history has been trimmed.
+   */
+  it("drops a passage the chunk re-sends from the end of the file", async () => {
+    const { joinAppendedChunk } = await import("./workspace-layout.js");
+    const onDisk = "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n";
+    // The model re-sends the last function it wrote before carrying on — the commonest join mistake,
+    // because it is reconstructing from memory rather than from the file.
+    const resent = "function b() {\n  return 2;\n}\n";
+    const r = joinAppendedChunk(onDisk, `${resent}\nfunction c() {\n  return 3;\n}\n`);
+    expect(r.trimmed).toBe(resent.length);
+    expect(r.chunk).toBe("\nfunction c() {\n  return 3;\n}\n");
+  });
+
+  it("leaves a clean join exactly as it was", async () => {
+    const { joinAppendedChunk } = await import("./workspace-layout.js");
+    const r = joinAppendedChunk("line one\nline two\n", "line three\nline four\n");
+    expect(r).toEqual({ chunk: "line three\nline four\n", trimmed: 0 });
+  });
+
+  it("is not fooled by repeated punctuation at a boundary", async () => {
+    const { joinAppendedChunk } = await import("./workspace-layout.js");
+    // `}` on both sides of a boundary is a coincidence; a re-sent paragraph is not.
+    expect(joinAppendedChunk("  return 1;\n}\n", "}\nfunction next() {\n").trimmed).toBe(0);
+    // Closing out of nested code: two line breaks, but nothing on those lines. Deleting this would
+    // corrupt exactly the file the guard exists to protect.
+    expect(joinAppendedChunk("    ok();\n  }\n}\n", "  }\n}\n\nnext();\n").trimmed).toBe(0);
+    // Long, but still only punctuation and indentation.
+    const bracey = "\n      }\n    }\n  }\n}\n";
+    expect(joinAppendedChunk(`code();${bracey}`, `${bracey}more();\n`).trimmed).toBe(0);
+  });
+
+  it("reports where the file ends, bounded so one huge line can't flood the reply", async () => {
+    const { fileTail } = await import("./workspace-layout.js");
+    // The trailing newline is not one of the three lines — counting it would spend a third of the
+    // anchor on nothing.
+    expect(fileTail("a\nb\nc\nd\ne\n")).toBe("c\nd\ne");
+    expect(fileTail("a\nb\nc\nd\ne")).toBe("c\nd\ne");
+    const huge = `x${"y".repeat(5000)}`;
+    const tail = fileTail(huge);
+    expect(tail.length).toBeLessThanOrEqual(401);
+    expect(tail.startsWith("…")).toBe(true);
+  });
+});

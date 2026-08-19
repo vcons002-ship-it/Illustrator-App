@@ -57,6 +57,8 @@ import {
   mergeWorkspaceReadme,
   workspacePathFor,
   wholeFileRewriteRefusal,
+  joinAppendedChunk,
+  fileTail,
   openBlockOf,
   launchesAnApp,
   describeBuddyToolActivity,
@@ -6062,14 +6064,35 @@ export function App() {
       await dispatchBuddyTurn([...preHistory, ...pre], refusal);
       return;
     }
-    let payload: { path: string; ok: boolean; error?: string };
+    let payload: { path: string; ok: boolean; error?: string; totalLines?: number; tail?: string; trimmedOverlap?: number };
     try {
-      const saved = await writeWorkspaceFile(path, call.content, await workspaceForWrite(), call.append);
+      /**
+       * STITCH THE JOIN, and then say where the file ends.
+       *
+       * Appending was a byte concatenation and nothing else: no check that the incoming chunk starts
+       * where the last one stopped, and no report of where that is. The model continued from its own
+       * memory of what it had emitted — unreliable after a reply ran out mid-file, and possibly not
+       * in its context at all after trimming — so a re-sent passage duplicated silently and a skipped
+       * one left a hole, both giving a file that often still parses.
+       */
+      const join = call.append && held?.exists ? joinAppendedChunk(held.text, call.content) : undefined;
+      const content = join ? join.chunk : call.content;
+      const saved = await writeWorkspaceFile(path, content, await workspaceForWrite(), call.append);
       // The MODEL is told the workspace-relative path it can address again (read_file/edit_file
       // resolve against the chat's folder); the READER's card below gets the absolute one, which is
       // what "Open on PC" needs. Handing the model the absolute path was how it lost track of files
       // it had just written.
-      payload = { path, ok: true };
+      // Read BACK what is now on disk, so the anchor handed to the model is the file itself rather
+      // than our idea of it — an append that partially failed must not be reported as whole.
+      const after = call.append ? await readWorkspaceFile(path, dirNow).catch(() => undefined) : undefined;
+      payload = {
+        path,
+        ok: true,
+        ...(after?.exists
+          ? { totalLines: after.text.split("\n").length, tail: fileTail(after.text) }
+          : {}),
+        ...(join?.trimmed ? { trimmedOverlap: join.trimmed } : {}),
+      };
       // Ledger it (keyed by the SORTED workspace-relative path — the one actually on disk, so
       // read_file/edit_file with it resolve to the same file) so the model stays aware of the file
       // across history trimming.

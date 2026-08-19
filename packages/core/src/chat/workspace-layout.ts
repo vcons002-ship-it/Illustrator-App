@@ -137,6 +137,63 @@ export function chatFolderName(label: string | undefined, sessionId: string): st
 }
 
 /**
+ * STITCHING A CHUNKED FILE, WHICH NOTHING WAS DOING.
+ *
+ * A big file is written in pieces: the first with write_file, the rest with `append:true`. That is
+ * the protocol the prompt asks for, and the whole of what the app did with it was concatenate bytes.
+ * The model was told only "APPENDED this chunk" — not how much is on disk, not what the file now
+ * ends with, not whether the join is sound. So it continued from its own memory of what it had
+ * emitted, which is precisely the thing that is unreliable after a reply ran out mid-file, and which
+ * may not even be in its context any more once history has been trimmed.
+ *
+ * A re-sent line at a join duplicates silently. A skipped one leaves a hole. Both produce a file that
+ * often still parses, which is the worst outcome available.
+ *
+ * So the join is checked: the longest suffix of what is on disk that the incoming chunk repeats is
+ * removed before writing.
+ *
+ * THREE CONDITIONS, and each one is doing work. Two line breaks, so this is a repeated PASSAGE. A
+ * character floor, because `}\n}\n` is four characters spanning two breaks and is perfectly ordinary
+ * at the end of nested code — deleting it would corrupt exactly the file this exists to protect. And
+ * at least one substantial line, because an overlap made only of punctuation and indentation is a
+ * coincidence however long it is, while one containing a real line of code is not.
+ *
+ * This is a heuristic and it is worth being honest that it is: it can only ever be wrong in the
+ * direction of dropping something, so it is built to need real evidence before it does.
+ */
+const MIN_OVERLAP_CHARS = 24;
+const SUBSTANTIAL_LINE = /[^\s]{8}/;
+
+export interface AppendJoin {
+  /** What should actually be written. */
+  chunk: string;
+  /** Characters of duplicate removed from the front of the incoming chunk (0 when the join was clean). */
+  trimmed: number;
+}
+
+export function joinAppendedChunk(existing: string, chunk: string): AppendJoin {
+  const max = Math.min(existing.length, chunk.length);
+  for (let n = max; n >= MIN_OVERLAP_CHARS; n--) {
+    const tail = existing.slice(existing.length - n);
+    if (!chunk.startsWith(tail)) continue;
+    if ((tail.match(/\n/g) ?? []).length < 2) continue;
+    if (!tail.split("\n").some((l) => SUBSTANTIAL_LINE.test(l))) continue;
+    return { chunk: chunk.slice(n), trimmed: n };
+  }
+  return { chunk, trimmed: 0 };
+}
+
+/** The last `lines` lines of a file — the anchor a continuation needs, and the one thing the model
+ * was never told. Bounded so a single enormous line can't flood the reply it rides in. */
+export function fileTail(text: string, lines = 3, maxChars = 400): string {
+  // A file almost always ends with a newline, which splits to a trailing empty string — counting that
+  // as one of the anchor lines would spend a third of the anchor on nothing.
+  const body = text.endsWith("\n") ? text.slice(0, -1) : text;
+  const tail = body.split("\n").slice(-lines).join("\n");
+  return tail.length > maxChars ? `…${tail.slice(tail.length - maxChars)}` : tail;
+}
+
+/**
  * WHOLE-FILE REWRITES OF EXISTING CODE, AND WHY THE APP REFUSES THEM.
  *
  * The prompt has told the model for a long time not to rewrite a big file from memory: the file

@@ -629,14 +629,17 @@ describe("the per-chat workspace layout", () => {
 
   it("sorts a written file into its kind folder", () => {
     expect(APP_RAW).toContain("const path = workspacePathFor(call.path);");
-    expect(APP_RAW).toContain("await writeWorkspaceFile(path, call.content, await workspaceForWrite(), call.append)");
+    // `content` rather than `call.content`: an append now has a duplicated join trimmed off it first.
+    expect(APP_RAW).toContain("await writeWorkspaceFile(path, content, await workspaceForWrite(), call.append)");
   });
 
   it("ledgers and reports the SAME relative path it wrote, not the absolute one", () => {
     // The ledger is the model's durable pointer to its own work; an absolute path there is a
     // pointer it cannot follow, because read_file/edit_file resolve against the chat's folder.
     expect(APP_RAW).toMatch(/recordCreatedFile\(path, call\.content/);
-    expect(APP_RAW).toContain("payload = { path, ok: true };");
+    // The payload gained the append anchor (line count + tail), so it is an object literal now; the
+    // claim being pinned is still that the RELATIVE path is what goes back to the model.
+    expect(APP_RAW).toContain("payload = {\n        path,\n        ok: true,");
   });
 
   it("resolves a workspace-relative read through the same door that wrote it", () => {
@@ -906,12 +909,33 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).toContain("wholeFileRewriteRefusal({");
     // Checked BEFORE the write — a refusal must leave the file on disk exactly as it was.
     const at = APP_RAW.indexOf("const runWriteFile");
-    const body = APP_RAW.slice(at, APP_RAW.indexOf("let payload: { path: string; ok: boolean; error?: string };", at));
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("let payload: {", at));
     expect(body).toContain("const held = await readWorkspaceFile(path, dirNow)");
     expect(body.indexOf("wholeFileRewriteRefusal")).toBeGreaterThan(-1);
     expect(body, "the guard must sit ahead of writeWorkspaceFile").not.toContain("await writeWorkspaceFile(");
     // The model is handed the reason, not just a wall.
     expect(APP_RAW).toContain("turns: [...pre, { role: \"user\", content: refusal }],");
+  });
+
+  /**
+   * "IS IT GOOD AT KNOWING WHERE THE PREVIOUS CHUNK STOPPED?" It had nothing to go on.
+   *
+   * Appending was a byte concatenation and the feedback said only "APPENDED this chunk" — no line
+   * count, no tail, no check on the join. So a model writing a file in pieces continued from its own
+   * memory of what it had emitted, which is what is unreliable after a reply ran out mid-file and may
+   * not be in context at all once history has been trimmed.
+   */
+  it("stitches an appended chunk and says where the file now ends", () => {
+    expect(APP_RAW).toContain("const join = call.append && held?.exists ? joinAppendedChunk(held.text, call.content) : undefined;");
+    expect(APP_RAW).toContain("const content = join ? join.chunk : call.content;");
+    // The anchor is read BACK off disk, so an append that partly failed is not reported as whole.
+    expect(APP_RAW).toContain("const after = call.append ? await readWorkspaceFile(path, dirNow)");
+    expect(APP_RAW).toContain("tail: fileTail(after.text)");
+    const TOOLS = readFileSync(join(__dirname, "../../../packages/core/src/chat/buddy-tools.ts"), "utf8");
+    expect(TOOLS).toContain("It currently ENDS with:");
+    expect(TOOLS).toContain("Continue from exactly there");
+    // A silent trim would be a worse bug than the one it fixes.
+    expect(TOOLS).toContain("were ALREADY on disk and were dropped");
   });
 
   it("does not grow a folder for a chat that only ever talks", () => {
