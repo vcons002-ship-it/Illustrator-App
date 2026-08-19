@@ -730,10 +730,18 @@ const slashCodeStyle = {
 /** Collapsible context-usage readout — a one-line summary that expands to the
  * donut + legend. Shared by both chat panels. */
 export const UsageDisclosure = memo(function UsageDisclosure({ usage }: { usage: ContextUsage }) {
+  /**
+   * FULL OF WHAT IT CAN USE, not of the whole window.
+   *
+   * A large share of the window is reserved for the REPLY — 40% on a local model — so the request can
+   * never reach the window at all. On a 50k-token window the ceiling is 27k, and a chat that was
+   * completely full, and being trimmed every turn to stay that way, displayed "54% of window". The
+   * reader saw a bar half empty and asked, reasonably, why the app was compacting. It was compacting
+   * because 54% was full.
+   */
+  const ceiling = usage.inputTokens ?? usage.maxTokens;
   const pct =
-    usage.maxTokens !== undefined
-      ? ` · ${Math.min(100, Math.round((usage.approxTokens / usage.maxTokens) * 100))}% of window`
-      : "";
+    ceiling !== undefined ? ` · ${Math.min(100, Math.round((usage.approxTokens / ceiling) * 100))}% full` : "";
   const used = usage.approxTokens >= 1000 ? `${(usage.approxTokens / 1000).toFixed(1)}k` : usage.approxTokens;
   return (
     <details style={usageDetailsStyle}>

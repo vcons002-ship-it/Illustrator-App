@@ -103,3 +103,48 @@ describe("compaction fires when conversation is actually being lost", () => {
     expect(measureContextUsage(parts, { budgetChars: 100, droppedChars: 0 }).droppedChars).toBeUndefined();
   });
 });
+
+describe("how full is 'full'", () => {
+  /**
+   * "WHY WOULD IT COMPACT HERE AT 54% CONTEXT?" Because 54% was full.
+   *
+   * The reply's reservation is 40% of a local window, so the request can never reach the window at
+   * all: on a 50k-token window the input ceiling is 27k, which displays as 54%. That number is the
+   * ceiling, not a halfway point — the chat was completely full and being trimmed every turn to stay
+   * there. The same denominator made the 0.8 fraction test unreachable, so on a local model it had
+   * never once fired.
+   */
+  it("measures fullness against what the request can occupy, not the window", async () => {
+    const { shouldAutoCompact } = await import("./context-usage.js");
+    const atCeiling = {
+      segments: [],
+      totalChars: 108_000,
+      approxTokens: 27_000, // exactly the input ceiling …
+      maxTokens: 50_000, // … which is 54% of the window
+      inputTokens: 27_000,
+      budgetChars: 75_600,
+    };
+    expect(shouldAutoCompact(atCeiling, 12)).toBe(true);
+    // Against the WINDOW this is 54% — under 0.8, so the old test said "plenty of room" at the
+    // exact moment there was none.
+    const { inputTokens: _ceiling, ...oldView } = atCeiling;
+    expect(shouldAutoCompact(oldView, 12)).toBe(false);
+  });
+
+  it("does not fire on a chat that is genuinely half full", async () => {
+    const { shouldAutoCompact } = await import("./context-usage.js");
+    expect(
+      shouldAutoCompact(
+        { segments: [], totalChars: 54_000, approxTokens: 13_500, maxTokens: 50_000, inputTokens: 27_000, budgetChars: 75_600 },
+        12,
+      ),
+    ).toBe(false);
+  });
+
+  it("carries the ceiling through the measurement", async () => {
+    const { measureContextUsage } = await import("./context-usage.js");
+    const parts = [{ key: "history", label: "Chat history", text: "abc" }];
+    expect(measureContextUsage(parts, { budgetChars: 100, inputTokens: 27_000 }).inputTokens).toBe(27_000);
+    expect(measureContextUsage(parts, { budgetChars: 100 }).inputTokens).toBeUndefined();
+  });
+});
