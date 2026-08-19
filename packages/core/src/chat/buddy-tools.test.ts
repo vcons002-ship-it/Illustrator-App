@@ -941,6 +941,41 @@ describe("buildBuddySystemPrompt", () => {
     }
   });
 
+  /**
+   * "STUCK IN A LOOP JUST TRYING TO EDIT A SINGLE LINE."
+   *
+   * Reported as: it identifies the fix, then can't seem to work edit_file, then the thinking ends and
+   * it starts over and identifies the same fix again. The model was never the problem. A raw newline
+   * or tab inside a JSON string is invalid JSON, and edit_file is exactly where source code goes
+   * inside JSON strings — the tool tells the model to copy surrounding lines VERBATIM. Emitted
+   * without re-escaping, the whole call failed to parse: no tool call, and no prose either (a reply
+   * opening with `{` is muted deliberately), so the round produced nothing and the turn's empty-reply
+   * recovery sent it round again.
+   */
+  it("parses an edit_file call whose search text carries real newlines and tabs", () => {
+    const raw = '{"tool":"edit_file","path":"tide-clock.py","edits":[{"search":"def tick():\n\tready = 1","replace":"def tick():\n\tready = 2"}]}';
+    const call = parseBuddyToolCall(raw);
+    expect(call, "a verbatim two-line search must not lose the whole call").toBeTruthy();
+    expect(call).toMatchObject({ tool: "edit_file", path: "tide-clock.py" });
+    // The characters survive as the real thing, so the search still matches the file on disk.
+    const edits = (call as { edits: { search: string; replace: string }[] }).edits;
+    expect(edits[0]!.search).toBe("def tick():\n\tready = 1");
+    expect(edits[0]!.replace).toBe("def tick():\n\tready = 2");
+  });
+
+  it("repairs raw control characters alongside a trailing comma", () => {
+    const both = '{"tool":"write_file","path":"a.md","content":"line one\nline two",}';
+    expect(parseBuddyToolCall(both)).toMatchObject({ tool: "write_file", path: "a.md", content: "line one\nline two" });
+  });
+
+  it("leaves a call that already parses exactly as it was", () => {
+    // The repairs run only after a clean parse fails, so an escaped \\n stays one newline and never
+    // becomes a literal backslash-n.
+    const clean = '{"tool":"edit_file","path":"a.js","edits":[{"search":"a\\nb","replace":"c\\nd"}]}';
+    const edits = (parseBuddyToolCall(clean) as { edits: { search: string }[] }).edits;
+    expect(edits[0]!.search).toBe("a\nb");
+  });
+
   it("carries the show-me-vs-generate image-tool rule in both modes", () => {
     for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });

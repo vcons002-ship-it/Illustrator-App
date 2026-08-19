@@ -25,7 +25,7 @@ import {
 } from "./ui-automation.js";
 import { taskDossier, type TaskPlan } from "./tasks.js";
 import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
-import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
+import { escapeRawControlChars, extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
 
 // The shared protocol primitives were first published from THIS file; re-export them from their new
 // home (tool-protocol.ts) so existing imports keep working unchanged.
@@ -3643,16 +3643,26 @@ export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
  * still isn't a JSON object.
  */
 function parseJsonLoose(chunk: string): Record<string, unknown> | undefined {
-  try {
-    return JSON.parse(chunk) as Record<string, unknown>;
-  } catch {
+  // Tried in order, each repair layered on the last. A repair that isn't needed is a no-op, and none
+  // of them can change a chunk that already parses — the first branch has already returned by then.
+  const attempts: ((c: string) => string)[] = [
+    (c) => c,
+    stripTrailingCommas,
+    // A raw newline or tab inside a string — what an edit_file call carrying two verbatim lines of
+    // indented source looks like. This one is why the assistant appeared unable to use its own edit
+    // tool: the call never became a call. See escapeRawControlChars.
+    escapeRawControlChars,
+    (c) => escapeRawControlChars(stripTrailingCommas(c)),
+  ];
+  for (const repair of attempts) {
     try {
-      const repaired = JSON.parse(stripTrailingCommas(chunk));
-      return repaired && typeof repaired === "object" ? (repaired as Record<string, unknown>) : undefined;
+      const parsed = JSON.parse(repair(chunk)) as unknown;
+      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
     } catch {
-      return undefined;
+      // Next repair.
     }
   }
+  return undefined;
 }
 
 /** Best-effort fiction-vs-technical guess for open_content when `mode` is omitted, from the
