@@ -966,6 +966,29 @@ describe("the per-chat workspace layout", () => {
     expect(SC).not.toContain("eval(");
   });
 
+  /**
+   * READ IT BEFORE YOU EDIT IT — the second harness behaviour, and the one aimed squarely at the
+   * loop the reader watched: identify the fix, fail to land the anchor, start over, identify the same
+   * fix. edit_file matches verbatim, so an anchor RECALLED rather than COPIED misses on an indent or
+   * a renamed token, and the model then guesses the same way again.
+   */
+  it("refuses an edit to a file it has not been given the text of", () => {
+    expect(APP_RAW).toContain("const seenFilesRef = useRef(new Set<string>());");
+    expect(APP_RAW).toContain("} else if (!seenFilesRef.current.has(fileKey(call.path))) {");
+    expect(APP_RAW).toContain("so any \\`search\\` here is from memory");
+  });
+
+  it("counts every way the model genuinely has the text, and no other", () => {
+    // A read_file that succeeded — observable only in the worker bridge, which now reports it.
+    const HOOK = readFileSync(join(__dirname, "useEngineWorker.ts"), "utf8");
+    expect(HOOK).toContain("onHostFileReadRef.current?.(path);");
+    // A write (it supplied the content) and its own applied edit (it was told exactly what changed).
+    expect(APP_RAW).toContain("markFileSeen(path);");
+    expect(APP_RAW).toContain("if (r.applied > 0) markFileSeen(call.path);");
+    // Knowledge of a file belongs to the conversation that acquired it.
+    expect(APP_RAW).toContain("seenFilesRef.current = new Set();");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");

@@ -968,7 +968,7 @@ export function App() {
     setActiveUnit,
     polishText,
     polishCancel,
-  } = useEngineWorker(settings, libraryStore, onBundledLlmReady);
+  } = useEngineWorker(settings, libraryStore, onBundledLlmReady, (p) => markFileSeenRef.current(p));
   // The VRAM the status bar shows: prefer the whole-GPU nvidia-smi reading (includes the LLM) when
   // available, else the worker's engine /system_stats reading (image-model context only).
   const effectiveVram = gpuVram ?? vram;
@@ -1890,6 +1890,30 @@ export function App() {
   // can keep a terse non-trimmable reminder in the prompt — the model stays aware of what it made and
   // re-opens a file with read_file before editing instead of forgetting it. Persisted per session.
   const createdFilesRef = useRef<CreatedFileRef[]>([]);
+  /**
+   * FILES WHOSE CURRENT CONTENTS THE MODEL HAS ACTUALLY BEEN GIVEN THIS SESSION.
+   *
+   * edit_file matches a `search` verbatim, so an anchor written from MEMORY misses — off by an
+   * indent, off by a renamed token — and the model, given nothing but "no exact match", guesses again
+   * the same way. That is the loop the reader watched: identify the fix, fail to land it, start over.
+   *
+   * Claude Code refuses an edit to a file it has not read, and this is why. Reading first is not
+   * bureaucracy; it is the only way the anchor can be copied rather than recalled.
+   *
+   * Populated where the model is genuinely handed the text: a read_file that succeeded, a write_file
+   * (it supplied the content), and its own successful edits. Emptied when the chat changes, because
+   * knowledge of a file belongs to the conversation that acquired it.
+   */
+  const seenFilesRef = useRef(new Set<string>());
+  /** Same path, same key, wherever it came from — the model addresses files workspace-relative. */
+  const fileKey = (p: string): string => workspacePathFor(p.trim()).replace(/\\/g, "/").toLowerCase();
+  const markFileSeen = useCallback((p: string): void => {
+    if (p.trim()) seenFilesRef.current.add(fileKey(p));
+  }, []);
+  // Held in a ref: the worker hook is constructed far above this, and naming the callback directly
+  // there would be a TDZ.
+  const markFileSeenRef = useRef<(p: string) => void>(() => {});
+  markFileSeenRef.current = markFileSeen;
   const ledgerMemoKey = (id: string) => `buddy-file-ledger:${id}`;
   /** Record a workspace file the assistant just wrote (write_file). Appends accumulate the line count
    * for the same path; a fresh write replaces it. Bounded + persisted; the next buddy turn pushes it. */
@@ -2005,6 +2029,11 @@ export function App() {
   // looking for a folder the chat already has. `buddySessions` is a dependency because the folder's
   // name comes from the chat's, and sessions arrive from storage after the first render: probing
   // before they land would look for the wrong name.
+  // Knowledge of a file belongs to the conversation that acquired it: a chat that has never read
+  // flow3.html must not inherit another chat's permission to edit it blind.
+  useEffect(() => {
+    seenFilesRef.current = new Set();
+  }, [activeBuddyId]);
   useEffect(() => {
     // The stored folder first — it is the durable answer, it needs no disk probe, and on a PHONE
     // (which resolves nothing itself) it is the only answer there is.
@@ -6132,6 +6161,9 @@ export function App() {
       // it had just written.
       // Read BACK what is now on disk, so the anchor handed to the model is the file itself rather
       // than our idea of it — an append that partially failed must not be reported as whole.
+      // It supplied this content, so it knows what is in the file — that is what read-before-edit is
+      // really asking, and a write satisfies it as well as a read does.
+      markFileSeen(path);
       const after = call.append ? await readWorkspaceFile(path, dirNow).catch(() => undefined) : undefined;
       payload = {
         path,
@@ -6223,10 +6255,25 @@ export function App() {
       if (!file.exists) {
         payload = { path: call.path, ok: false, error: "file not found — write_file it first, or check the path" };
         appendBuddy({ role: "tool", text: `⚠ edit_file: ${call.path} doesn't exist yet.`, turns: [] });
+      } else if (!seenFilesRef.current.has(fileKey(call.path))) {
+        /**
+         * READ IT BEFORE YOU EDIT IT. An anchor recalled rather than copied misses — off by an
+         * indent, off by a renamed token — and the model then guesses again the same way, which is
+         * the loop the reader watched. One read costs a round; the loop costs the whole turn.
+         */
+        payload = {
+          path: call.path,
+          ok: false,
+          error: `you have not read ${call.path} in this conversation, so any \`search\` here is from memory`,
+        };
+        appendBuddy({ role: "tool", text: `📖 Reading ${call.path} first — an edit needs the real text.`, turns: [] });
       } else {
         const r = applyFileEdits(file.text, call.edits);
         const summary = summarizeFileEdits(call.path, r);
         editedText = r.content;
+        // Its picture of the file is current again: it has just been told exactly what changed, and
+        // everything else is as it read it.
+        if (r.applied > 0) markFileSeen(call.path);
         if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
         payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
         recordCreatedFile(call.path, r.content.split("\n").length, false);
