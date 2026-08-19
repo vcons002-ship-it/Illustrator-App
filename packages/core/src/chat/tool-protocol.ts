@@ -62,6 +62,60 @@ export function stripTrailingCommas(s: string): string {
   return out;
 }
 
+/**
+ * ESCAPE THE RAW CONTROL CHARACTERS A MODEL LEAVES INSIDE A JSON STRING.
+ *
+ * Reported as the assistant being "stuck in a loop just trying to edit a single line — it identifies
+ * the fix, then can't seem to figure out how to use the edit_file tool, then the thinking ends and it
+ * starts over."
+ *
+ * A literal newline or tab inside a JSON string is INVALID JSON, and `edit_file` is where source code
+ * gets put inside JSON strings: the tool's own instructions say to copy enough surrounding lines
+ * VERBATIM to make the match unique. Copy two indented lines out of a file and emit them without
+ * re-escaping — which is what a small local model does, because it is transcribing rather than
+ * encoding — and the whole call fails to parse. There is then no tool call and no prose (a reply
+ * opening with `{` is muted on purpose), so the round produces nothing, the turn's empty-reply
+ * recovery asks for the answer again, and the model re-derives the same correct fix forever.
+ *
+ * Nothing about that is visible: the failure is in a parser, and what the reader sees is a model that
+ * cannot work its own tools. Escaping is unambiguous here — a raw control character can never be
+ * legal at that position — so a repair costs nothing and cannot change a call that already parsed.
+ *
+ * String-aware, like stripTrailingCommas: the newlines BETWEEN JSON tokens are fine and stay.
+ */
+export function escapeRawControlChars(s: string): string {
+  const ESCAPES: Readonly<Record<string, string>> = { "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f" };
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (!inStr) {
+      out += c;
+      if (c === '"') inStr = true;
+      continue;
+    }
+    if (esc) {
+      out += c;
+      esc = false;
+      continue;
+    }
+    if (c === "\\") {
+      out += c;
+      esc = true;
+      continue;
+    }
+    if (c === '"') {
+      out += c;
+      inStr = false;
+      continue;
+    }
+    // Anything below U+0020 has to be escaped to be legal inside a JSON string.
+    out += ESCAPES[c] ?? (c < " " ? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}` : c);
+  }
+  return out;
+}
+
 /** Unwrap a reply that is ONE fenced block. Accepts ANY fence language tag — models wrap tool JSON
  * in ```json but also ```tool_code (Gemma), ```python, ```bash, etc. Only the OPENING tag is a bare
  * word; without this those calls leak into the chat as prose. */
