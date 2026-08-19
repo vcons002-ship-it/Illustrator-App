@@ -134,6 +134,16 @@ export interface ChatSessionInfo {
    * phone rebuilds its session list from a flag it never received and lists them as ordinary chats,
    * so the one place these are deliberately kept out of would show every one of them. */
   hidden?: boolean;
+  /**
+   * The chat's own workspace folder, absolute — mirrored so the PHONE can name it.
+   *
+   * The phone resolves no folder of its own (it has no filesystem, and its turns run on the desktop),
+   * so the two functions that fill in the folder both refuse to run there. That left its bar saying
+   * "Default workspace" no matter what — including while the desktop was running commands inside the
+   * chat's folder on the other end of the link. The reader was told their files were somewhere they
+   * were not, on the device they were actually reading it on.
+   */
+  chatDir?: string;
 }
 
 /**
@@ -186,7 +196,17 @@ export interface ChatSendAttachment {
   name: string;
   kind: "image" | "doc";
   image?: { bytes: ArrayBuffer; mimeType: string };
+  /** What the MODEL is given: bounded by ATTACH_DOC_MAX_CHARS so one upload can't fill the window. */
   text?: string;
+  /**
+   * What goes to DISK — the whole file, present only when it is longer than `text`.
+   *
+   * The two had been the same value, so a file large enough to be trimmed for the prompt would have
+   * been saved trimmed too, and the copy in the workspace — the one the reader and the assistant go
+   * back to — would have been quietly missing its tail. Dropped first if the relay frame won't fit;
+   * losing the end of a very long document beats losing the send.
+   */
+  full?: string;
 }
 
 /**

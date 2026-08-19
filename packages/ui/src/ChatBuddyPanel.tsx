@@ -1529,7 +1529,11 @@ function WorkingFolderBar({
   // chosen one — including after the chat had made its own folder and was writing, searching and
   // running commands inside it. Someone reading the bar was told their files were somewhere they
   // were not, and had no way to find where they had gone.
-  const label = workingDir || (chatFolder ? `This chat's folder (${chatFolder})` : "Default workspace (~/VisualReader/workspace)");
+  // The folder's NAME, with the full path on hover/long-press. A linked phone is shown the desktop's
+  // absolute path, which is both the honest answer and far too long for the width available — and the
+  // name is the part that answers "which folder is this?".
+  const folderName = chatFolder ? chatFolder.split(/[\\/]/).filter(Boolean).pop() : undefined;
+  const label = workingDir || (folderName ? `This chat's folder (${folderName})` : "Default workspace (~/VisualReader/workspace)");
   const tinyBtn = { ...smallButtonStyle, padding: "2px 8px", fontSize: 11 } as const;
   const browse = async () => {
     const p = await onPick?.();
@@ -1560,7 +1564,7 @@ function WorkingFolderBar({
         <>
           <span
             style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }}
-            title={label}
+            title={chatFolder && !workingDir ? chatFolder : label}
           >
             {label}
           </span>

@@ -686,7 +686,10 @@ describe("the per-chat workspace layout", () => {
     const PANEL = readFileSync(join(__dirname, "../../../packages/ui/src/ChatBuddyPanel.tsx"), "utf8");
     // The bar said "Default workspace" while the chat was writing, searching and running commands in
     // its own folder — telling the reader their files were somewhere they were not.
-    expect(PANEL).toContain("chatFolder ? `This chat's folder (${chatFolder})`");
+    // The NAME, not the whole absolute path: on a linked phone the bar is showing the desktop's path,
+    // which is both correct and far wider than the screen. The full path stays on the title.
+    expect(PANEL).toContain("folderName ? `This chat's folder (${folderName})`");
+    expect(PANEL).toContain("title={chatFolder && !workingDir ? chatFolder : label}");
     expect(APP_RAW).toContain("...(chatFolder ? { chatFolder } : {}),");
     // The ref alone cannot drive a render, which is why there is state beside it.
     expect(APP_RAW).toContain("if (id === activeBuddyIdRef.current) setChatFolder(dir);");
@@ -706,12 +709,98 @@ describe("the per-chat workspace layout", () => {
 
   it("adopts read-only, so a chat that only talks still never grows a folder", () => {
     const at = APP_RAW.indexOf("const adoptChatWorkspace = useCallback");
-    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, displayLabel],", at));
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, displayLabel, rememberChatDir],", at));
     expect(body).toContain("await readWorkspaceFile(");
     expect(body, "the probe must never create a folder").not.toContain("writeWorkspaceFile");
-    // It checks the suffixed name a collision would have produced, and refuses someone else's folder.
-    expect(body).toContain("for (const folder of [base, suffixed])");
+    // It checks the suffixed name a collision would have produced, the name an OLDER build would have
+    // given the same chat, and refuses someone else's folder.
+    expect(body).toContain("for (const folder of [...new Set([base, suffixed, legacy])])");
     expect(body).toContain("if (owner && owner !== id) continue;");
+  });
+
+  /**
+   * "IT STILL JUST SAYS /WORKSPACE", ON THE PHONE — reported after the folder was already being
+   * resolved, created and used correctly on the desktop.
+   *
+   * Both functions that resolve a folder begin `if (!isDesktop || isRemoteClient) return`, which is
+   * right — the phone has no filesystem and its turns run on the desktop — and left the phone with
+   * nothing to name. So the bar said "Default workspace" on the one device the reader was holding,
+   * while commands ran in the chat's folder at the other end of the link. The desktop's answer now
+   * rides the chat mirror.
+   */
+  it("tells a linked phone which folder the desktop is using", () => {
+    const SYNC = readFileSync(join(__dirname, "remote-sync.ts"), "utf8");
+    expect(SYNC).toContain("chatDir?: string;");
+    expect(APP_RAW).toContain("...(s.chatDir ? { chatDir: s.chatDir } : {}),");
+    // And the phone keeps it when it adopts the mirrored session list — dropping it here would put
+    // the bar straight back to "Default workspace".
+    expect(APP_RAW.slice(APP_RAW.indexOf("const applyChat = useCallback"))).toContain(
+      "...(s.chatDir ? { chatDir: s.chatDir } : {}),",
+    );
+  });
+
+  it("counts Chat N once, so the switcher and the folder cannot disagree", () => {
+    // The switcher counted over the FILTERED list and displayLabel over the raw one, so a chat shown
+    // as "Chat 13" named its folder `chat-21` — and then went looking for `chat-13`, found nothing,
+    // and reported the default workspace. Reported exactly that way.
+    expect(APP_RAW).toContain("const i = list.filter((x) => !x.hidden).findIndex((x) => x.id === id);");
+    expect(APP_RAW).toContain("label: displayLabel(s.id),");
+    // No other place may count for itself.
+    expect(APP_RAW.match(/`Chat \$\{i \+ 1\}`/g) ?? []).toHaveLength(1);
+  });
+
+  /**
+   * A NAME THAT MOVES CANNOT BE USED TO FIND A FOLDER TWICE.
+   *
+   * "Chat 13" is a position and the reader can rename a chat at will, so rebuilding the name on every
+   * page load meant the folder was found only as long as nothing changed. Resolve once, remember the
+   * answer; the derived name is then only ever used to CHOOSE a folder, never to find it again.
+   */
+  it("remembers the folder on the session instead of re-deriving its name", () => {
+    expect(APP_RAW).toContain("chatDir?: string;");
+    expect(APP_RAW).toContain("const rememberChatDir = useCallback");
+    // Written to all three places that have to agree: the synchronous map a turn reads, the bar, and
+    // the persisted session.
+    const at = APP_RAW.indexOf("const rememberChatDir = useCallback");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, libraryStore],", at));
+    expect(body).toContain("chatWorkspaceRef.current.set(id, dir);");
+    expect(body).toContain("if (id === activeBuddyIdRef.current) setChatFolder(dir);");
+    expect(body).toContain('putMemo?.("buddy-sessions"');
+    // The stored answer is preferred over any probe, and the probe stores what it finds.
+    expect(APP_RAW).toContain("const stored = list.find((s) => s.id === id)?.chatDir;");
+    expect(APP_RAW).toContain("if (stored) chatWorkspaceRef.current.set(activeBuddyId, stored);");
+  });
+
+  /**
+   * THE UPLOAD WAS GONE THE MOMENT THE TURN ENDED.
+   *
+   * Reported as two things that are one thing: "the uploaded file was immediately lost after the turn
+   * ended, it was never saved to a workspace", and then "it didn't know where to find the code to give
+   * me a fully fixed version." An attachment was folded into a single prompt and nowhere else — its
+   * chip in the transcript is display-only (`turns: []`, deliberately, so a 30k-char paste doesn't sit
+   * in history forever), which left the content existing only inside a request that had already been
+   * sent.
+   */
+  it("saves an attached file into the chat's workspace and tells the model where", () => {
+    expect(APP_RAW).toContain("const saveAttachmentToWorkspace = useCallback");
+    expect(APP_RAW).toContain("const saved = await saveAttachmentToWorkspace(att);");
+    // Sorted by kind and put in the LEDGER — the pointer that survives history being trimmed.
+    const at = APP_RAW.indexOf("const saveAttachmentToWorkspace = useCallback");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme],", at));
+    expect(body).toContain("const path = workspacePathFor(att.name);");
+    expect(body).toContain("recordCreatedFile(path, body.split");
+    // A BOUNDED copy must never be written over the reader's own file.
+    expect(body).toContain("att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined)");
+    // And the model is told the path rather than left to guess it.
+    expect(APP_RAW).toContain("SAVED IN THE WORKSPACE as ${saved}");
+  });
+
+  it("carries the whole file to the desktop, not just the model's bounded share", () => {
+    const SYNC = readFileSync(join(__dirname, "remote-sync.ts"), "utf8");
+    expect(SYNC).toContain("full?: string;");
+    expect(APP_RAW).toContain("...(text.length > bounded.length ? { full: text } : {})");
+    // Shed before the send itself is refused — a document saved short beats one never sent.
+    expect(APP_RAW).toContain("relayAtts = relayAtts.map(({ full: _full, ...a }) => a);");
   });
 
   it("does not grow a folder for a chat that only ever talks", () => {
