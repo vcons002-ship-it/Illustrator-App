@@ -5573,14 +5573,18 @@ export function App() {
         return saved; // undefined ⇒ the reader cancelled the name prompt; the card says nothing
       },
       openInApp: (ref) => {
-        if (ref.path) void onOpenLocalFile(ref.path);
+        // Same rule as download, for the same reason: on a PHONE the path points at another machine,
+        // so a card holding the file's own content must use it rather than reaching for a disk that
+        // is not there. On the desktop the path stays first — it opens the real file, with its real
+        // handling, rather than a copy reconstructed from the card.
+        if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void onOpenLocalFile(ref.path);
         else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r)));
       },
       openInLibrary: (ref) => void withFetchedBytes(ref).then((r) => addRefToLibrary(r)),
       ...(isDesktop ? { openOnPC: (ref: FileRef) => void revealRefOnPC(ref) } : {}),
       // "Open as…" — re-route the SAME file through a chosen reader (overrides the extension default).
       openAs: (ref, as) => {
-        if (ref.path) void readLocalFile(ref.path).then((f) => onUpload(f, as));
+        if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void readLocalFile(ref.path).then((f) => onUpload(f, as));
         else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r), as));
       },
       // Read a text document INLINE in the chat when the CARD doesn't carry the text: a `.md` the
@@ -6120,7 +6124,22 @@ export function App() {
         appendBuddy({
           role: "tool",
           text: r.failures.length === 0 ? `✏️ Edited ${call.path} (${r.applied} edit${r.applied === 1 ? "" : "s"})` : `✏️ ${call.path}: ${r.applied} applied, ${r.failures.length} failed`,
-          attachments: [{ name: call.path.split(/[\\/]/).pop() || call.path, mime: "", kind: createdFileKind(call.path), path: file.path }],
+          attachments: [
+            {
+              name: call.path.split(/[\\/]/).pop() || call.path,
+              mime: "",
+              kind: createdFileKind(call.path),
+              path: file.path,
+              // THE EDITED FILE ITSELF, exactly as write_file's card carries what it wrote.
+              //
+              // This card had only a path, so on a linked PHONE — where that path is on another
+              // machine — 💾 Download had to go to a disk it cannot reach and failed. Reported as
+              // "still can't download" on the card for the very edit just made. After an edit
+              // `r.content` IS the whole file, which is the same thing a non-append write holds, so
+              // there was never a reason for the two cards to differ.
+              content: r.content,
+            },
+          ],
           turns: [],
         });
         // Mirror a live change into the open code window (like runWriteFile).
