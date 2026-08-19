@@ -212,6 +212,20 @@ describe("isTextDocument / inlineReadableText (Read here)", () => {
     expect(isTextDocument({ name: "README.mdx", mime: "" })).toBe(false);
   });
 
+  /**
+   * A `.html` card offered no way to look at the file, and the reader — who remembered seeing a
+   * preview earlier — reasonably concluded it had grown too large for the chat. There was never a
+   * size limit; the extension simply was not on the list. On a linked phone "read it here" is often
+   * the only way to see a file at all.
+   */
+  it("claims source files, which are text too", () => {
+    for (const name of ["flow3.html", "app.js", "styles.css", "tide-clock.py", "config.toml", "notes.log"]) {
+      expect(isTextDocument({ name, mime: "" }), name).toBe(true);
+    }
+    // Tabular files keep their richer table preview rather than being shown as prose.
+    expect(isTextDocument({ name: "sheet.csv", mime: "text/csv" })).toBe(false);
+  });
+
   it("uses the card's own content when it carries it", () => {
     expect(inlineReadableText({ name: "a.md", mime: "text/markdown", content: "# Hi" })).toBe("# Hi");
   });
