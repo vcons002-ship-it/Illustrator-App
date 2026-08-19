@@ -85,11 +85,30 @@ export const DELEGATE_CODING_COMMAND: SlashCommandInfo = {
   description: "Hand the job straight to the external coding agent (Aider/Codex) — no model in between",
 };
 
+/**
+ * PUT A FILE CARD BACK IN THE CHAT.
+ *
+ * A card is how a file becomes usable from a phone — 💾 Download, 📖 Open in app, 📖 Read here — and
+ * cards only ever appeared as a side effect of the assistant WRITING something. So a file that was
+ * written earlier, or edited before the card carried its content, or simply scrolled away, could not
+ * be got back at all: the reader could see it in the ledger and had no way to ask for it. Reported as
+ * not being able to bring the card back into the chat to download it.
+ *
+ * Main-thread, like `/find` and `/code`. The file is already on disk and the reader has already named
+ * it, so there is nothing for the model to decide and no reason for its cooperation to be a
+ * dependency — this session has spent a lot of time on turns that could not make a tool call.
+ */
+export const SHOW_FILE_COMMAND: SlashCommandInfo = {
+  name: "show",
+  args: "<file in this chat's folder>",
+  description: "Put a file card in the chat — download it, open it, or read it here",
+};
+
 /** Buddy commands shown for the given platform (desktop adds local-file search + delegation). */
 export function buddySlashCommands(desktop: boolean, canDelegateCoding = false): SlashCommandInfo[] {
   return [
     ...BUDDY_SLASH_COMMANDS,
-    ...(desktop ? [FIND_FILES_COMMAND] : []),
+    ...(desktop ? [FIND_FILES_COMMAND, SHOW_FILE_COMMAND] : []),
     // Only when it can actually run: a command that answers "the agent isn't set up" is worse than
     // one the reader never sees offered.
     ...(desktop && canDelegateCoding ? [DELEGATE_CODING_COMMAND] : []),

@@ -8430,6 +8430,48 @@ export function App() {
         await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() });
         return;
       }
+      /**
+       * `/show <file>` — PUT A FILE CARD BACK IN THE CHAT.
+       *
+       * A card is how a file becomes usable from a phone (💾 Download, 📖 Open in app, 📖 Read here),
+       * and cards only ever appeared as a side effect of the assistant WRITING something. A file
+       * written earlier, or one whose card scrolled away, could not be got back at all — the reader
+       * could see it named in the ledger and had no way to ask for it.
+       *
+       * Main-thread, like `/find` and `/code`: the file is on disk and the reader has already named
+       * it, so nothing is left for the model to decide.
+       */
+      const show = /^\/show\s+(.+)$/i.exec(text.trim());
+      if (show) {
+        const rel = show[1]!.trim().replace(/^["']|["']$/g, "");
+        appendBuddy({ role: "user", text });
+        try {
+          const found = await readWorkspaceFile(rel, workspaceDirNow());
+          if (!found.exists) {
+            appendBuddy({ role: "tool", text: `⚠ No file called “${rel}” in this chat's folder.`, turns: [] });
+            return;
+          }
+          appendBuddy({
+            role: "tool",
+            text: `📎 ${rel}`,
+            attachments: [
+              {
+                name: rel.split(/[\\/]/).pop() || rel,
+                mime: "",
+                kind: createdFileKind(rel),
+                path: found.path,
+                // Carried, not just pointed at — the whole reason for the command is a device whose
+                // disk this is not.
+                content: found.text,
+              },
+            ],
+            turns: [],
+          });
+        } catch (err) {
+          appendBuddy({ role: "tool", text: `⚠ Couldn't open “${rel}”: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+        }
+        return;
+      }
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
       // routes through the LLM worker, so no web page / book text can trigger it.
       const find = /^\/find\s+(.+)$/i.exec(text.trim());

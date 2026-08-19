@@ -874,6 +874,29 @@ describe("the per-chat workspace layout", () => {
     );
   });
 
+  /**
+   * "CAN YOU ADD A WAY TO ASK IT TO OPEN THE FILECARD IN CHAT?"
+   *
+   * A card is how a file becomes usable from a phone — Download, Open in app, Read here — and cards
+   * only ever appeared as a side effect of the assistant WRITING something. A file written earlier,
+   * or one whose card had scrolled away, could not be got back at all: the reader could see it named
+   * in the file ledger and had no way to ask for it.
+   */
+  it("can put a file card back in the chat on demand", () => {
+    const SLASH = readFileSync(join(__dirname, "../../../packages/core/src/chat/slash-commands.ts"), "utf8");
+    expect(SLASH).toContain("export const SHOW_FILE_COMMAND");
+    expect(SLASH).toContain("[FIND_FILES_COMMAND, SHOW_FILE_COMMAND]");
+    // MAIN-THREAD, like /find and /code — the file is on disk and the reader has named it, so the
+    // model's cooperation is not a dependency.
+    expect(APP_RAW).toMatch(/const show = \/\^\\\/show/);
+    expect(APP_RAW).toContain("const found = await readWorkspaceFile(rel, workspaceDirNow());");
+    // The card CARRIES the file, because the device asking is the one whose disk this is not.
+    const at = APP_RAW.indexOf("const show = /^\\/show");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("// `/find` is a MAIN-THREAD command", at));
+    expect(body).toContain("content: found.text,");
+    expect(body).toContain("No file called");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
@@ -973,9 +996,25 @@ describe("file cards on a linked phone", () => {
 describe("the file card's More menu escapes its bubble", () => {
   const CSS = readFileSync(join(__dirname, "../../../packages/ui/src/styles/components.css"), "utf8");
 
-  it("raises the bubble, because the menu's own z-index cannot win", () => {
-    // Every bubble sets backdrop-filter, which creates a stacking context — so the menu can only
-    // compete inside its own bubble and the next one paints over it however high it goes.
+  /**
+   * RAISING THE BUBBLE WAS NOT ENOUGH, and it was reported again after it shipped.
+   *
+   * Every bubble sets backdrop-filter, which creates a stacking context, so an absolutely-positioned
+   * panel can only ever compete inside its own bubble. `:has(details[open])` lifted the whole bubble
+   * and still lost — which is the point at which the answer stops being a z-index. The menu is now
+   * PORTALLED to document.body, where there is no ancestor context left to be trapped by. The CSS
+   * rule stays for the other disclosures that live inside a bubble.
+   */
+  it("portals the menu out of the bubble entirely", () => {
+    const PANEL = readFileSync(join(__dirname, "../../../packages/ui/src/ChatPanel.tsx"), "utf8");
+    expect(PANEL).toContain("<AnchoredMenu label=\"⋯ More\"");
+    // The old absolute panel must be gone, or it is still the thing being rendered.
+    expect(PANEL, "the file menu must not position itself inside the bubble").not.toContain("const fileMenuStyle");
+    const MENU = readFileSync(join(__dirname, "../../../packages/ui/src/AnchoredMenu.tsx"), "utf8");
+    expect(MENU).toContain("createPortal");
+  });
+
+  it("still raises the bubble for the disclosures that remain inside one", () => {
     expect(CSS).toContain(".vr-msg:has(details[open])");
     expect(CSS).toMatch(/\.vr-msg:has\(details\[open\]\)\s*\{[^}]*z-index:\s*30/);
   });

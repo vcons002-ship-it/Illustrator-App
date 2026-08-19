@@ -13,6 +13,7 @@ import {
   type SlashCommandInfo,
   type ToolCall,
 } from "@visual-reader/core";
+import { AnchoredMenu } from "./AnchoredMenu.js";
 import { ContextUsageDonut } from "./ContextUsageDonut.js";
 import { DataChart } from "./DataChart.js";
 import { DataTablePreview } from "./DataTablePreview.js";
@@ -1053,12 +1054,9 @@ const fileChipStyle = {
   cursor: "pointer",
 } as const;
 
-const fileMenuStyle = {
-  position: "absolute",
-  // Above anything inside the same bubble. Escaping the BUBBLE is a different problem entirely and
-  // no z-index here can solve it — see `.vr-msg:has(details[open])` in components.css.
-  zIndex: 5,
-  marginTop: 4,
+/** The panel's own look. Position and size come from AnchoredMenu's measurement, so nothing here
+ * may set them — see the note at the menu itself for why it is portalled at all. */
+const fileMenuPanelStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
@@ -1066,7 +1064,6 @@ const fileMenuStyle = {
   border: `1px solid ${t.border.button}`,
   borderRadius: 6,
   padding: 4,
-  minWidth: 150,
   boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
 } as const;
 
@@ -1171,12 +1168,6 @@ export function FileActionBar({
    * assistant's own documents come out, so it's the one that most needed to. */
   const [note, setNote] = useState<{ ok: boolean; text: string } | undefined>();
   const [readOpen, setReadOpen] = useState(false);
-  // The "⋯ More" menu is a native <details> — collapse it after a pick, or it stays open covering the
-  // chat until the reader clicks the summary again (U5).
-  const moreRef = useRef<HTMLDetailsElement>(null);
-  const closeMore = (): void => {
-    if (moreRef.current) moreRef.current.open = false;
-  };
   // Reading a text document INLINE, without leaving the chat. The card's own text when it carries it;
   // otherwise fetched on the first click, because the most common way a `.md` reaches the chat is as a
   // bare path (the assistant wrote it, or a search found it) — which used to mean a Markdown file the
@@ -1258,42 +1249,56 @@ export function FileActionBar({
         </button>
       ) : null}
       {rest.length >= 1 || actions.openAs ? (
-        <details ref={moreRef} style={{ position: "relative" }}>
-          <summary style={{ ...fileChipStyle, listStyle: "none", cursor: "pointer" }}>⋯ More</summary>
-          <div style={fileMenuStyle}>
-            {rest.map((it) => (
-              <button className={cx.btn}
-                key={it.key}
-                style={fileMenuItemStyle}
-                title={it.title}
-                disabled={busy === it.key}
-                onClick={() => {
-                  closeMore();
-                  void fire(it);
-                }}
-              >
-                {it.label}
-              </button>
-            ))}
-            {actions.openAs ? (
-              <>
-                <div style={{ opacity: 0.5, fontSize: 10, padding: "4px 8px 2px" }}>Open as…</div>
-                {OPEN_AS_CHOICES.map((c) => (
-                  <button className={cx.btn}
-                    key={c.as}
-                    style={fileMenuItemStyle}
-                    onClick={() => {
-                      closeMore();
-                      actions.openAs!(file, c.as);
-                    }}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </>
-            ) : null}
-          </div>
-        </details>
+        /**
+         * PORTALLED, because no z-index inside a bubble can win.
+         *
+         * This was a `<details>` with an absolutely-positioned panel. Every chat bubble sets
+         * `backdrop-filter`, which CREATES A STACKING CONTEXT, so the panel could only ever compete
+         * inside its own bubble and the next bubble painted straight over it. Raising the whole
+         * bubble with `:has(details[open])` was the previous attempt and it was still being reported
+         * as opening behind the message underneath.
+         *
+         * AnchoredMenu renders to document.body, so there is no ancestor context left to be trapped
+         * by — the same reason the settings panel portals. It measures the button and keeps the panel
+         * on screen too, which the absolute panel never did on a phone in portrait.
+         */
+        <AnchoredMenu label="⋯ More" title="More actions for this file" buttonStyle={fileChipStyle} panelStyle={fileMenuPanelStyle} width={190}>
+          {(close) => (
+            <>
+              {rest.map((it) => (
+                <button className={cx.btn}
+                  key={it.key}
+                  style={fileMenuItemStyle}
+                  title={it.title}
+                  disabled={busy === it.key}
+                  onClick={() => {
+                    close();
+                    void fire(it);
+                  }}
+                >
+                  {it.label}
+                </button>
+              ))}
+              {actions.openAs ? (
+                <>
+                  <div style={{ opacity: 0.5, fontSize: 10, padding: "4px 8px 2px" }}>Open as…</div>
+                  {OPEN_AS_CHOICES.map((c) => (
+                    <button className={cx.btn}
+                      key={c.as}
+                      style={fileMenuItemStyle}
+                      onClick={() => {
+                        close();
+                        actions.openAs!(file, c.as);
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </>
+              ) : null}
+            </>
+          )}
+        </AnchoredMenu>
       ) : null}
     </div>
     {note ? (
