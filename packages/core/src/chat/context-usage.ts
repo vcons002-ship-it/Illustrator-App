@@ -33,6 +33,20 @@ export interface ContextUsage {
   approxTokens: number;
   /** The model's context window in tokens, when known (local models report it). */
   maxTokens?: number;
+  /**
+   * THE MOST THE REQUEST CAN ACTUALLY OCCUPY — which is NOT the window.
+   *
+   * A large share of the window is reserved for the REPLY (40% on a local model), so the input can
+   * never reach the window at all: on a 50k-token window the ceiling is 27k, and a completely full
+   * chat reads as "54% of window". A reader watching that number sees a chat half empty while the app
+   * is discarding turns to keep it there, which is exactly how it was reported — "why would it
+   * compact here at 54% context?" It compacted because 54% WAS full.
+   *
+   * The same mistake sat in {@link shouldAutoCompact}: 0.8 of the window is 40k tokens on that setup,
+   * and the numerator is capped at 27k, so the threshold could not be crossed on a local model no
+   * matter how full the conversation got.
+   */
+  inputTokens?: number;
   /** The book/history char budget the worker targeted for this provider. */
   budgetChars: number;
   /**
@@ -51,7 +65,7 @@ export interface ContextUsage {
 /** Build a usage breakdown from labelled parts; empties dropped, largest first. */
 export function measureContextUsage(
   parts: readonly { key: string; label: string; text: string }[],
-  opts: { budgetChars: number; maxTokens?: number; droppedChars?: number },
+  opts: { budgetChars: number; maxTokens?: number; droppedChars?: number; inputTokens?: number },
 ): ContextUsage {
   const segments = parts
     .map((p) => ({ key: p.key, label: p.label, chars: p.text.length }))
@@ -65,6 +79,7 @@ export function measureContextUsage(
     ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
     budgetChars: opts.budgetChars,
     ...(opts.droppedChars ? { droppedChars: opts.droppedChars } : {}),
+    ...(opts.inputTokens ? { inputTokens: opts.inputTokens } : {}),
   };
 }
 
@@ -85,7 +100,8 @@ export function shouldAutoCompact(
 ): boolean {
   const fraction = opts?.fraction ?? 0.8;
   const minMessages = opts?.minMessages ?? 8;
-  if (!usage?.maxTokens || usage.maxTokens <= 0) return false;
+  const ceiling = usage?.inputTokens ?? usage?.maxTokens;
+  if (!usage || !ceiling || ceiling <= 0) return false;
   if (messageCount < minMessages) return false;
   /**
    * ALREADY LOSING CONVERSATION IS THE STRONGEST POSSIBLE SIGNAL, and it used to be invisible here.
@@ -99,5 +115,7 @@ export function shouldAutoCompact(
    * If anything was dropped, summarising is not "soon" — it is overdue.
    */
   if (usage.droppedChars && usage.droppedChars > 0) return true;
-  return usage.approxTokens >= usage.maxTokens * fraction;
+  // Against the ceiling the request can REACH, not the whole window — see `inputTokens`. Measured
+  // against the window this comparison was unreachable on a local model and did nothing.
+  return usage.approxTokens >= ceiling * fraction;
 }

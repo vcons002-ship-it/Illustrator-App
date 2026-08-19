@@ -10,6 +10,7 @@ import {
   chatContextSections,
   chatSystemCachePrefix,
   lookupBible,
+  approxTokens,
   chatTurnsChars,
   measureContextUsage,
   searchBookPassages,
@@ -3516,6 +3517,9 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         {
           budgetChars: budgets.book,
           ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}),
+          // What the request may actually occupy. NOT the window: the reply's reservation is the rest
+          // of it, so a completely full chat reads as roughly half a window without this.
+          inputTokens: approxTokens(budgets.input),
           ...(() => {
             const dropped = chatTurnsChars(fullHistory) - chatTurnsChars(history);
             return dropped > 0 ? { droppedChars: dropped } : {};
@@ -6148,6 +6152,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           // How much conversation did NOT fit. The segments above describe what was sent, so without
           // this the readout — and auto-compaction, which reads the same figure — are both measured
           // after the loss and can never see it.
+          inputTokens: approxTokens(budgets.input),
           ...(() => {
             const dropped = chatTurnsChars(fullBuddyHistory) - chatTurnsChars(history);
             return dropped > 0 ? { droppedChars: dropped } : {};
