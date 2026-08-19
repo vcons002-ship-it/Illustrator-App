@@ -57,6 +57,7 @@ import {
   mergeWorkspaceReadme,
   workspacePathFor,
   openBlockOf,
+  launchesAnApp,
   describeBuddyToolActivity,
   describeToolProposal,
   isLiveControlTool,
@@ -821,6 +822,8 @@ export function App() {
       text?: string;
       /** The untruncated file, kept for the workspace copy — see ChatSendAttachment.full. */
       full?: string;
+      /** What it is called on the reader's disk — see ChatSendAttachment.fileName. */
+      fileName?: string;
       image?: { bytes: ArrayBuffer; mimeType: string };
     }[]
   >([]);
@@ -5700,7 +5703,13 @@ export function App() {
         settings.commandShell,
         // Start it and leave it running — for anything meant to stay up, which the waiting path
         // would hold the turn for and then kill at the deadline.
-        call.detach,
+        //
+        // FORCED for a launcher (`start`, `open`, `xdg-open`), whether or not the model asked. Those
+        // hand a file to another program which inherits our pipes, so the read never reaches EOF and
+        // the turn waits on the browser rather than the launcher — and the deadline cannot rescue it,
+        // because it kills the launcher while the reader thread stays blocked on a pipe the launched
+        // program still holds. Reported as a turn that "just got stuck" with no output and no error.
+        call.detach || launchesAnApp(call.command),
       );
     } catch (err) {
       // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
@@ -5808,7 +5817,15 @@ export function App() {
     cwd: string,
   ): Promise<BuddyToolResultPayload> => {
     if (call.tool === "run_command") {
-      const r = await runCommand(call.command, settings.keys?.github || undefined, cwd, settings.commandShell);
+      // Same hazard as the chat's own run_command, and a coding agent is even less able to recover
+      // from it — nobody is watching the run to notice it stopped.
+      const r = await runCommand(
+        call.command,
+        settings.keys?.github || undefined,
+        cwd,
+        settings.commandShell,
+        launchesAnApp(call.command),
+      );
       return { command: r };
     }
     if (call.tool === "write_file") {
@@ -6547,11 +6564,14 @@ export function App() {
    * the cap and is therefore whole.
    */
   const saveAttachmentToWorkspace = useCallback(
-    async (att: { name: string; text?: string; full?: string }): Promise<string | undefined> => {
+    async (att: { name: string; fileName?: string; text?: string; full?: string }): Promise<string | undefined> => {
       if (!isDesktop && !isRemoteClient) return undefined;
       const body = att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined);
       if (!body?.trim()) return undefined;
-      const path = workspacePathFor(att.name);
+      // The name it had on the reader's disk wins. A document import names the chip after the parsed
+      // TITLE — "Flow3" for an HTML page — and saving under that gives a file with no extension,
+      // which Windows has no association for and the reader cannot open by double-clicking either.
+      const path = workspacePathFor(att.fileName ?? att.name);
       try {
         await execHostTool({ tool: "write_file", path, content: body });
         recordCreatedFile(path, body.split("\n").length, false);
@@ -8595,7 +8615,17 @@ export function App() {
           const name = imported.kind === "book" ? imported.book.title : imported.title || file.name;
           if (!text) return { id, name, kind: "doc", status: "error", error: "No readable text in this file." };
           const bounded = text.slice(0, ATTACH_DOC_MAX_CHARS);
-          return { id, name, kind: "doc", status: "ready", text: bounded, ...(text.length > bounded.length ? { full: text } : {}) };
+          return {
+            id,
+            name,
+            kind: "doc",
+            status: "ready",
+            text: bounded,
+            ...(text.length > bounded.length ? { full: text } : {}),
+            // `name` is the parsed TITLE for a document import, which loses the extension; the disk
+            // copy keeps what the reader uploaded.
+            ...(file.name && file.name !== name ? { fileName: file.name } : {}),
+          };
         }),
       );
     } catch (e) {
@@ -8689,7 +8719,13 @@ export function App() {
       const atts: ChatSendAttachment[] = ready.map((a) =>
         a.kind === "image" && a.image
           ? { name: a.name, kind: "image", image: { bytes: a.image.bytes.slice(0), mimeType: a.image.mimeType } }
-          : { name: a.name, kind: "doc", ...(a.text ? { text: a.text } : {}), ...(a.full ? { full: a.full } : {}) },
+          : {
+              name: a.name,
+              kind: "doc",
+              ...(a.text ? { text: a.text } : {}),
+              ...(a.full ? { full: a.full } : {}),
+              ...(a.fileName ? { fileName: a.fileName } : {}),
+            },
       );
       if (atts.length) setBuddyAttachments([]); // consumed the ready chips (a still-reading one stays)
       if (isRemoteClient) {

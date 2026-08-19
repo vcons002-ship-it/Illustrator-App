@@ -207,6 +207,16 @@ export interface ChatSendAttachment {
    * losing the end of a very long document beats losing the send.
    */
   full?: string;
+  /**
+   * The file's ORIGINAL name, when it differs from the display name.
+   *
+   * A document import names the chip after the TITLE it parsed out of the file, which for an HTML
+   * page is "Flow3" — no extension. Saving under that produced a workspace file called `Flow3`, and
+   * an extensionless file is one Windows has no association for: `start Flow3` opened nothing, and
+   * the reader could not double-click it either. What it is called on the reader's disk should be
+   * what they uploaded.
+   */
+  fileName?: string;
 }
 
 /**
