@@ -87,6 +87,45 @@ export function openFenceOf(text: string, start = ""): string {
   return fence;
 }
 
+/**
+ * THE FILE A REPLY WAS STILL WRITING WHEN IT RAN OUT — its language tag and everything written so far.
+ *
+ * A reply that ends inside an unclosed fence is a file the model was pasting into the chat, which the
+ * prompt tells it not to do and which it does anyway when the thing it is transcribing is long. The
+ * continuation loop then spends its whole allowance carrying that paste forward — and its directive
+ * says "no tool calls", so the one tool that would fix it is forbidden for as long as the loop runs.
+ *
+ * At the end of that there is a large, half-written file whose only copy is a chat bubble, and a
+ * model that has been taught never to rewrite a big file from memory. Asked to continue, it does the
+ * sensible thing and goes looking for the file on disk. There isn't one. Reported as: "how could the
+ * chat lose the text it just wrote and go look for a file?"
+ *
+ * Returning the body is what lets the host put it where the model will look.
+ */
+export function openBlockOf(text: string): { tag: string; body: string } | undefined {
+  const lines = text.split("\n");
+  let fence = "";
+  let tag = "";
+  let from = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!.trim();
+    if (fence) {
+      if (new RegExp("^`{" + fence.length + ",}$").test(l)) {
+        fence = "";
+        from = -1;
+      }
+      continue;
+    }
+    const m = /^(`{3,})[ \t]*([A-Za-z][\w+#-]*)$/.exec(l);
+    if (m) {
+      fence = m[1]!;
+      tag = m[2]!;
+      from = i + 1;
+    }
+  }
+  return fence && from >= 0 ? { tag, body: lines.slice(from).join("\n") } : undefined;
+}
+
 export function jsonGatedTokenSink(
   emit: (text: string) => void,
   /**

@@ -803,6 +803,32 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).toContain("relayAtts = relayAtts.map(({ full: _full, ...a }) => a);");
   });
 
+  /**
+   * "HOW COULD THE CHAT LOSE THE TEXT IT JUST WROTE AND GO LOOK FOR A FILE?"
+   *
+   * A reply spent all eight continuations pasting a page into the chat, stopped mid-identifier, and
+   * then ran find_files for a file that had never been written. Nothing was trimmed — the context was
+   * at 44%. The model went to disk because it is told to ("never rewrite a big file from memory") and
+   * because the prompt is emphatic that a big file belongs in write_file. It was right on both counts
+   * and had not done it, and the continuation directive forbids tool calls, so it could not.
+   */
+  it("saves the file a reply ran out of room writing", () => {
+    expect(APP_RAW).toContain("const rescueUnfinishedFile = useCallback");
+    expect(APP_RAW).toContain("const rescued = await rescueUnfinishedFile(res.text);");
+    const at = APP_RAW.indexOf("const rescueUnfinishedFile = useCallback");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, displayLabel, execHostTool", at));
+    // An unclosed fence is the whole signal.
+    expect(body).toContain("const block = openBlockOf(text);");
+    // What is rescued is incomplete, so it can never land on a finished file.
+    expect(body).toContain("-part${n}");
+    expect(body).toContain("if (!held?.exists) break;");
+    // And it goes in the ledger, which is what the next turn actually reads.
+    expect(body).toContain("recordCreatedFile(path, block.body.split");
+    // The follow-up turn is TOLD the path — this note is model-facing on purpose, unlike most.
+    expect(APP_RAW).toContain('To finish it: read_file "${rescued}"');
+    expect(APP_RAW).toContain('"append":true');
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");

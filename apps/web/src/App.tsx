@@ -56,6 +56,7 @@ import {
   readmeChatId,
   mergeWorkspaceReadme,
   workspacePathFor,
+  openBlockOf,
   describeBuddyToolActivity,
   describeToolProposal,
   isLiveControlTool,
@@ -701,6 +702,12 @@ const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 /** Per-attachment text cap for a chat-attached document — generous (a long report) but bounded
  * so several attachments can't blow the chat's context budget. */
 const ATTACH_DOC_MAX_CHARS = 30_000;
+/** Below this, a half-written block is quicker to re-type than to go and read, and saving it would
+ * only litter the chat's folder. */
+const RESCUE_MIN_CHARS = 400;
+/** Extensions worth looking for in the prose that introduces a code block, so a rescued file keeps
+ * the name the model (and the reader) already calls it. */
+const RESCUE_EXTS = ["html", "htm", "css", "js", "mjs", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "java", "c", "h", "cpp", "cs", "php", "sh", "sql", "md", "json", "yml", "yaml", "toml"];
 // MAX_STEP_REMINDERS moved to core (workflow.ts), beside the directive it bounds — the in-turn tick
 // in the worker needs the same bound and had grown its own nudge without one.
 
@@ -6455,6 +6462,60 @@ export function App() {
   saveCodeToWorkspaceRef.current = (b, source) => void saveCodeToWorkspace(b, source);
 
   /**
+   * A FILE THE REPLY WAS STILL WRITING WHEN IT RAN OUT OF ROOM.
+   *
+   * Reported as: "how could the chat lose the text it just wrote and go look for a file?" — after a
+   * reply spent all eight of its continuations pasting a page into the chat, stopped mid-identifier,
+   * and then, asked to continue, ran find_files for a file that had never been written.
+   *
+   * Nothing was trimmed; the context was at 44%. The model went looking on disk because that is what
+   * it is told to do — "never rewrite a big file from memory, read_file it FIRST" — and because the
+   * prompt is emphatic that a big file belongs in write_file rather than in a reply. It was right on
+   * both counts and had simply not done it, and by then the app had spent its whole continuation
+   * budget carrying the paste forward under a directive that explicitly forbids tool calls.
+   *
+   * So the app finishes the job the model started: an unclosed fence means the reply ended mid-file,
+   * and what has been written goes to disk, into the ledger, under a name taken from the prose that
+   * introduced it. "Continue" then means what the prompt already says it should — read the file,
+   * append the rest — instead of hunting for something that was never saved.
+   *
+   * NEVER OVERWRITES. What is rescued is by definition incomplete, and dropping a half-written page
+   * over the finished one it was derived from would turn a recoverable turn into a lost file.
+   */
+  const rescueUnfinishedFile = useCallback(
+    async (text: string): Promise<string | undefined> => {
+      if (!isDesktop && !isRemoteClient) return undefined;
+      const block = openBlockOf(text);
+      // Short enough to just re-type is not worth a file, and would litter the folder.
+      if (!block || block.body.trim().length < RESCUE_MIN_CHARS) return undefined;
+      // The model almost always names the file in the sentence before the block ("here's the fixed
+      // flow3.html"). That name is far better than anything we could invent, and it is the one the
+      // reader is already thinking in.
+      const named = new RegExp(String.raw`[\w-]+\.(?:${RESCUE_EXTS.join("|")})`, "i").exec(text.slice(0, text.indexOf(block.body)));
+      const base = named ? named[0]! : `${displayLabel(activeBuddyIdRef.current)}-unfinished`;
+      const wanted = workspacePathFor(codeFileNameFor(base, block.tag));
+      try {
+        // A rescued file is incomplete — it must never land on top of a finished one.
+        let path = wanted;
+        for (let n = 2; n <= 20; n++) {
+          const held = await readWorkspaceFile(path, workspaceDirNow()).catch(() => undefined);
+          if (!held?.exists) break;
+          const dot = wanted.lastIndexOf(".");
+          path = `${wanted.slice(0, dot)}-part${n}${wanted.slice(dot)}`;
+        }
+        await execHostTool({ tool: "write_file", path, content: block.body });
+        recordCreatedFile(path, block.body.split("\n").length, false);
+        void refreshWorkspaceReadme();
+        return path;
+      } catch {
+        // Best-effort: failing to rescue must not fail the turn that produced the text.
+        return undefined;
+      }
+    },
+    [isRemoteClient, displayLabel, execHostTool, recordCreatedFile, refreshWorkspaceReadme, workspaceDirNow],
+  );
+
+  /**
    * A FILE THE READER ATTACHED IS ALSO WORK — SO IT GOES TO THE WORKSPACE TOO.
    *
    * Reported as: "the uploaded file was immediately lost after the turn ended, it was never saved to
@@ -8168,6 +8229,26 @@ export function App() {
           ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
         });
         if (openedBook) appendChat({ role: "assistant", text: res.text });
+        // The reply ended inside an unfenced block — it ran out of room mid-file. Put what there is
+        // on disk before the turn closes, so "continue" has something to read instead of a hunt.
+        const rescued = await rescueUnfinishedFile(res.text);
+        if (rescued)
+          appendBuddy({
+            role: "tool",
+            text: `💾 That file was still being written — saved what there is to ${rescued}`,
+            // Model-facing, unlike most of these notes: the whole point is that the NEXT turn knows
+            // the file exists and finishes it in place rather than re-pasting it into the chat.
+            turns: [
+              {
+                role: "user",
+                content:
+                  `[The file you were writing ran out of room mid-reply. What you had written is saved at ${rescued}. ` +
+                  `To finish it: read_file "${rescued}", then APPEND the rest with ` +
+                  `{"tool":"write_file","path":"${rescued}","content":"…","append":true}. Do NOT paste the file into ` +
+                  `the chat again and do NOT start it over — the part already on disk is whole up to where it stops.]`,
+              },
+            ],
+          });
       }
 
       // APP-MANAGED STEPS: the app — not the model — decides if this step is done, from observed

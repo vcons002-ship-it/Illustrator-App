@@ -1253,7 +1253,14 @@ export async function runBuddyTurn(opts: {
       // thinking is complete as far as the reader is concerned, and telling them it was paused
       // mid-thought would be inviting them to ask for a continuation that does not exist.
       if (lastTruncated && worthContinuing) {
-        clean += '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up exactly where I left off.)_';
+        // A FILE AND AN ESSAY NEED DIFFERENT OFFERS. "Say continue and I'll pick up where I left off"
+        // is right for prose, and for a half-pasted file it invites another eight rounds of the thing
+        // that just failed — the reader watched exactly that, and then watched the model go looking on
+        // disk for a file it had never written. `openFence` is the difference, and the host saves what
+        // was written so the follow-up has a file to append to.
+        clean += openFence
+          ? "\n\n_(This file is longer than one reply can hold, so I stopped rather than keep pasting it. Ask me to finish it and I'll write the rest straight to the file instead of into the chat.)_"
+          : '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up exactly where I left off.)_';
       }
       /**
        * ONE REPLY, SEVERAL MESSAGES — the marker path, and the cheapest way to run a series.
