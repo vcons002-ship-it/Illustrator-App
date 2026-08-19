@@ -17,6 +17,19 @@ export interface FileEditFailure {
   index: number;
   search: string;
   reason: "not_found" | "ambiguous";
+  /**
+   * WHAT IS ACTUALLY THERE, for a search that matched nothing.
+   *
+   * A miss used to report only that it missed, so the model's next move was to guess again — usually
+   * the same guess, because nothing had told it what was wrong. Every real coding harness answers a
+   * failed patch with the surrounding text instead, and the reason is not politeness: an anchor is
+   * almost always off by indentation or by one token, and seeing the real line fixes it in one round
+   * where guessing does not converge at all.
+   */
+  nearest?: { line: number; text: string };
+  /** For an AMBIGUOUS search, the 1-based lines it matched — enough to pick which one to anchor on
+   * rather than being told, unhelpfully, to "add more context" somewhere. */
+  at?: number[];
 }
 
 export interface FileEditResult {
@@ -26,6 +39,54 @@ export interface FileEditResult {
   applied: number;
   /** Edits that matched zero (not_found) or 2+ (ambiguous) times. */
   failures: FileEditFailure[];
+}
+
+/** Identifiers and numbers in a line — the part of it that survives a change in indentation, which is
+ * what a near-miss anchor is usually wrong about. */
+function tokensOf(line: string): Set<string> {
+  return new Set(line.toLowerCase().match(/[a-z0-9_$]+/g) ?? []);
+}
+
+/**
+ * The line in `content` that most resembles the first real line of `search`, with a little context
+ * around it. Token overlap rather than character distance, because the difference between an anchor
+ * that misses and the line it meant is nearly always whitespace or one renamed identifier — and token
+ * overlap is blind to the first and survives the second.
+ *
+ * Undefined below half the tokens, where a "nearest" line would be a guess dressed as evidence.
+ */
+function nearestLine(content: string, search: string): { line: number; text: string } | undefined {
+  const first = search.split("\n").find((l) => l.trim());
+  if (!first) return undefined;
+  const want = tokensOf(first);
+  if (want.size === 0) return undefined;
+  const lines = content.split("\n");
+  let best = -1;
+  let bestScore = 0;
+  lines.forEach((l, i) => {
+    const have = tokensOf(l);
+    let hit = 0;
+    for (const tk of want) if (have.has(tk)) hit += 1;
+    const score = hit / want.size;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  if (best < 0 || bestScore < 0.5) return undefined;
+  const from = Math.max(0, best - 1);
+  return { line: best + 1, text: lines.slice(from, best + 3).join("\n") };
+}
+
+/** The 1-based lines a verbatim search starts on. */
+function matchLines(content: string, needle: string): number[] {
+  const out: number[] = [];
+  let i = content.indexOf(needle);
+  while (i !== -1) {
+    out.push(content.slice(0, i).split("\n").length);
+    i = content.indexOf(needle, i + needle.length);
+  }
+  return out;
 }
 
 /** Count non-overlapping occurrences of `needle` in `hay` (verbatim). */
@@ -61,7 +122,16 @@ export function applyFileEdits(content: string, edits: FileEdit[]): FileEditResu
       out = out.replace(search, () => replace);
       applied++;
     } else {
-      failures.push({ index, search, reason: matches > 1 ? "ambiguous" : "not_found" });
+      // The EVIDENCE, not just the verdict. A miss that says only "no exact match" leaves the model
+      // guessing again from the same information that produced the wrong guess.
+      const nearest = matches === 0 ? nearestLine(out, search) : undefined;
+      failures.push({
+        index,
+        search,
+        reason: matches > 1 ? "ambiguous" : "not_found",
+        ...(nearest ? { nearest } : {}),
+        ...(matches > 1 ? { at: matchLines(out, search) } : {}),
+      });
     }
   });
   return { content: out, applied, failures };
@@ -245,8 +315,34 @@ export function extractSection(body: string, heading: string): string | undefine
 /** A one-line, model-facing summary of an edit result (for the tool feedback). */
 export function summarizeFileEdits(path: string, r: FileEditResult): string {
   if (r.failures.length === 0) return `[edit_file applied ${r.applied} edit(s) to ${path}.]`;
+  /**
+   * SHOW THE FILE, NOT JUST THE VERDICT.
+   *
+   * This said "no exact match (re-read the file; copy the text verbatim)", which is true, unhelpful,
+   * and the same information the model already had when it produced the anchor that missed. So it
+   * guessed again, usually the same way. Real coding harnesses answer a failed patch with the
+   * surrounding text for exactly this reason: a bad anchor is nearly always off by indentation or one
+   * token, and one look at the real line ends it, where guessing does not converge at all.
+   */
   const why = r.failures
-    .map((f) => `#${f.index + 1} ${f.reason === "ambiguous" ? "matched 2+ places (add more surrounding context)" : "no exact match (re-read the file; copy the text verbatim)"}`)
-    .join("; ");
-  return `[edit_file: ${r.applied} applied, ${r.failures.length} FAILED on ${path} — ${why}. The file is unchanged for the failed edits.]`;
+    .map((f) => {
+      const head = `#${f.index + 1} `;
+      if (f.reason === "ambiguous") {
+        return (
+          head +
+          `matched ${f.at?.length ?? 2} places` +
+          (f.at?.length ? ` (lines ${f.at.join(", ")})` : "") +
+          " — anchor it with more surrounding text so it matches exactly one."
+        );
+      }
+      return (
+        head +
+        "no exact match." +
+        (f.nearest
+          ? ` The closest text in the file is at line ${f.nearest.line}:\n${f.nearest.text}\nCopy your \`search\` from THAT, character for character, including its indentation.`
+          : " Read the file and copy the `search` from it verbatim, including indentation.")
+      );
+    })
+    .join("\n");
+  return `[edit_file: ${r.applied} applied, ${r.failures.length} FAILED on ${path}.\n${why}\nThe file is unchanged for the failed edits.]`;
 }
