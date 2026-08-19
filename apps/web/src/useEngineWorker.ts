@@ -624,10 +624,16 @@ export function useEngineWorker(
   settings: ReaderSettings,
   imageStore?: ImageReadStore,
   onBundledLlmReady?: (runtime: { baseUrl: string; model: string }) => void,
+  /** Called with the path each time the MODEL is handed a file's contents through read_file. The host
+   * needs to know this to enforce read-before-edit: an anchor written from memory is the direct cause
+   * of the edit loop, and the only place that fact is observable is here. */
+  onHostFileRead?: (path: string) => void,
 ): EngineWorkerApi {
   const workerRef = useRef<Worker | undefined>(undefined);
   const onBundledLlmReadyRef = useRef(onBundledLlmReady);
   onBundledLlmReadyRef.current = onBundledLlmReady;
+  const onHostFileReadRef = useRef(onHostFileRead);
+  onHostFileReadRef.current = onHostFileRead;
   const lastBook = useRef<BookSource | undefined>(undefined);
   // Whether the user has begun generating the current book. Survives the
   // settings-driven re-open (which builds a fresh engine) so generation resumes
@@ -994,6 +1000,9 @@ export function useEngineWorker(
                 if (!ABSOLUTE_PATH.test(path)) {
                   const r = await readWorkspaceFile(path, msg.cwd);
                   if (r.exists) {
+                    // The model now has this file's current contents — which is what read-before-edit
+                    // is actually asking about.
+                    onHostFileReadRef.current?.(path);
                     reply({ ok: true, text: r.text.slice(0, 200_000) });
                     return;
                   }
