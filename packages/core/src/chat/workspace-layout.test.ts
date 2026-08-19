@@ -241,3 +241,47 @@ describe("chat ownership markers", () => {
     expect(readmeChatId(buildWorkspaceReadme("No id", []))).toBeUndefined();
   });
 });
+
+describe("whole-file rewrites of existing code are refused", () => {
+  /**
+   * The prompt has said "never rewrite a big file from memory" for a long time — in the file ledger,
+   * every turn — and the model does it anyway, because "fix this" reaches for the whole file. Twice
+   * the reader watched the consequence: a reply running out mid-file, and a verified 711-line page
+   * re-typed from memory in three chunks purely to make a card appear. Persuasion has had its turn.
+   */
+  it("refuses a full overwrite of an existing source file", async () => {
+    const { wholeFileRewriteRefusal } = await import("./workspace-layout.js");
+    const r = wholeFileRewriteRefusal({ path: "flow3.html", exists: true, existingLines: 711 });
+    expect(r).toBeTruthy();
+    expect(r).toContain("711 lines");
+    expect(r, "a refusal that doesn't say what to do instead is just a wall").toContain("edit_file");
+    expect(r).toContain("delegate_coding_task");
+    expect(r).toContain('"append":true');
+    expect(r).toContain("/show flow3.html");
+    expect(r, "the file must be reported as untouched").toContain("untouched");
+  });
+
+  it("leaves every legitimate write alone", async () => {
+    const { wholeFileRewriteRefusal, REWRITE_GUARD_MIN_LINES } = await import("./workspace-layout.js");
+    // A NEW file — the commonest thing it does, and never the failure mode.
+    expect(wholeFileRewriteRefusal({ path: "flow3.html", exists: false, existingLines: 0 })).toBeUndefined();
+    // An APPEND, which is the chunking protocol the prompt actually asks for.
+    expect(wholeFileRewriteRefusal({ path: "flow3.html", append: true, exists: true, existingLines: 900 })).toBeUndefined();
+    // A stub. Rewriting eight lines is quick, fits in a reply, and refusing it would only teach the
+    // model that write_file is unreliable.
+    expect(
+      wholeFileRewriteRefusal({ path: "flow3.html", exists: true, existingLines: REWRITE_GUARD_MIN_LINES - 1 }),
+    ).toBeUndefined();
+    // Prose and data are deliberately outside the guard — a half-written note is obvious to its
+    // reader, and regenerating a report or a table from a template is ordinary work.
+    for (const path of ["report.md", "tide-data.csv", "notes.txt", "config.json"]) {
+      expect(wholeFileRewriteRefusal({ path, exists: true, existingLines: 900 }), path).toBeUndefined();
+    }
+  });
+
+  it("covers a source file wherever it sits in the folder", async () => {
+    const { wholeFileRewriteRefusal } = await import("./workspace-layout.js");
+    expect(wholeFileRewriteRefusal({ path: "code/app.js", exists: true, existingLines: 200 })).toBeTruthy();
+    expect(wholeFileRewriteRefusal({ path: "src/lib/util.TS", exists: true, existingLines: 200 })).toBeTruthy();
+  });
+});
