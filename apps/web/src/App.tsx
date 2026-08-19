@@ -56,6 +56,7 @@ import {
   readmeChatId,
   mergeWorkspaceReadme,
   workspacePathFor,
+  wholeFileRewriteRefusal,
   openBlockOf,
   launchesAnApp,
   describeBuddyToolActivity,
@@ -6032,6 +6033,35 @@ export function App() {
     const path = workspacePathFor(call.path);
     setBuddyBusy(true);
     setBuddyActivity(`Writing ${path}…`);
+    /**
+     * A WHOLE-FILE REWRITE OF EXISTING CODE IS REFUSED — see wholeFileRewriteRefusal.
+     *
+     * Checked BEFORE the write, so a refusal leaves the file on disk exactly as it was. That is the
+     * point: the reader watched a verified 711-line page get re-typed from memory in chunks, and one
+     * transcription slip away from being destroyed, purely so a card would appear in the chat.
+     */
+    const dirNow = workspaceDirNow();
+    const held = await readWorkspaceFile(path, dirNow).catch(() => undefined);
+    const refusal =
+      held?.exists
+        ? wholeFileRewriteRefusal({
+            path,
+            ...(call.append ? { append: true } : {}),
+            exists: true,
+            existingLines: held.text.split("\n").length,
+          })
+        : undefined;
+    if (refusal) {
+      setBuddyBusy(false);
+      setBuddyActivity("");
+      appendBuddy({
+        role: "tool",
+        text: `🛑 Not replacing ${path} wholesale — it's ${held!.text.split("\n").length} lines already. Editing it in place instead.`,
+        turns: [...pre, { role: "user", content: refusal }],
+      });
+      await dispatchBuddyTurn([...preHistory, ...pre], refusal);
+      return;
+    }
     let payload: { path: string; ok: boolean; error?: string };
     try {
       const saved = await writeWorkspaceFile(path, call.content, await workspaceForWrite(), call.append);

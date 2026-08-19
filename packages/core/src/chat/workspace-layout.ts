@@ -136,6 +136,69 @@ export function chatFolderName(label: string | undefined, sessionId: string): st
   return fallback.slice(0, MAX_FOLDER_CHARS) || "chat";
 }
 
+/**
+ * WHOLE-FILE REWRITES OF EXISTING CODE, AND WHY THE APP REFUSES THEM.
+ *
+ * The prompt has told the model for a long time not to rewrite a big file from memory: the file
+ * ledger says it every turn, and the write_file guidance says a big file will not fit in one reply.
+ * It does it anyway, because a model asked to "fix this" reaches for the whole file — and the result
+ * is the failure the reader watched twice: the reply runs out mid-file, or the model re-types a
+ * verified file from memory in three chunks purely to make a card appear, with a working page one
+ * transcription slip from being destroyed.
+ *
+ * Persuasion has had its turn. This is the same decision the reader already made, so the app makes
+ * it: an existing source file of any size worth caring about cannot be replaced wholesale. It can be
+ * CHANGED in place (edit_file, which is a diff and cannot truncate), handed to the external coding
+ * agent (which edits files directly), appended to, or written under a NEW name. Nothing legitimate is
+ * lost — a fresh file, a small file and an append are all untouched.
+ *
+ * The floor exists so this never fires on a stub. Rewriting eight lines is not the failure mode; it
+ * is quick, it fits in a reply, and refusing it would only teach the model that write_file is
+ * unreliable.
+ */
+export const REWRITE_GUARD_MIN_LINES = 40;
+
+/** Extensions the guard covers: things that are RUN or compiled, where a truncated file is a broken
+ * one. Prose and data are deliberately absent — a half-written note is obvious to its reader, and
+ * regenerating a .md or .csv from a template is ordinary work. */
+const GUARDED_CODE_EXTS: ReadonlySet<string> = new Set([
+  "html", "htm", "css", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte",
+  "py", "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cpp", "hpp", "cs", "php", "sh", "bash",
+  "ps1", "sql", "lua", "r", "pl",
+]);
+
+/**
+ * The refusal a whole-file rewrite of an existing source file earns, or undefined when the write is
+ * fine. Model-facing: it names every route that still works, because a refusal that does not say
+ * what to do instead is just a wall.
+ */
+export function wholeFileRewriteRefusal(input: {
+  path: string;
+  append?: boolean;
+  exists: boolean;
+  existingLines: number;
+}): string | undefined {
+  if (input.append || !input.exists) return undefined;
+  if (input.existingLines < REWRITE_GUARD_MIN_LINES) return undefined;
+  const ext = (input.path.split(/[/\\]/).pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
+  if (!GUARDED_CODE_EXTS.has(ext)) return undefined;
+  return (
+    `[write_file REFUSED — ${input.path} already exists and is ${input.existingLines} lines, and this ` +
+    `call would replace the whole of it from memory. That is how the work gets lost: the reply runs ` +
+    `out part way and what lands on disk is half a file. Nothing has been written; the file on disk ` +
+    `is untouched.\n` +
+    `Do it one of these ways instead:\n` +
+    `- CHANGE it in place: read_file it, then edit_file with search/replace. This is almost always ` +
+    `what you want, it cannot truncate, and it is far cheaper than re-typing the file.\n` +
+    `- Hand the job to the coding agent: delegate_coding_task, which edits the files itself and ` +
+    `reports a diff. Right for a change touching several places or several files.\n` +
+    `- ADD to the end: the same call with "append":true.\n` +
+    `- Genuinely need a fresh file? Write it under a NEW name.\n` +
+    `If you only wanted the reader to SEE the file, it is already on disk — say so and tell them to ` +
+    `type /show ${input.path}, which puts its card in the chat. Do not re-save a file to make a card.]`
+  );
+}
+
 export interface WorkspaceEntry {
   /** Workspace-relative path, e.g. `code/index.html`. */
   path: string;

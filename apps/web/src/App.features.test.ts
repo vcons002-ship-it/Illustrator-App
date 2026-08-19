@@ -897,6 +897,23 @@ describe("the per-chat workspace layout", () => {
     expect(body).toContain("No file called");
   });
 
+  /**
+   * "IT JUST TRIES TO WRITE IT ALL IN ONE GO." The reader's own diagnosis, and the fix they chose:
+   * the app refuses, rather than the prompt asking again.
+   */
+  it("refuses to replace an existing code file wholesale, before writing anything", () => {
+    expect(APP_RAW).toContain("const refusal =");
+    expect(APP_RAW).toContain("wholeFileRewriteRefusal({");
+    // Checked BEFORE the write — a refusal must leave the file on disk exactly as it was.
+    const at = APP_RAW.indexOf("const runWriteFile");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("let payload: { path: string; ok: boolean; error?: string };", at));
+    expect(body).toContain("const held = await readWorkspaceFile(path, dirNow)");
+    expect(body.indexOf("wholeFileRewriteRefusal")).toBeGreaterThan(-1);
+    expect(body, "the guard must sit ahead of writeWorkspaceFile").not.toContain("await writeWorkspaceFile(");
+    // The model is handed the reason, not just a wall.
+    expect(APP_RAW).toContain("turns: [...pre, { role: \"user\", content: refusal }],");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
