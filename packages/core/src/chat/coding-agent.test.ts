@@ -300,3 +300,28 @@ describe("agentChangedFiles", () => {
     expect(agentChangedFiles({ dirtyBefore: "", dirtyAfter: " M a.ts", committed: "a.ts" })).toEqual(["a.ts"]);
   });
 });
+
+describe("what the delegated agent is told besides the job", () => {
+  /**
+   * The agent runs headless and, as the tool's own description says, "doesn't see this chat" — so no
+   * workspace convention reaches it, and it names things the way an agent with no context does:
+   * main.py, test_main.py, app.js. Reported as everything being called something generic and the
+   * workspace becoming hard to look through. The task file is the only channel there is.
+   */
+  it("carries the naming convention the agent cannot otherwise see", async () => {
+    const { buildDelegatedTask, DELEGATED_CONVENTIONS } = await import("./coding-agent.js");
+    const out = buildDelegatedTask("Add a retry to the fetch helper.");
+    expect(out.startsWith("Add a retry to the fetch helper.")).toBe(true); // the job leads
+    expect(out).toContain(DELEGATED_CONVENTIONS);
+    expect(out).toContain("NAME FILES FOR WHAT THEY DO");
+    expect(out).toContain("`main.py`, `app.js`, `index.js`, `script.py` and `code.html` are NOT names");
+    // A revision is not a new file, and an unasked-for scaffold is not the job.
+    expect(out).toContain("revise a file IN PLACE");
+    expect(out).toContain("Do not add a project scaffold");
+  });
+
+  it("still says something when the spec is empty", async () => {
+    const { buildDelegatedTask } = await import("./coding-agent.js");
+    expect(buildDelegatedTask("   ")).toContain("NAME FILES FOR WHAT THEY DO");
+  });
+});

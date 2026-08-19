@@ -592,7 +592,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAiderArgs, buildCodexArgs, buildCodexConfigToml, codexBaseUrl, agentChangedFiles, quotePosixCommand, ollamaApiBase } =
+  const { buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, quotePosixCommand, ollamaApiBase } =
     await import("@visual-reader/core");
   const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined);
 
@@ -612,7 +612,8 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // repo when there is one (so a folder inside the reader's own project is left alone) and otherwise
   // inits one with a base commit — which also hands the reader a real undo for whatever the agent
   // does next.
-  await writeWorkspaceFile(CODING_TASK_FILE, opts.task, opts.cwd);
+  // The agent never sees the chat, so the workspace's conventions have to travel with the job.
+  await writeWorkspaceFile(CODING_TASK_FILE, buildDelegatedTask(opts.task), opts.cwd);
   let repoNote = "";
   let beforeSha = "";
   let dirtyBefore = "";
