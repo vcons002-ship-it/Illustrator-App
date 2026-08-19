@@ -1010,6 +1010,22 @@ describe("buildBuddySystemPrompt", () => {
     }
   });
 
+  /**
+   * Fourth of the four harness behaviours: a map of the file. read_file has taken a line RANGE for a
+   * while, and nothing told the model WHICH range — the only route to line 698 of a 711-line page was
+   * to read from line 1 and count. So it read the whole file, which on a local model is most of the
+   * input allowance, to change one line.
+   */
+  it("puts an outline on an unranged read of a big file, and not on a ranged one", () => {
+    const big = `${Array.from({ length: 200 }, (_, i) => `// line ${i}`).join("\n")}\nfunction rebuild() {\nfunction draw() {\nfunction tick() {\n`;
+    const whole = formatBuddyToolResult({ tool: "read_file", path: "flow3.html" }, { fileText: big });
+    expect(whole).toContain("outline of flow3.html");
+    expect(whole).toContain("function rebuild()");
+    // A RANGED read already knows where it is going — an outline there is pure cost.
+    const ranged = formatBuddyToolResult({ tool: "read_file", path: "flow3.html", from: 100, to: 120 }, { fileText: big });
+    expect(ranged).not.toContain("outline of");
+  });
+
   it("carries the show-me-vs-generate image-tool rule in both modes", () => {
     for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });
