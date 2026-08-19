@@ -443,6 +443,24 @@ describe("jsonGatedTokenSink", () => {
     expect(openFenceOf("````md\n```js\nx\n```\n")).toBe("````");
   });
 
+  /**
+   * The reply ran out mid-file, and the half-written page's only copy was a chat bubble. Asked to
+   * continue, the model went looking for it on disk — correctly, per its own instructions — and found
+   * nothing. Returning the body is what lets the host put it where the model will look.
+   */
+  it("reports the block a reply was still inside when it ran out", async () => {
+    const { openBlockOf } = await import("./chat-session.js");
+    expect(openBlockOf("Here it is:\n\n```html\n<p>one</p>\n<p>two</p>")).toEqual({
+      tag: "html",
+      body: "<p>one</p>\n<p>two</p>",
+    });
+    // A block that closed is not unfinished.
+    expect(openBlockOf("Here:\n\n```js\nx\n```\nDone.")).toBeUndefined();
+    // The LAST block is the one still open, not the first.
+    expect(openBlockOf("```js\na\n```\nand now\n```css\np{}")).toEqual({ tag: "css", body: "p{}" });
+    expect(openBlockOf("Just prose, no block at all.")).toBeUndefined();
+  });
+
   it("still streams prose that merely contains balanced braces", async () => {
     const { jsonGatedTokenSink } = await import("./chat-session.js");
     const out: string[] = [];
