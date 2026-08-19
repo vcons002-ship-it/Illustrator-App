@@ -1926,6 +1926,9 @@ export function App() {
    * re-render, and the bar telling the reader "Default workspace" while their files went somewhere
    * else is the thing being fixed. */
   const [chatFolder, setChatFolder] = useState<string | undefined>(undefined);
+  /** The folder-adoption probe, held in a ref: the effect that runs it sits above where the callback
+   * can be declared (it needs `displayLabel`), and naming it directly in a dep array is a TDZ. */
+  const adoptChatWorkspaceRef = useRef<(id: string) => void>(() => {});
   /**
    * WHAT THIS CHAT IS CALLED ON SCREEN.
    *
@@ -1953,10 +1956,14 @@ export function App() {
   taskPlansRef.current = taskPlans;
   const activeBuddyIdRef = useRef(activeBuddyId);
   activeBuddyIdRef.current = activeBuddyId;
-  // Switching chats switches which folder the bar should name.
+  // Switching chats switches which folder the bar should name — and, on a fresh page, is when we go
+  // looking for a folder the chat already has. `buddySessions` is a dependency because the folder's
+  // name comes from the chat's, and sessions arrive from storage after the first render: probing
+  // before they land would look for the wrong name.
   useEffect(() => {
     setChatFolder(chatWorkspaceRef.current.get(activeBuddyId));
-  }, [activeBuddyId]);
+    void adoptChatWorkspaceRef.current(activeBuddyId);
+  }, [activeBuddyId, buddySessions]);
   /**
    * THE CHAT'S OWN FOLDER, MADE THE FIRST TIME IT WRITES SOMETHING.
    *
@@ -2017,6 +2024,45 @@ export function App() {
       return undefined;
     }
   }, [isRemoteClient, displayLabel]);
+  /**
+   * FIND THE CHAT'S EXISTING FOLDER, WITHOUT MAKING ONE.
+   *
+   * `chatWorkspaceRef` is rebuilt per page load, and only `ensureChatWorkspace` ever filled it — on a
+   * WRITE. So after a reload, a chat that already had a folder full of its work looked like a chat
+   * with no folder at all: the bar said "Default workspace", and worse, `workspaceDirNow()` returned
+   * nothing, so commands and reads went to the shared root while the chat's files sat elsewhere. The
+   * folder was durable on disk and the app just wasn't looking for it.
+   *
+   * READ-ONLY on purpose: a chat that only ever talks must still never grow a folder, so this probes
+   * and adopts but never creates. It checks both the plain name and the suffixed one a collision
+   * would have produced, and refuses a folder whose README names a different chat.
+   */
+  const adoptChatWorkspace = useCallback(
+    async (id: string): Promise<void> => {
+      if (!isDesktop || isRemoteClient || chatWorkspaceRef.current.has(id)) return;
+      const base = chatFolderName(displayLabel(id), id);
+      const suffixed = `${base}-${id.replace(/[^a-z0-9]+/gi, "").slice(-6).toLowerCase()}`;
+      for (const folder of [base, suffixed]) {
+        try {
+          const r = await readWorkspaceFile(`${folder}/README.md`);
+          if (!r.exists) continue;
+          // An UNMARKED folder is treated as ours, matching what creation does: it predates the
+          // marker, and adopting it beats stranding its contents.
+          const owner = readmeChatId(r.text);
+          if (owner && owner !== id) continue;
+          const dir = r.path.slice(0, Math.max(r.path.lastIndexOf("/"), r.path.lastIndexOf("\\")));
+          if (!dir) continue;
+          chatWorkspaceRef.current.set(id, dir);
+          if (id === activeBuddyIdRef.current) setChatFolder(dir);
+          return;
+        } catch {
+          // Best-effort: not finding a folder is the same as not having one.
+        }
+      }
+    },
+    [isRemoteClient, displayLabel],
+  );
+  adoptChatWorkspaceRef.current = (id) => void adoptChatWorkspace(id);
   /** The folder to work in for this chat: the reader's own choice first, else the chat's — CREATING
    * the chat's folder if this is the first time it's needed. */
   const workspaceForWrite = useCallback(
