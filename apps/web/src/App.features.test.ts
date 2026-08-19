@@ -787,7 +787,10 @@ describe("the per-chat workspace layout", () => {
     // Sorted by kind and put in the LEDGER — the pointer that survives history being trimmed.
     const at = APP_RAW.indexOf("const saveAttachmentToWorkspace = useCallback");
     const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme],", at));
-    expect(body).toContain("const path = workspacePathFor(att.name);");
+    // Saved under the name it had on the reader's DISK. A document import names the chip after the
+    // parsed title — "Flow3" for an HTML page — and a file with no extension is one Windows has no
+    // association for: `start Flow3` opened nothing and a double-click did not work either.
+    expect(body).toContain("const path = workspacePathFor(att.fileName ?? att.name);");
     expect(body).toContain("recordCreatedFile(path, body.split");
     // A BOUNDED copy must never be written over the reader's own file.
     expect(body).toContain("att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined)");
@@ -831,6 +834,18 @@ describe("the per-chat workspace layout", () => {
     // The follow-up turn is TOLD the path — this note is model-facing on purpose, unlike most.
     expect(APP_RAW).toContain('To finish it: read_file "${rescued}"');
     expect(APP_RAW).toContain('"append":true');
+  });
+
+  /**
+   * "IT JUST GOT STUCK DOING THIS" — `start Flow3`, indefinitely, with no output, no error and no
+   * timeout. A launcher returns at once but the program it starts inherits our pipes, and the host
+   * reads them to EOF, which never comes. The deadline cannot save it: it kills the launcher while
+   * the reader thread is still blocked on a pipe the launched program holds.
+   */
+  it("never waits on a command that hands a file to another program", () => {
+    expect(APP_RAW).toContain("call.detach || launchesAnApp(call.command),");
+    // A coding agent hits the same trap with nobody watching to notice.
+    expect(APP_RAW).toContain("launchesAnApp(call.command),\n      );");
   });
 
   it("does not grow a folder for a chat that only ever talks", () => {

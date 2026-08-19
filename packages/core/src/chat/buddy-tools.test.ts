@@ -976,6 +976,40 @@ describe("buildBuddySystemPrompt", () => {
     expect(edits[0]!.search).toBe("a\nb");
   });
 
+  /**
+   * "IT JUST GOT STUCK DOING THIS" — `start Flow3`, after the reader tapped Open it. No output, no
+   * error, no timeout, indefinitely.
+   *
+   * The launcher returns at once, but the program it starts inherits our stdout and stderr pipes, and
+   * the host reads those to EOF — which does not arrive until every holder of the write end exits. So
+   * the turn waits on the browser. The deadline cannot rescue it either: it kills the launcher while
+   * the reader thread stays blocked on a pipe the launched program is holding.
+   */
+  it("recognises a command that hands a file to another program", async () => {
+    const { launchesAnApp } = await import("./buddy-tools.js");
+    for (const cmd of [
+      "start Flow3",
+      "start flow3.html",
+      "  START  page.html ",
+      "explorer .",
+      "open index.html",
+      "xdg-open report.pdf",
+      "cmd /c start page.html",
+      'powershell -Command Start-Process "page.html"',
+    ]) {
+      expect(launchesAnApp(cmd), cmd).toBe(true);
+    }
+  });
+
+  it("does not detach an ordinary command that merely says start", async () => {
+    const { launchesAnApp } = await import("./buddy-tools.js");
+    // These are scripts whose OUTPUT is the point — detaching them would throw away the very thing
+    // the model is waiting to read.
+    for (const cmd of ["npm start", "pnpm start", "python main.py", "node build.js", "git status", "yarn run start"]) {
+      expect(launchesAnApp(cmd), cmd).toBe(false);
+    }
+  });
+
   it("carries the show-me-vs-generate image-tool rule in both modes", () => {
     for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });

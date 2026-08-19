@@ -2682,6 +2682,47 @@ export interface CreatedFileRef {
  * each (path + line count) so it never crowds a small model. Empty string when nothing's been written.
  */
 export const LEDGER_MAX = 20;
+/**
+ * DOES THIS COMMAND HAND A FILE TO ANOTHER PROGRAM AND WALK AWAY?
+ *
+ * Reported as a turn that "just got stuck" on `start Flow3` after the reader tapped Open it — no
+ * output, no error, no timeout, indefinitely.
+ *
+ * A launcher returns almost immediately, but the program it starts INHERITS the stdout and stderr
+ * pipes. The host reads those to EOF, and EOF does not arrive until every process holding the write
+ * end has exited — so the turn waits on the browser, not on the launcher. Worse, the command
+ * deadline cannot rescue it: the deadline kills the launcher, and the reader thread is still blocked
+ * on a pipe the launched program is holding, so the join after it never returns. A hang with no
+ * timeout is the one shape of failure the reader has no way to interpret.
+ *
+ * Detaching is the fix and it is also the honest description of the intent: nobody is waiting for a
+ * browser's output. The model can ask for `detach` itself, and for this class of command it should
+ * not have to — getting it wrong costs the whole turn and there is no diagnostic.
+ */
+const LAUNCHERS: ReadonlySet<string> = new Set([
+  "start", // cmd's builtin — `start page.html`
+  "explorer",
+  "explorer.exe",
+  "open", // macOS
+  "xdg-open", // freedesktop
+  "gio", // `gio open …`
+  "wslview",
+  "start-process", // powershell
+]);
+export function launchesAnApp(command: string): boolean {
+  const words = command.trim().split(/\s+/);
+  let i = 0;
+  // `cmd /c start …` and `powershell -Command Start-Process …` wrap exactly the same thing; skip the
+  // shell and its switches to reach the verb that matters.
+  while (i < words.length && /^(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)$/i.test(words[i] ?? "")) {
+    i += 1;
+    while (i < words.length && /^[-/]/.test(words[i] ?? "")) i += 1;
+  }
+  // Only as the FIRST word. `npm start` and `pnpm start` are scripts, not launchers, and forcing
+  // those to detach would throw away the build output the model is waiting to read.
+  return LAUNCHERS.has((words[i] ?? "").replace(/^["']+|["']+$/g, "").toLowerCase());
+}
+
 export function buildFileLedgerBlock(files: CreatedFileRef[]): string {
   if (!files.length) return "";
   const rows = files
