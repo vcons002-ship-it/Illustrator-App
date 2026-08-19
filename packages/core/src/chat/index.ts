@@ -51,6 +51,7 @@ export * from "./chat-image-blobs.js";
 export * from "./creations.js";
 export * from "./tool-approval.js";
 export * from "./file-edits.js";
+export * from "./syntax-check.js";
 export * from "./coding-agent.js";
 export * from "./document-polish.js";
 export * from "./math-engine.js";
