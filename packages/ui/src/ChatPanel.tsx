@@ -1108,7 +1108,16 @@ export function isTextDocument(file: Pick<FileRef, "name" | "mime">): boolean {
   return (
     file.mime === "text/markdown" ||
     file.mime === "text/plain" ||
-    /\.(md|markdown|txt|text)$/i.test(file.name)
+    /\.(md|markdown|txt|text)$/i.test(file.name) ||
+    // SOURCE FILES ARE TEXT TOO, and leaving them out is why a `.html` card had no way to be looked
+    // at. The reader expected a preview, remembered seeing one, and reasonably concluded the file had
+    // grown too big for the chat — there was never a size limit, the extension simply was not on the
+    // list. On a linked phone "read it here" is often the ONLY way to see a file at all.
+    // Tabular files are deliberately NOT here: a .csv gets the table preview, which is better than
+    // showing it as prose, and claiming it would take that away.
+    /\.(html?|css|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|c|h|cpp|cs|php|sh|sql|json|ya?ml|toml|ini|xml|svg|log)$/i.test(
+      file.name,
+    )
   );
 }
 
