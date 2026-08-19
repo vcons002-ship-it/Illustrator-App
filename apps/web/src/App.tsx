@@ -6495,14 +6495,22 @@ export function App() {
       const base = named ? named[0]! : `${displayLabel(activeBuddyIdRef.current)}-unfinished`;
       const wanted = workspacePathFor(codeFileNameFor(base, block.tag));
       try {
-        // A rescued file is incomplete — it must never land on top of a finished one.
-        let path = wanted;
-        for (let n = 2; n <= 20; n++) {
-          const held = await readWorkspaceFile(path, workspaceDirNow()).catch(() => undefined);
-          if (!held?.exists) break;
-          const dot = wanted.lastIndexOf(".");
-          path = `${wanted.slice(0, dot)}-part${n}${wanted.slice(dot)}`;
-        }
+        /**
+         * IF THE FILE IS ALREADY THERE, DO NOTHING — this is a last resort, not a habit.
+         *
+         * A rescued block is incomplete by definition. Writing it beside a working file under a
+         * `-part2` name looked safe (nothing is overwritten) and is still wrong: it leaves a
+         * half-written duplicate in the folder and a ledger entry pointing at it, so the next turn
+         * has two candidates and the worse one is the one we just advertised. The reader's objection
+         * was exactly this — a file one line away from working should not end up shadowed by half of
+         * itself.
+         *
+         * When the file exists, the model already has the right thing to read and edit_file, and
+         * needs nothing from us. This only earns its place when the alternative is nothing at all.
+         */
+        const held = await readWorkspaceFile(wanted, workspaceDirNow()).catch(() => undefined);
+        if (held?.exists) return undefined;
+        const path = wanted;
         await execHostTool({ tool: "write_file", path, content: block.body });
         recordCreatedFile(path, block.body.split("\n").length, false);
         void refreshWorkspaceReadme();

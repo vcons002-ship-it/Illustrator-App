@@ -728,6 +728,36 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     }
   }
 
+  /**
+   * WHEN NOTHING CHANGED, SAY WHAT IS ACTUALLY THERE.
+   *
+   * "Ran but changed NO files" is true and nearly useless: it reads as "the task was wrong" when the
+   * commonest cause by far is that the file the task names is not in the folder the agent ran in. A
+   * reader watching that happen concluded the integration was broken; the listing would have said
+   * "this folder has README.md in it" and ended the question in one line.
+   *
+   * Our own scaffolding is filtered out for the same reason it is filtered out of the diff — it is
+   * not the reader's work and naming it only invites the assistant to go and read it.
+   */
+  let folderLine = "";
+  if (!changed) {
+    try {
+      const ls = await run(isWin ? "dir /b" : "ls -1");
+      const entries = ls.stdout
+        .split(/\r?\n/)
+        .map((e) => e.trim())
+        .filter((e) => e && !e.startsWith(".vr-"))
+        .slice(0, 40);
+      folderLine = entries.length
+        ? `\nThe folder it ran in (${workDir || "the workspace"}) contains: ${entries.join(", ")}.` +
+          `\nIf a file the task names is NOT in that list, it is not there to edit — write it first with write_file, ` +
+          `then delegate again.`
+        : `\nThe folder it ran in (${workDir || "the workspace"}) is EMPTY, so there was nothing to edit.`;
+    } catch {
+      /* listing is best-effort */
+    }
+  }
+
   const ok = (agent.code === 0 || changed) && verifyOk && !agent.timedOut;
   // A DEADLINE IS NOT A NO-OP, and saying so is the difference between a useful next step and a
   // wasted one. "Changed no files" reads as "the task was wrong, rewrite it"; being stopped after
@@ -752,7 +782,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
       `${timedOutLine}${verifyLine}${tailLine}${repoNote}` +
       `\nCHECK the files above actually contain the work before reporting success — an agent's claim is ` +
       `not evidence. If something's off, fix it with edit_file or delegate again with a sharper task.]`
-    : `[delegate_coding_task: ${label} ran but changed NO files (exit ${agent.code}).${timedOutLine}` +
+    : `[delegate_coding_task: ${label} ran but changed NO files (exit ${agent.code}).${timedOutLine}${folderLine}` +
       `\n${label} output (tail):\n${tail}${verifyLine}${repoNote}` +
       `\nNothing was written, so there is nothing to review. Do the change yourself with ` +
       `write_file/edit_file, or delegate again with a clearer task.]`;

@@ -198,24 +198,44 @@ export function agentChangedFiles(input: {
   committed: string;
   /** Scaffolding of our own that must never be reported as the agent's work. */
   exclude?: readonly string[];
-  /** Whole DIRECTORIES of our own, named with their trailing slash. Needed because git collapses an
-   * untracked directory to a single `?? dir/` entry rather than listing what is inside it — so an
-   * exact-path exclusion of `dir/file` never matches, and our own generated config was reported as
-   * the agent's one changed file. That one leaked entry was enough to make the assistant believe a
-   * run had produced a project, go looking for files that were never written, and report a failure
-   * of the wrong thing entirely. */
+  /** Whole DIRECTORIES of our own. Needed because git collapses an untracked directory to a single
+   * `?? dir/` entry rather than listing what is inside it — so an exact-path exclusion of `dir/file`
+   * never matches, and our own generated config was reported as the agent's one changed file. That
+   * one leaked entry was enough to make the assistant believe a run had produced a project, go
+   * looking for files that were never written, and report a failure of the wrong thing entirely.
+   * Matched as a path SEGMENT, at any depth — see the note in `add`. */
   excludeDirs?: readonly string[];
 }): string[] {
   const before = new Set(parsePorcelainPaths(input.dirtyBefore));
   const skip = new Set(input.exclude ?? []);
-  const skipDirs = (input.excludeDirs ?? []).map((d) => (d.endsWith("/") ? d : `${d}/`));
+  const skipDirs = new Set((input.excludeDirs ?? []).map((d) => d.replace(/\/+$/, "")));
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (p: string): void => {
     const path = p.trim();
-    if (!path || skip.has(path) || seen.has(path)) return;
-    // Both the collapsed directory entry (`dir/`) and anything under it.
-    if (skipDirs.some((d) => path === d || path === d.slice(0, -1) || path.startsWith(d))) return;
+    if (!path || seen.has(path)) return;
+    /**
+     * MATCHED BY SEGMENT, BECAUSE GIT DOES NOT REPORT PATHS FROM WHERE THE COMMAND RAN.
+     *
+     * `git status --porcelain` and `git diff --name-only` print paths relative to the REPOSITORY
+     * ROOT, whatever directory they were invoked in. The workspace often is not that root — a chat
+     * folder inside an already-initialised workspace, or a folder inside the reader's own project —
+     * so our own `.vr-codex/config.toml` came back as `chat-21/.vr-codex/config.toml`, a prefix match
+     * against `.vr-codex/` failed, and the app reported the config file we had just generated as the
+     * agent's one changed file.
+     *
+     * What that looked like from outside: "Coding agent changed 1 file(s)", the assistant dutifully
+     * checking and finding an empty file it was not allowed to read, and a delegated run that had in
+     * fact done nothing being reported as having done something. Reported as "the codex integration
+     * just doesn't work, something is wrong with config".
+     *
+     * A segment test does not care where the root is, which is the only thing that makes it correct
+     * here — the depth is genuinely unknown at this point.
+     */
+    const segments = path.split("/").filter(Boolean);
+    if (segments.some((seg) => skipDirs.has(seg))) return;
+    const base = segments[segments.length - 1] ?? path;
+    if (skip.has(path) || skip.has(base)) return;
     seen.add(path);
     out.push(path);
   };

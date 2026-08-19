@@ -461,6 +461,62 @@ describe("jsonGatedTokenSink", () => {
     expect(openBlockOf("Just prose, no block at all.")).toBeUndefined();
   });
 
+  /**
+   * "IT DIDN'T EVEN LOOK AT ITS CHAT HISTORY." It looked, and there was nothing there.
+   *
+   * The walk keeps the newest message unconditionally and then breaks on the first one that doesn't
+   * fit — and a reply that has just written most of a file is, by itself, larger than the whole
+   * history budget. So a turn that said "continue" reached the model as a trimmed marker and the word
+   * "continue", and that marker's own advice is "re-read the file that holds it". It did.
+   */
+  it("keeps the reply being answered, cut in the middle, rather than dropping it whole", async () => {
+    const { trimChatHistory, TRUNCATED_RESULT_MARKER, HISTORY_TRIMMED_MARKER } = await import("./chat-session.js");
+    const huge = "A".repeat(5000) + "TAIL";
+    const out = trimChatHistory(
+      [
+        { role: "user", content: "write me the page" },
+        { role: "assistant", content: huge },
+        { role: "user", content: "continue" },
+      ],
+      1000,
+    );
+    expect(out[0]!.content).toBe(HISTORY_TRIMMED_MARKER);
+    expect(out).toHaveLength(3);
+    expect(out[1]!.role).toBe("assistant");
+    expect(out[1]!.content).toContain(TRUNCATED_RESULT_MARKER);
+    // Head AND tail survive — where the reply STOPPED is the half a continuation needs most.
+    expect(out[1]!.content.startsWith("AAA")).toBe(true);
+    expect(out[1]!.content.endsWith("TAIL")).toBe(true);
+    expect(out[1]!.content.length).toBeLessThanOrEqual(1000);
+    expect(out[2]!.content).toBe("continue");
+  });
+
+  it("still drops older exchanges outright, which is what the marker is for", async () => {
+    const { trimChatHistory, HISTORY_TRIMMED_MARKER } = await import("./chat-session.js");
+    const out = trimChatHistory(
+      [
+        { role: "user", content: "x".repeat(400) },
+        { role: "assistant", content: "y".repeat(400) },
+        { role: "user", content: "recent" },
+        { role: "assistant", content: "reply" },
+        { role: "user", content: "now" },
+      ],
+      40,
+    );
+    expect(out[0]!.content).toBe(HISTORY_TRIMMED_MARKER);
+    expect(out.map((t) => t.content)).toContain("now");
+    expect(out.map((t) => t.content)).not.toContain("x".repeat(400));
+  });
+
+  it("leaves a history that fits completely alone", async () => {
+    const { trimChatHistory } = await import("./chat-session.js");
+    const h = [
+      { role: "user" as const, content: "hi" },
+      { role: "assistant" as const, content: "hello" },
+    ];
+    expect(trimChatHistory(h, 10_000)).toEqual(h);
+  });
+
   it("still streams prose that merely contains balanced braces", async () => {
     const { jsonGatedTokenSink } = await import("./chat-session.js");
     const out: string[] = [];

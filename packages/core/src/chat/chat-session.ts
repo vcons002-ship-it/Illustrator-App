@@ -394,6 +394,37 @@ export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn
     start--;
   }
   if (start === 0) return history;
+  /**
+   * THE REPLY IT JUST MADE IS NEVER DROPPED WHOLE — cut its middle instead.
+   *
+   * Reported as: "how could the chat lose the text it just wrote and go look for a file? I don't
+   * understand why it seems like it didn't even look at its chat history."
+   *
+   * It looked; there was nothing there. This walk keeps the newest message unconditionally (the
+   * reader's new one) and then breaks on the FIRST message that doesn't fit — and a reply that just
+   * wrote most of a file is, on its own, bigger than the whole history budget. So the model was
+   * handed a trimmed marker and the word "continue", and the marker's own advice is "re-read the file
+   * that holds it". It went looking for the file. It was doing exactly as it was told.
+   *
+   * All-or-nothing is the flaw, not the size of the budget: the single most relevant thing in the
+   * conversation is the thing most likely to be too big for it. {@link trimTurnMessages} already
+   * learned this — "the newest result is kept even when it alone exceeds the budget, truncated in the
+   * middle" — and this function is where the same rule was missing.
+   *
+   * Only the message immediately before the new one is rescued this way. Older exchanges dropping out
+   * is ordinary and is what the marker is for; losing the turn being answered is not.
+   */
+  if (start === history.length - 1 && start > 0) {
+    const prev = history[start - 1]!;
+    const room = Math.max(0, maxChars - used);
+    if (room > TRUNCATED_RESULT_MARKER.length) {
+      return [
+        { role: "user", content: HISTORY_TRIMMED_MARKER },
+        { ...prev, content: cutMiddle(prev.content, room) },
+        ...history.slice(start),
+      ];
+    }
+  }
   return [{ role: "user", content: HISTORY_TRIMMED_MARKER }, ...history.slice(start)];
 }
 
