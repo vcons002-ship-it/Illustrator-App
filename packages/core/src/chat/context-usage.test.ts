@@ -59,3 +59,47 @@ describe("shouldAutoCompact", () => {
     expect(shouldAutoCompact(usageWith(5000, 8192), 3, { fraction: 0.5, minMessages: 4 })).toBe(false);
   });
 });
+
+describe("compaction fires when conversation is actually being lost", () => {
+  /**
+   * "WHY ARE WE EVEN TRIMMING CHAT HISTORY?" — a fair question, and the honest answer is that we
+   * should not have been, this often. Auto-compaction exists precisely to summarise a conversation
+   * BEFORE trimming destroys it, and it was gated on `approxTokens`, measured on the history that
+   * SURVIVED trimming. Trimming holds that figure at or under budget by construction, so it never
+   * reached 0.8 of the window and compaction never ran: the donut sat at 44% while earlier turns
+   * were being thrown away every single turn.
+   */
+  it("triggers as soon as anything was dropped, however small the readout", async () => {
+    const { shouldAutoCompact } = await import("./context-usage.js");
+    const trimmedLooksFine = {
+      segments: [],
+      totalChars: 4_000,
+      approxTokens: 1_000, // ~3% of the window — nowhere near the 0.8 fraction
+      maxTokens: 30_000,
+      budgetChars: 12_000,
+      droppedChars: 9_000,
+    };
+    expect(shouldAutoCompact(trimmedLooksFine, 12)).toBe(true);
+    // Nothing dropped and well under the fraction: still nothing to do.
+    const { droppedChars: _drop, ...nothingLost } = trimmedLooksFine;
+    expect(shouldAutoCompact(nothingLost, 12)).toBe(false);
+  });
+
+  it("still needs a real conversation and a known window", async () => {
+    const { shouldAutoCompact } = await import("./context-usage.js");
+    const lost = { segments: [], totalChars: 1, approxTokens: 1, maxTokens: 30_000, budgetChars: 10, droppedChars: 5_000 };
+    // A two-message chat is not worth summarising, however tight the window.
+    expect(shouldAutoCompact(lost, 3)).toBe(false);
+    // No known window means no basis for any of this.
+    const { maxTokens: _max, ...noWindow } = lost;
+    expect(shouldAutoCompact(noWindow, 12)).toBe(false);
+  });
+
+  it("records what did not fit, and omits the field when everything did", async () => {
+    const { measureContextUsage } = await import("./context-usage.js");
+    const parts = [{ key: "history", label: "Chat history", text: "abc" }];
+    expect(measureContextUsage(parts, { budgetChars: 100, droppedChars: 42 }).droppedChars).toBe(42);
+    expect(measureContextUsage(parts, { budgetChars: 100 }).droppedChars).toBeUndefined();
+    expect(measureContextUsage(parts, { budgetChars: 100, droppedChars: 0 }).droppedChars).toBeUndefined();
+  });
+});

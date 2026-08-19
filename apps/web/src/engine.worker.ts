@@ -10,6 +10,7 @@ import {
   chatContextSections,
   chatSystemCachePrefix,
   lookupBible,
+  chatTurnsChars,
   measureContextUsage,
   searchBookPassages,
   historyBudget,
@@ -3494,10 +3495,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         : msg.userText;
     // The conversation gets whatever the system prompt didn't use — measured, not guessed. See
     // historyBudget: a fixed fraction starved the chat of all but the last exchange or two.
-    const history = trimChatHistory(
-      [...msg.history, { role: "user", content: modelFacingUserText }],
-      historyBudget(budgets.input, system.length),
-    );
+    const fullHistory: ChatTurn[] = [...msg.history, { role: "user", content: modelFacingUserText }];
+    const history = trimChatHistory(fullHistory, historyBudget(budgets.input, system.length));
     // Where the context is going, for the usage donut — posted before the turn.
     post({
       type: "chatContextUsage",
@@ -3514,7 +3513,14 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
           { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
           { key: "message", label: "Your message", text: msg.userText },
         ],
-        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
+        {
+          budgetChars: budgets.book,
+          ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}),
+          ...(() => {
+            const dropped = chatTurnsChars(fullHistory) - chatTurnsChars(history);
+            return dropped > 0 ? { droppedChars: dropped } : {};
+          })(),
+        },
       ),
     });
     const thinking = thinkingNotifier((text) =>
@@ -6124,10 +6130,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // As above: the buddy chat has no book section at all, so a fixed 30%-to-history split
     // reserved most of the window for something that isn't there and left the conversation with a
     // few hundred words. What the setup didn't use is the conversation's.
-    const history = trimChatHistory(
-      [...msg.history, { role: "user", content: modelFacingUserText }],
-      historyBudget(budgets.input, setup.length + volatile.length),
-    );
+    const fullBuddyHistory: ChatTurn[] = [...msg.history, { role: "user", content: modelFacingUserText }];
+    const history = trimChatHistory(fullBuddyHistory, historyBudget(budgets.input, setup.length + volatile.length));
     post({
       type: "chatContextUsage",
       requestId: msg.requestId,
@@ -6138,7 +6142,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
           { key: "message", label: "Your message", text: msg.userText },
         ],
-        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
+        {
+          budgetChars: budgets.book,
+          ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}),
+          // How much conversation did NOT fit. The segments above describe what was sent, so without
+          // this the readout — and auto-compaction, which reads the same figure — are both measured
+          // after the loss and can never see it.
+          ...(() => {
+            const dropped = chatTurnsChars(fullBuddyHistory) - chatTurnsChars(history);
+            return dropped > 0 ? { droppedChars: dropped } : {};
+          })(),
+        },
       ),
     });
     /**
