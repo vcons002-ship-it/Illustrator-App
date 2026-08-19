@@ -692,6 +692,28 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).toContain("if (id === activeBuddyIdRef.current) setChatFolder(dir);");
   });
 
+  it("finds a folder the chat ALREADY has, on a fresh page load", () => {
+    // The chat→folder map is rebuilt per page load and only a WRITE ever filled it, so after a
+    // reload a chat with a folder full of its work looked like a chat with none: the bar said
+    // "Default workspace" and — worse — commands and reads went to the shared root while the chat's
+    // files sat elsewhere. The folder was on disk the whole time; nothing was looking for it.
+    expect(APP_RAW).toContain("const adoptChatWorkspace = useCallback");
+    expect(APP_RAW).toContain("void adoptChatWorkspaceRef.current(activeBuddyId);");
+    // Sessions arrive from storage after the first render, and the folder's name comes from the
+    // chat's — probing before they land would look for the wrong name.
+    expect(APP_RAW).toContain("}, [activeBuddyId, buddySessions]);");
+  });
+
+  it("adopts read-only, so a chat that only talks still never grows a folder", () => {
+    const at = APP_RAW.indexOf("const adoptChatWorkspace = useCallback");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, displayLabel],", at));
+    expect(body).toContain("await readWorkspaceFile(");
+    expect(body, "the probe must never create a folder").not.toContain("writeWorkspaceFile");
+    // It checks the suffixed name a collision would have produced, and refuses someone else's folder.
+    expect(body).toContain("for (const folder of [base, suffixed])");
+    expect(body).toContain("if (owner && owner !== id) continue;");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
