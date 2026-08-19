@@ -919,6 +919,28 @@ describe("buildBuddySystemPrompt", () => {
     expect(g).toContain("draft_email");
   });
 
+  /**
+   * THE WORKED EXAMPLE WAS TEACHING THE OPPOSITE OF THE RULE.
+   *
+   * The paragraph said "name files for what they are" and then demonstrated `script.py`, `main.py`,
+   * `test_main.py` and `src/main.py`. A small model copies the demonstration — this repo has learned
+   * that more than once — so the reader ended up with a workspace where everything was called
+   * something generic and nothing could be found. Rule and example now agree.
+   */
+  it("demonstrates descriptive filenames, not main.py", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
+    expect(p).toContain("NAME A FILE FOR WHAT IT DOES");
+    expect(p).toContain("are NOT " + "names");
+    // The prohibition has to NAME the generic names to forbid them; everywhere else in the prompt
+    // they must be gone. A negative ("X is not a name") is a rule; a tool call using X is a
+    // demonstration, and the demonstration is what gets copied.
+    const sentence = p.slice(p.indexOf("NAME A FILE FOR WHAT IT DOES"), p.indexOf("are NOT names") + 13);
+    const rest = p.replace(sentence, "");
+    for (const generic of ["script.py", "main.py", "app.js", "index.js", "code.html"]) {
+      expect(rest, `${generic} is being demonstrated to the model`).not.toContain(generic);
+    }
+  });
+
   it("carries the show-me-vs-generate image-tool rule in both modes", () => {
     for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });

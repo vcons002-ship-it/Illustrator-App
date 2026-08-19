@@ -1332,7 +1332,7 @@ export function buildBuddySystemPrompt(raw: {
       'view a picture, or after you find or create one and want to display it. Don\'t read an image file as text.\n'
     : "";
   const writeFileTool = opts.canRunCommands
-    ? '- {"tool":"write_file","path":"script.py","content":"…"} — SAVE a file straight into the workspace ' +
+    ? '- {"tool":"write_file","path":"tide-clock.py","content":"…"} — SAVE a file straight into the workspace ' +
       "yourself: a script or data file to run, OR any sizable thing the reader KEEPS — a long document/.md, an " +
       // THE WORKED EXAMPLES ARE THE CONVENTION. They used to be `analysis.py`, `dragon.html`,
       // `notes.md` — all bare filenames — so every chat's files landed together in one flat folder
@@ -1342,10 +1342,17 @@ export function buildBuddySystemPrompt(raw: {
       ".html page, a report. `path` is workspace-relative and cannot escape the workspace. The app FILES " +
       "what you write: prose to `documents/`, structured files to `data/`, pictures to `images/`, notes to " +
       "`notes/`. CODE AND ANYTHING ELSE THAT RUNS STAYS AT THE TOP, beside run_command — which always runs " +
-      "in the workspace root — so `main.py` and `test_main.py` sit together and import each other. Give a " +
+      "in the workspace root — so `tide-clock.py` and `test_tide_clock.py` sit together and import each other. Give a " +
       "path yourself (`src/lib/util.ts`) and it is used exactly as written. " +
-      "Name files for what they are, in words, with no dates or version numbers — `tide-report.md`, not " +
-      "`2026-08-20-tide-report-v2.md` — and rewrite the same path when you revise something. Saving needs " +
+      // THE EXAMPLES ABOVE USED TO BE `script.py`, `main.py`, `test_main.py`. The rule beside them
+      // already said "name files for what they are" — and the model copied the demonstration, which
+      // is what a small model does with a rule and an example that disagree. A workspace where every
+      // chat's work is called main.py cannot be searched, listed or read a week later, and the
+      // reader reported exactly that.
+      "NAME A FILE FOR WHAT IT DOES, in words, with no dates or version numbers — `tide-report.md`, not " +
+      "`2026-08-20-tide-report-v2.md`. `main.py`, `app.js`, `index.js`, `script.py` and `code.html` are NOT " +
+      "names: they say nothing, and every one of them collides with the last thing that was called that. " +
+      "Rewrite the SAME path when you revise something — a revision is not a new file. Saving needs " +
       "NO approval click. Prefer this over a fenced ```code``` " +
       "block for anything substantial: the file is saved WHOLE on disk and you can read it back next turn (read with "
       + 'source:"file"), ' +
@@ -1359,7 +1366,7 @@ export function buildBuddySystemPrompt(raw: {
       "file is already whole.\n"
     : "";
   const editFileTool = opts.canRunCommands
-    ? '- {"tool":"edit_file","path":"src/main.py","edits":[{"search":"old exact text","replace":"new text"}]} — ' +
+    ? '- {"tool":"edit_file","path":"tide-clock.py","edits":[{"search":"old exact text","replace":"new text"}]} — ' +
       "change an EXISTING workspace file IN PLACE via search/replace, instead of rewriting the whole file. Each " +
       "`search` must appear EXACTLY ONCE — copy enough surrounding lines VERBATIM (from a read, source:\"file\") to make it " +
       "unique; if a search is ambiguous, add more context. ALWAYS prefer this over write_file when TWEAKING a file " +
@@ -2074,7 +2081,7 @@ export function buildBuddySystemPrompt(raw: {
       ? '    • "file" → ref is a LOCAL path (from find_files) — read ONE local file\'s text (a form, a statement, a ' +
         "prior document) when you need what's inside it. (For an IMAGE file use open_image, not read.) A big file " +
         'comes back in pieces: add "from" and/or "to" (1-based LINE numbers) to read any part of it, e.g. ' +
-        '{"tool":"read","source":"file","ref":"src/main.py","from":400,"to":600}. The header tells you which lines ' +
+        '{"tool":"read","source":"file","ref":"tide-clock.py","from":400,"to":600}. The header tells you which lines ' +
         "you got and how many the file has, so keep reading until you have the part you need to change — edit_file " +
         "matches text VERBATIM, so it can only be aimed at text you have actually read.\n"
       : "") +
