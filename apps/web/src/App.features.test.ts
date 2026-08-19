@@ -848,6 +848,32 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).toContain("launchesAnApp(call.command),\n      );");
   });
 
+  /**
+   * "STILL CAN'T DOWNLOAD" — on the card for the edit that had just been made.
+   *
+   * write_file's card carries what it wrote; edit_file's carried only a path. On a linked phone that
+   * path is on another machine, so 💾 Download went to a disk it cannot reach and failed, while the
+   * file's content — which after an edit is the WHOLE file — was right there in the host that built
+   * the card. The two cards had no reason to differ.
+   */
+  it("puts the edited file on its own card, so a phone can save it", () => {
+    const at = APP_RAW.indexOf("const runEditFile");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("const feedback = formatBuddyToolResult(call, { editFile: payload });", at));
+    expect(body).toContain("content: r.content,");
+    expect(body).toContain("kind: createdFileKind(call.path)");
+  });
+
+  it("opens from what the card holds when the disk is on another machine", () => {
+    // The path is still preferred on the DESKTOP — it opens the real file with its real handling,
+    // not a copy rebuilt from the card.
+    expect(APP_RAW).toContain(
+      "if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void onOpenLocalFile(ref.path);",
+    );
+    expect(APP_RAW).toContain(
+      "if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void readLocalFile(ref.path).then((f) => onUpload(f, as));",
+    );
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
