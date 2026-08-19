@@ -364,6 +364,85 @@ describe("jsonGatedTokenSink", () => {
     expect(out.join("").trim()).toBe("Looking that up.");
   });
 
+  /**
+   * THE BLOCK'S OWN CLOSING FENCE USED TO END THE STREAM FOR GOOD.
+   *
+   * Reported as a reply that "got stuck partway through and never continued", with no way to tell
+   * whether the model was working. It was: `mute` is terminal, a bare ``` is how a tool call opens,
+   * and the line that CLOSES a deliverable looks exactly like one. So the first code block streamed,
+   * its closing fence muted the sink, and the rest of the answer — here the full corrected file, the
+   * thing actually being asked for — was written to nobody for the rest of the generation.
+   */
+  it("keeps streaming after a code block closes, including a second block", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    const reply = "Found it:\n\n```js\nconst a = 1;\n```\n\nHere is the whole file:\n\n```html\n<p>hi</p>\n```\n";
+    for (const ch of reply) sink(ch);
+    expect(out.join("")).toBe(reply);
+  });
+
+  /**
+   * A LINE THAT STARTS WITH `{` IS ORDINARY SOURCE, not a tool call, once we are inside a block.
+   * An object in an array literal is enough to hit it, and it muted the rest of the generation.
+   */
+  it("does not mute on a brace at the start of a line inside a code block", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    const reply = "Here:\n\n```js\nconst p = [\n  { x: 0 },\n];\nconsole.log(p);\n```\nDone.";
+    for (const ch of reply) sink(ch);
+    expect(out.join("")).toBe(reply);
+  });
+
+  /** A `````-fenced block is closed by its own run, not by the ``` on a line inside it — which is
+   * exactly why the opener is remembered as a run and not as a boolean. */
+  it("closes a longer fence only on a run at least as long", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    const reply = "See:\n\n````md\n```js\nx\n```\n````\nDone.";
+    for (const ch of reply) sink(ch);
+    expect(out.join("")).toBe(reply);
+  });
+
+  /** The gate must still do its job on the prose BETWEEN blocks: closing one puts us back outside,
+   * where a tool call is a tool call again. */
+  it("still mutes a tool call appended after a code block", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    for (const ch of 'Saving it.\n\n```js\nconst a = 1;\n```\n\n{"tool":"write_file","path":"a.js"}') sink(ch);
+    expect(out.join("")).toBe("Saving it.\n\n```js\nconst a = 1;\n```\n");
+  });
+
+  /**
+   * A CONTINUATION IS THE MIDDLE OF A REPLY, NOT THE START OF ONE.
+   *
+   * When the budget cuts an answer off, the loop asks the model to pick up at the next character and
+   * a FRESH sink receives it. The hold asks "does this reply open like a tool call?" — a question
+   * about the first characters of an answer — and part two of a file routinely resumes on a `{` or on
+   * the ``` that closes the block. Answered about a fragment, it muted the whole continuation, so the
+   * reply stopped growing exactly when the budget ran out: the moment it most looks like a hang.
+   */
+  it("streams a continuation that resumes on a brace", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t), { fence: "```" });
+    for (const ch of '{ "x": 1 },\n{ "y": 2 },\n];\n```\nThat completes it.') sink(ch);
+    expect(out.join("")).toBe('{ "x": 1 },\n{ "y": 2 },\n];\n```\nThat completes it.');
+  });
+
+  it("knows which block a cut-off reply left open", async () => {
+    const { openFenceOf } = await import("./chat-session.js");
+    expect(openFenceOf("Here:\n\n```html\n<p>hi</p>")).toBe("```");
+    expect(openFenceOf("Here:\n\n```html\n<p>hi</p>\n```\nDone.")).toBe("");
+    // Folded across parts: the second half closes what the first half opened.
+    expect(openFenceOf("<p>more</p>\n```\nDone.", "```")).toBe("");
+    // A ```` block is not closed by the ``` inside it.
+    expect(openFenceOf("````md\n```js\nx\n```\n")).toBe("````");
+  });
+
   it("still streams prose that merely contains balanced braces", async () => {
     const { jsonGatedTokenSink } = await import("./chat-session.js");
     const out: string[] = [];

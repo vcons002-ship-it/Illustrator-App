@@ -539,6 +539,20 @@ interface BuddySession {
    * file ledger, and the reader can work in one by hand.
    */
   hidden?: boolean;
+  /**
+   * THE CHAT'S OWN WORKSPACE FOLDER, once it has one. Absolute, and REMEMBERED rather than re-derived.
+   *
+   * The folder was named after the chat and then found again by rebuilding that name from scratch on
+   * every page load — which works right up until the name changes, and the name is a POSITION in a
+   * list. Delete an earlier chat and "Chat 21" becomes "Chat 13": the folder full of work is still on
+   * disk under the old name, and the app now goes looking for a different one, finds nothing, and
+   * reports "Default workspace" while a directory of that chat's files sits beside it.
+   *
+   * Renaming the chat did the same thing, more obviously. So the derived name is now only ever used
+   * ONCE, to choose a folder the first time one is needed; after that this is the answer, and the
+   * chat can be renamed and renumbered as much as the reader likes without moving anything.
+   */
+  chatDir?: string;
 }
 
 /**
@@ -798,6 +812,8 @@ export function App() {
       status: "reading" | "ready" | "error";
       error?: string;
       text?: string;
+      /** The untruncated file, kept for the workspace copy — see ChatSendAttachment.full. */
+      full?: string;
       image?: { bytes: ArrayBuffer; mimeType: string };
     }[]
   >([]);
@@ -1940,13 +1956,26 @@ export function App() {
    */
   const displayLabel = useCallback((id: string): string => {
     const list = buddySessionsRef.current;
-    const i = list.findIndex((s) => s.id === id);
-    const s = i === -1 ? undefined : list[i];
+    const s = list.find((x) => x.id === id);
+    /**
+     * NUMBERED WITHIN THE LIST THE READER SEES, which is the only list the number means anything in.
+     *
+     * "Chat N" was counted over the RAW session array here and over the FILTERED one in the switcher,
+     * and the two disagree by however many hidden sessions (a scheduled task's workspace is one) come
+     * first. The switcher said "Chat 13" and this said "Chat 21", so the chat named its folder
+     * `chat-21` and then looked for `chat-13` — and the reader, reasonably, reported that the app was
+     * still just using the default workspace.
+     *
+     * The switcher now calls this rather than counting again, so there is one number and it cannot
+     * drift. A HIDDEN session is not in that list and gets no number: it falls back to its folder
+     * name, and failing that to its id, which is stable rather than merely plausible.
+     */
+    const i = list.filter((x) => !x.hidden).findIndex((x) => x.id === id);
     return (
       s?.label?.trim() ||
       (id === BUDDY_CHAT_ID ? "Assistant chat" : "") ||
       (s?.workingDir ? lastPathSegment(s.workingDir) : "") ||
-      `Chat ${i + 1}`
+      (i === -1 ? `Chat ${id.replace(/[^a-z0-9]+/gi, "").slice(-6).toLowerCase()}` : `Chat ${i + 1}`)
     );
   }, []);
   // Live mirrors: a turn dispatched right after opening a task runs before the async
@@ -1961,9 +1990,37 @@ export function App() {
   // name comes from the chat's, and sessions arrive from storage after the first render: probing
   // before they land would look for the wrong name.
   useEffect(() => {
+    // The stored folder first — it is the durable answer, it needs no disk probe, and on a PHONE
+    // (which resolves nothing itself) it is the only answer there is.
+    const stored = buddySessions.find((s) => s.id === activeBuddyId)?.chatDir;
+    if (stored) chatWorkspaceRef.current.set(activeBuddyId, stored);
     setChatFolder(chatWorkspaceRef.current.get(activeBuddyId));
     void adoptChatWorkspaceRef.current(activeBuddyId);
   }, [activeBuddyId, buddySessions]);
+  /**
+   * REMEMBER THE FOLDER — in the map the turn reads synchronously, on the session that is persisted
+   * and mirrored, and in the bar.
+   *
+   * One place, because these three had to agree and previously only the first was written: the map is
+   * rebuilt empty on every page load, so a chat's folder was forgotten the moment the app restarted,
+   * and the phone was never told about it at all.
+   */
+  const rememberChatDir = useCallback(
+    (id: string, dir: string): void => {
+      chatWorkspaceRef.current.set(id, dir);
+      if (id === activeBuddyIdRef.current) setChatFolder(dir);
+      if (isRemoteClient) return; // the desktop owns the sessions; the phone receives them
+      setBuddySessions((prev) => {
+        if (prev.some((s) => s.id === id && s.chatDir === dir)) return prev;
+        const next = prev.map((s) => (s.id === id ? { ...s, chatDir: dir } : s));
+        // Written directly rather than through persistSessions, which is declared further down and
+        // would be a TDZ in this dependency array.
+        void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(next)).catch(() => {});
+        return next;
+      });
+    },
+    [isRemoteClient, libraryStore],
+  );
   /**
    * THE CHAT'S OWN FOLDER, MADE THE FIRST TIME IT WRITES SOMETHING.
    *
@@ -2015,15 +2072,14 @@ export function App() {
       // `saved` is the absolute path of the README; its directory is the workspace.
       const dir = saved.slice(0, Math.max(saved.lastIndexOf("/"), saved.lastIndexOf("\\")));
       if (!dir) return undefined;
-      chatWorkspaceRef.current.set(id, dir);
-      if (id === activeBuddyIdRef.current) setChatFolder(dir);
+      rememberChatDir(id, dir);
       return dir;
     } catch {
       // Best-effort: a workspace we could not create must not stop the write. It falls back to the
       // shared root, which is exactly where it used to go.
       return undefined;
     }
-  }, [isRemoteClient, displayLabel]);
+  }, [isRemoteClient, displayLabel, rememberChatDir]);
   /**
    * FIND THE CHAT'S EXISTING FOLDER, WITHOUT MAKING ONE.
    *
@@ -2040,9 +2096,26 @@ export function App() {
   const adoptChatWorkspace = useCallback(
     async (id: string): Promise<void> => {
       if (!isDesktop || isRemoteClient || chatWorkspaceRef.current.has(id)) return;
+      const list = buddySessionsRef.current;
+      const stored = list.find((s) => s.id === id)?.chatDir;
+      if (stored) {
+        rememberChatDir(id, stored);
+        return;
+      }
       const base = chatFolderName(displayLabel(id), id);
       const suffixed = `${base}-${id.replace(/[^a-z0-9]+/gi, "").slice(-6).toLowerCase()}`;
-      for (const folder of [base, suffixed]) {
+      /**
+       * THE NAME A FOLDER WAS MADE UNDER IS NOT ALWAYS THE NAME IT WOULD GET TODAY.
+       *
+       * Folders made before the numbering was unified were named from the RAW session index, so a
+       * chat the switcher calls "Chat 13" can own a directory called `chat-21` — full of its work,
+       * and invisible to a probe that only asks for the current name. Every name this app has ever
+       * generated is tried, newest convention first, and the marker in the README is what confirms
+       * the folder is actually this chat's rather than a lookalike. One probe: whatever it finds is
+       * then stored, so no later load has to guess again.
+       */
+      const legacy = chatFolderName(`Chat ${list.findIndex((s) => s.id === id) + 1}`, id);
+      for (const folder of [...new Set([base, suffixed, legacy])]) {
         try {
           const r = await readWorkspaceFile(`${folder}/README.md`);
           if (!r.exists) continue;
@@ -2052,15 +2125,14 @@ export function App() {
           if (owner && owner !== id) continue;
           const dir = r.path.slice(0, Math.max(r.path.lastIndexOf("/"), r.path.lastIndexOf("\\")));
           if (!dir) continue;
-          chatWorkspaceRef.current.set(id, dir);
-          if (id === activeBuddyIdRef.current) setChatFolder(dir);
+          rememberChatDir(id, dir);
           return;
         } catch {
           // Best-effort: not finding a folder is the same as not having one.
         }
       }
     },
-    [isRemoteClient, displayLabel],
+    [isRemoteClient, displayLabel, rememberChatDir],
   );
   adoptChatWorkspaceRef.current = (id) => void adoptChatWorkspace(id);
   /** The folder to work in for this chat: the reader's own choice first, else the chat's — CREATING
@@ -3982,6 +4054,7 @@ export function App() {
         ...(s.label ? { label: s.label } : {}),
         ...(s.closed ? { closed: true as const } : {}),
         ...(s.hidden ? { hidden: true as const } : {}),
+        ...(s.chatDir ? { chatDir: s.chatDir } : {}),
       })),
       activeId: activeBuddyId,
       messages: boundChatHistoryForMirror(buddyMessages),
@@ -4007,6 +4080,9 @@ export function App() {
         ...(s.label ? { label: s.label } : {}),
         ...(s.closed ? { closed: true as const } : {}),
         ...(s.hidden ? { hidden: true as const } : {}),
+        // The folder the DESKTOP resolved. The phone can't work one out for itself, so without this
+        // its bar has nothing to name and says "Default workspace" while the turn runs elsewhere.
+        ...(s.chatDir ? { chatDir: s.chatDir } : {}),
       })),
     );
     // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
@@ -5030,14 +5106,15 @@ export function App() {
       walked.add(chatId);
       out.push(...collectCreations(chatId, label, msgs));
     };
-    const sessionLabel = (s: BuddySession, i: number) => s.label || (s.id === BUDDY_CHAT_ID ? "Assistant chat" : `Chat ${i + 1}`);
-    buddySessions.forEach((s, i) => {
-      if (s.id === activeBuddyId) walk(s.id, sessionLabel(s, i), buddyMessages);
-    });
-    for (const [i, s] of buddySessions.entries()) {
+    // Same name here as in the switcher and on the folder — a third "Chat N" count is a third
+    // chance for them to disagree.
+    for (const s of buddySessions) {
+      if (s.id === activeBuddyId) walk(s.id, displayLabel(s.id), buddyMessages);
+    }
+    for (const s of buddySessions) {
       if (walked.has(s.id)) continue;
       const hist = await libraryStore.getChatHistory?.(s.id).catch(() => undefined);
-      if (hist) walk(s.id, sessionLabel(s, i), hist);
+      if (hist) walk(s.id, displayLabel(s.id), hist);
     }
     const books = await libraryStore.listBooks().catch(() => [] as BookSummary[]);
     for (const b of books) {
@@ -6376,6 +6453,48 @@ export function App() {
     [codeFileName, isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme, workspaceDirNow],
   );
   saveCodeToWorkspaceRef.current = (b, source) => void saveCodeToWorkspace(b, source);
+
+  /**
+   * A FILE THE READER ATTACHED IS ALSO WORK — SO IT GOES TO THE WORKSPACE TOO.
+   *
+   * Reported as: "the uploaded file was immediately lost after the turn ended, it was never saved to
+   * a workspace", and then, a few messages later, "it didn't know where to find the code to give me a
+   * fully fixed version." One cause, two symptoms.
+   *
+   * An attachment was folded into ONE turn's prompt as `[Attached file "x"]\n<text>` and nowhere
+   * else. Its chip in the transcript carries `turns: []` — display-only, deliberately, so a 30k-char
+   * paste doesn't sit in the model's history forever. Which is right, and left the content existing
+   * in exactly one place: a prompt that had already been sent. The next turn had no file to read, no
+   * ledger entry to point at one, and nothing to do but ask the reader to paste it again.
+   *
+   * Everything else the assistant handles already lands on disk — a code book, a created document, a
+   * written file. An upload is the same kind of thing arriving through a different door, so it takes
+   * the same route: `workspacePathFor` sorts it by kind, `recordCreatedFile` puts it in the ledger
+   * (the pointer that survives history trimming), and the README picks it up.
+   *
+   * NEVER writes a SHORT copy over a good file. The model's share of an attachment is bounded, and
+   * saving that bounded copy would silently truncate the reader's own file on disk. `full` carries
+   * the whole thing when the two differ; without it, the text is only trusted when it came in under
+   * the cap and is therefore whole.
+   */
+  const saveAttachmentToWorkspace = useCallback(
+    async (att: { name: string; text?: string; full?: string }): Promise<string | undefined> => {
+      if (!isDesktop && !isRemoteClient) return undefined;
+      const body = att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined);
+      if (!body?.trim()) return undefined;
+      const path = workspacePathFor(att.name);
+      try {
+        await execHostTool({ tool: "write_file", path, content: body });
+        recordCreatedFile(path, body.split("\n").length, false);
+        void refreshWorkspaceReadme();
+        return path;
+      } catch {
+        // Best-effort: a file we couldn't save must not stop the turn that was asking about it.
+        return undefined;
+      }
+    },
+    [isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme],
+  );
 
   // Load the editor when a (different) code book opens; clear it otherwise. Gated on the book id so
   // persisting an edit back into `book` (same id) doesn't yank the draft out from under the typist.
@@ -8386,7 +8505,8 @@ export function App() {
           const text = (raw ?? "").trim();
           const name = imported.kind === "book" ? imported.book.title : imported.title || file.name;
           if (!text) return { id, name, kind: "doc", status: "error", error: "No readable text in this file." };
-          return { id, name, kind: "doc", status: "ready", text: text.slice(0, ATTACH_DOC_MAX_CHARS) };
+          const bounded = text.slice(0, ATTACH_DOC_MAX_CHARS);
+          return { id, name, kind: "doc", status: "ready", text: bounded, ...(text.length > bounded.length ? { full: text } : {}) };
         }),
       );
     } catch (e) {
@@ -8452,15 +8572,24 @@ export function App() {
               : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}.${alsoAReference}]`,
           );
         } else if (att.kind === "doc" && att.text) {
-          appendBuddy({ role: "user", text: `📎 ${att.name}`, turns: [] });
-          parts.push(`[Attached file "${att.name}"]\n${att.text}`);
+          // Saved BEFORE the turn runs, so the path in the prompt below is one the model can already
+          // read — and so a turn that is stopped part-way still leaves the file behind.
+          const saved = await saveAttachmentToWorkspace(att);
+          appendBuddy({ role: "user", text: saved ? `📎 ${att.name} → ${saved}` : `📎 ${att.name}`, turns: [] });
+          parts.push(
+            saved
+              ? `[Attached file "${att.name}" — SAVED IN THE WORKSPACE as ${saved}. It is on disk: to see it again ` +
+                `later in this conversation, read_file "${saved}" rather than asking the reader to paste it, and ` +
+                `edit_file/write_file the same path when you change it.]\n${att.text}`
+              : `[Attached file "${att.name}"]\n${att.text}`,
+          );
         }
       }
       const combined = parts.length ? `${parts.join("\n\n")}\n\n${userText}` : userText;
       // The attachment bubbles are already shown above; pass the typed question as its own bubble.
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, userText);
     },
-    [assessImage, onBuddySendText, buddyMessages],
+    [assessImage, onBuddySendText, buddyMessages, saveAttachmentToWorkspace],
   );
   // Panel "send": gather the ready attachments. On a linked PHONE the turn runs on the DESKTOP (it
   // has the models + the working folder) — relay the message AND its (already-extracted) attachments,
@@ -8471,7 +8600,7 @@ export function App() {
       const atts: ChatSendAttachment[] = ready.map((a) =>
         a.kind === "image" && a.image
           ? { name: a.name, kind: "image", image: { bytes: a.image.bytes.slice(0), mimeType: a.image.mimeType } }
-          : { name: a.name, kind: "doc", ...(a.text ? { text: a.text } : {}) },
+          : { name: a.name, kind: "doc", ...(a.text ? { text: a.text } : {}), ...(a.full ? { full: a.full } : {}) },
       );
       if (atts.length) setBuddyAttachments([]); // consumed the ready chips (a still-reading one stays)
       if (isRemoteClient) {
@@ -8496,6 +8625,11 @@ export function App() {
           relayAtts = await Promise.all(
             relayAtts.map(async (a) => (a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image, 512) } : a)),
           );
+        }
+        if (!fitsOneRelayFrame(frame(relayAtts))) {
+          // Last thing to go before the send itself: the workspace copy's tail. The model still gets
+          // its bounded `text`, and a document saved short beats a document not sent at all.
+          relayAtts = relayAtts.map(({ full: _full, ...a }) => a);
         }
         if (!fitsOneRelayFrame(frame(relayAtts))) {
           buddyNoteRef.current(
@@ -10345,9 +10479,11 @@ export function App() {
       // it doesn't leave the picker showing some other chat's name.
       sessions={buddySessions
         .filter((s) => !s.hidden || s.id === activeBuddyId)
-        .map((s, i) => ({
+        // ONE definition of the name — displayLabel. Counting "Chat N" again here is what let the
+        // switcher and the chat's own folder disagree.
+        .map((s) => ({
           id: s.id,
-          label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
+          label: displayLabel(s.id),
           ...(s.closed ? { closed: true } : {}),
         }))}
       activeSessionId={activeBuddyId}

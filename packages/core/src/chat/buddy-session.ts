@@ -40,7 +40,7 @@ import { buildTradingScript, scriptLanguage } from "./trading-scripts.js";
 import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
-import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
+import { jsonGatedTokenSink, openFenceOf, trimTurnMessages } from "./chat-session.js";
 import { TOOLSET_IDS, isToolAvailable, toolsetForTool } from "./toolsets.js";
 import {
   MIN_CHUNKED_DOCUMENT_CHARS,
@@ -698,7 +698,9 @@ export async function runBuddyTurn(opts: {
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
   // continued in another pass and stitched together.
-  const chatOnce = (): Promise<string> => {
+  /** `resume` marks a call that CONTINUES the previous reply rather than starting a new one — see
+   * jsonGatedTokenSink's second parameter. Only the auto-continue below passes it. */
+  const chatOnce = (resume?: { fence?: string }): Promise<string> => {
     lastTruncated = false;
     // First-token heartbeat: a big local model (e.g. a 27B over the phone tunnel) can take a long
     // time to load/process the prompt before the FIRST token arrives. The linked phone's silence
@@ -770,7 +772,7 @@ export async function runBuddyTurn(opts: {
              * with a different answer, and it is answered here, on every delta.
              */
             onToken: ((): ((delta: string) => void) => {
-              const gated = jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text }));
+              const gated = jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text }), resume);
               return (delta: string) => {
                 noteContent();
                 gated(delta);
@@ -1219,6 +1221,9 @@ export async function runBuddyTurn(opts: {
       // where it left off and stitch the parts, so a big document (a full worksheet, a long file)
       // isn't capped at one reply — the reader sees each part stream in with a "part N" status.
       let rawSoFar = reply;
+      // Where the reply left off, block-wise. Folded part by part so a file spanning three
+      // continuations is still recognised as one open block on the third.
+      let openFence = openFenceOf(reply);
       // A budget spent on REASONING is not an answer cut off mid-sentence — see
       // MIN_CONTINUABLE_CHARS. Entering the loop on a one-character reply asks the model to continue
       // something that was never started, and every pass pushes its own reply and the directive back
@@ -1234,7 +1239,8 @@ export async function runBuddyTurn(opts: {
             "next character, do NOT repeat anything already written, no preamble and no tool calls — " +
             "until the answer is complete.]",
         });
-        rawSoFar = await chatOnce();
+        rawSoFar = await chatOnce({ fence: openFence });
+        openFence = openFenceOf(rawSoFar, openFence);
         const more = stripToolCallJson(rawSoFar).trim();
         // A pass that adds nothing will not add anything next time either, and each one costs a
         // model call and two more messages of context. The old loop ran all eight regardless.

@@ -63,9 +63,74 @@ export type ChatTurnEvent =
  * live once the first non-JSON character proves the reply is an answer; a held
  * JSON reply that turns out to be prose still arrives via the final text.
  */
-export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string) => void {
+/**
+ * The fenced block `text` leaves OPEN, or "" when it ends outside one.
+ *
+ * Used to hand the auto-continue's sink the state its predecessor ended in: part two of a file is
+ * still inside the block part one opened, and a gate that thinks otherwise reads the ``` closing that
+ * block as a tool call and mutes the rest.
+ *
+ * `start` is the fence already open when `text` begins, so a reply split across several continuations
+ * can be folded one part at a time.
+ */
+export function openFenceOf(text: string, start = ""): string {
+  let fence = start;
+  for (const line of text.split("\n")) {
+    const l = line.trim();
+    if (fence) {
+      if (new RegExp("^`{" + fence.length + ",}$").test(l)) fence = "";
+      continue;
+    }
+    const m = /^(`{3,})[ \t]*[A-Za-z][\w+#-]*$/.exec(l);
+    if (m) fence = m[1]!;
+  }
+  return fence;
+}
+
+export function jsonGatedTokenSink(
+  emit: (text: string) => void,
+  /**
+   * RESUMING a reply rather than starting one — the auto-continue after a length cut.
+   *
+   * The hold below asks "does this reply OPEN like a tool call?", which is a question about the first
+   * characters of an answer. A continuation's first characters are the middle of one: pick up inside
+   * an HTML file and it very often resumes on `{`, or on the ``` that closes the block. Asked the
+   * opening question about a fragment, the gate muted the entire continuation — so the reply stopped
+   * growing at exactly the point the budget ran out, which is the moment it most looks like a hang.
+   *
+   * `fence` carries too: part two of a file is still inside the block part one opened.
+   */
+  resume?: { fence?: string },
+): (delta: string) => void {
   let buffer = "";
-  let mode: "hold" | "live" | "mute" = "hold";
+  let mode: "hold" | "live" | "mute" = resume ? "live" : "hold";
+  /**
+   * INSIDE A FENCED BLOCK, NOTHING IS A TOOL CALL — and not knowing that is what went dark.
+   *
+   * Reported as: "it got stuck partway through its response and never continued… maybe it was
+   * working but there was absolutely no way to tell." The reply froze mid-code-block with a cursor
+   * under it, so the reader stopped a turn that was writing the file perfectly well, and then had to
+   * ask for it again.
+   *
+   * `mute` is TERMINAL, and two things every code block contains were tripping it:
+   *
+   *   1. ITS OWN CLOSING FENCE. A bare ``` is how a tool call opens, so the boundary test below
+   *      matched the line that CLOSES a deliverable — the block streamed, and then everything after
+   *      it, including a second and much larger file, went to a muted sink for the rest of the
+   *      generation.
+   *   2. A LINE THAT STARTS WITH `{`. Ordinary in source — an object in an array literal, an Allman
+   *      brace — and indistinguishable from a tool call to a test that never asked whether we were
+   *      inside a block.
+   *
+   * Both were one missing piece of state. The earlier fix here taught the gate that ```html opens a
+   * deliverable rather than a call; it just never remembered that it had, so every test kept running
+   * as though the text were still prose. Between an opening fence and its close, the answer to "is
+   * this a tool call?" is no, without looking: a tool call cannot be nested inside a file.
+   *
+   * Held as the backtick RUN, not a boolean, so a ````-fenced block (what a model writes when the
+   * file itself contains ```) is closed by ```` and not by the ``` on the line before it.
+   */
+  let fence = resume?.fence ?? "";
   return (delta) => {
     if (mode === "mute") return;
     buffer += delta;
@@ -81,8 +146,8 @@ export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string
         // WAIT FOR THE WHOLE FENCE LINE. A language tag makes it a file the reader asked for; its
         // absence makes it a tool call; and one backtick says neither. Deciding on the first
         // character is what muted every code block that opened a reply.
-        if (/^`{1,3}[A-Za-z0-9+#-]*$/.test(lead)) return;
-        if (!/^```[ \t]*[A-Za-z][\w+#-]*[ \t]*(?:\n|$)/.test(lead) || /^```[ \t]*json\b/.test(lead)) {
+        if (/^`{1,}[A-Za-z0-9+#-]*$/.test(lead)) return;
+        if (!/^`{3,}[ \t]*[A-Za-z][\w+#-]*[ \t]*(?:\n|$)/.test(lead) || /^`{3,}[ \t]*json\b/.test(lead)) {
           mode = "mute";
           return;
         }
@@ -96,64 +161,103 @@ export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string
      * mute the rest so the raw JSON never streams into the bubble.
      *
      * A LANGUAGE-TAGGED FENCE IS NOT A TOOL CALL, and treating it as one hid every file the
-     * assistant ever wrote. `mute` is terminal — nothing clears it — so a reply shaped "here is your
-     * page:\n```html\n…" streamed the sentence and then went silent for the entire generation. The
-     * reader watched a cursor sitting under one paragraph for minutes with the whole document
-     * arriving behind it, which is what "it stopped here, and then just did nothing" was.
+     * assistant ever wrote. A tool call is a bare object or a bare/```json fence; a deliverable
+     * announces its language. So ```html, ```python, ```css stream, and ``` / ```json still hold.
+     * Being wrong in the permissive direction costs a moment of raw JSON on screen that the settle
+     * then replaces; being wrong the other way costs the file.
      *
-     * A tool call is a bare object or a bare/```json fence; a deliverable announces its language.
-     * So ```html, ```python, ```css stream, and ``` / ```json still hold. Being wrong in the
-     * permissive direction costs a moment of raw JSON on screen that the settle then replaces;
-     * being wrong the other way costs the file.
+     * The loop alternates between the two regions — outside a block, where those tests apply, and
+     * inside one, where none of them do — because a single delta can cross the boundary in either
+     * direction, and a reply is commonly prose, file, prose, file.
      */
-    /**
-     * AN UNFINISHED FENCE LINE CANNOT BE CLASSIFIED YET, and deciding early is what muted the file.
-     *
-     * "\n```" IS a bare fence — a tool call — right up until the next character makes it "```html",
-     * a deliverable. The boundary test below runs before the hold, so it reached its verdict at the
-     * third backtick, every time, and `mute` is terminal. Hold the partial line instead and look
-     * again on the next delta, by which point the language tag either exists or does not.
-     */
-    const partialFence = /\n[ \t]*`{1,3}[A-Za-z0-9+#-]*$/.exec(buffer);
-    if (partialFence) {
-      if (partialFence.index > 0) emit(buffer.slice(0, partialFence.index));
-      buffer = buffer.slice(partialFence.index);
+    for (;;) {
+      if (fence) {
+        // INSIDE a deliverable: everything streams, and the only thing worth finding is the line
+        // that closes it. A run at least as long as the opener, alone on its line.
+        const close = new RegExp("\\n[ \\t]*`{" + fence.length + ",}[ \\t]*\\n").exec(buffer);
+        if (close) {
+          const end = close.index + close[0].length;
+          emit(buffer.slice(0, end));
+          buffer = buffer.slice(end);
+          fence = "";
+          continue; // back outside — the rest of this delta is prose again, and gets tested as prose
+        }
+        // No close yet. Stream it all bar a trailing partial that could BECOME one: the newline it
+        // has to be anchored to arrives in an earlier delta than its backticks.
+        const partial = /\n[ \t]*`*[ \t]*$/.exec(buffer);
+        if (partial) {
+          if (partial.index > 0) emit(buffer.slice(0, partial.index));
+          buffer = buffer.slice(partial.index);
+        } else {
+          emit(buffer);
+          buffer = "";
+        }
+        return;
+      }
+      /**
+       * AN UNFINISHED FENCE LINE CANNOT BE CLASSIFIED YET, and deciding early is what muted the file.
+       *
+       * "\n```" IS a bare fence — a tool call — right up until the next character makes it "```html",
+       * a deliverable. The boundary test below runs before the hold, so it reached its verdict at the
+       * third backtick, every time, and `mute` is terminal. Hold the partial line instead and look
+       * again on the next delta, by which point the language tag either exists or does not.
+       */
+      const partialFence = /\n[ \t]*`{1,}[A-Za-z0-9+#-]*$/.exec(buffer);
+      if (partialFence) {
+        if (partialFence.index > 0) emit(buffer.slice(0, partialFence.index));
+        buffer = buffer.slice(partialFence.index);
+        return;
+      }
+      // The line that OPENS a deliverable. Matched here rather than left to fall through the tests
+      // below, because opening one is a STATE CHANGE: it is what tells every test after it to stand
+      // down until the block closes.
+      const opener = /(?:^|\n)[ \t]*(`{3,})[ \t]*[A-Za-z][\w+#-]*[ \t]*\n/.exec(buffer);
+      // `(?!`)` pins the run to its full length. Without it the engine backtracks a ````md opener
+      // down to three backticks, finds a backtick where a language tag should be, and calls a
+      // deliverable a tool call — the same misread as before, one backtick deeper.
+      const lineStart = /\n[ \t]*(?:\{|`{3,}(?!`)(?![ \t]*[A-Za-z][\w+#-]*[ \t]*(?:\n|$))|`{3,}(?!`)[ \t]*json\b)/.exec(buffer);
+      const inlineTool = /\{\s*"(?:tool|name|function)"\s*:/.exec(buffer);
+      const boundaryIdx = Math.min(
+        lineStart ? lineStart.index : Number.POSITIVE_INFINITY,
+        inlineTool ? inlineTool.index : Number.POSITIVE_INFINITY,
+      );
+      if (opener && opener.index < boundaryIdx) {
+        const end = opener.index + opener[0].length;
+        emit(buffer.slice(0, end));
+        buffer = buffer.slice(end);
+        fence = opener[1]!;
+        continue; // inside now — the rest of this delta is file content, not a call
+      }
+      if (boundaryIdx !== Number.POSITIVE_INFINITY) {
+        if (boundaryIdx > 0) emit(buffer.slice(0, boundaryIdx));
+        buffer = "";
+        mode = "mute";
+        return;
+      }
+      /**
+       * Otherwise stream eagerly, but HOLD a trailing partial that could be the START of a tool call:
+       * a "\n   " (start of "\n{…}"), a dangling unclosed "{…" (the model has begun an inline object
+       * whose first key hasn't arrived yet), or an unfinished FENCE LINE.
+       *
+       * The fence half was missing, and its absence made the boundary test above unreachable for any
+       * fence at all. Three backticks and a language tag arrive over several deltas; the old hold
+       * released as soon as the first backtick landed, so by the time "```json" was complete the "\n"
+       * it had to be anchored to was several emits in the past. A fenced tool call appended after prose
+       * therefore streamed straight into the bubble — the exact thing this gate exists to stop — and
+       * the fence could not be classified either way.
+       *
+       * Holding until the fence LINE is complete means the decision is always made on the whole thing:
+       * language tag present or not, which is what separates a file from a tool call.
+       */
+      const tail = /\n[ \t]*(?:`{1,}[A-Za-z0-9+#-]*)?$|\{[^{}]*$/.exec(buffer);
+      if (tail) {
+        if (tail.index > 0) emit(buffer.slice(0, tail.index));
+        buffer = buffer.slice(tail.index);
+      } else {
+        emit(buffer);
+        buffer = "";
+      }
       return;
-    }
-    const lineStart = /\n[ \t]*(?:\{|```(?![ \t]*[A-Za-z][\w+#-]*[ \t]*(?:\n|$))|```[ \t]*json\b)/.exec(buffer);
-    const inlineTool = /\{\s*"(?:tool|name|function)"\s*:/.exec(buffer);
-    const boundaryIdx = Math.min(
-      lineStart ? lineStart.index : Number.POSITIVE_INFINITY,
-      inlineTool ? inlineTool.index : Number.POSITIVE_INFINITY,
-    );
-    if (boundaryIdx !== Number.POSITIVE_INFINITY) {
-      if (boundaryIdx > 0) emit(buffer.slice(0, boundaryIdx));
-      buffer = "";
-      mode = "mute";
-      return;
-    }
-    /**
-     * Otherwise stream eagerly, but HOLD a trailing partial that could be the START of a tool call:
-     * a "\n   " (start of "\n{…}"), a dangling unclosed "{…" (the model has begun an inline object
-     * whose first key hasn't arrived yet), or an unfinished FENCE LINE.
-     *
-     * The fence half was missing, and its absence made the boundary test above unreachable for any
-     * fence at all. Three backticks and a language tag arrive over several deltas; the old hold
-     * released as soon as the first backtick landed, so by the time "```json" was complete the "\n"
-     * it had to be anchored to was several emits in the past. A fenced tool call appended after prose
-     * therefore streamed straight into the bubble — the exact thing this gate exists to stop — and
-     * the fence could not be classified either way.
-     *
-     * Holding until the fence LINE is complete means the decision is always made on the whole thing:
-     * language tag present or not, which is what separates a file from a tool call.
-     */
-    const tail = /\n[ \t]*(?:`{1,3}[A-Za-z0-9+#-]*)?$|\{[^{}]*$/.exec(buffer);
-    if (tail) {
-      if (tail.index > 0) emit(buffer.slice(0, tail.index));
-      buffer = buffer.slice(tail.index);
-    } else {
-      emit(buffer);
-      buffer = "";
     }
   };
 }
