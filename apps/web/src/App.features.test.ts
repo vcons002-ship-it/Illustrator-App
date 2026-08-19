@@ -938,6 +938,34 @@ describe("the per-chat workspace layout", () => {
     expect(TOOLS).toContain("were ALREADY on disk and were dropped");
   });
 
+  /**
+   * "IF WE CAN'T GET IT TO RELIABLY USE CODEX WE NEED TO AT LEAST GIVE IT DECENT CODING MANAGEMENT."
+   *
+   * Every real harness verifies after it edits — Aider lints and hands the errors straight back. One
+   * run in the wild did it by hand here, extracting a page's <script> and putting it through Node's
+   * parser, and found the split literal that had killed the entire page. That was the model on a good
+   * day. Without it, a file broken by an edit is not discovered until the reader opens it.
+   */
+  it("checks that the file still parses after it writes or edits one", () => {
+    expect(APP_RAW).toContain("const verifySource = useCallback");
+    expect(APP_RAW).toContain('formatBuddyToolResult(call, { writeFile: payload }) + verified');
+    expect(APP_RAW).toContain('formatBuddyToolResult(call, { editFile: payload }) + verified');
+    // An APPEND is exempt: a chunk in the middle of a file is expected not to parse, and crying
+    // breakage every time would train the model to ignore the one message that matters.
+    expect(APP_RAW).toContain("payload.ok && !call.append ? await verifySource(path, call.content)");
+    // The edit path checks what is actually on disk after the edit, not the pre-edit text.
+    expect(APP_RAW).toContain("await verifySource(call.path, editedText)");
+  });
+
+  it("never runs the file it is checking", () => {
+    const SC = readFileSync(join(__dirname, "../../../packages/core/src/chat/syntax-check.ts"), "utf8");
+    // --check parses, ast.parse builds a tree, new Function compiles a body without calling it. A
+    // check that ran the file would be a far worse idea than no check.
+    expect(SC).toContain("--check");
+    expect(SC).toContain("ast.parse");
+    expect(SC).not.toContain("eval(");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");

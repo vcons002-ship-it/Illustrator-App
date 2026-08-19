@@ -59,6 +59,9 @@ import {
   wholeFileRewriteRefusal,
   joinAppendedChunk,
   fileTail,
+  jsonSyntaxError,
+  syntaxCheckFor,
+  syntaxCheckNote,
   openBlockOf,
   launchesAnApp,
   describeBuddyToolActivity,
@@ -6008,6 +6011,51 @@ export function App() {
   // run_command executes in — NOT the exports folder), then feed the result back so it can run_command
   // it. Saving needs no approval click (it just writes into the sandbox); the dangerous step,
   // run_command, stays gated unless Autonomous workspace is on. Mirrors approveRunCommand.
+  /**
+   * DID THAT STILL PARSE? — asked after every change the app makes to source, not when the model
+   * remembers to.
+   *
+   * One run in the wild did this by hand: extracted a page's <script>, put it through Node's parser,
+   * found the split numeric literal that had killed the entire page, and reported PARSE OK. That was
+   * the model on a good day. Aider does it after every single edit, and the reason is the failure the
+   * reader kept hitting — a file broken by an edit is not discovered until they open it and find
+   * nothing works, by which point the turn that broke it is long gone.
+   *
+   * Returns a line to append to the model's feedback, or "" when there is nothing cheap and honest to
+   * check. Never runs the file: --check parses, ast.parse builds a tree, new Function compiles a body
+   * without calling it.
+   *
+   * NOT on an append. A chunk written into the middle of a file is expected not to parse, and
+   * reporting that as breakage every time would train the model to ignore the one message that
+   * matters.
+   */
+  const verifySource = useCallback(
+    async (relPath: string, text: string): Promise<string> => {
+      if (!isDesktop || isRemoteClient || !settings.allowCommands) return "";
+      const jsonErr = jsonSyntaxError(relPath, text);
+      if (jsonErr) return syntaxCheckNote("JSON.parse", false, jsonErr);
+      if (/\.jsonc?$/i.test(relPath)) return syntaxCheckNote("JSON.parse", true, "");
+      const wantsNode = /\.(js|mjs|cjs|html?)$/i.test(relPath);
+      const wantsPython = /\.pyw?$/i.test(relPath);
+      if (!wantsNode && !wantsPython) return "";
+      try {
+        const node = wantsNode ? await whichInterpreter("node") : undefined;
+        const python = wantsPython ? await whichInterpreter("python") : undefined;
+        const check = syntaxCheckFor(relPath, {
+          ...(node ? { node } : {}),
+          ...(python ? { python } : {}),
+        });
+        if (!check) return "";
+        const r = await runCommand(check.command, undefined, workspaceDirNow(), settings.commandShell);
+        return syntaxCheckNote(check.label, r.code === 0, `${r.stdout}\n${r.stderr}`);
+      } catch {
+        // A check we couldn't run says nothing. Silence beats a false verdict in both directions.
+        return "";
+      }
+    },
+    [isRemoteClient, settings.allowCommands, settings.commandShell, workspaceDirNow],
+  );
+
   const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
     setBuddyPendingTool(undefined);
     const pre = pendingBuddyTranscript.current;
@@ -6133,7 +6181,13 @@ export function App() {
       payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
       appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
     }
-    const feedback = formatBuddyToolResult(call, { writeFile: payload });
+    // Checked before the model gets its answer, so a broken file is a fact in the same turn rather
+    // than a discovery the reader makes later. Skipped for an append: a chunk in the middle of a file
+    // is expected not to parse.
+    const verified = payload.ok && !call.append ? await verifySource(path, call.content) : "";
+    if (verified.includes("DOES NOT PARSE"))
+      appendBuddy({ role: "tool", text: `⚠ ${path} doesn't parse after that write — fixing.`, turns: [] });
+    const feedback = formatBuddyToolResult(call, { writeFile: payload }) + verified;
     // App-managed steps: writing the file IS this step's action — judge it by whether it saved.
     if (appManagedActive && buddyWorkflowRef.current) {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: payload } });
@@ -6161,6 +6215,8 @@ export function App() {
     setBuddyBusy(true);
     setBuddyActivity(`Editing ${call.path}…`);
     let payload: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
+    // What is on disk after the edit — the text the syntax check has to look at.
+    let editedText = "";
     try {
       const dir = await workspaceForWrite();
       const file = await readWorkspaceFile(call.path, dir);
@@ -6170,6 +6226,7 @@ export function App() {
       } else {
         const r = applyFileEdits(file.text, call.edits);
         const summary = summarizeFileEdits(call.path, r);
+        editedText = r.content;
         if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
         payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
         recordCreatedFile(call.path, r.content.split("\n").length, false);
@@ -6207,7 +6264,10 @@ export function App() {
       payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
       appendBuddy({ role: "tool", text: `⚠ Couldn't edit ${call.path}: ${payload.error}`, turns: [] });
     }
-    const feedback = formatBuddyToolResult(call, { editFile: payload });
+    const verified = payload.ok ? await verifySource(call.path, editedText) : "";
+    if (verified.includes("DOES NOT PARSE"))
+      appendBuddy({ role: "tool", text: `⚠ ${call.path} doesn't parse after that edit — fixing.`, turns: [] });
+    const feedback = formatBuddyToolResult(call, { editFile: payload }) + verified;
     if (appManagedActive && buddyWorkflowRef.current) {
       // A file step is satisfied by a SUCCESSFUL edit (writeFile-shaped evidence so the collar's `file`
       // contract reads it the same as a write).
