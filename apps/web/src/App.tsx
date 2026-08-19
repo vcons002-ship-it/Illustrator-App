@@ -411,6 +411,7 @@ import {
   readWorkspaceFile,
   delegateCodingTask,
   gitEnsureRepo,
+  gitRepoRoot,
   gitWorktreeCreate,
   gitCommitAll,
   gitWorktreeDiff,
@@ -6085,6 +6086,50 @@ export function App() {
     [isRemoteClient, settings.allowCommands, settings.commandShell, workspaceDirNow],
   );
 
+  /**
+   * A CHANGE YOU CAN UNDO — the checkpoint every coding harness keeps and this app only had inside
+   * delegation.
+   *
+   * Aider commits after each successful change so any step can be walked back. Here an edit landed on
+   * disk and the previous version was simply gone: if it went wrong, the only recovery was to ask the
+   * model to reconstruct a file it had already demonstrated it could not reconstruct. `git diff` also
+   * answers "what did it actually change?", which nothing else here does.
+   *
+   * THE GUARDS ARE THE WHOLE DESIGN, because committing in the wrong directory is far worse than not
+   * committing at all:
+   *
+   *  - Only the CHAT'S OWN folder. A folder the reader chose is their project, and sweeping their
+   *    unrelated work into a commit we invented is exactly the mistake the delegation runner was
+   *    rewritten to avoid.
+   *  - Only when the repo root IS that folder. `git add -A` reaches the whole repository from any
+   *    subdirectory, so a chat folder sitting inside an enclosing repo — the reader's, most likely —
+   *    is left strictly alone.
+   *  - Only for source files, and best-effort throughout: a checkpoint that cannot be taken must
+   *    never stop the edit it was going to protect.
+   */
+  const checkpointBeforeCodeChange = useCallback(
+    async (relPath: string): Promise<void> => {
+      if (!isDesktop || isRemoteClient || !settings.allowCommands) return;
+      if (!/\.(html?|css|js|mjs|cjs|jsx|tsx?|vue|svelte|py|rb|go|rs|java|kt|swift|c|h|cpp|hpp|cs|php|sh|bash|ps1|sql|lua|r|pl)$/i.test(relPath))
+        return;
+      // Their project is theirs. This only ever touches a folder the app made for this chat.
+      if (buddyWorkingDirRef.current) return;
+      const dir = chatWorkspaceRef.current.get(activeBuddyIdRef.current);
+      if (!dir) return;
+      try {
+        const same = (a: string, b: string): boolean => a.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase() === b.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+        const root = await gitRepoRoot(dir);
+        // An ENCLOSING repo belongs to somebody else. Leave it completely alone.
+        if (root && !same(root, dir)) return;
+        if (!root) await gitEnsureRepo(dir);
+        await gitCommitAll(dir, `Before editing ${relPath}`);
+      } catch {
+        // Best-effort: a checkpoint we couldn't take must not stop the edit.
+      }
+    },
+    [isRemoteClient, settings.allowCommands],
+  );
+
   const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
     setBuddyPendingTool(undefined);
     const pre = pendingBuddyTranscript.current;
@@ -6120,6 +6165,8 @@ export function App() {
      * transcription slip away from being destroyed, purely so a card would appear in the chat.
      */
     const dirNow = workspaceDirNow();
+    // Snapshot first, so the previous version survives whatever happens next.
+    await checkpointBeforeCodeChange(path);
     const held = await readWorkspaceFile(path, dirNow).catch(() => undefined);
     const refusal =
       held?.exists
@@ -6271,6 +6318,7 @@ export function App() {
         const r = applyFileEdits(file.text, call.edits);
         const summary = summarizeFileEdits(call.path, r);
         editedText = r.content;
+        if (r.applied > 0) await checkpointBeforeCodeChange(call.path);
         // Its picture of the file is current again: it has just been told exactly what changed, and
         // everything else is as it read it.
         if (r.applied > 0) markFileSeen(call.path);

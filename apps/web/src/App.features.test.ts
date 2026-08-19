@@ -989,6 +989,29 @@ describe("the per-chat workspace layout", () => {
     expect(APP_RAW).toContain("seenFilesRef.current = new Set();");
   });
 
+  /**
+   * Third of the four: the checkpoint every harness keeps. Aider commits after each change so any
+   * step can be walked back; here an edit landed and the previous version was simply gone, leaving
+   * one recovery — asking the model to reconstruct a file it had already shown it could not.
+   */
+  it("snapshots the folder before a code change, and only ever its own", () => {
+    expect(APP_RAW).toContain("const checkpointBeforeCodeChange = useCallback");
+    // Taken BEFORE the write, or it is not a checkpoint.
+    expect(APP_RAW).toContain("await checkpointBeforeCodeChange(path);\n    const held = await readWorkspaceFile(path, dirNow)");
+    expect(APP_RAW).toContain("if (r.applied > 0) await checkpointBeforeCodeChange(call.path);");
+  });
+
+  it("never commits in a folder the reader chose, or an enclosing repo", () => {
+    const at = APP_RAW.indexOf("const checkpointBeforeCodeChange = useCallback");
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, settings.allowCommands],", at));
+    // Their project is theirs — the same mistake the delegation runner was rewritten to avoid.
+    expect(body).toContain("if (buddyWorkingDirRef.current) return;");
+    // `git add -A` reaches the whole repository from any subdirectory, so an enclosing repo is left
+    // strictly alone.
+    expect(body).toContain("if (root && !same(root, dir)) return;");
+    expect(body).toContain("chatWorkspaceRef.current.get(activeBuddyIdRef.current)");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");
