@@ -9,7 +9,7 @@ import {
   MIN_CONTINUABLE_CHARS,
   type BuddyTurnEvent,
 } from "./buddy-session.js";
-import { MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
+import { LIVE_REPEAT_LIMIT, MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
 function scriptedLlm(replies: string[]): ChatCapable & { calls: ChatTurn[][] } {
@@ -268,7 +268,13 @@ describe("runBuddyTurn — turn-local steering stays out of the persisted transc
   /** A turn that keeps calling tools until the per-turn round cap trips the "Do NOT call another
    * tool now" nudge. */
   const runToToolLimit = async () => {
-    const llm = scriptedLlm([...Array<string>(MAX_BUDDY_TOOL_ROUNDS).fill('{"tool":"search_web","query":"q"}'), "Here's the summary."]);
+    // The queries VARY. Byte-identical rounds are now caught as a stuck repeat long before the round
+    // limit (see "STUCK ON REPEAT"), and this helper is about the ROUND LIMIT — a model that is
+    // researching, not one that is spinning. A real research loop varies its query too.
+    const llm = scriptedLlm([
+      ...Array.from({ length: MAX_BUDDY_TOOL_ROUNDS }, (_, i) => `{"tool":"search_web","query":"q${i}"}`),
+      "Here's the summary.",
+    ]);
     const outcome = await runBuddyTurn({
       llm,
       system: "sys",
@@ -1559,7 +1565,9 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
     // Seven search rounds: nothing reaches the reader until the turn settles, so the periodic
     // progress line is the only thing keeping them in the loop. Removing it there would trade this
     // bug for the one it was written to prevent.
-    const llm = scriptedLlm([...Array.from({ length: 7 }, () => '{"tool":"search_web","query":"X"}'), "Found it."]);
+    // Varied queries: the point here is a LONG loop that is making progress, not a stuck one. Seven
+    // byte-identical searches now end the turn as a repeat, which is a different test.
+    const llm = scriptedLlm([...Array.from({ length: 7 }, (_, i) => `{"tool":"search_web","query":"X${i}"}`), "Found it."]);
     await runBuddyTurn({
       llm,
       system: "sys",
@@ -1570,6 +1578,44 @@ describe("runBuddyTurn — a turn that is many messages, without a checklist", (
       .flat()
       .filter((m) => /short plain-text line of progress/.test(m.content));
     expect(nudged.length, "a silent tool loop lost its progress line").toBeGreaterThan(0);
+  });
+
+  /**
+   * "SEARCHING HAS THE SAME PROBLEM AS READING — IT NEVER CHECKS OFF THE CHECKLIST SO JUST GOES
+   * FOREVER." Reported from a scheduled task, with search_web("stock market") run eighteen times,
+   * byte for byte, inside a checklist step that searching could not satisfy.
+   *
+   * The guard for this existed, was tested, and was gated on `opts.liveControl` — written while
+   * driving another program's UI, where a click that changes nothing is the obvious shape of the
+   * failure. Nothing about it is specific to clicking, and an UNATTENDED run is the worse case: a
+   * live-control loop has someone watching it.
+   */
+  it("stops an ordinary turn that repeats one action byte for byte", async () => {
+    const llm = scriptedLlm(['{"tool":"search_web","query":"stock market"}']);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "what happened in the market today" }],
+      deps: { ...baseDeps, searchWeb: async () => [] },
+    });
+    expect(outcome.text).toContain("repeated the same action");
+    // It ends with an ANSWER, not an error: the reader's question is "what happened?".
+    expect(outcome.text).toContain("Tell me what you'd like me to try instead");
+    // And it stops EARLY — the whole point is not reaching the round backstop twenty rounds later.
+    expect(llm.calls.length).toBeLessThanOrEqual(LIVE_REPEAT_LIMIT + 1);
+  });
+
+  it("leaves a loop that is actually varying its query alone", async () => {
+    // Five searches that differ are research, not repetition. Catching those would break the thing
+    // the round limit exists for.
+    const llm = scriptedLlm([...Array.from({ length: 5 }, (_, i) => `{"tool":"search_web","query":"q${i}"}`), "Here it is."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research this" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+    });
+    expect(outcome.text).toBe("Here it is.");
   });
 
   it("refuses a round bought with nothing written", async () => {
@@ -2273,7 +2319,9 @@ describe("runBuddyTurn", () => {
   });
 
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
-    const llm = scriptedLlm(['{"tool":"search_web","query":"loop"}']);
+    // scriptedLlm repeats its LAST entry, so a single identical call would now trip the repeat guard
+    // at five rounds. The backstop being tested is the round limit, so the queries vary.
+    const llm = scriptedLlm(Array.from({ length: MAX_BUDDY_TOOL_ROUNDS + 4 }, (_, i) => `{"tool":"search_web","query":"loop${i}"}`));
     const outcome = await runBuddyTurn({
       llm,
       system: "sys",
