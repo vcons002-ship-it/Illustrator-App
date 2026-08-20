@@ -1186,3 +1186,46 @@ describe("judging a step by WHAT was sent, not merely that something was", () =>
     expect(evaluateStep(step({ doneWhen: { kind: "narration" } }), ev([sendMsg("a beat")], "")).done).toBe(true);
   });
 });
+
+describe("a read step is satisfiable", () => {
+  /**
+   * "The read task never seems to get checked off checklists anymore." The checklist showed
+   * "Reading a file ×2" above a step still sitting at 0/5.
+   *
+   * `read` is a DISPATCHER: the model calls {"tool":"read","source":"file","ref":"…"} — which the
+   * prompt teaches and which every read_file result tells it to use again — and the parser resolves
+   * it by `source` into read_file / read_url / read_email. Nothing is ever recorded as `read`, so a
+   * step declaring needs:"read" compiled to a contract no evidence could satisfy. The unknown-token
+   * fall-through that exists for exactly this failure did not catch it, because "read" IS a real
+   * tool name.
+   */
+  it("counts a resolved read against a step that asked for `read`", async () => {
+    const { evaluateStep } = await import("./workflow.js");
+    const step: WorkflowStep = { id: "s1", instruction: "Read the current flow3.html source", status: "active", doneWhen: { kind: "tool_ok", tool: "read" }, attempts: 1, maxAttempts: 3, onFail: "ask_user" };
+    const evidence = { toolResults: [{ call: { tool: "read_file" as const, path: "flow3.html" }, result: { fileText: "<html>" } }], text: "" };
+    expect(evaluateStep(step, evidence).done).toBe(true);
+  });
+
+  it("accepts the whole read family, not just files", async () => {
+    const { evaluateStep } = await import("./workflow.js");
+    const step: WorkflowStep = { id: "s1", instruction: "Read the article", status: "active", doneWhen: { kind: "tool_ok", tool: "read" }, attempts: 1, maxAttempts: 3, onFail: "ask_user" };
+    const evidence = { toolResults: [{ call: { tool: "read_url" as const, url: "https://x.test" }, result: { page: { text: "hi" } } }], text: "" };
+    expect(evaluateStep(step, evidence).done).toBe(true);
+  });
+
+  it("does not tick a read step on some other tool entirely", async () => {
+    const { evaluateStep } = await import("./workflow.js");
+    const step: WorkflowStep = { id: "s1", instruction: "Read the current flow3.html source", status: "active", doneWhen: { kind: "tool_ok", tool: "read" }, attempts: 1, maxAttempts: 3, onFail: "ask_user" };
+    const evidence = { toolResults: [{ call: { tool: "search_web" as const, query: "x" }, result: { hits: [] } }], text: "" };
+    expect(evaluateStep(step, evidence).done).toBe(false);
+  });
+
+  it("infers a read contract for a step whose whole job IS the read", async () => {
+    const { inferDoneWhen } = await import("./workflow.js");
+    expect(inferDoneWhen("Read the current flow3.html source")).toEqual({ kind: "tool_ok", tool: "read" });
+    expect(inferDoneWhen("Re-read the file")).toEqual({ kind: "tool_ok", tool: "read" });
+    // A comma means the reading is a preamble and the work is what follows — judging the step by the
+    // read would tick it before anything was done.
+    expect(inferDoneWhen("Read 'documents/daily.md', find the entry for that day")).toEqual({ kind: "text", min: 1 });
+  });
+});

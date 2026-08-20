@@ -645,6 +645,17 @@ export async function runBuddyTurn(opts: {
   let ranOutThinking = 0;
   /** How many deliberations the app has cut this turn — tightens the next round's bound. */
   let thinkingCuts = 0;
+  /**
+   * The last round was CUT for runaway deliberation, as opposed to merely coming back empty.
+   *
+   * The two are not the same failure and do not deserve the same next allowance. A round that
+   * finished thinking and emitted nothing may simply have had a hard problem, and halving its budget
+   * is the measured response the comment below describes. A round that was CUT has already
+   * demonstrated it will spend whatever it is given on reasoning — reported as: "it just thinks and
+   * writes the code in thinking and then hits its limit and starts over" — so handing it half of a
+   * budget it just exhausted is handing it another draft to write where nobody will ever see it.
+   */
+  let lastRoundWasCut = false;
   // How many times this turn the model has been told its call was in its reasoning. Bounded because
   // a model that keeps doing it is not going to be talked out of it, and the wrap-up below is a
   // better ending than an unbounded loop of the same correction.
@@ -818,8 +829,9 @@ export async function runBuddyTurn(opts: {
        */
       ...(opts.thinkingBudgetChars
         ? {
-            thinkingBudgetChars:
-              thinkingCuts > 0
+            thinkingBudgetChars: lastRoundWasCut
+              ? MIN_TIGHTENED_THINKING_CHARS
+              : thinkingCuts > 0
                 ? Math.max(MIN_TIGHTENED_THINKING_CHARS, Math.floor(opts.thinkingBudgetChars / 2))
                 : opts.thinkingBudgetChars,
           }
@@ -1054,6 +1066,10 @@ export async function runBuddyTurn(opts: {
         // Every empty-and-thinking round tightens the next one's bound, whether the app cut it or the
         // provider's own token limit did — both mean the same thing: deliberation instead of output.
         thinkingCuts += 1;
+        // A round that RAN OUT is a different animal from one that finished and said nothing: it has
+        // proved it will spend the whole allowance reasoning, so the next one goes straight to the
+        // floor rather than being offered half of what it just exhausted.
+        lastRoundWasCut = lastTruncated;
         opts.onEvent?.({ kind: "activity", text: "Wrapping that up…" });
         messages.push({ role: "assistant", content: reply });
         messages.push({
@@ -1062,7 +1078,13 @@ export async function runBuddyTurn(opts: {
             (lastTruncated
               ? "[That reply hit its length limit while you were still thinking, so nothing came out " +
                 "at all. You have already worked this out — give the answer now, in the reply itself. " +
-                "If it needs a tool, make the call. Do not re-check anything."
+                "If it needs a tool, make the call. Do not re-check anything. " +
+                // The specific shape this keeps taking: the file gets composed in reasoning, the cut
+                // lands, and the next round starts the same draft again. Naming it is the only lever
+                // available inside a round.
+                "If you were drafting a FILE in your thinking, stop drafting it there — reasoning is " +
+                "not delivered and is what just got cut. Put the content directly into a write_file " +
+                "call instead, in chunks with append:true if it is long."
               : // NOT "briefly". The wrap-up says brief and that is right for a summary; here the
                 // deliverable itself may be the answer, and asking for brevity is asking the model
                 // to describe the page instead of writing it.

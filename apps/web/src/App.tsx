@@ -6443,10 +6443,23 @@ export function App() {
       });
       payload = { ok: r.ok, installed: r.installed, summary: r.summary };
       for (const f of r.files) recordCreatedFile(f, 0, false);
+      /**
+       * SHOW THE READER WHAT THE AGENT DID, not a one-line verdict about it.
+       *
+       * The chat said "🤝 Coding agent ran (review needed)" and everything else — the changed files,
+       * the diffstat, the verify result, the agent's own output — went only to the MODEL as tool
+       * feedback. Reported as: "there's no way to see what codex is doing from my end." So the reader
+       * watched a headless process report a result they could not check, and when the model then
+       * reasoned wrongly about it there was nothing to compare its account against.
+       *
+       * The summary is already written for exactly this — it names the files, carries the diffstat
+       * and the verify line, and includes the agent's output tail whenever the run did not cleanly
+       * succeed. It just was not being shown to the person who most needed it.
+       */
       appendBuddy({
         role: "tool",
         text: r.installed
-          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}`
+          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}\n\n${r.summary.replace(/^\[|\]$/g, "").trim()}`
           : (settings.codingAgentBackend ?? "aider") === "codex"
             ? "🤝 Codex isn't installed — install it (npm i -g @openai/codex) to delegate coding jobs."
             : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",

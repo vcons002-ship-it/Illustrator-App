@@ -762,9 +762,43 @@ describe("a reply that spent its whole budget thinking", () => {
     });
     expect(caps[0], "the first round was not allowed a real deliberation").toBe(40_000);
     expect(caps[1]!, "the second round got the same allowance as the first").toBeLessThan(caps[0]!);
-    // Halved, not slashed. A round that has to read its own handed-back notes and decide a layout
-    // needs room to do it — a cut that fires before it has finished reading is not a smaller
-    // allowance, it is a bound on thought.
+    /**
+     * STRAIGHT TO THE FLOOR AFTER A CUT — a deliberate reversal of the halving this test used to pin.
+     *
+     * The old reasoning was that a round reading its own handed-back notes needs room to decide, and
+     * a cut firing before it has finished reading is a bound on thought rather than a smaller
+     * allowance. The first half of that is still true; the second does not apply, because the cap
+     * bounds GENERATED reasoning and the handed-back notes are input, which costs nothing against it.
+     *
+     * And the evidence went the other way. Reported as: "it just thinks and writes the code in
+     * thinking and then hits its limit and starts over." A round that was CUT has already proved it
+     * will spend whatever it is given, so half of a budget it just exhausted is another draft written
+     * where nobody will ever see it. 8,000 characters is still a couple of thousand tokens — room to
+     * decide, not room to compose a stylesheet.
+     */
+    expect(caps[1]!).toBe(8_000);
+  });
+
+  it("still only HALVES for a round that finished thinking and simply said nothing", async () => {
+    // The distinction the reversal above turns on. This round was not cut — it deliberated, stopped
+    // of its own accord, and emitted nothing. That may just be a hard problem, and the measured
+    // response is the right one.
+    const caps: (number | undefined)[] = [];
+    const llm: ChatCapable & { calls: ChatTurn[][] } = {
+      calls: [],
+      async chat(messages, opts) {
+        this.calls.push([...messages]);
+        const o = opts as { thinkingBudgetChars?: number; onThinking?: (t: string) => void; onComplete?: (m: { truncated: boolean }) => void };
+        caps.push(o.thinkingBudgetChars);
+        o.onThinking?.("deliberating at length ".repeat(40));
+        o.onComplete?.({ truncated: false }); // finished on its own — NOT cut
+        return this.calls.length >= 3 ? "here it is" : "";
+      },
+    };
+    await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "code me an html page" }], deps: baseDeps,
+      thinkingBudgetChars: 40_000,
+    });
     expect(caps[1]!).toBe(20_000);
   });
 
