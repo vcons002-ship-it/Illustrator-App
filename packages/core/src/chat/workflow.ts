@@ -281,6 +281,21 @@ export function inferDoneWhen(instruction: string): DoneWhen {
     return { kind: "image" };
   if (/\b(save|write|export|create)\b[^.]*\b(file|\.md|\.csv|\.txt|\.json|document|script|doc)\b/.test(t))
     return { kind: "file", ...(asksForANewOne(t) ? { fresh: true } : {}) };
+  /**
+   * "Read the current flow3.html source" had no rule of its own and fell to the generic text check,
+   * which any sentence satisfies — so a read step ticked off whether or not anything was read. Placed
+   * AFTER the render and file rules on purpose, on the same principle they use between themselves:
+   * when a step both reads and produces, the deliverable is what proves it, and only a step whose
+   * whole job is the reading is judged by the reading. `tool_ok("read")` accepts the whole read
+   * family (see READ_FAMILY), so it does not care whether the thing read was a file, a page or mail.
+   */
+  // ONE CLAUSE. "Read 'daily.md', find the entry for that day" is a step whose job is the finding —
+  // a comma means the reading is a preamble, and judging the step by it would tick before the work.
+  //
+  // A period only ends the clause when a SPACE follows it. The dot in `flow3.html` does not, and
+  // treating it as a sentence break made this rule reject the exact step that prompted it.
+  if (/^(?:re-?)?read\b(?:[^.,;]|\.\S)*$/.test(t) && /\.[a-z0-9]{1,5}\b|\b(file|source|contents?|document|page|script)\b/.test(t))
+    return { kind: "tool_ok", tool: "read" };
   if (/\b(run|execute|exec)\b[^.]*\b(command|script|test|build|it)\b/.test(t)) return { kind: "command_ok" };
   if (isWebSearchStep(t)) return { kind: "tool_ok", tool: "search_web" };
   // "ask me / ask the reader / your favorite / what's your …" → wait for the reader.
@@ -644,10 +659,35 @@ export function workflowFinished(wf: Workflow | undefined): boolean {
  * a failed image `{image:{ok:false}}` — all with a top-level `error` absent. Checking only `!r.result.error`
  * would call those SUCCESSES (the collar hole: a `tool_ok("generate_video")` step marked done off a failed
  * render). So a match counts as success only when it has no top-level `error` AND no nested `ok:false`. */
+/**
+ * `read` IS A DISPATCHER, NOT A TOOL — and a step that waited for one could never be ticked.
+ *
+ * The model calls `{"tool":"read","source":"file","ref":"…"}`, which is what the prompt teaches and
+ * what every read_file result tells it to use again. The parser resolves that by `source` into
+ * read_file / read_url / read_email / …, so NOTHING is ever recorded with `call.tool === "read"`.
+ * A step declaring `needs:"read"` therefore compiled to a contract no evidence could satisfy, and
+ * "read" is a real tool name so the unknown-token fall-through — which exists for exactly this
+ * failure — did not catch it.
+ *
+ * Reported as: the read task never gets checked off. The checklist showed "Reading a file ×2" above a
+ * step still sitting at 0/5, which is precisely the re-nudge loop this file keeps having to be taught
+ * about, arriving through the one door that was still open.
+ */
+const READ_FAMILY: readonly BuddyToolName[] = [
+  "read_file",
+  "read_url",
+  "read_email",
+  "read_document",
+  "read_data",
+  "read_attachment",
+  "extract_from_document",
+];
+
 function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
+  const accept: readonly BuddyToolName[] = name === "read" ? READ_FAMILY : [name];
   return evidence.toolResults.some(
     (r) =>
-      r.call.tool === name &&
+      accept.includes(r.call.tool) &&
       !r.result.error &&
       r.result.video?.ok !== false &&
       r.result.writeFile?.ok !== false &&

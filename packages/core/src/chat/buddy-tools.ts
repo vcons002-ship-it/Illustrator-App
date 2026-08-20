@@ -1364,7 +1364,15 @@ export function buildBuddySystemPrompt(raw: {
       'each next chunk with {"tool":"write_file","path":"<same path>","content":"…","append":true} — the chunks ' +
       "are appended on DISK into one whole file. Keep each chunk well under one reply, split at line boundaries, " +
       "and NEVER paste a giant file into the chat or try to stitch chunks back together yourself — the workspace " +
-      "file is already whole.\n"
+      "file is already whole.\n" +
+      // OBSERVED, not hypothetical: the reader watched a run draft an entire stylesheet inside its
+      // reasoning, hit the deliberation cut with an empty reply, and start the draft again. Twice.
+      // Reasoning is not delivered to anyone and is cut when it runs long, so a file composed there
+      // is written to nobody — and the model cannot tell, because from the inside it looks like work.
+      "DO NOT DRAFT A FILE IN YOUR REASONING. Thinking is never delivered and is CUT when it runs long, " +
+      "so a file you compose there is lost and you will have to write it again from nothing. Decide WHAT " +
+      "the file needs in a sentence or two, then put the actual content straight into the write_file " +
+      "call. The tool argument is the only place file content survives.\n"
     : "";
   const editFileTool = opts.canRunCommands
     ? '- {"tool":"edit_file","path":"tide-clock.py","edits":[{"search":"old exact text","replace":"new text"}]} — ' +

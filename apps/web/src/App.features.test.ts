@@ -1028,6 +1028,27 @@ describe("the per-chat workspace layout", () => {
     expect(body).toContain("chatWorkspaceRef.current.get(activeBuddyIdRef.current)");
   });
 
+  /**
+   * "THERE'S NO WAY TO SEE WHAT CODEX IS DOING FROM MY END."
+   *
+   * The chat said "🤝 Coding agent ran (review needed)" and everything else — the changed files, the
+   * diffstat, the verify result, the agent's own output tail — went only to the MODEL as tool
+   * feedback. So the reader watched a headless process report a result they could not check, and when
+   * the model reasoned wrongly about it there was nothing to compare its account against.
+   */
+  it("shows the reader what the coding agent actually reported", () => {
+    expect(APP_RAW).toContain("r.summary.replace(");
+    expect(APP_RAW).toContain('changed ${r.files.length} file(s)');
+  });
+
+  it("lists the folder with a command the shell actually has", () => {
+    const RUNTIME = readFileSync(join(__dirname, "runtime.ts"), "utf8");
+    // `dir /b` is a cmd builtin. In PowerShell `dir` is Get-ChildItem, which rejects /b and writes
+    // nothing — so the summary told the model the folder was EMPTY while `dir` in that same folder
+    // showed four files, and the model reasoned from a false fact.
+    expect(RUNTIME).toContain('opts.shell === "powershell" ? "Get-ChildItem -Name"');
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");

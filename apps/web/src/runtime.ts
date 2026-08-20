@@ -742,7 +742,18 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   let folderLine = "";
   if (!changed) {
     try {
-      const ls = await run(isWin ? "dir /b" : "ls -1");
+      /**
+       * `dir /b` IS A CMD BUILTIN, and this ran it in PowerShell too.
+       *
+       * `isWin` is true for both Windows shells, and in PowerShell `dir` is an alias for
+       * Get-ChildItem, which rejects `/b` and writes nothing to stdout. So the listing came back
+       * empty and the summary told the model, confidently, that the folder it had just run in was
+       * EMPTY — while `dir` in the same folder showed four files. The model then reasoned from a
+       * false fact, and the reader watched it invent an explanation for it.
+       */
+      const ls = await run(
+        opts.shell === "powershell" ? "Get-ChildItem -Name" : isWin ? "dir /b" : "ls -1",
+      );
       const entries = ls.stdout
         .split(/\r?\n/)
         .map((e) => e.trim())
