@@ -8546,8 +8546,21 @@ export function App() {
       // APP-MANAGED STEPS: the app — not the model — decides if this step is done, from observed
       // evidence (the accumulated tool results + this settle's text). It then advances/retries/parks.
       if (appManagedActive && buddyWorkflowRef.current && !res.paused) {
+        /**
+         * BOTH LEDGERS. The host's own records HOST tools — a command, a written file, a render —
+         * because those are the ones it ran itself. Everything the model did INSIDE the turn
+         * (search_web, read_file) is in the turn's own record and was never sent across, so a step
+         * whose contract is a successful search could not be ticked however many searches ran.
+         * Reported as forty searches under a step stuck at 0/5.
+         *
+         * `stepToolResults` is already scoped to the ACTIVE step, so this cannot credit step 2 with
+         * step 1's work — the mistake that watermark exists to prevent.
+         */
         const handled = await advanceWorkflowAfterTurn(
-          { toolResults: buddyStepEvidenceRef.current.toolResults, text: res.text },
+          {
+            toolResults: [...buddyStepEvidenceRef.current.toolResults, ...(res.stepToolResults ?? [])],
+            text: res.text,
+          },
           (nudge) => dispatchBuddyTurn([...history, { role: "user", content: userText }, ...res.transcript], nudge, undefined, true),
         );
         if (handled) return res.text || undefined;

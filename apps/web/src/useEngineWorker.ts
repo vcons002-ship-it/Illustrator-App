@@ -554,6 +554,10 @@ export interface BuddyDoneResult {
   thinking?: string;
   /** The turn paused at a cloud "keep going?" budget checkpoint — offer a Continue affordance. */
   paused?: boolean;
+  /** What the ACTIVE checklist step has to show for itself, slimmed to what the judge reads. The
+   * host's own ledger holds HOST tools only, so without this a step whose contract is a successful
+   * search or read is invisible to the settle-time judge. */
+  stepToolResults?: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
   error?: string;
 }
 
@@ -1368,6 +1372,7 @@ export function useEngineWorker(
             ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
             ...(msg.thinking ? { thinking: msg.thinking } : {}),
             ...(msg.paused ? { paused: true } : {}),
+            ...(msg.stepToolResults ? { stepToolResults: msg.stepToolResults } : {}),
           });
           break;
         }

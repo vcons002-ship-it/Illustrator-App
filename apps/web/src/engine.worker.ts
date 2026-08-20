@@ -13,6 +13,7 @@ import {
   approxTokens,
   chatTurnsChars,
   measureContextUsage,
+  slimStepEvidence,
   searchBookPassages,
   historyBudget,
   trimChatHistory,
@@ -6541,6 +6542,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
       ...(outcome.thinking ? { thinking: outcome.thinking } : {}),
       ...(outcome.paused ? { paused: true } : {}),
+      // What the ACTIVE step has to show for itself, slimmed to the fields the judge reads. Without
+      // this the host's settle-time judge sees only HOST tools, so a checklist step whose contract is
+      // a successful search or read could never be ticked however many ran.
+      ...(outcome.stepToolResults.length ? { stepToolResults: slimStepEvidence(outcome.stepToolResults) } : {}),
     });
   } catch (err) {
     post({

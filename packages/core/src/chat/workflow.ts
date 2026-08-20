@@ -654,6 +654,37 @@ export function workflowFinished(wf: Workflow | undefined): boolean {
   return !!wf && !wf.steps.some((s) => s.status === "pending" || s.status === "active");
 }
 
+/**
+ * THE EVIDENCE, WITHOUT THE PAYLOAD — small enough to cross the worker boundary.
+ *
+ * The host judges the active step again when the turn settles, and its own ledger records only HOST
+ * tools: run_command, write_file, a render. An in-worker tool — search_web, read_file — never
+ * reaches it, so a step whose contract is a successful SEARCH was invisible to that judge however
+ * many searches had run. Reported as forty searches under a step stuck at 0/5.
+ *
+ * The turn's record cannot simply be posted across: one read_file result is 200,000 characters and
+ * the message rides a structured clone on every settle. Every field the judge actually reads is
+ * listed below and nothing else travels — `hits`, `fileText`, `page` and the rest are for the model,
+ * not for this. PURE.
+ */
+export function slimStepEvidence(
+  results: readonly { call: BuddyToolCall; result: BuddyToolResultPayload }[],
+): { call: BuddyToolCall; result: BuddyToolResultPayload }[] {
+  return results.map(({ call, result }) => ({
+    // The CALL identifies the tool and is small; a search query or a path is worth keeping legible.
+    call,
+    result: {
+      ...(result.error ? { error: result.error } : {}),
+      ...(result.image ? { image: { ok: result.image.ok } } : {}),
+      ...(result.video ? { video: { ok: result.video.ok } } : {}),
+      ...(result.writeFile ? { writeFile: { path: result.writeFile.path, ok: result.writeFile.ok } } : {}),
+      ...(result.command ? { command: { stdout: "", stderr: "", code: result.command.code } } : {}),
+      ...(result.artifact ? { artifact: result.artifact } : {}),
+      ...(result.sent ? { sent: result.sent } : {}),
+    } as BuddyToolResultPayload,
+  }));
+}
+
 /** True when a tool of `name` ran this turn and didn't error. Host tools report failure NESTED, not at
  * the top level: a failed render/clip carries `{video:{ok:false}}`, a failed write `{writeFile:{ok:false}}`,
  * a failed image `{image:{ok:false}}` — all with a top-level `error` absent. Checking only `!r.result.error`
