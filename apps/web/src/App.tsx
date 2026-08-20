@@ -5463,10 +5463,12 @@ export function App() {
   // PHONE: fetch an older image card's bytes back from the desktop on demand (the mirror strips heavy
   // bytes from old cards to stay tunnel-safe; the desktop kept the originals). Resolves undefined on
   // timeout or if the desktop can't find it. No-op (undefined) off a linked phone.
+  /** Ask the desktop for a file's bytes — by card `id` (the mirror stripped them) or by `path` (the
+   * phone has no disk to read it from). Both come back chunked. */
   const fetchRemoteFileBytes = useCallback(
-    (id: string): Promise<ArrayBuffer | undefined> =>
+    (want: { id?: string; path?: string }): Promise<ArrayBuffer | undefined> =>
       new Promise((resolve) => {
-        if (!isRemoteClient) return resolve(undefined);
+        if (!isRemoteClient || (!want.id && !want.path)) return resolve(undefined);
         const reqId = ++fileFetchSeq.current;
         const timer = setTimeout(() => {
           fileChunkBufs.current.delete(reqId); // drop any partial chunks for this stalled fetch
@@ -5476,7 +5478,7 @@ export function App() {
           clearTimeout(timer);
           resolve(bytes);
         });
-        sendAppSync({ type: "vrcmd:fetchFile", reqId, id });
+        sendAppSync({ type: "vrcmd:fetchFile", reqId, ...(want.id ? { id: want.id } : {}), ...(want.path ? { path: want.path } : {}) });
       }),
     [isRemoteClient, sendAppSync],
   );
@@ -5514,7 +5516,7 @@ export function App() {
         if (restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
         fetchingImageIds.current.add(id);
         const load: Promise<ArrayBuffer | undefined> = isRemoteClient
-          ? fetchRemoteFileBytes(id)
+          ? fetchRemoteFileBytes({ id })
           : (libraryStore.getImageBlob?.(chatId, id).then((b) => b?.bytes) ?? Promise.resolve(undefined));
         void load.then((bytes) => {
           fetchingImageIds.current.delete(id);
@@ -5538,11 +5540,28 @@ export function App() {
    */
   const withFetchedBytes = useCallback(
     async (ref: FileRef): Promise<FileRef> => {
-      if (ref.bytes || ref.path || !ref.id) return ref;
+      if (ref.bytes) return ref;
+      /**
+       * A PHONE HAS NO DISK TO READ FROM, so both routes go over the relay.
+       *
+       * The path branch is the one that was missing. Every find_files result is a card carrying only
+       * a path, and the early return above used to treat a path as "nothing to fetch" — correct on
+       * the desktop, where the path IS the file, and exactly wrong here, where it names another
+       * machine. Download then fell through to the desktop bridge and failed on a file that was
+       * sitting right there.
+       */
       if (isRemoteClient) {
-        const bytes = await fetchRemoteFileBytes(ref.id);
-        return bytes ? { ...ref, bytes } : ref;
+        if (ref.id) {
+          const bytes = await fetchRemoteFileBytes({ id: ref.id });
+          if (bytes) return { ...ref, bytes };
+        }
+        if (ref.path && ref.content === undefined) {
+          const bytes = await fetchRemoteFileBytes({ path: ref.path });
+          if (bytes) return { ...ref, bytes };
+        }
+        return ref;
       }
+      if (ref.path || !ref.id) return ref;
       for (const chatId of [activeBuddyIdRef.current, bookRef.current?.id]) {
         if (!chatId) continue;
         const blob = await libraryStore.getImageBlob?.(chatId, ref.id).catch(() => undefined);
@@ -5613,14 +5632,14 @@ export function App() {
         // so a card holding the file's own content must use it rather than reaching for a disk that
         // is not there. On the desktop the path stays first — it opens the real file, with its real
         // handling, rather than a copy reconstructed from the card.
-        if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void onOpenLocalFile(ref.path);
+        if (ref.path && !isRemoteClient) void onOpenLocalFile(ref.path);
         else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r)));
       },
       openInLibrary: (ref) => void withFetchedBytes(ref).then((r) => addRefToLibrary(r)),
       ...(isDesktop ? { openOnPC: (ref: FileRef) => void revealRefOnPC(ref) } : {}),
       // "Open as…" — re-route the SAME file through a chosen reader (overrides the extension default).
       openAs: (ref, as) => {
-        if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void readLocalFile(ref.path).then((f) => onUpload(f, as));
+        if (ref.path && !isRemoteClient) void readLocalFile(ref.path).then((f) => onUpload(f, as));
         else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r), as));
       },
       // Read a text document INLINE in the chat when the CARD doesn't carry the text: a `.md` the
@@ -5638,7 +5657,12 @@ export function App() {
           // Add to library, Download) just calls and lets the answer be the answer, and Read here was
           // the one button that could refuse a file the button beside it opened fine. Don't predict a
           // failure the call itself will report.
-          if (isRemoteClient) return undefined;
+          // The relay can fetch a file BY PATH now, so a phone no longer has to refuse: the comment
+          // above was right that nothing came back, and that is the thing that changed.
+          if (isRemoteClient) {
+            const full = await withFetchedBytes(ref);
+            return full.bytes ? new TextDecoder().decode(new Uint8Array(full.bytes)) : undefined;
+          }
           const f = await readLocalFile(ref.path);
           return await f.text();
         }

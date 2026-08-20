@@ -40,7 +40,7 @@ import type {
   SoulEssenceRelayRequestId,
   SyncToPhone,
 } from "./remote-sync.js";
-import { restartApp } from "./runtime.js";
+import { readLocalFile, restartApp } from "./runtime.js";
 
 /**
  * PHONE MIRROR: a linked phone shows exactly what the desktop shows — its library, the open book,
@@ -735,7 +735,23 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             const fileId = msg.id;
             void (async () => {
               let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
-              for (const m of buddyMessagesRef.current) {
+              /**
+               * A PATH, which the phone cannot read for itself.
+               *
+               * Every find_files result is a card carrying only a path, and on a phone that path
+               * names a disk on another machine — so Download failed with "Desktop bridge
+               * unavailable" on a file that was sitting right here. The lookup below only ever knew
+               * about ids.
+               */
+              if (msg.path) {
+                try {
+                  const f = await readLocalFile(msg.path);
+                  found = { bytes: await f.arrayBuffer(), ...(f.type ? { mime: f.type } : {}) };
+                } catch {
+                  found = undefined; // reported as "not found" below, like any other miss
+                }
+              }
+              for (const m of found?.bytes ? [] : buddyMessagesRef.current) {
                 const a = m.attachments?.find((x) => x.id === fileId && x.bytes);
                 if (a?.bytes) {
                   found = { bytes: a.bytes, mime: a.mime };
@@ -749,7 +765,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
               }
               // After a desktop reload the in-memory messages are byte-less (bytes were externalized) —
               // serve them from the chat blob store instead so the phone can still fetch older images.
-              if (!found?.bytes) {
+              if (!found?.bytes && fileId) {
                 const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, fileId).catch(() => undefined);
                 if (blob) found = { bytes: blob.bytes, mime: blob.mimeType };
               }
