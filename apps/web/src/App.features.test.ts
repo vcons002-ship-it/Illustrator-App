@@ -866,15 +866,31 @@ describe("the per-chat workspace layout", () => {
     expect(body).toContain("kind: createdFileKind(call.path)");
   });
 
-  it("opens from what the card holds when the disk is on another machine", () => {
-    // The path is still preferred on the DESKTOP — it opens the real file with its real handling,
-    // not a copy rebuilt from the card.
-    expect(APP_RAW).toContain(
-      "if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void onOpenLocalFile(ref.path);",
-    );
-    expect(APP_RAW).toContain(
-      "if (ref.path && !(isRemoteClient && (ref.bytes || ref.content !== undefined))) void readLocalFile(ref.path).then((f) => onUpload(f, as));",
-    );
+  /**
+   * "STILL NOT SHOWING, AND DOWNLOAD STILL NOT WORKING" — on a find_files card, which carries ONLY a
+   * path, and a path names a disk the phone does not have. Putting content on the cards the assistant
+   * writes fixed those cards and could never fix this one: a search result has no content to carry.
+   *
+   * The relay could already fetch a file's bytes, but only BY ID — a card whose bytes the mirror had
+   * stripped. A path had no route at all, so Download fell through to the desktop bridge and failed
+   * with "Desktop bridge unavailable" on a file that was sitting right there.
+   */
+  it("fetches a path-only card over the relay instead of reaching for a disk it lacks", () => {
+    const SYNC = readFileSync(join(__dirname, "remote-sync.ts"), "utf8");
+    expect(SYNC).toContain('{ type: "vrcmd:fetchFile"; reqId: number; id?: string; path?: string }');
+    const MIRROR = readFileSync(join(__dirname, "useRemoteMirror.ts"), "utf8");
+    expect(MIRROR).toContain("if (msg.path) {");
+    expect(MIRROR).toContain("const f = await readLocalFile(msg.path);");
+    expect(APP_RAW).toContain("const bytes = await fetchRemoteFileBytes({ path: ref.path });");
+  });
+
+  it("never sends a phone to the desktop's disk for any card action", () => {
+    // Download, Open in app, Open as and Read here all take the relay there. The path is still first
+    // on the DESKTOP, where it opens the real file with its real handling.
+    expect(APP_RAW).toContain("if (ref.path && !isRemoteClient) void onOpenLocalFile(ref.path);");
+    expect(APP_RAW).toContain("if (ref.path && !isRemoteClient) void readLocalFile(ref.path).then((f) => onUpload(f, as));");
+    // Read here refused outright before, because nothing came back. Now something does.
+    expect(APP_RAW).not.toContain("if (isRemoteClient) return undefined;\n          const f = await readLocalFile(ref.path);");
   });
 
   /**

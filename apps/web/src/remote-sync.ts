@@ -383,7 +383,20 @@ export type CmdToDesktop =
   | { type: "vrcmd:installIpAdapter" }
   | { type: "vrcmd:openLocalFile"; path: string } // open a PC file (PDF/EPUB/doc) FROM the desktop's disk as a book; the desktop reads + imports it, the open book mirrors back
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall; cwd?: string } // run a desktop-runtime tool (files/command/screenshot) on the desktop, in the phone's chosen working folder
-  | { type: "vrcmd:fetchFile"; reqId: number; id: string }; // ask the desktop for the full bytes of a file card whose bytes the mirror stripped (lazy image fetch)
+  /**
+   * Ask the desktop for a file's full bytes, CHUNKED back as `vrsync:fileData`.
+   *
+   * `id` is the original use: a file card whose bytes the mirror stripped, looked up in the desktop's
+   * own history or blob store. `path` is the other half, and its absence was a hole — a card that
+   * carries only a PATH (every find_files result, and anything the assistant wrote before its card
+   * carried content) had no route at all on a phone, because the path names a disk on another
+   * machine. 💾 Download failed with "Desktop bridge unavailable" on a file that was sitting right
+   * there, and the reader had no way to get at it.
+   *
+   * Reading a file is strictly less capability than this link already grants — a phone can run
+   * commands through `vrcmd:hostTool` — so this opens nothing that was closed.
+   */
+  | { type: "vrcmd:fetchFile"; reqId: number; id?: string; path?: string };
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
 
