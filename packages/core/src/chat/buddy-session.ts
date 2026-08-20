@@ -414,6 +414,21 @@ export interface BuddyTurnOutcome {
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
+  /**
+   * The tail of `toolResults` belonging to the step that is STILL ACTIVE — everything since the last
+   * checklist advance.
+   *
+   * The host judges the active step again when the turn settles, from its own evidence ledger, and
+   * that ledger only ever records HOST tools: run_command, write_file, an image. An in-worker tool —
+   * search_web, read_file — never reaches it. So a checklist step whose contract is a successful
+   * search was invisible to the settle-time judge no matter how many searches had run, and the
+   * executor nudged it round again.
+   *
+   * Reported as forty searches under a step stuck at 0/5. The whole turn's record cannot be handed
+   * over instead: that is the bug `stepEvidenceFrom` exists to prevent, where step 2's contract is
+   * satisfied by step 1's work. This is the same watermark, exposed.
+   */
+  stepToolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
   /** Toolsets loaded by the end of the turn (seeded + anything pulled in). The host keeps these for
    * the session so the next turn doesn't pay the round-trip again. */
   loadedToolsets?: readonly string[];
@@ -871,13 +886,16 @@ export async function runBuddyTurn(opts: {
     const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
     // Every finished outcome funnels through here, so it is also where the turn reports which
     // toolsets ended up loaded — the host keeps them for the session rather than re-paying next turn.
-    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome => {
+    const withThinking = (out: Omit<BuddyTurnOutcome, "stepToolResults">): BuddyTurnOutcome => {
       // The severed round's reasoning beats the latest when it is bigger — see `severedThinking`.
       // A recovery round's "I'll summarise now" must not be what the reader is left holding when
       // the round before it contained the entire deliverable.
       const keep = severedThinking.length > lastThinking.length ? severedThinking : lastThinking;
       return {
         ...out,
+        // Filled in HERE because every settle funnels through this one function — a return that
+        // forgot it would silently hand the host an empty ledger, which is the failure being fixed.
+        stepToolResults: toolResults.slice(stepEvidenceFrom),
         ...(deferring ? { loadedToolsets } : {}),
         ...(keep.trim() ? { thinking: keep.trim() } : {}),
       };

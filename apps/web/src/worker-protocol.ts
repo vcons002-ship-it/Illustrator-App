@@ -572,6 +572,15 @@ export type WorkerToMain =
       /** The turn paused at a cloud "keep going?" budget checkpoint (work remains) — the host offers
        * a Continue affordance instead of treating it as a finished answer. */
       paused?: boolean;
+      /**
+       * What the ACTIVE checklist step has to show for itself — slimmed to the fields the step judge
+       * reads (see slimStepEvidence), because a read_file result is 200,000 characters and this rides
+       * a structured clone on every settle.
+       *
+       * The host's own evidence ledger records HOST tools only, so a step whose contract is a
+       * successful search or read was invisible to the settle-time judge however many had run.
+       */
+      stepToolResults?: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
     }
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */

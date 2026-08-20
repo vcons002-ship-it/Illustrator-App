@@ -1229,3 +1229,55 @@ describe("a read step is satisfiable", () => {
     expect(inferDoneWhen("Read 'documents/daily.md', find the entry for that day")).toEqual({ kind: "text", min: 1 });
   });
 });
+
+describe("the settle-time judge can see an in-worker tool", () => {
+  /**
+   * The reported checklist, with its real contracts:
+   *
+   *   1. Search the web for today's top stock market news and movers · search_web
+   *   2. Analyze the news for potential trades and emerging trends   · text
+   *   3. Find expert analysis from reputable sources                 · search_web
+   *   4. Write a concise, easy-to-read report …                      · text
+   *
+   * The contracts were RIGHT. What was wrong is that the host judges the active step again when the
+   * turn settles, from its own ledger — and that ledger records HOST tools only, because those are
+   * the ones the host runs itself. search_web happens inside the worker, so the judge saw nothing,
+   * the step stayed active, the executor nudged, and it searched again. Forty times.
+   */
+  it("keeps only the fields the judge reads, so the evidence can cross the worker boundary", async () => {
+    const { slimStepEvidence } = await import("./workflow.js");
+    const slim = slimStepEvidence([
+      // A read_file result is 200,000 characters, and this rides a structured clone on every settle.
+      { call: { tool: "read_file", path: "flow3.html" }, result: { fileText: "x".repeat(200_000) } },
+      { call: { tool: "search_web", query: "stock market" }, result: { hits: [{ title: "T", link: "l", snippet: "s" }] } },
+      { call: { tool: "write_file", path: "a.md", content: "…" }, result: { writeFile: { path: "a.md", ok: true } } },
+      { call: { tool: "run_command", command: "x" }, result: { command: { stdout: "y".repeat(9_000), stderr: "", code: 0 } } },
+    ]);
+    expect(JSON.stringify(slim).length, "the payload came along for the ride").toBeLessThan(1_000);
+    // The CALL survives whole — the tool name is the entire point, and a query is worth reading.
+    expect(slim[1]!.call).toEqual({ tool: "search_web", query: "stock market" });
+    // Everything the judge tests on is preserved.
+    expect(slim[2]!.result.writeFile?.ok).toBe(true);
+    expect(slim[3]!.result.command?.code).toBe(0);
+  });
+
+  it("ticks a search step off evidence that came from the worker", async () => {
+    const { evaluateStep, slimStepEvidence } = await import("./workflow.js");
+    const step: WorkflowStep = {
+      id: "s1",
+      instruction: "Search the web for today's top stock market news and movers",
+      status: "active",
+      doneWhen: { kind: "tool_ok", tool: "search_web" },
+      attempts: 1,
+      maxAttempts: 3,
+      onFail: "ask_user",
+    };
+    const evidence = {
+      toolResults: slimStepEvidence([
+        { call: { tool: "search_web", query: "stock market" }, result: { hits: [{ title: "T", link: "l", snippet: "s" }] } },
+      ]),
+      text: "",
+    };
+    expect(evaluateStep(step, evidence).done).toBe(true);
+  });
+});
