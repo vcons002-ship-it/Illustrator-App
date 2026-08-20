@@ -592,7 +592,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, quotePosixCommand, ollamaApiBase } =
+  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase } =
     await import("@visual-reader/core");
   const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined);
 
@@ -649,7 +649,11 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   //    the local server differently: Aider by env var (OLLAMA_API_BASE), Codex by a generated config
   //    file we select with CODEX_HOME — it reads no env var for this.
   const base = ollamaApiBase(opts.textServerUrl);
-  const isWin = opts.shell === "cmd" || opts.shell === "powershell";
+  // The shell the reader actually uses. It is passed to buildAgentCommand rather than collapsed to a
+  // Windows/not-Windows flag, because cmd and PowerShell agree on none of the three things this
+  // command needs: setting an environment variable, joining two statements, and stdin redirection.
+  const shell = opts.shell;
+  const isWin = shell === "cmd" || shell === "powershell";
   let command: string;
   if (backend === "codex") {
     // PIN THE MODEL, IN A FILE. Codex reads its config from `CODEX_HOME` (default `~/.codex`), and
@@ -664,9 +668,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     );
     const home = workDir ? `${workDir}/${CODEX_HOME_DIR}` : CODEX_HOME_DIR;
     const argv = ["codex", ...buildCodexArgs({ model: opts.model })];
-    command = isWin
-      ? `set "CODEX_HOME=${home}" && ${argv.join(" ")} < ${CODING_TASK_FILE}`
-      : `CODEX_HOME=${quotePosixCommand([home])} ${quotePosixCommand(argv)} < ${quotePosixCommand([CODING_TASK_FILE])}`;
+    command = buildAgentCommand({ shell, env: { CODEX_HOME: home }, argv, stdinFile: CODING_TASK_FILE });
   } else {
     const argv = ["aider", ...buildAiderArgs({
       messageFile: CODING_TASK_FILE,
@@ -674,9 +676,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
       ...(opts.editorModel ? { editorModel: opts.editorModel } : {}),
       ...(opts.files ? { files: opts.files } : {}),
     })];
-    command = isWin
-      ? `set "OLLAMA_API_BASE=${base}" && ${argv.join(" ")}`
-      : `OLLAMA_API_BASE=${base} ${quotePosixCommand(argv)}`;
+    command = buildAgentCommand({ shell, env: { OLLAMA_API_BASE: base }, argv });
   }
   // An external agent editing several files against a local model runs for tens of minutes. The
   // ordinary four-minute command ceiling killed it mid-edit and then reported that nothing changed —

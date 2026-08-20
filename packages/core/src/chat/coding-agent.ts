@@ -44,6 +44,59 @@ export function buildDelegatedTask(task: string): string {
   return spec ? `${spec}\n\n${DELEGATED_CONVENTIONS}\n` : `${DELEGATED_CONVENTIONS}\n`;
 }
 
+/**
+ * THE COMMAND LINE THE AGENT IS ACTUALLY LAUNCHED WITH — and why it needs three shapes, not two.
+ *
+ * Reported as: Codex returns INSTANTLY with "changed a file", and nothing on disk changed. An
+ * instantaneous return from a headless coding agent means it never ran, and the reason was that the
+ * command was written for `cmd` and handed to PowerShell. Every part of it is invalid there:
+ *
+ *  - `set "K=v"` sets a POWERSHELL VARIABLE named `K=v`, not an environment variable. So CODEX_HOME
+ *    never reached Codex, which then read the reader's own ~/.codex/config.toml — the precise fault
+ *    that made a local-only setup answer from a cloud model, supposedly fixed months ago and never
+ *    actually applied on this shell.
+ *  - `&&` is a syntax error in Windows PowerShell 5.1, which is what `powershell.exe` is. It only
+ *    became valid in PowerShell 7.
+ *  - `<` is a PARSE ERROR in every version of PowerShell: the operator is reserved and refuses to
+ *    run. That alone kills the line before a single character is executed.
+ *
+ * So the process exited immediately on a parse error, the diff found nothing (correctly), and the
+ * app reported "ran (review needed)" — the one outcome that looks like a bad task rather than a
+ * command that was never a command.
+ */
+export function buildAgentCommand(spec: {
+  /** The reader's configured shell. `undefined` means a POSIX `sh -c`. */
+  shell: "cmd" | "powershell" | undefined;
+  /** Environment the agent needs. Set inline: it must not enter the chat transcript. */
+  env: Readonly<Record<string, string>>;
+  argv: readonly string[];
+  /** A file to feed the agent's STDIN — Codex's `exec -` reads its task that way. */
+  stdinFile?: string;
+}): string {
+  const { shell, env, argv, stdinFile } = spec;
+  if (shell === "powershell") {
+    // Single quotes are LITERAL in PowerShell (no expansion, no escapes) — the safest form for a
+    // Windows path full of backslashes. A literal quote inside one is written by doubling it.
+    const ps = (v: string): string => `'${v.replace(/'/g, "''")}'`;
+    const assigns = Object.entries(env).map(([k, v]) => `$env:${k} = ${ps(v)}`);
+    // `&` is the call operator: it runs the first token as a COMMAND rather than echoing it as a
+    // string, which is what a quoted program name would otherwise do.
+    const call = `& ${argv.map(ps).join(" ")}`;
+    // PowerShell has no `<`. Piping the file's contents in is the same thing said in its own words;
+    // -Raw keeps it one string rather than an array of lines.
+    const line = stdinFile ? `Get-Content -Raw ${ps(stdinFile)} | ${call}` : call;
+    return [...assigns, line].join("; ");
+  }
+  if (shell === "cmd") {
+    const assigns = Object.entries(env).map(([k, v]) => `set "${k}=${v}"`);
+    const line = `${argv.join(" ")}${stdinFile ? ` < ${stdinFile}` : ""}`;
+    return [...assigns, line].join(" && ");
+  }
+  const assigns = Object.entries(env).map(([k, v]) => `${k}=${quotePosixCommand([v])}`);
+  const line = `${quotePosixCommand(argv)}${stdinFile ? ` < ${quotePosixCommand([stdinFile])}` : ""}`;
+  return [...assigns, line].join(" ");
+}
+
 /** Cap on how many files the model may seed the agent's editing context with. */
 export const MAX_DELEGATE_FILES = 20;
 
@@ -142,7 +195,7 @@ function posixQuote(token: string): string {
 }
 
 /** Join argv into one POSIX shell command string, quoting each token as needed. PURE. */
-export function quotePosixCommand(parts: string[]): string {
+export function quotePosixCommand(parts: readonly string[]): string {
   return parts.map(posixQuote).join(" ");
 }
 

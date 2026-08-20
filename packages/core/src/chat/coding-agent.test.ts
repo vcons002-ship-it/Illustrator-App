@@ -137,7 +137,9 @@ describe("the delegation runtime's failure modes", () => {
     expect(RUNTIME).not.toContain("OLLAMA_HOST=");
     expect(RUNTIME).toContain('const CODEX_HOME_DIR = ".vr-codex";');
     expect(RUNTIME).toContain("buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) })");
-    expect(RUNTIME).toMatch(/CODEX_HOME=/);
+    // The env var is no longer spelled into a cmd string here — buildAgentCommand writes it in the
+    // reader's actual shell, because `set "K=v"` is a PowerShell VARIABLE and never reached Codex.
+    expect(RUNTIME).toContain("env: { CODEX_HOME: home }");
   });
 
   it("makes the folder a repo first, since the whole report is a git diff", () => {
@@ -386,5 +388,70 @@ describe("our own scaffolding never counts as the agent's work", () => {
         excludeDirs: [".vr-codex"],
       }),
     ).toEqual(["config.toml"]);
+  });
+});
+
+describe("the command line the agent is launched with", () => {
+  /**
+   * "There's no way Codex did anything that fast — it gave that message instantaneously."
+   *
+   * Correct: it never ran. The command was written for `cmd` and handed to PowerShell, where every
+   * part of it is invalid — `set "K=v"` sets a PowerShell VARIABLE rather than an environment one,
+   * `&&` is a syntax error in Windows PowerShell 5.1, and `<` is a parse error in every version
+   * because the operator is reserved. The process died on the parse, the diff correctly found
+   * nothing, and the app reported "ran (review needed)".
+   */
+  it("speaks PowerShell when the reader's shell is PowerShell", async () => {
+    const { buildAgentCommand } = await import("./coding-agent.js");
+    const cmd = buildAgentCommand({
+      shell: "powershell",
+      env: { CODEX_HOME: "C:\\Users\\v\\ws\\chat-21\\.vr-codex" },
+      argv: ["codex", "exec", "-m", "qwen3.8:27b", "-"],
+      stdinFile: ".vr-coding-task.md",
+    });
+    expect(cmd, "an environment variable, not a PowerShell variable").toContain("$env:CODEX_HOME = ");
+    expect(cmd, "&& is a syntax error in Windows PowerShell 5.1").not.toContain("&&");
+    expect(cmd, "< is a parse error in every version of PowerShell").not.toContain("<");
+    expect(cmd).toContain("Get-Content -Raw '.vr-coding-task.md' |");
+    expect(cmd, "the call operator, or the program name is echoed as a string").toContain("& 'codex'");
+  });
+
+  it("still speaks cmd when the reader's shell is cmd", async () => {
+    const { buildAgentCommand } = await import("./coding-agent.js");
+    const cmd = buildAgentCommand({
+      shell: "cmd",
+      env: { CODEX_HOME: "C:\\ws\\.vr-codex" },
+      argv: ["codex", "exec", "-"],
+      stdinFile: ".vr-coding-task.md",
+    });
+    expect(cmd).toBe('set "CODEX_HOME=C:\\ws\\.vr-codex" && codex exec - < .vr-coding-task.md');
+  });
+
+  it("still speaks sh everywhere else", async () => {
+    const { buildAgentCommand } = await import("./coding-agent.js");
+    const cmd = buildAgentCommand({
+      shell: undefined,
+      env: { OLLAMA_API_BASE: "http://127.0.0.1:11434" },
+      argv: ["aider", "--model", "ollama/qwen"],
+    });
+    // posixQuote leaves a token alone when it needs no quoting — the point is the shape, not the quotes.
+    expect(cmd).toContain("OLLAMA_API_BASE=");
+    expect(cmd).toContain("aider");
+    expect(cmd, "sh takes an inline assignment, not `set`").not.toContain("set ");
+    expect(cmd).not.toContain("$env:");
+  });
+
+  it("escapes a quote inside a PowerShell literal by doubling it", async () => {
+    const { buildAgentCommand } = await import("./coding-agent.js");
+    const cmd = buildAgentCommand({ shell: "powershell", env: {}, argv: ["x", "it's"] });
+    expect(cmd).toContain("'it''s'");
+  });
+
+  it("omits the stdin stage entirely when the agent takes no stdin", async () => {
+    const { buildAgentCommand } = await import("./coding-agent.js");
+    // Aider reads its task from --message-file, so piping would hand it an empty prompt.
+    const cmd = buildAgentCommand({ shell: "powershell", env: {}, argv: ["aider"] });
+    expect(cmd).not.toContain("Get-Content");
+    expect(cmd).toBe("& 'aider'");
   });
 });
