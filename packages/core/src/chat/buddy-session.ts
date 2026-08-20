@@ -1319,30 +1319,44 @@ export async function runBuddyTurn(opts: {
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
-    // STUCK ON REPEAT, in-turn half. Nobody is watching a live run step by step, so the failure that
-    // matters isn't a crash — it's the model repeating an action that changes nothing until the
-    // backstop. Rounds that merely look alike are fine; it takes LIVE_REPEAT_LIMIT byte-identical ones.
-    //
-    // This catches the IN-WORKER tools only (see the note on effectiveMax: a host tool ends its turn,
-    // so the clicking loop is never visible from in here). The host runs the same two pure helpers
-    // over its own chain, which is where a repeated CLICK is caught. Both, because the failure is the
-    // same shape on either side of the boundary and neither one sees the other's calls.
-    //
-    // It ends the turn with an ANSWER rather than an error, because the reader's question is "what
-    // happened?" and "I repeated the same thing five times and it didn't change anything" answers it.
-    if (opts.liveControl) {
-      roundSignatures.push(roundSignature(calls));
-      if (stuckOnRepeat(roundSignatures)) {
-        const last = calls[0];
-        return withThinking({
-          text:
-            `I stopped — I've repeated the same action ${LIVE_REPEAT_LIMIT} times without anything changing` +
-            `${last ? ` (${describeBuddyToolActivity(last).replace(/…$/, "")})` : ""}. ` +
-            "Something isn't responding the way I expect. Tell me what you see and I'll try a different way.",
-          transcript,
-          toolResults,
-        });
-      }
+    /**
+     * STUCK ON REPEAT — for EVERY turn, not only a live-control one.
+     *
+     * Nobody is watching a long run step by step, so the failure that matters isn't a crash: it's the
+     * model repeating an action that changes nothing until the backstop. Rounds that merely look
+     * alike are fine; it takes LIVE_REPEAT_LIMIT byte-identical ones.
+     *
+     * THIS USED TO BE GATED ON `opts.liveControl`, and the gate was the bug. The guard was written
+     * while driving another program's UI, where a click that changes nothing is the obvious form of
+     * the failure — but nothing about it is specific to clicking. Reported from an ordinary scheduled
+     * task: `search_web("stock market")` eighteen times, byte for byte, in a checklist step that
+     * could not be satisfied by searching. The guard was sitting right there, tested, switched off.
+     *
+     * An unattended run is if anything the WORSE case: a live-control loop has someone watching it.
+     *
+     * This catches the IN-WORKER tools only (see the note on effectiveMax: a host tool ends its turn,
+     * so the clicking loop is never visible from in here). The host runs the same two pure helpers
+     * over its own chain, which is where a repeated CLICK is caught. Both, because the failure is the
+     * same shape on either side of the boundary and neither one sees the other's calls.
+     *
+     * It ends the turn with an ANSWER rather than an error, because the reader's question is "what
+     * happened?" and "I did the same thing five times and nothing changed" answers it.
+     */
+    roundSignatures.push(roundSignature(calls));
+    if (stuckOnRepeat(roundSignatures)) {
+      const last = calls[0];
+      const what = last ? describeBuddyToolActivity(last).replace(/…$/, "") : "";
+      return withThinking({
+        text:
+          `I stopped — I repeated the same action ${LIVE_REPEAT_LIMIT} times and nothing changed` +
+          `${what ? ` (${what})` : ""}. ` +
+          (opts.liveControl
+            ? "Something isn't responding the way I expect. Tell me what you see and I'll try a different way."
+            : "Whatever I'm looking for isn't coming back that way. Tell me what you'd like me to try instead, " +
+              "or give me the detail I'm missing and I'll carry on."),
+        transcript,
+        toolResults,
+      });
     }
 
     // Run every tool the model batched this round, in order. A host/UI tool (needs approval or a
