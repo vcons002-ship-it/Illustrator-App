@@ -3457,7 +3457,9 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       ...(userSoul ? { userSoul } : {}),
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
-    const memory = memoryPromptBlock(await loadMemory(memoryStore()));
+    // SCOPED TO THE TURN once the set is too big to carry whole — the notes this message is about
+    // arrive in full, the rest as their opening line. Nothing is dropped; see memoryPromptBlock.
+    const memory = memoryPromptBlock(await loadMemory(memoryStore()), msg.userText ?? "");
     const skills = skillsIndexBlock(withBuiltinSkills(await loadSkills(memoryStore())));
     // THE SAME REFERENCE PICTURES THE BUDDY CHAT DRAWS FROM. The reference set is per-SESSION, not
     // per-panel, and the reader's renders were the one surface that knew nothing about it: the block
@@ -5854,7 +5856,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // Cached after the first turn; a fetch of a local file, and it can't change while loaded.
     const buildStampLabel = formatBuildStamp(await loadBuildStamp());
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
-    const memory = memoryPromptBlock(await loadMemory(store));
+    const memory = memoryPromptBlock(await loadMemory(store), msg.userText ?? "");
     const selfName = await loadSoulName(store, "self");
     const soulQueryContext = soulEvidenceQueryContext(msg.history, msg.userText);
     const soulMode = selectSoulContextMode({
