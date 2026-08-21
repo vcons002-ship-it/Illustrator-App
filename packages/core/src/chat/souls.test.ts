@@ -58,6 +58,7 @@ import {
   soulEvidencePromptBlock,
   SOUL_EVIDENCE_PROMPT_BUDGET_CHARS,
   isSelfPortraitRequest,
+  portraitSubjects,
   isUserPortraitRequest,
   userPortraitPrompt,
 } from "./souls.js";
@@ -1716,5 +1717,63 @@ describe("a Soul photo is used by DEFAULT, not on request", () => {
     expect(self("paint the house you live in")).toBe(false);
     expect(self("a landscape you would like")).toBe(false);
     expect(user("draw me a castle")).toBe(false);
+  });
+});
+
+describe("whose picture is this", () => {
+  /**
+   * Reported from a FRESH chat: "generate an image of yourself" produced the assistant with the
+   * wrong hair colour and a beard, despite being a woman.
+   *
+   * The two subject tests ran independently, each over the reader's words AND the model's rewritten
+   * prompt joined together, and both could say yes. When they did, BOTH souls' looks were folded
+   * into one prompt and both faces went to the render.
+   */
+  const names = { selfName: "Aria", userName: "Nick" };
+
+  it("keeps the reader's subject when the model's prose names the other soul", () => {
+    const got = portraitSubjects({
+      userText: "generate an image of yourself",
+      // The model rewrites freely, and here it mentions the reader by name.
+      modelPrompt: "a warm portrait, in the style Nick asked for, soft evening light",
+      ...names,
+    });
+    expect(got).toEqual({ self: true, user: false });
+  });
+
+  it("still finds the subject from the model's prompt when the reader implied it", () => {
+    // The reason the two texts are joined at all: the reader names the subject, the model's prompt
+    // does not, or the reverse.
+    expect(portraitSubjects({ userText: "draw yourself", modelPrompt: "a woman in a garden", ...names })).toEqual({
+      self: true,
+      user: false,
+    });
+    expect(portraitSubjects({ userText: "make one", modelPrompt: "a portrait of Nick at the shore", ...names })).toEqual({
+      self: false,
+      user: true,
+    });
+  });
+
+  it("returns BOTH for a genuine two-hander", () => {
+    expect(portraitSubjects({ userText: "draw you and me on a beach", modelPrompt: "two figures", ...names })).toEqual({
+      self: true,
+      user: true,
+    });
+  });
+
+  it("keeps both when the reader really did name both", () => {
+    // Ambiguity the reader created is not ours to resolve — this is what it did before, and it is
+    // right when there is nothing to choose on.
+    expect(portraitSubjects({ userText: "a picture of Aria and Nick", modelPrompt: "two people", ...names })).toEqual({
+      self: true,
+      user: true,
+    });
+  });
+
+  it("says neither when the picture is of something else entirely", () => {
+    expect(portraitSubjects({ userText: "draw me a castle", modelPrompt: "a stone castle at dusk", ...names })).toEqual({
+      self: false,
+      user: false,
+    });
   });
 });
