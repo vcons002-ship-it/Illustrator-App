@@ -126,8 +126,7 @@ import {
   soulSourceFingerprint,
   selfPortraitPrompt,
   userPortraitPrompt,
-  isSelfPortraitRequest,
-  isUserPortraitRequest,
+  portraitSubjects,
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
@@ -6703,13 +6702,25 @@ async function handleChatTool(
     // garden", which contains nothing this can match — so the Soul was skipped for the one request
     // that named it outright.
     const request = userText?.trim() ? `${userText}\n${call.prompt}` : call.prompt;
-    if ((!inStory || !!storySoulCast?.self) && isSelfPortraitRequest(request, portraitSelfName)) {
+    /**
+     * ONE QUESTION, NOT TWO. The two tests could both say yes on the same request — the reader's
+     * words and the model's rewritten prompt are joined, and the model's prose can easily mention the
+     * other soul — and then BOTH appearances were folded into one prompt and both faces sent to the
+     * render. A woman with a beard is exactly what that produces. See portraitSubjects.
+     */
+    const subject = portraitSubjects({
+      userText: userText ?? "",
+      modelPrompt: call.prompt,
+      selfName: portraitSelfName,
+      userName: portraitUserName,
+    });
+    if ((!inStory || !!storySoulCast?.self) && subject.self) {
       prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes, request);
       const own = await loadSoulRefs(store, "self");
       refs.push(...own);
       if (own.length) sources.self = own.length;
     }
-    if ((!inStory || !!storySoulCast?.user) && isUserPortraitRequest(request, portraitUserName)) {
+    if ((!inStory || !!storySoulCast?.user) && subject.user) {
       prompt = userPortraitPrompt(prompt, portraitUserName, userNotes, request);
       const own = await loadSoulRefs(store, "user");
       refs.push(...own);

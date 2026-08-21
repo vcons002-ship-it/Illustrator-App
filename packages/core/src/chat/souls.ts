@@ -4351,6 +4351,52 @@ export function isUserPortraitRequest(prompt: string, name: string): boolean {
   );
 }
 
+/**
+ * WHOSE PICTURE IS THIS? — asked once, instead of two independent yes/no questions.
+ *
+ * Reported from a FRESH chat: "generate an image of yourself" produced the assistant with the wrong
+ * hair colour and a beard, despite being a woman.
+ *
+ * The two tests ran separately, each against the reader's words AND the model's rewritten prompt
+ * joined together, and both could say yes. When they did, both souls' looks were folded into one
+ * prompt — "…depict Aria with this appearance: auburn hair… — depict Nick with this appearance:
+ * dark hair, beard…" — and both souls' reference photos went to the render. A woman with a beard is
+ * exactly what that produces, and the wrong hair is the same collision. It also explains the third
+ * symptom: two appearance clauses make a long prompt, and a long prompt is where an image model
+ * starts dropping specifics.
+ *
+ * Joining the two texts is right for FINDING a subject — the reader says "draw yourself" and the
+ * model then writes "a portrait of a woman in a garden", which names nobody. It is wrong for
+ * SEPARATING them, because the model's prompt is free prose that can easily mention the other soul.
+ *
+ * So the reader's own words break the tie. They asked for one thing; a rewrite underneath cannot
+ * turn it into two. A genuine PAIR request ("you and me") still returns both — that case is why the
+ * combined test exists at all, and it is asked first.
+ */
+export function portraitSubjects(input: {
+  /** What the reader actually typed. Authoritative when the two disagree. */
+  userText: string;
+  /** The prompt the model wrote. Finds a subject the reader named only by implication. */
+  modelPrompt: string;
+  selfName: string;
+  userName: string;
+}): { self: boolean; user: boolean } {
+  const combined = input.userText.trim() ? `${input.userText}\n${input.modelPrompt}` : input.modelPrompt;
+  // A two-hander is the one case that genuinely wants both, and it is asked before anything else.
+  if (isPairRequest(combined.toLowerCase())) return { self: true, user: true };
+  const self = isSelfPortraitRequest(combined, input.selfName);
+  const user = isUserPortraitRequest(combined, input.userName);
+  if (!self || !user) return { self, user };
+  // Both matched and it is not a pair: something in the model's prose collided with the other soul.
+  // Fall back to what the reader said, which is the only text that carries their intent.
+  const saidSelf = isSelfPortraitRequest(input.userText, input.selfName);
+  const saidUser = isUserPortraitRequest(input.userText, input.userName);
+  if (saidSelf !== saidUser) return { self: saidSelf, user: saidUser };
+  // The reader's words name both, or neither. Genuinely ambiguous — keep both rather than guess,
+  // which is what this did before and is right when there is nothing to choose on.
+  return { self: true, user: true };
+}
+
 /** Append the soul's appearance to a prompt (no-op when the soul has no look notes). */
 function foldSoulLook(prompt: string, name: string, notes: readonly SoulNote[], fallback: string): string {
   // Portrait prompts historically separate source notes with commas; keep that surface while using
