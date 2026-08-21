@@ -5,6 +5,7 @@ import {
   MAX_NOTE_CHARS,
   loadMemory,
   memoryPromptBlock,
+  relevantMemoryIndices,
   rememberNote,
   forgetNote,
   saveMemory,
@@ -100,5 +101,71 @@ describe("reader memory", () => {
     const saved = await saveMemory(store, many);
     expect(saved).toHaveLength(MAX_MEMORY_NOTES);
     expect(saved[saved.length - 1]!.text).toBe(`note ${MAX_MEMORY_NOTES + 4}`);
+  });
+});
+
+describe("memory scoped to the turn", () => {
+  // Long enough that the whole set exceeds MEMORY_BLOCK_BUDGET_CHARS — below it the set is carried
+  // verbatim, which is the point of the first test.
+  const long = (label: string) => ({ text: `${label}: ${"detail ".repeat(200)}`, at: 1 });
+
+  it("carries a small set whole — retrieval that changes nothing is pure risk", () => {
+    const notes = [
+      { text: "prefers watercolor", at: 1 },
+      { text: "reading the Empyrean series", at: 2 },
+      { text: "never spoil endings", at: 3 },
+    ];
+    const block = memoryPromptBlock(notes, "draw me a castle");
+    for (const n of notes) expect(block).toContain(`- ${n.text}`);
+    expect(block).not.toContain("shortened");
+  });
+
+  /**
+   * Forty notes of two thousand characters is most of a local model's entire input allowance, spent
+   * on preferences about a book the reader is not reading today.
+   */
+  it("gives the turn's notes in full and shortens the rest", () => {
+    // Six, so the three always-recent ones do not cover the whole list.
+    const notes = [long("sailing"), long("astronomy"), long("baking"), long("chess"), long("gardening"), long("watercolor")];
+    const block = memoryPromptBlock(notes, "what should I bake this weekend");
+    expect(block).toContain(`- ${notes[2]!.text}`); // baking, in full
+    // Present, legible, and clearly marked as abbreviated.
+    expect(block).toContain("sailing: detail");
+    expect(block).toContain("[shortened — not obviously about this turn]");
+  });
+
+  it("hides nothing — every note is still listed", () => {
+    // A retrieval that silently drops a note is indistinguishable from the app having forgotten it.
+    const notes = [long("sailing"), long("baking"), long("astronomy"), long("watercolor"), long("chess")];
+    const block = memoryPromptBlock(notes, "sourdough starter");
+    for (const label of ["sailing", "baking", "astronomy", "watercolor", "chess"]) {
+      expect(block, label).toContain(`- ${label}:`);
+    }
+  });
+
+  it("keeps the newest notes whatever the query is about", () => {
+    // "Remember this" is usually about right now — a preference stated a minute ago losing to one
+    // from March would be its own bug.
+    const notes = [long("sailing"), long("baking"), long("astronomy"), long("watercolor"), long("chess")];
+    const keep = relevantMemoryIndices(notes, "something unrelated entirely");
+    expect(keep.has(notes.length - 1)).toBe(true);
+    expect(keep.has(notes.length - 2)).toBe(true);
+  });
+
+  it("matches the way a reader actually phrases things", () => {
+    // Straight term overlap fails the first realistic query it meets: "bake" shares not one token
+    // with a note about BAKING. A reader does not phrase a request the way they phrased the
+    // preference.
+    const notes = [long("sailing"), long("astronomy"), long("baking"), long("chess"), long("gardening"), long("watercolor")];
+    for (const q of ["what should I bake this weekend", "any tips on sailing", "chess opening"]) {
+      const keep = relevantMemoryIndices(notes, q);
+      const hit = q.includes("bake") ? 2 : q.includes("sailing") ? 0 : 3;
+      expect(keep.has(hit), q).toBe(true);
+    }
+  });
+
+  it("falls back to the whole set when there is no query to score against", () => {
+    const notes = [long("sailing"), long("baking"), long("astronomy"), long("watercolor")];
+    expect(memoryPromptBlock(notes, "   ")).not.toContain("shortened");
   });
 });
