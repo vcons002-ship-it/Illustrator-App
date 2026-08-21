@@ -15,6 +15,15 @@ import type { ChatTurn } from "../providers/llm/chat.js";
 /** Average characters per token for English prose (estimate; see file note). */
 export const CHARS_PER_TOKEN = 4;
 
+/**
+ * How much of the request's capacity has to be LOST before compacting on loss alone.
+ *
+ * A tenth is roughly an exchange, not a trimmed sentence. The fraction test is the primary trigger
+ * and fires before any loss at all; this is the backstop for the case it cannot see coming — a single
+ * message so large that one turn goes from comfortable to over budget.
+ */
+const SIGNIFICANT_LOSS = 0.1;
+
 export function approxTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
@@ -104,17 +113,28 @@ export function shouldAutoCompact(
   if (!usage || !ceiling || ceiling <= 0) return false;
   if (messageCount < minMessages) return false;
   /**
-   * ALREADY LOSING CONVERSATION IS THE STRONGEST POSSIBLE SIGNAL, and it used to be invisible here.
+   * LOSING CONVERSATION IS A SIGNAL — but "any loss at all" was far too sharp a reading of it, and
+   * the correction matters more than the original fix did.
    *
-   * The fraction test alone asks "are we NEARLY full?" of a figure measured on the history that
-   * survived trimming — which is, by construction, never over budget. So on a small window the app
-   * trimmed quietly turn after turn and the donut sat at 44%, and this returned false every time. The
-   * one mechanism that preserves meaning rather than discarding it was gated on a number that the
-   * discarding kept low.
+   * Two changes shipped together. `inputTokens` made the fraction test below WORK: it had been
+   * measured against the whole window, which the request can never reach, so on a local model it had
+   * never once fired. That alone is the mechanism, and it fires at 80% of what the request can hold —
+   * BEFORE anything is lost, which is the whole point of compacting.
    *
-   * If anything was dropped, summarising is not "soon" — it is overdue.
+   * This test fired on the first dropped CHARACTER, on top of that, and auto-compaction is not a
+   * gentle thing: it replaces the entire history with a summary and keeps six recent messages. So a
+   * chat that had never been compacted in its life was suddenly being summarised most turns.
+   *
+   * Reported as souls blurring into each other, reference photos losing their subject, and physical
+   * descriptions going missing — which is precisely what a summary does to two similar characters and
+   * a list of specifics. The reader had also asked, one screenshot earlier, why it was compacting at
+   * 54%, and the honest answer turned out to be "because I told it to".
+   *
+   * So the threshold is real loss, not a nick: an exchange's worth, not a trimmed sentence. Below
+   * that, the fraction test above has already had its chance and trimming is doing its ordinary job.
    */
-  if (usage.droppedChars && usage.droppedChars > 0) return true;
+  const lostALot = (usage.droppedChars ?? 0) >= ceiling * CHARS_PER_TOKEN * SIGNIFICANT_LOSS;
+  if (lostALot) return true;
   // Against the ceiling the request can REACH, not the whole window — see `inputTokens`. Measured
   // against the window this comparison was unreachable on a local model and did nothing.
   return usage.approxTokens >= ceiling * fraction;

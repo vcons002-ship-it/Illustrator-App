@@ -69,7 +69,7 @@ describe("compaction fires when conversation is actually being lost", () => {
    * reached 0.8 of the window and compaction never ran: the donut sat at 44% while earlier turns
    * were being thrown away every single turn.
    */
-  it("triggers as soon as anything was dropped, however small the readout", async () => {
+  it("triggers on REAL loss, not on a trimmed sentence", async () => {
     const { shouldAutoCompact } = await import("./context-usage.js");
     const trimmedLooksFine = {
       segments: [],
@@ -77,12 +77,22 @@ describe("compaction fires when conversation is actually being lost", () => {
       approxTokens: 1_000, // ~3% of the window — nowhere near the 0.8 fraction
       maxTokens: 30_000,
       budgetChars: 12_000,
-      droppedChars: 9_000,
+      inputTokens: 27_000,
+      droppedChars: 30_000, // an exchange's worth of a 108,000-character capacity
     };
     expect(shouldAutoCompact(trimmedLooksFine, 12)).toBe(true);
     // Nothing dropped and well under the fraction: still nothing to do.
     const { droppedChars: _drop, ...nothingLost } = trimmedLooksFine;
     expect(shouldAutoCompact(nothingLost, 12)).toBe(false);
+    /**
+     * A NICK IS NOT A LOSS, and reading it as one is what broke souls and reference photos.
+     *
+     * Auto-compaction replaces the whole history with a summary. Firing it on the first dropped
+     * character meant a chat that had never been compacted was suddenly summarised most turns — and
+     * a summary is exactly where two similar characters blur together and a list of physical
+     * specifics goes missing. Reported as souls mixing and references losing their subject.
+     */
+    expect(shouldAutoCompact({ ...trimmedLooksFine, droppedChars: 400 }, 12)).toBe(false);
   });
 
   it("still needs a real conversation and a known window", async () => {
