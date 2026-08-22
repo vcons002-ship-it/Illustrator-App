@@ -11,7 +11,9 @@ import {
   chatSystemCachePrefix,
   lookupBible,
   approxTokens,
+  boundTranscript,
   chatTurnsChars,
+  compactionBudget,
   measureContextUsage,
   slimStepEvidence,
   searchBookPassages,
@@ -4357,6 +4359,17 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
       throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
     }
     const transcript = msg.turns.map((t) => `${t.role.toUpperCase()}: ${t.content}`).join("\n\n");
+    /**
+     * SIZED TO THE JOB, AND WITH ROOM TO THINK — see compactionBudget.
+     *
+     * This was a flat `maxTokens: 1024` with no reasoning bound, on a thinking model where the two
+     * share one allowance: deliberate about how to structure the brief and there is nothing left to
+     * write it with, so the call returns an empty string and compaction fails on the one chat that
+     * needed it. The input was cut with `slice(-120_000)`, which keeps the TAIL — and the tail is the
+     * part still in the conversation, while the HEAD is what compaction exists to rescue.
+     */
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const budget = compactionBudget(transcript.length, approxTokens(budgets.input));
     const text = await withChatPriority(llm.id, () =>
       llm.chat(
         [
@@ -4368,9 +4381,9 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
               "stated preferences, anything opened or generated, and open questions. Terse bullet points; " +
               "no preamble, no meta-commentary.",
           },
-          { role: "user", content: transcript.slice(-120_000) },
+          { role: "user", content: boundTranscript(transcript, budget.inputCap) },
         ],
-        { maxTokens: 1024 },
+        { maxTokens: budget.maxTokens, thinkingBudgetChars: budget.thinkingBudgetChars },
       ),
     );
     const trimmed = text.trim();

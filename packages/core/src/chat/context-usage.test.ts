@@ -158,3 +158,56 @@ describe("how full is 'full'", () => {
     expect(measureContextUsage(parts, { budgetChars: 100 }).inputTokens).toBeUndefined();
   });
 });
+
+describe("what a compaction may spend and read", () => {
+  /**
+   * Reported as a chat "compacting with no end". Three faults in one call: a flat 1024-token budget
+   * shared with reasoning on a thinking model (so the summary can come back EMPTY), a budget that
+   * ignored how much was being compressed, and an input cut with slice(-120_000) — which keeps the
+   * tail, and the tail is the part still in the conversation.
+   */
+  it("leaves room to think on top of the summary, not inside it", async () => {
+    const { compactionBudget } = await import("./context-usage.js");
+    const b = compactionBudget(80_000, 27_000);
+    expect(b.thinkingBudgetChars).toBeGreaterThan(0);
+    // The generation has to cover BOTH, or the thinking bound starves the summary instead of
+    // protecting it.
+    expect(b.maxTokens).toBeGreaterThan(b.thinkingBudgetChars / 4);
+  });
+
+  it("scales the summary with what is being compressed, within bounds", async () => {
+    const { compactionBudget } = await import("./context-usage.js");
+    const small = compactionBudget(8_000, 27_000);
+    const large = compactionBudget(400_000, 27_000);
+    expect(large.maxTokens).toBeGreaterThan(small.maxTokens);
+    // Never so terse it cannot carry decisions and open questions …
+    expect(small.maxTokens).toBeGreaterThan(400);
+    // … and never so long it becomes a permanent tax on every later prompt, since the brief is
+    // injected into all of them.
+    expect(large.maxTokens).toBeLessThan(2_100);
+  });
+
+  it("reads as much as the model can hold, not a fixed 120k", async () => {
+    const { compactionBudget } = await import("./context-usage.js");
+    // A big window should read more than a small one.
+    expect(compactionBudget(500_000, 100_000).inputCap).toBeGreaterThan(compactionBudget(500_000, 20_000).inputCap);
+    // With no known ceiling the old fixed cap stands rather than guessing.
+    expect(compactionBudget(500_000).inputCap).toBe(120_000);
+  });
+
+  it("cuts the MIDDLE, because the head is the only copy of what was decided", async () => {
+    const { boundTranscript } = await import("./context-usage.js");
+    const text = `OPENING DECISION${"x".repeat(5_000)}THE LAST THING SAID`;
+    const out = boundTranscript(text, 1_000);
+    expect(out.length).toBeLessThanOrEqual(1_000);
+    expect(out.startsWith("OPENING DECISION"), "the head is what compaction exists to rescue").toBe(true);
+    expect(out.endsWith("THE LAST THING SAID"), "the tail is what the reader just said").toBe(true);
+    // Announced, so the model does not read the join as continuous.
+    expect(out).toContain("not shown");
+  });
+
+  it("leaves a transcript that already fits completely alone", async () => {
+    const { boundTranscript } = await import("./context-usage.js");
+    expect(boundTranscript("short enough", 1_000)).toBe("short enough");
+  });
+});

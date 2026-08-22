@@ -1049,6 +1049,29 @@ describe("the per-chat workspace layout", () => {
     expect(RUNTIME).toContain('opts.shell === "powershell" ? "Get-ChildItem -Name"');
   });
 
+  /**
+   * "MY CHAT IS COMPACTING, STUCK RUNNING WITH NO END."
+   *
+   * The failure path cleared `autoCompactingRef` and `buddyBusy` and left `buddyUsage` exactly as it
+   * was — and `buddyUsage` is what the trigger effect reads. So the moment `buddyBusy` flipped back
+   * the effect re-ran, found the same usage that had fired it, and started again: an unbounded retry
+   * at up to 120 seconds an attempt, each a full generation pinning the local model.
+   */
+  it("does not retry a failed compaction into an infinite loop", () => {
+    expect(APP_RAW).toContain("const compactFailedAtRef = useRef<number | undefined>(undefined);");
+    expect(APP_RAW).toContain("compactFailedAtRef.current = msgs.length;");
+    expect(APP_RAW).toContain("if (failedAt !== undefined && buddyMessages.length < failedAt + COMPACT_RETRY_AFTER) return;");
+    // A success clears the hold, so an ordinary later compaction is not blocked by an old failure.
+    expect(APP_RAW).toContain("compactFailedAtRef.current = undefined;");
+  });
+
+  it("tells the reader when compaction fails, instead of failing silently", () => {
+    // A failed compaction leaves the conversation exactly as over-budget as it was, so the reader
+    // needs to know their next turns will be trimmed.
+    expect(APP_RAW).toContain("⚠ Couldn't compact this conversation");
+    expect(APP_RAW).toContain("Older messages will be trimmed to fit instead");
+  });
+
   it("does not grow a folder for a chat that only ever talks", () => {
     // The per-turn reads (project guide, plan file check) use the NON-creating lookup.
     expect(APP_RAW).toContain("const workspaceDirNow = useCallback");

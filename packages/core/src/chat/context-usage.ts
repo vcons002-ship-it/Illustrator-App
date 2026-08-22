@@ -28,6 +28,76 @@ export function approxTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
+/**
+ * WHAT A COMPACTION MAY SPEND, AND WHAT IT MAY READ.
+ *
+ * The summary call was a flat `maxTokens: 1024` with no thinking bound and an input capped by
+ * `slice(-120_000)`. Three separate problems in one line:
+ *
+ *  - 1024 is the whole allowance on a THINKING model, where reasoning and reply come out of the same
+ *    budget. Deliberate for a few hundred tokens about how to structure a brief and there is nothing
+ *    left to write it with — the call returns an empty string and compaction fails, on a chat that is
+ *    over budget precisely because it needed compacting.
+ *  - A flat budget ignores how much is being compressed. Twenty exchanges and two hundred get the
+ *    same room.
+ *  - `slice(-120_000)` keeps the TAIL. The tail is the part still in the conversation; the HEAD is
+ *    what compaction exists to rescue, and it was the part being thrown away.
+ *
+ * The output is bounded at both ends for a reason that is easy to miss: the brief is injected into
+ * every later prompt. A summary that is too big is not a better summary, it is a permanent tax on the
+ * window it was meant to relieve. PURE.
+ */
+export interface CompactionBudget {
+  /** Generation cap for the summary call — reply AND any reasoning, on a local model. */
+  maxTokens: number;
+  /** Bound on reasoning, so deliberation cannot consume the whole generation. */
+  thinkingBudgetChars: number;
+  /** Most transcript characters to feed in. */
+  inputCap: number;
+}
+
+/** Never so terse it cannot carry decisions, names and open questions. */
+const MIN_SUMMARY_TOKENS = 400;
+/** The brief rides in EVERY later prompt: past this it costs more than it saves. */
+const MAX_SUMMARY_TOKENS = 1_500;
+/** Roughly 1 summary token per this many transcript characters — about a 40:1 compression. */
+const COMPRESSION = 40;
+/** Reasoning allowance, on top of the summary itself. Enough to plan a brief, not to draft one. */
+const SUMMARY_THINKING_CHARS = 2_000;
+
+export function compactionBudget(transcriptChars: number, inputCeilingTokens?: number): CompactionBudget {
+  const wanted = Math.round(transcriptChars / COMPRESSION);
+  const summary = Math.min(MAX_SUMMARY_TOKENS, Math.max(MIN_SUMMARY_TOKENS, wanted));
+  return {
+    // The generation has to cover the reasoning as well, or the bound below is the thing that starves
+    // the summary rather than the thing that protects it.
+    maxTokens: summary + Math.ceil(SUMMARY_THINKING_CHARS / CHARS_PER_TOKEN),
+    thinkingBudgetChars: SUMMARY_THINKING_CHARS,
+    // Read as much as the model can actually hold, leaving room for the summary it has to write.
+    // Without a known ceiling, the old fixed cap stands.
+    inputCap: inputCeilingTokens
+      ? Math.max(20_000, (inputCeilingTokens - summary) * CHARS_PER_TOKEN)
+      : 120_000,
+  };
+}
+
+/**
+ * Fit a transcript to `maxChars` by cutting its MIDDLE, keeping both ends.
+ *
+ * The head is where a conversation's decisions, names and constraints are established, and it is the
+ * only copy — everything after compaction is derived from this. The tail is what the reader just
+ * said. Dropping either loses the run; the middle is the part a brief can most afford to lose, and
+ * the cut is announced so the model does not read the join as continuous. PURE.
+ */
+export function boundTranscript(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const marker = "\n\n[… a stretch of the middle of this conversation is not shown …]\n\n";
+  const room = Math.max(0, maxChars - marker.length);
+  // The OPENING gets the larger share: it carries what was decided, which the tail assumes.
+  const head = Math.ceil(room * 0.55);
+  return text.slice(0, head) + marker + text.slice(text.length - (room - head));
+}
+
 /** A labelled slice of the request, with its size in characters. */
 export interface ContextSegment {
   key: string;
