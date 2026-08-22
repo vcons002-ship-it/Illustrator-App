@@ -10295,6 +10295,22 @@ export function App() {
   // same flow the manual Compact button uses, but fired automatically when usage crosses ~0.8
   // of the model's window. The file ledger + plan persist separately, so they survive intact.
   const autoCompactingRef = useRef(false);
+  /**
+   * THE MESSAGE COUNT A COMPACTION FAILED AT — so a failure is not immediately retried forever.
+   *
+   * Reported as a chat "compacting with no end". The failure path cleared `autoCompactingRef` and
+   * `buddyBusy` and left `buddyUsage` exactly as it was — and `buddyUsage` is what the trigger effect
+   * reads. So the moment `buddyBusy` flipped back to false the effect re-ran, found the same usage
+   * that had fired it a moment earlier, and started again: an unbounded retry loop at up to 120
+   * seconds an attempt, each one a full generation pinning the local model.
+   *
+   * Clearing the usage instead would stop the loop and lie about the readout. Remembering WHERE it
+   * failed is honest and self-clearing: the conversation has to actually grow before it is worth
+   * trying again, and a successful compaction wipes it.
+   */
+  const compactFailedAtRef = useRef<number | undefined>(undefined);
+  /** Messages that must arrive after a failure before another attempt is worth the model call. */
+  const COMPACT_RETRY_AFTER = 6;
   const onAutoCompactBuddy = useCallback(async () => {
     if (autoCompactingRef.current || buddyBusy) return;
     const msgs = buddyMessagesRef.current;
@@ -10313,11 +10329,25 @@ export function App() {
       // Drop the stale usage donut: it reflected the pre-compaction history. The next turn
       // recomputes it — and clearing it stops this effect from re-firing on the old value.
       setBuddyUsage(undefined);
+      compactFailedAtRef.current = undefined;
+    } else {
+      // NOT SILENT, and not immediately retried. A failed compaction leaves the conversation exactly
+      // as over-budget as it was, so the reader needs to know their next turns will be trimmed — and
+      // the app must not spend the next hour discovering that again every two minutes.
+      compactFailedAtRef.current = msgs.length;
+      appendBuddy({
+        role: "tool",
+        text: `⚠ Couldn't compact this conversation${res.error ? ` (${res.error})` : ""}. Older messages will be trimmed to fit instead — start a new chat if you need the earlier detail kept.`,
+        turns: [],
+      });
     }
     autoCompactingRef.current = false;
-  }, [buddyBusy, summarize]);
+  }, [buddyBusy, summarize, appendBuddy]);
   useEffect(() => {
     if (isRemoteClient || buddyBusy || autoCompactingRef.current) return;
+    // A recent failure holds it off until the conversation has actually grown — see compactFailedAtRef.
+    const failedAt = compactFailedAtRef.current;
+    if (failedAt !== undefined && buddyMessages.length < failedAt + COMPACT_RETRY_AFTER) return;
     if (shouldAutoCompact(buddyUsage, buddyMessages.length)) void onAutoCompactBuddy();
   }, [buddyUsage, buddyBusy, buddyMessages.length, isRemoteClient, onAutoCompactBuddy]);
   const buddyPanelMessages = useMemo(
