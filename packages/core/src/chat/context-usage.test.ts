@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { approxTokens, measureContextUsage, shouldAutoCompact, type ContextUsage } from "./context-usage.js";
+import { approxTokens, compactionBudget, measureContextUsage, shouldAutoCompact, type ContextUsage } from "./context-usage.js";
 
+/**
+ * A usage where ALL of the weight is chat history — the case where compacting can obviously help.
+ *
+ * `segments: []` used to be shorthand for "don't care": only the totals mattered, because
+ * `shouldAutoCompact` only read the totals. It reads the segments now, and it has to: compaction can
+ * shrink the history and nothing else, so a request that is over budget on its BOOK is a request
+ * compaction cannot rescue, and firing it there is the loop the guard exists to break. The fixture
+ * has to say which it is.
+ */
 const usageWith = (approx: number, max: number | undefined): ContextUsage => ({
-  segments: [],
+  segments: [{ key: "history", label: "Chat history", chars: approx * 4 }],
   totalChars: approx * 4,
   approxTokens: approx,
   ...(max ? { maxTokens: max } : {}),
@@ -72,7 +81,7 @@ describe("compaction fires when conversation is actually being lost", () => {
   it("triggers on REAL loss, not on a trimmed sentence", async () => {
     const { shouldAutoCompact } = await import("./context-usage.js");
     const trimmedLooksFine = {
-      segments: [],
+      segments: [{ key: "history", label: "Chat history", chars: 4_000 }],
       totalChars: 4_000,
       approxTokens: 1_000, // ~3% of the window — nowhere near the 0.8 fraction
       maxTokens: 30_000,
@@ -127,7 +136,12 @@ describe("how full is 'full'", () => {
   it("measures fullness against what the request can occupy, not the window", async () => {
     const { shouldAutoCompact } = await import("./context-usage.js");
     const atCeiling = {
-      segments: [],
+      // Split the way a real reading session is: a book that compaction cannot touch, and the
+      // history that it can.
+      segments: [
+        { key: "book", label: "Book text", chars: 60_000 },
+        { key: "history", label: "Chat history", chars: 48_000 },
+      ],
       totalChars: 108_000,
       approxTokens: 27_000, // exactly the input ceiling …
       maxTokens: 50_000, // … which is 54% of the window
@@ -209,5 +223,102 @@ describe("what a compaction may spend and read", () => {
   it("leaves a transcript that already fits completely alone", async () => {
     const { boundTranscript } = await import("./context-usage.js");
     expect(boundTranscript("short enough", 1_000)).toBe("short enough");
+  });
+});
+
+/**
+ * "THE CURRENT COMPACTING IS STUCK RUNNING WITH NO END."
+ *
+ * Both of `shouldAutoCompact`'s conditions measure the WHOLE request — book, visual bible,
+ * instructions, live documents, history — while compaction can only shrink the history. So a long
+ * book with a big bible can hold the request over the line on its own, and then the trigger is true
+ * regardless of what compaction does: summarise the entire conversation to nothing and it is still
+ * true on the next render. The app destroys the history, re-measures, finds itself over budget, and
+ * destroys it again — for as long as the chat is open, at up to two minutes of local generation a
+ * round.
+ *
+ * A trigger its own remedy cannot clear is not a trigger. These are the cases that separate the two.
+ */
+describe("compaction only fires when compacting would actually help", () => {
+  const over = (segments: { key: string; label: string; chars: number }[]): ContextUsage => {
+    const totalChars = segments.reduce((n, s) => n + s.chars, 0);
+    return { segments, totalChars, approxTokens: approxTokens(totalChars), inputTokens: 27_000, budgetChars: 0 };
+  };
+
+  it("holds when the non-chat segments alone are over the line", () => {
+    // 100k chars of book = 25k tokens against a 27k ceiling. Compacting the 8k-char history to a
+    // brief leaves the request at ~25k tokens: still over 0.8, so this would fire again immediately.
+    const bookIsTooBig = over([
+      { key: "book", label: "Book text", chars: 100_000 },
+      { key: "history", label: "Chat history", chars: 8_000 },
+    ]);
+    expect(bookIsTooBig.approxTokens).toBeGreaterThan(27_000 * 0.8); // the trigger's condition IS met
+    expect(shouldAutoCompact(bookIsTooBig, 20)).toBe(false); // …and compaction still cannot help
+  });
+
+  it("fires when the history is the thing that is too big", () => {
+    const historyIsTooBig = over([
+      { key: "book", label: "Book text", chars: 20_000 },
+      { key: "history", label: "Chat history", chars: 80_000 },
+    ]);
+    expect(shouldAutoCompact(historyIsTooBig, 20)).toBe(true);
+  });
+
+  it("holds when there is no history to compact at all", () => {
+    expect(shouldAutoCompact(over([{ key: "book", label: "Book text", chars: 110_000 }]), 20)).toBe(false);
+  });
+
+  it("holds when real loss is happening but compaction is not the remedy", () => {
+    // The loss backstop fires on dropped conversation — but if the drop is happening because the
+    // book fills the window, replacing the history with a brief changes nothing about that.
+    const losing = { ...over([{ key: "book", label: "Book text", chars: 100_000 }, { key: "history", label: "Chat history", chars: 4_000 }]), droppedChars: 30_000 };
+    expect(shouldAutoCompact(losing, 20)).toBe(false);
+  });
+
+  it("refuses a compaction that would make the request bigger", () => {
+    // A short history compresses to a brief with a 400-token floor — 1,600 characters, which is more
+    // than the 600 it replaces. Compaction that grows the request is not compaction.
+    const barelyAnyHistory = over([
+      { key: "book", label: "Book text", chars: 90_000 },
+      { key: "history", label: "Chat history", chars: 600 },
+    ]);
+    expect(shouldAutoCompact(barelyAnyHistory, 20)).toBe(false);
+  });
+});
+
+/**
+ * The brief is injected into EVERY later prompt, and the transcript it reads has to fit the same
+ * window that is already too small. Both bounds were absolutes with no reference to the model.
+ */
+describe("compactionBudget scales to the model, not just the transcript", () => {
+  it("never asks to read more than the model can hold", () => {
+    // The old `Math.max(20_000, …)` floor: a floor above a ceiling is not a floor. On an 8k-token
+    // window it sent 20,000 characters — 5,000 tokens of transcript plus the brief plus the
+    // reasoning — into a call made BECAUSE the conversation was already too big.
+    const tiny = compactionBudget(400_000, 8_000);
+    expect(approxTokens(tiny.inputCap) + tiny.maxTokens).toBeLessThanOrEqual(8_000);
+  });
+
+  it("shrinks the brief before it shrinks the transcript on a small window", () => {
+    const tiny = compactionBudget(400_000, 8_000);
+    const roomy = compactionBudget(400_000, 100_000);
+    expect(tiny.summaryTokens).toBeLessThan(roomy.summaryTokens);
+    // …and it stays large enough to carry decisions, names and open questions.
+    expect(tiny.summaryTokens).toBeGreaterThanOrEqual(150);
+  });
+
+  it("keeps the brief to a share of the window, so it cannot out-cost what it evicted", () => {
+    for (const ceiling of [4_000, 8_000, 27_000, 120_000]) {
+      const b = compactionBudget(400_000, ceiling);
+      expect(b.summaryTokens).toBeLessThanOrEqual(Math.max(150, ceiling * 0.15));
+    }
+  });
+
+  it("still reports a reasoning bound, since the summary call is where it was silently dropped", () => {
+    expect(compactionBudget(50_000, 27_000).thinkingBudgetChars).toBeGreaterThan(0);
+    // The generation has to cover the reasoning AS WELL AS the brief, or the bound starves the
+    // summary rather than protecting it.
+    const b = compactionBudget(50_000, 27_000);
+    expect(b.maxTokens).toBeGreaterThan(b.summaryTokens);
   });
 });

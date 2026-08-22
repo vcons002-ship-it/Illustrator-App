@@ -731,6 +731,8 @@ export function useEngineWorker(
     >
   >(new Map());
   const activeBuddyRequestId = useRef<number | undefined>(undefined);
+  /** The in-flight compaction, so Stop and the timeout can send `summarizeCancel` at it. */
+  const activeSummarizeRequestId = useRef<number | undefined>(undefined);
   // In-flight compact-summaries, resolved by `summarized` replies.
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
     new Map(),
@@ -2310,6 +2312,10 @@ export function useEngineWorker(
     // so Stop couldn't end a run.
     const cid = activeCodingAgentsRequestId.current;
     if (cid !== undefined) send({ type: "codingAgentCancel", requestId: cid });
+    // And a compaction. Stop was rendered throughout one and did nothing at all — there was no abort
+    // anywhere in the chain, so the only way out of a summary that had gone long was to wait for it.
+    const sid = activeSummarizeRequestId.current;
+    if (sid !== undefined) send({ type: "summarizeCancel", requestId: sid });
   }, []);
   const summarize = useCallback(
     (turns: ChatTurn[]): Promise<{ text?: string; error?: string }> =>
@@ -2317,11 +2323,17 @@ export function useEngineWorker(
         const requestId = nextRefRequestId.current++;
         const timeout = setTimeout(() => {
           if (summarizeRequests.current.delete(requestId)) {
+            // TELL THE WORKER. Giving up here used to be purely local: the promise resolved, the app
+            // moved on, and the worker kept generating a brief nobody would read — with the local
+            // model pinned for as long as it took, and a retry queueing a second one behind it.
+            send({ type: "summarizeCancel", requestId });
             resolve({ error: "Compacting timed out — try again." });
           }
         }, 120_000);
+        activeSummarizeRequestId.current = requestId;
         summarizeRequests.current.set(requestId, (r) => {
           clearTimeout(timeout);
+          if (activeSummarizeRequestId.current === requestId) activeSummarizeRequestId.current = undefined;
           resolve(r);
         });
         send({ type: "summarize", requestId, turns });

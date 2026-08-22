@@ -384,6 +384,22 @@ export const HISTORY_TRIMMED_MARKER =
  * large old message takes everything before it too. That is deliberate (a contiguous tail is the
  * only kind a conversation reads correctly) and it is exactly why a big deliverable evicts itself.
  */
+/**
+ * THE OPENING LINE OF A COMPACTION BRIEF — the one history turn that must never be trimmed away.
+ *
+ * A brief is the whole of the conversation before it, compressed. It is also, necessarily, the
+ * OLDEST turn in the history, and this function drops oldest-first — so the very first thing thrown
+ * out of a compacted chat was the compaction. The app spent up to two minutes of local generation
+ * rescuing the head of the conversation and then discarded the rescue before the next reply, which
+ * is worse than never having compacted: the history it summarised is gone too.
+ */
+export const COMPACTION_BRIEF_MARKER = "[Summary of our conversation so far — continue from this context]";
+
+/** Whether a turn is a compaction brief (see {@link COMPACTION_BRIEF_MARKER}). */
+export function isCompactionBrief(turn: ChatTurn): boolean {
+  return turn.role === "user" && turn.content.startsWith(COMPACTION_BRIEF_MARKER);
+}
+
 export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn[] {
   let used = 0;
   let start = history.length;
@@ -425,7 +441,22 @@ export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn
       ];
     }
   }
-  return [{ role: "user", content: HISTORY_TRIMMED_MARKER }, ...history.slice(start)];
+  return [...briefPrefix(history.slice(0, start), maxChars - used), ...history.slice(start)];
+}
+
+/**
+ * The head of a trimmed history: the cut marker, plus the compaction brief if one was among the
+ * turns being dropped — cut in the middle rather than lost, on the same principle as the rescue
+ * above. What room is left after the surviving tail is what the brief gets; if there is none it goes,
+ * because a brief with no conversation after it is not worth the window either.
+ */
+function briefPrefix(dropped: readonly ChatTurn[], room: number): ChatTurn[] {
+  const marker: ChatTurn = { role: "user", content: HISTORY_TRIMMED_MARKER };
+  const brief = dropped.find(isCompactionBrief);
+  if (!brief) return [marker];
+  const budget = room - HISTORY_TRIMMED_MARKER.length;
+  if (budget <= COMPACTION_BRIEF_MARKER.length + TRUNCATED_RESULT_MARKER.length) return [marker];
+  return [{ ...brief, content: cutMiddle(brief.content, budget) }, marker];
 }
 
 /** Marker left where messages were dropped, so the model knows its view is partial rather than

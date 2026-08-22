@@ -4,6 +4,10 @@ import { runChatTurn,
   stampAssistantContent,
   stampTurnContent,
   stripTurnStamp,
+  trimChatHistory,
+  isCompactionBrief,
+  COMPACTION_BRIEF_MARKER,
+  HISTORY_TRIMMED_MARKER,
 } from "./chat-session.js";
 import { MAX_TOOL_ROUNDS } from "./chat-tools.js";
 import type { ChatCapable, ChatOptions, ChatTurn } from "../providers/llm/chat.js";
@@ -847,5 +851,54 @@ describe("a step directive is a message like any other, and carries a time", () 
 
   it("is not mistaken for a stamp-only reply", () => {
     expect(isOnlyTurnStamp(stampTurnContent("[You haven't done step 1 yet. Do it now.]", at))).toBe(false);
+  });
+});
+
+/**
+ * COMPACTION SPENT TWO MINUTES RESCUING THE HEAD OF A CONVERSATION, AND THIS THREW IT AWAY FIRST.
+ *
+ * A brief is everything before it, compressed — and it is therefore, necessarily, the OLDEST turn in
+ * the history. `trimChatHistory` drops oldest-first. So the very first thing evicted from a compacted
+ * chat was the compaction, which leaves the model worse off than if it had never run: the history the
+ * brief replaced is gone too, and the brief that replaced it is gone as well.
+ */
+describe("a compaction brief survives trimming", () => {
+  const brief = (text: string): ChatTurn => ({ role: "user", content: `${COMPACTION_BRIEF_MARKER}\n${text}` });
+
+  it("keeps the brief when the turns around it are trimmed away", () => {
+    const history: ChatTurn[] = [
+      brief("decided on Flow3; the API key lives in .env; open question: retry policy"),
+      { role: "user", content: "x".repeat(2_000) },
+      { role: "assistant", content: "y".repeat(2_000) },
+      { role: "user", content: "and now?" },
+    ];
+    const out = trimChatHistory(history, 3_000);
+    // The 2,000-character reader turn WAS trimmed — that is the ordinary loss the marker is for.
+    expect(out.some((t) => t.content.startsWith("xxxx"))).toBe(false);
+    expect(out.some(isCompactionBrief)).toBe(true);
+    expect(out[0]!.content).toContain("Flow3");
+    // The cut is still announced, so the model does not read the join as continuous.
+    expect(out.some((t) => t.content === HISTORY_TRIMMED_MARKER)).toBe(true);
+  });
+
+  it("cuts a long brief in the middle rather than dropping it", () => {
+    const long = `START-OF-BRIEF ${"m".repeat(8_000)} END-OF-BRIEF`;
+    const out = trimChatHistory([brief(long), { role: "user", content: "z".repeat(1_500) }, { role: "user", content: "next?" }], 2_500);
+    const kept = out.find(isCompactionBrief);
+    expect(kept).toBeDefined();
+    expect(kept!.content).toContain("START-OF-BRIEF");
+    expect(kept!.content).toContain("END-OF-BRIEF");
+    expect(kept!.content.length).toBeLessThan(long.length);
+  });
+
+  it("leaves an untrimmed history exactly as it was", () => {
+    const history: ChatTurn[] = [brief("short"), { role: "user", content: "hi" }];
+    expect(trimChatHistory(history, 10_000)).toEqual(history);
+  });
+
+  it("identifies a brief by its marker, not by position", () => {
+    expect(isCompactionBrief(brief("x"))).toBe(true);
+    expect(isCompactionBrief({ role: "user", content: "summary of our conversation" })).toBe(false);
+    expect(isCompactionBrief({ role: "assistant", content: COMPACTION_BRIEF_MARKER })).toBe(false);
   });
 });

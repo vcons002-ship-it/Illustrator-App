@@ -262,6 +262,7 @@ import {
   applyFileEdits,
   summarizeFileEdits,
   shouldAutoCompact,
+  COMPACTION_BRIEF_MARKER,
   resolveVideoModelFiles,
   VIDEO_RENDER_DEFAULTS,
   anchorClipPrompt,
@@ -1910,6 +1911,18 @@ export function App() {
   const fileKey = (p: string): string => workspacePathFor(p.trim()).replace(/\\/g, "/").toLowerCase();
   const markFileSeen = useCallback((p: string): void => {
     if (p.trim()) seenFilesRef.current.add(fileKey(p));
+  }, []);
+  /**
+   * Emptied on COMPACTION too, for the same reason as on a session switch.
+   *
+   * Compaction destroys the text of every file the model had read — that is what it is for — but it
+   * left this set populated, and this set is what lets `edit_file` past the read-before-edit guard.
+   * So the first edit after a compaction was made against a file the model could no longer see, from
+   * memory of an anchor rather than a copy of one: exactly the failure the guard exists to prevent,
+   * with the guard reporting that it had been satisfied.
+   */
+  const forgetReadFiles = useCallback((): void => {
+    seenFilesRef.current = new Set();
   }, []);
   // Held in a ref: the worker hook is constructed far above this, and naming the callback directly
   // there would be a TDZ.
@@ -10255,36 +10268,123 @@ export function App() {
     setChatMessages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  /** Replacement history after a compact: ONE visible summary message whose
-   * model-facing turns hand the brief to the model as established context. */
+  /**
+   * Replacement history after a compact: ONE visible summary message whose model-facing turn hands
+   * the brief to the model as established context — a SYSTEM note, not something the reader said.
+   *
+   * It was a `user` turn followed by a fabricated `assistant` "Got it — I have the context". Both
+   * are wrong in the same way. `chatTurnsOf` clock-stamps reader turns, so the model received a
+   * summary of its own conversation as a dated message the reader had just typed — and then an
+   * agreement it never gave, which is a statement about what it knows, put in its mouth. A system
+   * note is what a brief actually is, needs no alternation partner, and is not stamped.
+   */
   const compactedMessage = (summary: string): StoredChatMessage => ({
     role: "tool",
     at: Date.now(),
     text: `📜 Conversation compacted — continuing from this summary:\n\n${summary}`,
-    turns: [
-      { role: "user", content: `[Summary of our conversation so far — continue from this context]\n${summary}` },
-      { role: "assistant", content: "Got it — I have the context from the summary." },
-    ],
+    turns: [{ role: "system", content: `${COMPACTION_BRIEF_MARKER}\n${summary}` }],
   });
+
+  /**
+   * MESSAGES A COMPACTION MUST NOT DESTROY — the ones whose bytes exist nowhere else.
+   *
+   * A generated image lives ONLY in its chat message. `imageAttachment` mints a FileRef with bytes
+   * and NO path: nothing is written to the workspace or the library, and on persist the bytes move
+   * out to the chat blob store, leaving a byte-less `{ id }` pointer behind in the message.
+   * Replacing the message array therefore drops the only reference to those blobs — and ~500ms
+   * later the persist effect writes the shortened array over the on-disk copy that still held them.
+   * `clearChatBlobs` runs only on session delete, so the bytes then sit there unreachable until the
+   * whole chat is. There is no undo and no second copy: not the library, not disk, and not the
+   * Creations gallery.
+   *
+   * Their WORDS are in the brief. Their BYTES cannot be. So they survive as themselves, with
+   * `turns: []` — `chatTurnsOf` returns nothing for a message whose turns are empty, so a preserved
+   * card costs the model exactly zero context while staying visible, downloadable, and findable by
+   * `resolveVideoSource` when the reader says "animate the picture from earlier".
+   */
+  const carriesIrreplaceableMedia = (m: StoredChatMessage): boolean =>
+    Boolean(m.image || m.video || m.gallery?.length || m.attachments?.length);
+  const preservedMedia = (msgs: readonly StoredChatMessage[]): StoredChatMessage[] =>
+    msgs.filter(carriesIrreplaceableMedia).map((m) => ({ ...m, turns: [] }));
+
+  /**
+   * Apply a compaction to the CURRENT array rather than the one it started from.
+   *
+   * Summarizing takes up to two minutes of local generation, and the write-back was
+   * `setBuddyMessages([summary, ...recent])` built from a snapshot captured before that wait — so
+   * every message that arrived during it was silently deleted, including whatever the reader was
+   * reading at the time. Returning `undefined` abandons the compaction instead: the conversation
+   * has moved in a way this result no longer describes (cleared, session switched, messages
+   * deleted), and pasting a stale brief over it would be worse than not compacting at all.
+   */
+  const applyCompaction = (
+    current: readonly StoredChatMessage[],
+    snapshot: readonly StoredChatMessage[],
+    older: readonly StoredChatMessage[],
+    recent: readonly StoredChatMessage[],
+    summary: string,
+  ): StoredChatMessage[] | undefined => {
+    // Identity, not length: the snapshot's last message must still BE the message at that position.
+    if (current.length < snapshot.length) return undefined;
+    if (snapshot.length > 0 && current[snapshot.length - 1] !== snapshot[snapshot.length - 1]) return undefined;
+    const arrivedDuring = current.slice(snapshot.length);
+    return [...preservedMedia(older), compactedMessage(summary), ...recent, ...arrivedDuring];
+  };
+  /**
+   * Manual Compact. Three things it used to get wrong, all of them destructive:
+   *
+   *  - it replaced the ENTIRE conversation with the brief, media included (see `preservedMedia`);
+   *  - it wrote back a snapshot captured before an up-to-two-minute call, deleting anything the
+   *    reader or the assistant added while it ran (see `applyCompaction`);
+   *  - on a linked PHONE it ran the summary locally and threw the result away — the phone mirrors
+   *    the desktop's chat and never persists it, so the button appeared to work and changed nothing.
+   */
   const onCompactBuddy = useCallback(async () => {
     if (buddyBusy || buddyMessages.length < 4) return;
+    if (isRemoteClient) {
+      appendBuddy({ role: "tool", text: "⚠ Compacting has to run on the desktop — this chat is mirrored from there.", turns: [] });
+      return;
+    }
+    const snapshot = buddyMessages;
     setBuddyBusy(true);
     setBuddyActivity("Compacting the conversation…");
-    const res = await summarize(chatTurnsOf(buddyMessages));
+    const res = await summarize(chatTurnsOf(snapshot));
     setBuddyBusy(false);
     setBuddyActivity("");
-    if (res.text) setBuddyMessages([compactedMessage(res.text)]);
-    else appendBuddy({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
-  }, [buddyBusy, buddyMessages, summarize]);
+    if (!res.text) {
+      appendBuddy({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
+      return;
+    }
+    const summary = res.text;
+    let applied = true;
+    setBuddyMessages((cur) => {
+      const next = applyCompaction(cur, snapshot, snapshot, [], summary);
+      if (!next) applied = false;
+      return next ?? cur;
+    });
+    if (!applied) appendBuddy({ role: "tool", text: "⚠ The conversation moved while it was compacting, so nothing was replaced. Try Compact again.", turns: [] });
+    else forgetReadFiles();
+  }, [buddyBusy, buddyMessages, summarize, appendBuddy, isRemoteClient, forgetReadFiles]);
   const onCompactChat = useCallback(async () => {
     if (chatBusy || chatMessages.length < 4) return;
+    const snapshot = chatMessages;
     setChatBusy(true);
     setChatActivity("Compacting the conversation…");
-    const res = await summarize(chatTurnsOf(chatMessages));
+    const res = await summarize(chatTurnsOf(snapshot));
     setChatBusy(false);
     setChatActivity("");
-    if (res.text) setChatMessages([compactedMessage(res.text)]);
-    else appendChat({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
+    if (!res.text) {
+      appendChat({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
+      return;
+    }
+    const summary = res.text;
+    let applied = true;
+    setChatMessages((cur) => {
+      const next = applyCompaction(cur, snapshot, snapshot, [], summary);
+      if (!next) applied = false;
+      return next ?? cur;
+    });
+    if (!applied) appendChat({ role: "tool", text: "⚠ The conversation moved while it was compacting, so nothing was replaced. Try Compact again.", turns: [] });
   }, [chatBusy, chatMessages, summarize]);
   const onCompactBuddyClick = useCallback(() => void onCompactBuddy(), [onCompactBuddy]);
   const onCompactChatClick = useCallback(() => void onCompactChat(), [onCompactChat]);
@@ -10311,45 +10411,79 @@ export function App() {
   const compactFailedAtRef = useRef<number | undefined>(undefined);
   /** Messages that must arrive after a failure before another attempt is worth the model call. */
   const COMPACT_RETRY_AFTER = 6;
+  /**
+   * THE SIZE THE LAST COMPACTION LEFT BEHIND — the backstop against compacting the same chat twice.
+   *
+   * The projection in `shouldAutoCompact` decides whether compaction COULD help; this records
+   * whether it DID. If a compaction lands and the conversation is still over the line — a book and
+   * a visual bible that between them fill the window, a single kept message bigger than the whole
+   * budget — the trigger is true again on the very next render, and the app summarises a chat that
+   * is already a summary, then a summary of that. Requiring real growth first makes each round of
+   * compaction a one-way step rather than something the app can do to itself repeatedly.
+   */
+  const compactedAtCharsRef = useRef<number | undefined>(undefined);
+  /** Total characters of a message array — the measure `compactedAtCharsRef` holds. */
+  const conversationChars = (msgs: readonly StoredChatMessage[]): number =>
+    msgs.reduce((n, m) => n + m.text.length + (m.turns?.reduce((k, t) => k + t.content.length, 0) ?? 0), 0);
   const onAutoCompactBuddy = useCallback(async () => {
     if (autoCompactingRef.current || buddyBusy) return;
-    const msgs = buddyMessagesRef.current;
+    const snapshot = buddyMessagesRef.current;
     const keepRecent = 6;
-    if (msgs.length <= keepRecent + 1) return; // nothing meaningful to summarize away
-    const older = msgs.slice(0, msgs.length - keepRecent);
-    const recent = msgs.slice(msgs.length - keepRecent);
+    if (snapshot.length <= keepRecent + 1) return; // nothing meaningful to summarize away
+    const older = snapshot.slice(0, snapshot.length - keepRecent);
+    const recent = snapshot.slice(snapshot.length - keepRecent);
+    // The session this result belongs to. Summarizing takes up to two minutes; switching chats in
+    // that time used to land one chat's brief in another and replace its entire history.
+    const forSession = activeBuddyIdRef.current;
     autoCompactingRef.current = true;
     setBuddyBusy(true);
     setBuddyActivity("Compacting earlier conversation to stay within context…");
     const res = await summarize(chatTurnsOf(older));
     setBuddyBusy(false);
     setBuddyActivity("");
+    autoCompactingRef.current = false;
+    if (activeBuddyIdRef.current !== forSession) return; // a different chat is open; this result is not its history
     if (res.text) {
-      setBuddyMessages([compactedMessage(res.text), ...recent]);
+      const summary = res.text;
+      let applied = true;
+      setBuddyMessages((cur) => {
+        const next = applyCompaction(cur, snapshot, older, recent, summary);
+        if (!next) applied = false;
+        return next ?? cur;
+      });
+      if (!applied) return; // the conversation moved underneath it — see applyCompaction
+      compactedAtCharsRef.current = conversationChars([...preservedMedia(older), ...recent]);
       // Drop the stale usage donut: it reflected the pre-compaction history. The next turn
       // recomputes it — and clearing it stops this effect from re-firing on the old value.
       setBuddyUsage(undefined);
       compactFailedAtRef.current = undefined;
+      forgetReadFiles();
     } else {
       // NOT SILENT, and not immediately retried. A failed compaction leaves the conversation exactly
       // as over-budget as it was, so the reader needs to know their next turns will be trimmed — and
       // the app must not spend the next hour discovering that again every two minutes.
-      compactFailedAtRef.current = msgs.length;
+      compactFailedAtRef.current = snapshot.length;
       appendBuddy({
         role: "tool",
         text: `⚠ Couldn't compact this conversation${res.error ? ` (${res.error})` : ""}. Older messages will be trimmed to fit instead — start a new chat if you need the earlier detail kept.`,
         turns: [],
       });
     }
-    autoCompactingRef.current = false;
-  }, [buddyBusy, summarize, appendBuddy]);
+  }, [buddyBusy, summarize, appendBuddy, forgetReadFiles]);
   useEffect(() => {
     if (isRemoteClient || buddyBusy || autoCompactingRef.current) return;
+    // Never between a tool call and its result: the parked continuation replays the history it was
+    // parked with, so a compaction landing in the gap is both destroyed and, until then, invisible.
+    if (buddyPendingTool) return;
     // A recent failure holds it off until the conversation has actually grown — see compactFailedAtRef.
     const failedAt = compactFailedAtRef.current;
     if (failedAt !== undefined && buddyMessages.length < failedAt + COMPACT_RETRY_AFTER) return;
+    // A previous compaction holds it off until the conversation has actually grown past what that one
+    // left behind — see compactedAtCharsRef. Without this the remedy re-triggers itself.
+    const since = compactedAtCharsRef.current;
+    if (since !== undefined && conversationChars(buddyMessages) <= since) return;
     if (shouldAutoCompact(buddyUsage, buddyMessages.length)) void onAutoCompactBuddy();
-  }, [buddyUsage, buddyBusy, buddyMessages.length, isRemoteClient, onAutoCompactBuddy]);
+  }, [buddyUsage, buddyBusy, buddyMessages, isRemoteClient, onAutoCompactBuddy, buddyPendingTool]);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({

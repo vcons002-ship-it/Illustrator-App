@@ -356,6 +356,42 @@ describe("LocalServerLLMProvider Ollama native path (numCtx)", () => {
       expect(thinking.length, "it kept reading long past the bound").toBeLessThan(5000);
     });
 
+
+    /**
+     * THE BOUND WAS A NO-OP ON THE ONE CALL THAT NEEDED IT MOST — and this is why compaction never
+     * ended.
+     *
+     * `chatViaOllama` short-circuits to the BUFFERED endpoint whenever the caller wants a result
+     * rather than a live token sink, and the buffered path has no stream to watch, so it never
+     * carried `thinkingBudgetChars` at all. Compaction is exactly that caller: `handleSummarize`
+     * wants the brief, not a typewriter. So the summary call ran with no bound whatsoever, on a
+     * thinking model, with a `num_predict` sized for a brief — it deliberated through the entire
+     * allowance, `message.content` came back empty, and compaction failed with "the model returned an
+     * empty summary". Every attempt. Then the trigger fired again.
+     *
+     * A declared bound now forces the streaming path, with a sink that discards.
+     */
+    it("enforces the bound even when the caller wants a result rather than a token stream", async () => {
+      const { fetchImpl, requests } = streamingFetch([ruminating(50)]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      let thinking = "";
+      await p.chat([{ role: "user", content: "summarize this conversation" }], {
+        onThinking: (t) => (thinking = t),
+        thinkingBudgetChars: 500,
+        maxTokens: 900,
+      });
+      // It streamed (so the bound could be watched) rather than taking the buffered endpoint.
+      expect((requests[0]?.body as { stream?: boolean }).stream, "it took the buffered path, where the bound is invisible").toBe(true);
+      expect(thinking.length, "it read the whole runaway instead of cutting it").toBeLessThan(5000);
+    });
+
+    it("still uses the buffered path when no bound is declared", async () => {
+      const { fetchImpl, requests } = streamingFetch([ruminating(1, [JSON.stringify({ message: { content: "hi" } })])]);
+      const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+      await p.chat([{ role: "user", content: "hi" }], { maxTokens: 100 }).catch(() => {});
+      expect((requests[0]?.body as { stream?: boolean } | undefined)?.stream).not.toBe(true);
+    });
+
     it("never cuts a model that has started writing, however long it thinks afterwards", async () => {
       // The bound is on deliberating INSTEAD of answering. Once a character of the reply exists the
       // model is working, and interleaved reasoning after that is not a runaway — cutting there

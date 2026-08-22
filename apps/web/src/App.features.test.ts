@@ -1059,10 +1059,117 @@ describe("the per-chat workspace layout", () => {
    */
   it("does not retry a failed compaction into an infinite loop", () => {
     expect(APP_RAW).toContain("const compactFailedAtRef = useRef<number | undefined>(undefined);");
-    expect(APP_RAW).toContain("compactFailedAtRef.current = msgs.length;");
+    // `snapshot`, not `msgs` — the array is now captured under that name because the write-back has
+    // to compare it against the CURRENT one; see applyCompaction.
+    expect(APP_RAW).toContain("compactFailedAtRef.current = snapshot.length;");
     expect(APP_RAW).toContain("if (failedAt !== undefined && buddyMessages.length < failedAt + COMPACT_RETRY_AFTER) return;");
     // A success clears the hold, so an ordinary later compaction is not blocked by an old failure.
     expect(APP_RAW).toContain("compactFailedAtRef.current = undefined;");
+  });
+
+  /**
+   * THE OTHER HALF OF "NO END" — a compaction that SUCCEEDS and still leaves the trigger true.
+   *
+   * The retry hold above only covers failures. If the request is over budget for a reason compaction
+   * cannot fix, a successful compaction lands, the effect re-measures, finds itself over budget, and
+   * compacts the summary it just wrote — then a summary of that. `shouldAutoCompact` refuses the
+   * obvious cases (see context-usage.test.ts); this is the empirical backstop for the rest: the
+   * conversation has to have actually GROWN past what the last compaction left behind.
+   */
+  it("does not compact the same conversation twice without new conversation", () => {
+    expect(APP_RAW).toContain("const compactedAtCharsRef = useRef<number | undefined>(undefined);");
+    expect(APP_RAW).toContain("if (since !== undefined && conversationChars(buddyMessages) <= since) return;");
+  });
+
+  /**
+   * COMPACTION MUST NOT DELETE WHAT ONLY IT WAS HOLDING.
+   *
+   * A generated image lives ONLY in its chat message — `imageAttachment` mints a FileRef with bytes
+   * and no path, and on persist the bytes move to the chat blob store leaving a byte-less `{ id }`
+   * pointer. Replacing the message array dropped the last reference to those blobs, and the persist
+   * effect then overwrote the on-disk copy that still had them. No undo, no second copy.
+   */
+  it("keeps the messages whose bytes exist nowhere else", () => {
+    expect(APP_RAW).toContain("const carriesIrreplaceableMedia = (m: StoredChatMessage): boolean =>");
+    expect(APP_RAW).toContain("msgs.filter(carriesIrreplaceableMedia).map((m) => ({ ...m, turns: [] }))");
+    // `turns: []` is the whole trick: chatTurnsOf returns nothing for a message with empty turns, so
+    // a preserved card is visible and downloadable at exactly zero context cost.
+    expect(APP_RAW).toContain("return [...preservedMedia(older), compactedMessage(summary), ...recent, ...arrivedDuring];");
+  });
+
+  /**
+   * Summarizing takes up to two minutes, and the write-back was built from a snapshot taken before
+   * it — so every message that arrived during the wait was deleted, and a chat switched mid-summary
+   * had another chat's brief pasted over its entire history.
+   */
+  it("applies a compaction to the current conversation, in the session it came from", () => {
+    expect(APP_RAW).toContain("if (current.length < snapshot.length) return undefined;");
+    expect(APP_RAW).toContain("if (snapshot.length > 0 && current[snapshot.length - 1] !== snapshot[snapshot.length - 1]) return undefined;");
+    expect(APP_RAW).toContain("const arrivedDuring = current.slice(snapshot.length);");
+    expect(APP_RAW).toContain("if (activeBuddyIdRef.current !== forSession) return;");
+    // And never between a tool call and its result — the parked continuation replays the history it
+    // was parked with, so a compaction landing in the gap is destroyed anyway.
+    expect(APP_RAW).toContain("if (buddyPendingTool) return;");
+  });
+
+  /**
+   * The brief is what the model is told about its own conversation. It reached it as a clock-stamped
+   * turn from the READER, followed by an agreement the assistant never gave.
+   */
+  it("hands the brief over as a system note, not as something the reader said", () => {
+    expect(APP_RAW).toContain('turns: [{ role: "system", content: `${COMPACTION_BRIEF_MARKER}\\n${summary}` }]');
+    expect(APP_RAW).not.toContain("Got it — I have the context from the summary.");
+  });
+
+  /**
+   * Compaction destroys the text of every file the model had read; `seenFilesRef` is what lets
+   * edit_file past the read-before-edit guard. Left populated, the first edit after a compaction is
+   * made from memory of an anchor rather than a copy of one — the exact failure the guard prevents.
+   */
+  it("forgets which files have been read when the conversation holding them is compacted", () => {
+    expect(APP_RAW).toContain("const forgetReadFiles = useCallback((): void => {");
+    expect(APP_RAW).toMatch(/setBuddyUsage\(undefined\);\s*\n\s*compactFailedAtRef\.current = undefined;\s*\n\s*forgetReadFiles\(\);/);
+  });
+
+
+  /**
+   * STOP WAS RENDERED THROUGHOUT A COMPACTION AND DID NOTHING.
+   *
+   * There was no abort anywhere in the chain: no signal on the summarize call, no cancel message in
+   * the protocol, nothing sent from Stop. And the host's 120-second timeout gave up LOCALLY — it
+   * resolved the promise and told nobody, so the worker kept generating a brief that would be thrown
+   * away, with the local model pinned for as long as it took and the retry queueing another behind
+   * it. Two generations deep on a model that can only run one is what "no end" looks like from the
+   * outside.
+   */
+  it("can actually stop a compaction, and tells the worker when it gives up", () => {
+    const PROTOCOL = readFileSync(join(__dirname, "worker-protocol.ts"), "utf8");
+    const HOOK = readFileSync(join(__dirname, "useEngineWorker.ts"), "utf8");
+    const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+    expect(PROTOCOL).toContain('{ type: "summarizeCancel"; requestId: number }');
+    // Stop sends it…
+    expect(HOOK).toContain("const sid = activeSummarizeRequestId.current;");
+    expect(HOOK).toContain('if (sid !== undefined) send({ type: "summarizeCancel", requestId: sid });');
+    // …and so does the timeout, instead of abandoning a generation that keeps running.
+    expect(HOOK).toMatch(/summarizeRequests\.current\.delete\(requestId\)\) \{[\s\S]{0,400}?send\(\{ type: "summarizeCancel", requestId \}\);/);
+    // The worker has something to abort ON — the summarize call carries the signal.
+    expect(WORKER).toContain("const summarizeAborts = new Map<number, AbortController>();");
+    expect(WORKER).toContain("thinkingBudgetChars: budget.thinkingBudgetChars, signal: ac.signal");
+    expect(WORKER).toContain("summarizeAborts.get(msg.requestId)?.abort();");
+  });
+
+  /**
+   * The brief is what the model is told about its own conversation, and half of what continuation
+   * needs from it cannot be paraphrased: "the login handler" cannot be passed to read_file.
+   */
+  it("asks the summarizer to copy identifiers rather than describe them, within a stated length", () => {
+    const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+    expect(WORKER).toContain("COPY these EXACTLY, never paraphrase them: file paths, file names, function and variable ");
+    // A summariser that does not know its own limit writes until it hits one, and the only check —
+    // is it empty? — accepts the truncated result and installs it as the conversation's memory.
+    expect(WORKER).toContain("Stay under ${words} words, and finish the last bullet.");
+    // Tool results and app notes were labelled USER:/ASSISTANT:, so the brief misattributed them.
+    expect(WORKER).toContain('`${t.role === "system" ? "NOTE" : t.role.toUpperCase()}: ${t.content}`');
   });
 
   it("tells the reader when compaction fails, instead of failing silently", () => {

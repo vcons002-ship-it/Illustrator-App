@@ -2017,6 +2017,10 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "summarize":
       void handleSummarize(msg);
       break;
+    case "summarizeCancel":
+      summarizeAborts.get(msg.requestId)?.abort();
+      summarizeAborts.delete(msg.requestId);
+      break;
     case "soulEssenceRefresh":
       void handleSoulEssenceRefresh(msg);
       break;
@@ -4352,13 +4356,34 @@ async function handleSchwabPlaceOrder(msg: Extract<MainToWorker, { type: "schwab
   }
 }
 
+/**
+ * In-flight compactions, so Stop and the host's timeout can actually END one.
+ *
+ * Stop was rendered throughout a compaction and did nothing — the summary had no signal to abort on
+ * anywhere in the chain. Worse, the host gave up after 120 seconds and resolved with a timeout while
+ * the worker carried on generating: the local model stayed pinned on a brief nobody would ever read,
+ * and the retry queued a second generation behind the first.
+ */
+const summarizeAborts = new Map<number, AbortController>();
+
 async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
+  const ac = new AbortController();
+  summarizeAborts.set(msg.requestId, ac);
   try {
     const { llm } = chatProviders();
     if (!supportsChat(llm)) {
       throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
     }
-    const transcript = msg.turns.map((t) => `${t.role.toUpperCase()}: ${t.content}`).join("\n\n");
+    /**
+     * LABEL EACH TURN BY WHAT IT IS. `${t.role.toUpperCase()}: …` collapsed four different kinds of
+     * content onto two labels: tool RESULTS, app-observed facts and raw tool-call JSON all became
+     * "USER:" or "ASSISTANT:". The summariser was then asked to record "the reader's stated
+     * preferences", and duly attributed a file listing to the reader and a system note to the
+     * assistant. A brief that misattributes who said what is worse than a short one.
+     */
+    const transcript = msg.turns
+      .map((t) => `${t.role === "system" ? "NOTE" : t.role.toUpperCase()}: ${t.content}`)
+      .join("\n\n");
     /**
      * SIZED TO THE JOB, AND WITH ROOM TO THINK — see compactionBudget.
      *
@@ -4370,6 +4395,19 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
      */
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const budget = compactionBudget(transcript.length, approxTokens(budgets.input));
+    /**
+     * WHAT MUST SURVIVE VERBATIM, AND HOW LONG THE BRIEF MAY BE.
+     *
+     * "Terse bullet points" is an instruction to paraphrase, and paraphrase is exactly wrong for the
+     * half of this that matters: a path, a function name, a URL, an id, an exact error string. Those
+     * are what continuation needs to be able to quote — "the login handler" cannot be passed to
+     * read_file. So the identifiers are pinned as copy-not-describe, and everything else stays terse.
+     *
+     * The length is stated too. The call is hard-capped at `budget.maxTokens`, and a summariser that
+     * does not know its own limit writes until it hits one — a brief cut off mid-sentence, which the
+     * only check (is it empty?) accepts as a success and installs as the conversation's whole memory.
+     */
+    const words = Math.max(80, Math.round(budget.summaryTokens * 0.7));
     const text = await withChatPriority(llm.id, () =>
       llm.chat(
         [
@@ -4377,13 +4415,17 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
             role: "system",
             content:
               "Compress this conversation transcript into a brief that lets the SAME assistant continue " +
-              "seamlessly. Preserve: decisions made, facts established, names/numbers/links, the reader's " +
-              "stated preferences, anything opened or generated, and open questions. Terse bullet points; " +
-              "no preamble, no meta-commentary.",
+              "seamlessly. Preserve: decisions made, facts established, the reader's stated preferences, " +
+              "anything opened or generated, and open questions.\n" +
+              "COPY these EXACTLY, never paraphrase them: file paths, file names, function and variable " +
+              "names, URLs, ids, numbers, and the exact wording of any error. Everything else: terse " +
+              "bullet points, no preamble, no meta-commentary.\n" +
+              `Attribute correctly — USER is the reader, ASSISTANT is you, NOTE is the app.\n` +
+              `Stay under ${words} words, and finish the last bullet.`,
           },
           { role: "user", content: boundTranscript(transcript, budget.inputCap) },
         ],
-        { maxTokens: budget.maxTokens, thinkingBudgetChars: budget.thinkingBudgetChars },
+        { maxTokens: budget.maxTokens, thinkingBudgetChars: budget.thinkingBudgetChars, signal: ac.signal },
       ),
     );
     const trimmed = text.trim();
@@ -4394,8 +4436,10 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
       type: "summarized",
       requestId: msg.requestId,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: ac.signal.aborted ? "compacting was stopped" : err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    summarizeAborts.delete(msg.requestId);
   }
 }
 
