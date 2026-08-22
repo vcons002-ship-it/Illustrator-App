@@ -608,6 +608,25 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
    * thinking-model preambles are stripped just like the SSE path.
    */
   private async chatViaOllama(messages: ChatTurn[], opts: ChatOptions): Promise<string> {
+    /**
+     * A DECLARED REASONING BOUND FORCES THE STREAMING PATH — it can only be enforced by watching the
+     * reasoning arrive, and the buffered path never sees it.
+     *
+     * `thinkingBudgetChars` was silently dropped here for every caller that wanted a result rather
+     * than a live sink, and compaction is exactly that caller. So the summarize call ran with no
+     * bound at all on a thinking model, where reasoning and reply share one `num_predict`: it
+     * deliberated through the whole allowance, `message.content` came back empty, and compaction
+     * failed with "the model returned an empty summary" — every single time, on the one chat that
+     * needed it. Reported as compacting that never ends.
+     *
+     * The fix is not to ask for less thinking: `reasoningEffort: "none"` reaches Ollama as
+     * `think: false`, which stops the model TAGGING its monologue rather than having one, and the
+     * monologue is then published as the answer (see `thinkingBudgetChars` on ChatOptions). Streaming
+     * with a sink that discards costs nothing and makes the bound real.
+     */
+    if (!opts.onToken && opts.thinkingBudgetChars) {
+      return this.chatViaOllama(messages, { ...opts, onToken: () => {} });
+    }
     if (!opts.onToken) {
       // No streaming sink — reuse the buffered native path and return the text.
       return this.completeViaOllama(messages as { role: "system" | "user" | "assistant"; content: string }[], {

@@ -50,6 +50,8 @@ export function approxTokens(chars: number): number {
 export interface CompactionBudget {
   /** Generation cap for the summary call — reply AND any reasoning, on a local model. */
   maxTokens: number;
+  /** The brief itself, without the reasoning headroom — what it will COST in every later prompt. */
+  summaryTokens: number;
   /** Bound on reasoning, so deliberation cannot consume the whole generation. */
   thinkingBudgetChars: number;
   /** Most transcript characters to feed in. */
@@ -65,19 +67,44 @@ const COMPRESSION = 40;
 /** Reasoning allowance, on top of the summary itself. Enough to plan a brief, not to draft one. */
 const SUMMARY_THINKING_CHARS = 2_000;
 
+/**
+ * The largest share of the request's capacity the brief may permanently occupy.
+ *
+ * The absolute bounds above are sized for a comfortable window. On a small one they are not a bound
+ * at all: 1,500 tokens of brief against an 8k-token ceiling is a fifth of every later prompt, spent
+ * before the reader has said anything — compaction charging more rent than the history it evicted.
+ */
+const MAX_SUMMARY_SHARE = 0.15;
+/** Below this a brief cannot carry decisions AND names AND open questions; compaction is pointless. */
+const MIN_VIABLE_SUMMARY_TOKENS = 150;
+/** The transcript cap with no known ceiling — generous, because the unknown case is a cloud model. */
+const DEFAULT_INPUT_CAP_CHARS = 120_000;
+
 export function compactionBudget(transcriptChars: number, inputCeilingTokens?: number): CompactionBudget {
   const wanted = Math.round(transcriptChars / COMPRESSION);
-  const summary = Math.min(MAX_SUMMARY_TOKENS, Math.max(MIN_SUMMARY_TOKENS, wanted));
+  let summary = Math.min(MAX_SUMMARY_TOKENS, Math.max(MIN_SUMMARY_TOKENS, wanted));
+  const thinkingTokens = Math.ceil(SUMMARY_THINKING_CHARS / CHARS_PER_TOKEN);
+  let inputCap = DEFAULT_INPUT_CAP_CHARS;
+  if (inputCeilingTokens && inputCeilingTokens > 0) {
+    // The brief yields FIRST on a tight window. A shorter brief about the whole conversation beats a
+    // full-length one about its last tenth — and the alternative, holding the brief's size fixed,
+    // takes the room out of the transcript, which is the input compaction exists to read.
+    summary = Math.min(summary, Math.max(MIN_VIABLE_SUMMARY_TOKENS, Math.floor(inputCeilingTokens * MAX_SUMMARY_SHARE)));
+    /**
+     * NEVER MORE THAN THE MODEL CAN HOLD. This was `Math.max(20_000, …)`, and a floor above a
+     * ceiling is not a floor — on any window under ~12k tokens the max() won, so the one call made
+     * BECAUSE the conversation was too big was itself sent over the limit. The server then truncates
+     * from the front, which silently discards the head — the exact part compaction exists to rescue.
+     */
+    inputCap = Math.max(0, inputCeilingTokens - summary - thinkingTokens) * CHARS_PER_TOKEN;
+  }
   return {
     // The generation has to cover the reasoning as well, or the bound below is the thing that starves
     // the summary rather than the thing that protects it.
-    maxTokens: summary + Math.ceil(SUMMARY_THINKING_CHARS / CHARS_PER_TOKEN),
+    maxTokens: summary + thinkingTokens,
+    summaryTokens: summary,
     thinkingBudgetChars: SUMMARY_THINKING_CHARS,
-    // Read as much as the model can actually hold, leaving room for the summary it has to write.
-    // Without a known ceiling, the old fixed cap stands.
-    inputCap: inputCeilingTokens
-      ? Math.max(20_000, (inputCeilingTokens - summary) * CHARS_PER_TOKEN)
-      : 120_000,
+    inputCap,
   };
 }
 
@@ -204,8 +231,37 @@ export function shouldAutoCompact(
    * that, the fraction test above has already had its chance and trimming is doing its ordinary job.
    */
   const lostALot = (usage.droppedChars ?? 0) >= ceiling * CHARS_PER_TOKEN * SIGNIFICANT_LOSS;
-  if (lostALot) return true;
   // Against the ceiling the request can REACH, not the whole window — see `inputTokens`. Measured
   // against the window this comparison was unreachable on a local model and did nothing.
-  return usage.approxTokens >= ceiling * fraction;
+  const overBudget = usage.approxTokens >= ceiling * fraction;
+  if (!lostALot && !overBudget) return false;
+  return compactionCanHelp(usage, ceiling, fraction);
+}
+
+/** The one segment a compaction can shrink. The rest is rebuilt from scratch every turn regardless. */
+const COMPACTIBLE_KEY = "history";
+
+/**
+ * WHETHER COMPACTING WOULD ACTUALLY GET THE REQUEST UNDER BUDGET — the test that makes the trigger
+ * FALSIFIABLE.
+ *
+ * Reported as "the current compacting is stuck running with no end". Both conditions above measure
+ * the WHOLE request — book, visual bible, instructions, live documents, history — while compaction
+ * can only shrink the history. So on a long book with a big bible, the non-chat segments alone can
+ * sit above the threshold, and then the condition is true no matter what compaction does: summarise
+ * the entire conversation down to nothing and it is still true on the very next render. The app
+ * destroys the history, re-measures, finds itself over budget, and destroys it again.
+ *
+ * A trigger that its own remedy cannot clear is not a trigger, it is a loop. So: project what the
+ * request would weigh with the history replaced by the brief it would produce, and only fire if that
+ * projection lands under the line. PURE.
+ */
+function compactionCanHelp(usage: ContextUsage, ceiling: number, fraction: number): boolean {
+  const history = usage.segments.find((s) => s.key === COMPACTIBLE_KEY)?.chars ?? 0;
+  if (history <= 0) return false;
+  const brief = compactionBudget(history, ceiling).summaryTokens * CHARS_PER_TOKEN;
+  // Compaction that would grow the request is not compaction.
+  if (brief >= history) return false;
+  const after = approxTokens(usage.totalChars - history + brief);
+  return after < ceiling * fraction;
 }

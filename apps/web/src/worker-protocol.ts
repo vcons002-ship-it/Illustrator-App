@@ -207,6 +207,10 @@ export type MainToWorker =
       agents: { title: string; instructions: string; dir: string }[];
     }
   | { type: "codingAgentCancel"; requestId: number }
+  /** Stop an in-flight compaction. Nothing could: Stop was rendered while a summary generated, and
+   * the host's 120s timeout ABANDONED the request without telling the worker — so the local model
+   * kept generating a brief nobody would read, and a retry queued a second one behind it. */
+  | { type: "summarizeCancel"; requestId: number }
   /** Auto-resolve git merge conflicts with the main model (answered by `conflictsResolved`). */
   | {
       type: "resolveConflicts";
