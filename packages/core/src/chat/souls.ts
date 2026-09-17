@@ -4285,6 +4285,8 @@ function isPairRequest(p: string): boolean {
   return (
     /\b(you|us)\s+and\s+(me|i)\b/.test(p) ||
     /\bme\s+and\s+(you|us)\b/.test(p) ||
+    /\b(?:yourself|(?:the\s+)?(?:ai\s+)?assistant)\s+and\s+(?:me|myself|the reader)\b/.test(p) ||
+    /\b(?:me|myself|the reader)\s+and\s+(?:yourself|(?:the\s+)?(?:ai\s+)?assistant)\b/.test(p) ||
     /\bus\s+(together|both)\b/.test(p) ||
     /\bboth\s+of\s+us\b/.test(p) ||
     /\bthe\s+two\s+of\s+us\b/.test(p)
@@ -4314,14 +4316,41 @@ const PICTURE_WORDS = "portrait|picture|photo|pic|pics|image|drawing|painting|se
  */
 const DEPICTED = "as|in|at|on|wearing|holding|dressed|standing|sitting|smiling|posing|looking";
 
+/** Remove a few explicit non-subject frames before testing names or pronouns. This deliberately
+ * handles clear exclusions and forms of address, rather than treating every name mention as a face
+ * to render. Keep the rest of the request intact so genuine pairs still resolve to both Souls. */
+function portraitSubjectText(prompt: string, name: string): string {
+  let p = prompt.toLowerCase();
+  const named = name.trim() ? escapeRegExp(name.trim().toLowerCase()) : "";
+  const people = [named, "(?:the\\s+)?(?:ai\\s+)?assistant", "(?:the\\s+)?reader", "yourself", "myself", "you", "me"]
+    .filter(Boolean).join("|");
+  p = p.replace(
+    new RegExp(`\\b(?:not|without|except|excluding|rather than|instead of|(?:do not|don't)\\s+(?:include|depict|draw|show))\\s+(?:${people})\\b`, "g"),
+    " ",
+  );
+  if (named) {
+    // "Aria, draw me" addresses Aria; "Aria, standing by the sea" still depicts her.
+    p = p.replace(
+      new RegExp(`(^|[.!?]\\s*)(?:(?:hey|hi|hello)\\s+)?${named}\\s*,\\s*(?=(?:please\\b|can\\b|could\\b|would\\b|will\\b|draw\\b|paint\\b|render\\b|sketch\\b|generate\\b|make\\b|create\\b|show\\b|send\\b))`, "g"),
+      "$1",
+    );
+    // The person asking for/receiving the image is not necessarily in it.
+    p = p.replace(new RegExp(`\\b${named}\\b(?=\\s+(?:would like|wants?|asked|requested)\\b)`, "g"), " ");
+    p = p.replace(new RegExp(`\\bfor\\s+${named}\\b`, "g"), " ");
+  }
+  return p;
+}
+
 export function isSelfPortraitRequest(prompt: string, name: string): boolean {
-  const p = prompt.toLowerCase();
+  const p = portraitSubjectText(prompt, name);
   const t = name.trim();
   const named = !!t && new RegExp(`\\b${escapeRegExp(t.toLowerCase())}\\b`).test(p);
   return (
     named ||
     /\byourself\b/.test(p) ||
     /\ba selfie\b/.test(p) ||
+    new RegExp(`\\b(?:${PICTURE_WORDS})\\s+of\\s+(?:the\\s+)?(?:ai\\s+)?assistant\\b`).test(p) ||
+    /\b(?:draw|paint|render|sketch|depict|show)\s+(?:the\s+)?(?:ai\s+)?assistant\b/.test(p) ||
     new RegExp(`\\b(${PICTURE_WORDS})\\s+of\\s+you\\b`).test(p) ||
     /\b(draw|paint|render|generate|make|create|show|send)\s+(me\s+)?you\b/.test(p) ||
     /\byour\s+(self-?portrait|portrait|avatar|likeness|face|appearance|look)\b/.test(p) ||
@@ -4336,7 +4365,7 @@ export function isSelfPortraitRequest(prompt: string, name: string): boolean {
  * ("myself", "a picture of me", "my portrait", "draw me" — but NOT "draw me a/an/the …", which is
  * "make something FOR me", not a portrait OF me). */
 export function isUserPortraitRequest(prompt: string, name: string): boolean {
-  const p = prompt.toLowerCase();
+  const p = portraitSubjectText(prompt, name);
   const t = name.trim();
   const named = !!t && new RegExp(`\\b${escapeRegExp(t.toLowerCase())}\\b`).test(p);
   return (
@@ -4365,13 +4394,9 @@ export function isUserPortraitRequest(prompt: string, name: string): boolean {
  * symptom: two appearance clauses make a long prompt, and a long prompt is where an image model
  * starts dropping specifics.
  *
- * Joining the two texts is right for FINDING a subject — the reader says "draw yourself" and the
- * model then writes "a portrait of a woman in a garden", which names nobody. It is wrong for
- * SEPARATING them, because the model's prompt is free prose that can easily mention the other soul.
- *
- * So the reader's own words break the tie. They asked for one thing; a rewrite underneath cannot
- * turn it into two. A genuine PAIR request ("you and me") still returns both — that case is why the
- * combined test exists at all, and it is asked first.
+ * Resolve the reader's text FIRST, including genuine pairs. Combining the two texts before testing
+ * let a model-authored "you and me" bypass the reader's clear "draw yourself" request. The model's
+ * prompt may identify an implied subject only when the reader did not identify one at all.
  */
 export function portraitSubjects(input: {
   /** What the reader actually typed. Authoritative when the two disagree. */
@@ -4381,20 +4406,13 @@ export function portraitSubjects(input: {
   selfName: string;
   userName: string;
 }): { self: boolean; user: boolean } {
-  const combined = input.userText.trim() ? `${input.userText}\n${input.modelPrompt}` : input.modelPrompt;
-  // A two-hander is the one case that genuinely wants both, and it is asked before anything else.
-  if (isPairRequest(combined.toLowerCase())) return { self: true, user: true };
-  const self = isSelfPortraitRequest(combined, input.selfName);
-  const user = isUserPortraitRequest(combined, input.userName);
-  if (!self || !user) return { self, user };
-  // Both matched and it is not a pair: something in the model's prose collided with the other soul.
-  // Fall back to what the reader said, which is the only text that carries their intent.
   const saidSelf = isSelfPortraitRequest(input.userText, input.selfName);
   const saidUser = isUserPortraitRequest(input.userText, input.userName);
-  if (saidSelf !== saidUser) return { self: saidSelf, user: saidUser };
-  // The reader's words name both, or neither. Genuinely ambiguous — keep both rather than guess,
-  // which is what this did before and is right when there is nothing to choose on.
-  return { self: true, user: true };
+  if (saidSelf || saidUser) return { self: saidSelf, user: saidUser };
+  return {
+    self: isSelfPortraitRequest(input.modelPrompt, input.selfName),
+    user: isUserPortraitRequest(input.modelPrompt, input.userName),
+  };
 }
 
 /** Append the soul's appearance to a prompt (no-op when the soul has no look notes). */

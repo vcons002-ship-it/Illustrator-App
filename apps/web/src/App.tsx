@@ -577,6 +577,13 @@ function memoryStoreLabel(about: "reader" | "self" | "user" | undefined): string
   return about === "self" ? "(your Soul)" : about === "user" ? "(the reader's Soul)" : "(memory)";
 }
 
+/** A retry or executor continuation keeps the reader's original subject and reference-photo intent. */
+function imageRequestForTurn(previous: string, request?: string): string {
+  if (request === undefined) return previous;
+  if (previous && /^(?:continue|resume|retry|try again)[.!?]*$/i.test(request.trim())) return previous;
+  return request;
+}
+
 /** Downscale a phone-attached photo before it rides the relay to the desktop. A full-res phone photo
  * (5–12 MB) base64-encodes to a 7–16 MB frame that a Cloudflare tunnel silently drops (the relay
  * documents a ~3 MB frame ceiling), so "send photo from phone" would do nothing. Bounded to ≤1280 px
@@ -1747,7 +1754,10 @@ export function App() {
   const [chatStreaming, setChatStreaming] = useState("");
   const [chatThinking, setChatThinking] = useState("");
   const [chatActivity, setChatActivity] = useState("");
-  const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
+  // Keep the reader's request with the call: approval can happen after other chat work, and the
+  // model-authored image prompt is not authoritative about whose Soul should be pictured.
+  const [chatPendingTool, setChatPendingTool] = useState<{ call: ToolCall; userText: string } | undefined>();
+  const chatUserTextRef = useRef("");
   const [chatUsage, setChatUsage] = useState<ContextUsage | undefined>();
   // Bumped whenever a turn is superseded (Clear / cancel) so its async completion
   // is ignored — a cancelled turn's late reply (or stray error) can't reappear.
@@ -3750,6 +3760,7 @@ export function App() {
     buddyHandoff.current = undefined;
     setChatMessages(book && handoff ? handoff : []);
     setChatPendingTool(undefined);
+    chatUserTextRef.current = "";
     setChatStreaming("");
     setChatActivity("");
     setChatUsage(undefined);
@@ -4803,6 +4814,8 @@ export function App() {
       }
       const turnBookId = book.id; // guard: ignore this turn if the reader switches/exits
       const seq = ++chatTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+      const originalUserText = imageRequestForTurn(chatUserTextRef.current, text);
+      chatUserTextRef.current = originalUserText;
       const history = chatTurnsOf(chatMessages);
       appendChat({ role: "user", text });
       setChatBusy(true);
@@ -4947,7 +4960,7 @@ export function App() {
           return;
         }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
-        setChatPendingTool(res.pendingTool);
+        setChatPendingTool({ call: res.pendingTool, userText: originalUserText });
         return;
       }
       // Store the model-facing transcript whenever there was one (tool rounds), even
@@ -4976,8 +4989,9 @@ export function App() {
   );
 
   const onApproveChatTool = useCallback(async () => {
-    const call = chatPendingTool;
-    if (!call || call.tool !== "generate_image") return;
+    const pending = chatPendingTool;
+    if (!pending || pending.call.tool !== "generate_image") return;
+    const call = pending.call;
     if (chatRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     chatRenderingRef.current = true;
     setChatPendingTool(undefined);
@@ -4986,6 +5000,7 @@ export function App() {
     try {
       const out = await chatTool(call, {
         onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
+        userText: pending.userText,
         // THE READER'S CHOSEN PICTURES REACH THIS RENDER TOO. The reference set is per-SESSION, and
         // this was the one render that never received it — approveGenerateImage passed `refImages`
         // and this didn't, so a picture the reader had saved conditioned their buddy-chat renders
@@ -5021,6 +5036,7 @@ export function App() {
     setChatActivity("");
     setChatMessages([]);
     setChatPendingTool(undefined);
+    chatUserTextRef.current = "";
     if (book) void libraryStore.deleteChatHistory?.(book.id);
   }, [book, libraryStore, chatCancel]);
 
@@ -7113,6 +7129,9 @@ export function App() {
   const approveGenerateImage = async (call: Extract<BuddyToolCall, { tool: "generate_image" }>): Promise<void> => {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
+    // Capture before starting the render engine: a later reader turn must not change the identity
+    // or explicit reference-photo intent of the already-approved image while startup awaits.
+    const originalUserText = turnUserTextRef.current;
     setBuddyPendingTool(undefined);
     // Snapshot the turn epoch: if the reader hits Clear, switches sessions, or Stops mid-render,
     // buddyTurnSeq is bumped and this continuation must NOT append/dispatch into the new session.
@@ -7132,7 +7151,7 @@ export function App() {
       out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
         ...(turnRefImagesRef.current.length ? { refImages: turnRefImagesRef.current } : {}),
-        ...(turnUserTextRef.current ? { userText: turnUserTextRef.current } : {}),
+        ...(originalUserText ? { userText: originalUserText } : {}),
       });
     } finally {
       // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
@@ -7851,7 +7870,9 @@ export function App() {
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
-    if (userBubbleText !== undefined) turnUserTextRef.current = userBubbleText;
+    // Tool feedback and executor nudges have no bubble. The Continue action does, but it is still
+    // resuming the original request; replacing "draw yourself" with "continue" loses its subject.
+    turnUserTextRef.current = imageRequestForTurn(turnUserTextRef.current, userBubbleText);
     // NOT cleared here. The reader's attached pictures stay available for the rest of the session,
     // because the natural way to use them is over several turns — attach a photo, ask what it is,
     // THEN ask for an image of it. Clearing on the next message (which is what this did) meant the
@@ -12450,7 +12471,7 @@ export function App() {
           onThinkingOpenChange={setThinkingOpen}
           busy={chatBusy}
           {...(chatActivity ? { activity: chatActivity } : {})}
-          {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}
+          {...(chatPendingTool ? { pendingTool: chatPendingTool.call } : {})}
           allowSpoilers={isTechnical || allowSpoilers}
           technical={isTechnical}
           onSend={onChatSendText}

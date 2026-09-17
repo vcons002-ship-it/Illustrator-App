@@ -10,6 +10,8 @@ export * from "./book-passage-search.js";
 export * from "./note-store.js";
 export * from "./reader-memory.js";
 export * from "./souls.js";
+export * from "./soul-portrait.js";
+export * from "./portrait-scene.js";
 export * from "./creative-log.js";
 export * from "./thinking-display.js";
 export * from "./skills.js";

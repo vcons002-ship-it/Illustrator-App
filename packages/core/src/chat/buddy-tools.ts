@@ -11,6 +11,7 @@ import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import { MAX_NOTE_CHARS } from "./reader-memory.js";
+import { parsePortraitScene, PORTRAIT_SCENE_GUIDANCE, PORTRAIT_REFERENCE_GUIDANCE, PORTRAIT_SCENE_SCHEMA, type PortraitScene } from "./portrait-scene.js";
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
 import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
@@ -308,7 +309,7 @@ export type BuddyToolCall =
       illustrateAfter?: "chapter" | "book";
     }
   /** Same shape as the in-book chat's generate_image: approval-gated render. */
-  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string; truncated?: boolean }
+  | { tool: "generate_image"; prompt: string; scene?: PortraitScene; model?: string; steps?: number; style?: string; truncated?: boolean }
   /** Animate an existing image into a short VIDEO via the local ComfyUI engine (image-to-video). `prompt`
    * describes the MOTION/camera; `source` picks which image to animate — the most recent one shown (default),
    * a library illustration by id, or an image file by path. Approval-gated like generate_image. Desktop +
@@ -2104,15 +2105,8 @@ export function buildBuddySystemPrompt(raw: {
     '- {"tool":"generate_image","prompt":"…"} — generate a NEW image with the app\'s image model (the reader approves it first). ' +
     'Optional: "model" (an installed image model they name), "steps" (sampler steps), "style" (an art style name). ' +
     "(Resolution / Hi-Res is the reader's own Settings toggle — you can't set it; just describe the subject in the prompt.)\n" +
-    // The app conditions the render on reference photos by itself; the model's job is only to write
-    // the prompt. Said here because a model that doesn't know it will otherwise TALK the reader out
-    // of what it can already do ("I can't use your photo") or describe the face in laborious prose.
-    "  REFERENCE PHOTOS ARE AUTOMATIC — do not ask for them, apologise for them, or try to pass them. " +
-    "If the reader attached a picture to this turn, the app conditions the render on that picture; if the " +
-    "request is of the reader or of you, it uses the reference photos saved in their Soul panels; and in a " +
-    "book or story it uses the reference photos on those characters. So just write the SCENE — what is " +
-    "happening, where, in what light — and let the likeness come from the photos. Saying \"draw us together\" " +
-    "works: both faces are used.\n" +
+    PORTRAIT_SCENE_GUIDANCE + "\n" +
+    PORTRAIT_REFERENCE_GUIDANCE + "\n" +
     "PICKING THE IMAGE TOOL (same rule in every persona): \"show me / find / pull up / look up / what does X " +
     'look like" = the reader wants a REAL image → search_images. "generate / draw / make / create / paint / ' +
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +
@@ -2763,8 +2757,8 @@ export function buildImageReferenceBlock(labels: readonly string[]): string {
   if (!labels.length) return "";
   const rows = labels.slice(-LEDGER_MAX).map((l) => `- ${l}`).join("\n");
   return (
-    `REFERENCE PICTURES active in this chat (${labels.length}) — every image you generate draws from ` +
-    "them, and they carry the likeness:\n" +
+    `REFERENCE PICTURES active in this chat (${labels.length}) — ordinary images draw from ` +
+    "them. Assistant/reader portraits use their own Soul photos unless the reader explicitly asks to use these:\n" +
     rows +
     // THEY ARE ALREADY IN PLACE. Without this the list read as a topic rather than a state: asked to
     // draw something from a picture the reader had already adopted, the model planned to adopt one
@@ -3779,8 +3773,11 @@ export function ollamaToolSchemas(opts: {
     ),
     toolFn(
       "generate_image",
-      "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something.",
-      { prompt: strParam("A vivid, concrete description of what to depict.") },
+      "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something. " + PORTRAIT_SCENE_GUIDANCE + " " + PORTRAIT_REFERENCE_GUIDANCE,
+      {
+        prompt: strParam("A vivid, concrete description of what to depict. For assistant/reader portraits also provide scene; the app supplies Soul identity."),
+        scene: PORTRAIT_SCENE_SCHEMA,
+      },
       ["prompt"],
     ),
     toolFn(
@@ -4948,6 +4945,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   if (tool === "generate_image") {
     const { text: prompt, truncated } = clampArg(obj.prompt, MAX_PROMPT_CHARS);
     if (!prompt) return undefined;
+    const scene = parsePortraitScene(obj.scene);
     const model = strArg(obj.model, MAX_NAME_CHARS);
     const style = strArg(obj.style, MAX_NAME_CHARS);
     const steps =
@@ -4957,6 +4955,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return {
       tool,
       prompt,
+      ...(scene ? { scene } : {}),
       ...(model ? { model } : {}),
       ...(style ? { style } : {}),
       ...(steps !== undefined ? { steps } : {}),
@@ -6435,8 +6434,8 @@ function formatBuddyToolResultBody(
     // in buildImageReferenceBlock, where it rides every turn and is about the next render whenever
     // that comes; what belongs here is what just happened, and that it is finished.
     return (
-      `[use_image_reference — "${r.title ?? call.query ?? "that picture"}" is now a REFERENCE for pictures you make ` +
-      "in this chat. That is the whole action and it is done: confirm it briefly, and do NOT generate an image " +
+      `[use_image_reference — "${r.title ?? call.query ?? "that picture"}" is now a REFERENCE for ordinary pictures you make ` +
+      "in this chat; Soul portraits use it only when the reader explicitly asks. That is the whole action and it is done: confirm it briefly, and do NOT generate an image " +
       "unless the reader asks for one]"
     );
   }
@@ -6449,7 +6448,7 @@ function formatBuddyToolResultBody(
       // Same contract as an attached photo: the BYTES go to the image model, so a prompt that
       // re-types the description throws the likeness away and renders something that merely matches
       // the words. The model cannot know that unless it is told.
-      "\nThis picture is ALSO a REFERENCE for anything you generate in this chat, so do NOT describe its " +
+      "\nThis picture is ALSO a REFERENCE for ordinary images in this chat. Soul portraits use it only when the reader explicitly asks. When using it, do NOT describe its " +
       "appearance back into a generate_image prompt — write only what should CHANGE (the scene, the pose, " +
       "the style) and let the reference carry the likeness." +
       "\nDon't re-describe the picture unless asked; carry on with the task."
