@@ -126,9 +126,7 @@ import {
   loadLatestSoulEssence,
   saveSoulEssence,
   soulSourceFingerprint,
-  selfPortraitPrompt,
-  userPortraitPrompt,
-  portraitSubjects,
+  buildSoulPortraitRender,
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
@@ -6617,17 +6615,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
 }
 
 /** A soul's reference photos, decoded to bytes for use as character references in an image render. */
-/**
- * The ceiling on how many reference photos one chat render may carry.
- *
- * Deliberately the LOOSEST of the routes, not the tightest: each backend caps to what its own
- * mechanism can use (IP-Adapter blends, so it takes four; Flux.2's ReferenceLatent chain keeps each
- * photo independent, so it takes ten). Clamping to four here would have silently thrown away the
- * capability that makes Flux.2 worth using — a person from one photo, a place from another.
- * This is only a sanity bound so an accidental drag-and-drop of a folder can't queue fifty encodes.
- */
-const MAX_CHAT_REFS = 10;
-
 async function loadSoulRefs(
   store: ReturnType<typeof memoryStore>,
   kind: "self" | "user",
@@ -6743,75 +6730,17 @@ async function handleChatTool(
     const storySoulCast = inStory ? await soulCastForStoryBook(currentBook) : undefined;
     const portraitSelfName = storySoulCast?.self ?? selfName;
     const portraitUserName = storySoulCast?.user ?? userName;
-    let prompt = call.prompt;
-    // Every reference this render can legitimately use, in one list.
-    //
-    // It used to be an if/else over the two Souls, so "draw you and me together" carried ONE face —
-    // whichever branch won — and the other person came out a stranger in a picture that named them.
-    // And an ATTACHED photo carried nothing at all: the vision model described it, the description
-    // went into the prompt, and the bytes were dropped, so "make an image from this" rendered from
-    // somebody's words about the picture rather than the picture.
-    const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
-    // Counted by SOURCE as they're gathered, so the note under the picture can name where they came
-    // from. "Used 3 reference photos" leaves the Soul case unanswered — an attachment is visible in
-    // the transcript, but a Soul photo lives two panels away with nothing on screen to say it helped.
-    const sources: { attached?: number; self?: number; user?: number; selfName?: string } = {};
-    // Tested against the READER'S OWN WORDS as well as the model's prompt. "Generate an image of
-    // yourself" is unmistakable; the prompt the model then writes may be "a portrait of a woman in a
-    // garden", which contains nothing this can match — so the Soul was skipped for the one request
-    // that named it outright.
-    const request = userText?.trim() ? `${userText}\n${call.prompt}` : call.prompt;
-    /**
-     * ONE QUESTION, NOT TWO. The two tests could both say yes on the same request — the reader's
-     * words and the model's rewritten prompt are joined, and the model's prose can easily mention the
-     * other soul — and then BOTH appearances were folded into one prompt and both faces sent to the
-     * render. A woman with a beard is exactly what that produces. See portraitSubjects.
-     */
-    const subject = portraitSubjects({
+    const [selfRefs, userRefs] = await Promise.all([loadSoulRefs(store, "self"), loadSoulRefs(store, "user")]);
+    // Both chat surfaces use this same tested assembly: reader intent selects the Soul, its own
+    // notes supply appearance, and old session attachments cannot silently supply another face.
+    const { prompt, refs: soulRefs, sources } = buildSoulPortraitRender({
       userText: userText ?? "",
       modelPrompt: call.prompt,
-      selfName: portraitSelfName,
-      userName: portraitUserName,
+      ...(call.scene ? { scene: call.scene } : {}),
+      self: { name: portraitSelfName, notes: selfNotes, refs: selfRefs, enabled: !inStory || !!storySoulCast?.self },
+      user: { name: portraitUserName, notes: userNotes, refs: userRefs, enabled: !inStory || !!storySoulCast?.user },
+      ...(refImages ? { chatRefs: refImages } : {}),
     });
-    if ((!inStory || !!storySoulCast?.self) && subject.self) {
-      prompt = selfPortraitPrompt(prompt, portraitSelfName, selfNotes, request);
-      const own = await loadSoulRefs(store, "self");
-      refs.push(...own);
-      if (own.length) sources.self = own.length;
-    }
-    if ((!inStory || !!storySoulCast?.user) && subject.user) {
-      prompt = userPortraitPrompt(prompt, portraitUserName, userNotes, request);
-      const own = await loadSoulRefs(store, "user");
-      refs.push(...own);
-      if (own.length) sources.user = own.length;
-    }
-    // The reader's own picture is the strongest statement of intent there is — they picked THIS one
-    // for THIS chat — so it leads, and at a higher weight than a stored Soul photo.
-    //
-    // It LEADS. It was appended last and the list then cut with `slice(0, MAX_CHAT_REFS)`, which
-    // keeps the FIRST ten — so on a request that also pulled in Soul photos, enough of them pushed
-    // the reader's own picture off the end and the render never saw it. Silently, and worse than
-    // silently: `sources.attached` was counted before the cut, so the note under the picture said
-    // the reference had been used. A chat reference is the reader choosing, now; a Soul photo is
-    // standing configuration. If anything has to go, it isn't the choice they just made.
-    //
-    // NEWEST FIRST, because every cap downstream takes the FIRST n: this list is trimmed to
-    // MAX_CHAT_REFS, and then the backend trims again to what it can actually use — four on
-    // IP-Adapter, ten on a ReferenceLatent family. The set is held oldest-first (that is what makes
-    // its own cap keep the newest), so passing it through unreversed meant a capped render kept the
-    // pictures chosen EARLIEST and dropped the ones just added. The most recent choice is the one
-    // most likely to be what the reader means now.
-    const chatRefs = [...(refImages ?? [])]
-      .reverse()
-      .map((im) => ({ bytes: im.bytes, mimeType: im.mimeType, weight: 0.9 }));
-    const ordered = [...chatRefs, ...refs];
-    if (portraitSelfName.trim()) sources.selfName = portraitSelfName;
-    const soulRefs = ordered.length ? ordered.slice(0, MAX_CHAT_REFS) : undefined;
-    // Count what SURVIVED the cut, not what was gathered — the note under the picture is read as a
-    // statement about the render, so it has to be one.
-    if (chatRefs.length) sources.attached = Math.min(chatRefs.length, soulRefs?.length ?? 0);
-    if (sources.self) sources.self = Math.min(sources.self, Math.max(0, (soulRefs?.length ?? 0) - chatRefs.length));
-    if (sources.user) sources.user = Math.min(sources.user, Math.max(0, (soulRefs?.length ?? 0) - chatRefs.length - (sources.self ?? 0)));
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),

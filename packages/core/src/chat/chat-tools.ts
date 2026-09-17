@@ -6,6 +6,7 @@ import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } fro
 import { tableToText, type DataTable } from "../data/data-table.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import { MAX_NOTE_CHARS } from "./reader-memory.js";
+import { parsePortraitScene, PORTRAIT_SCENE_GUIDANCE, PORTRAIT_REFERENCE_GUIDANCE, type PortraitScene } from "./portrait-scene.js";
 
 /**
  * Provider-agnostic tool protocol for the reading-companion chat. Native
@@ -20,6 +21,8 @@ export type ToolCall =
   | {
       tool: "generate_image";
       prompt: string;
+      /** Required by the renderer for Soul portraits; optional for legacy ordinary images. */
+      scene?: PortraitScene;
       /** Optional per-render overrides the user asked for in chat ("…, 20 steps, flux 2"). */
       model?: string;
       steps?: number;
@@ -157,6 +160,8 @@ export const CHAT_TOOLS_SYSTEM =
   'model they name, e.g. "flux 2"), "steps" (sampler steps), "style" (an art style name). Copy such ' +
   "requests into the call; otherwise omit the fields and the app's current settings apply. (Resolution / " +
   "Hi-Res is the reader's own Settings toggle — you can't set it.)\n" +
+  PORTRAIT_SCENE_GUIDANCE + "\n" +
+  PORTRAIT_REFERENCE_GUIDANCE + "\n" +
   'PICKING THE IMAGE TOOL: "show me / find / pull up / what does X look like" = a REAL image → ' +
   'search_images. "generate / draw / make / create / paint / imagine" = NEW art → generate_image. ' +
   "Ambiguous → search_images for real-world subjects, generate_image only for fictional scenes.\n" +
@@ -289,6 +294,7 @@ export function parseToolCall(text: string): ToolCall | undefined {
   if (tool === "generate_image") {
     const prompt = strArg(obj.prompt, MAX_PROMPT_CHARS);
     if (!prompt) return undefined;
+    const scene = parsePortraitScene(obj.scene);
     const model = strArg(obj.model, MAX_NAME_CHARS);
     const style = strArg(obj.style, MAX_NAME_CHARS);
     const steps =
@@ -298,6 +304,7 @@ export function parseToolCall(text: string): ToolCall | undefined {
     return {
       tool,
       prompt,
+      ...(scene ? { scene } : {}),
       ...(model ? { model } : {}),
       ...(style ? { style } : {}),
       ...(steps !== undefined ? { steps } : {}),
