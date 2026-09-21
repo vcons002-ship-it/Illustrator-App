@@ -7,6 +7,19 @@ const flux2Files = {
 };
 
 describe("suggestComponents", () => {
+  it("does not confuse original Qwen-Image and 2.1 components", () => {
+    const oldFiles = { textEncoders: ["qwen_2.5_vl_7b_fp8_scaled.safetensors"], vaes: ["qwen_image_vae.safetensors"] };
+    const newFiles = { textEncoders: ["qwen3vl_8b_int8_convrot.safetensors"], vaes: ["qwen_image_2.1_vae_bf16.safetensors"] };
+    const available = { textEncoders: [...oldFiles.textEncoders, ...newFiles.textEncoders], vaes: [...oldFiles.vaes, ...newFiles.vaes] };
+    const next = suggestComponents("qwen_image_2.1_int8_convrot.safetensors", "qwenimage21", available);
+    expect(next.recommendedEncoder).toBe(newFiles.textEncoders[0]);
+    expect(next.recommendedVae).toBe(newFiles.vaes[0]);
+    expect(next.note).toMatch(/Research\/evaluation only/);
+    expect(suggestComponents("qwen_image_2.1_custom.safetensors", "qwenimage21", oldFiles).recommendedEncoder).toBeUndefined();
+    expect(suggestComponents("qwen_image_2.1_custom.safetensors", "qwenimage21", oldFiles).recommendedVae).toBeUndefined();
+    expect(suggestComponents("qwen_image_custom.safetensors", "qwenimage", newFiles).recommendedEncoder).toBeUndefined();
+    expect(suggestComponents("qwen_image_custom.safetensors", "qwenimage", newFiles).recommendedVae).toBeUndefined();
+  });
   it("SDXL is all-in-one — no components apply", () => {
     const s = suggestComponents("sd_xl_base_1.0.safetensors", "sdxl", { textEncoders: [], vaes: [] });
     expect(s.usesComponents).toBe(false);

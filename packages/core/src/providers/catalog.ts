@@ -126,6 +126,7 @@ export type CatalogModelFamily =
   | "flux2"
   | "zimage"
   | "qwenimage"
+  | "qwenimage21"
   | "hidream";
 
 export interface LocalModelCatalogEntry {
@@ -332,6 +333,37 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
       },
     ],
   },
+  {
+    id: "qwen-image-2.1-int8-eval",
+    label: "Qwen Image 2.1 (INT8 ConvRot · evaluation only)",
+    sizeGB: 17.3,
+    note: "Research/evaluation only — not production or commercial use. Text-to-image only; requires native TextEncodeQwenImage21 support in ComfyUI.",
+    filename: "qwen_image_2.1_int8_convrot.safetensors",
+    url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/ace0edeb3791a594ddfa36ed5f41a178a394e921/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+    family: "qwenimage21",
+    clipType: "qwen_image",
+    sampler: { cfg: 1, sampler: "euler", scheduler: "simple", steps: 25 },
+    files: [
+      {
+        filename: "qwen_image_2.1_int8_convrot.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/ace0edeb3791a594ddfa36ed5f41a178a394e921/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+        sizeGB: 7.26,
+      },
+      {
+        filename: "qwen3vl_8b_int8_convrot.safetensors",
+        folder: "text_encoders",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/ace0edeb3791a594ddfa36ed5f41a178a394e921/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+        sizeGB: 9.35,
+      },
+      {
+        filename: "qwen_image_2.1_vae_bf16.safetensors",
+        folder: "vae",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/ace0edeb3791a594ddfa36ed5f41a178a394e921/vae/qwen_image_2.1_vae_bf16.safetensors",
+        sizeGB: 0.68,
+      },
+    ],
+  },
   // --- HiDream-I1 (native ComfyUI). A 17B diffusion transformer that loads via a
   // QuadrupleCLIPLoader (clip_l + clip_g + t5xxl + llama_3.1_8b), a UNETLoader, the Flux
   // VAE (ae.safetensors), and a ModelSamplingSD3 shift node. Files + URLs + sampler
@@ -408,6 +440,7 @@ export function detectCheckpointFamily(name: string): CatalogModelFamily | undef
   const n = (name || "").toLowerCase();
   if (/hi[\s._-]?dream/.test(n)) return "hidream"; // hidream_i1_full_fp16, HiDream-O1, …
   if (/z[\s._-]?image/.test(n)) return "zimage"; // z_image_turbo, z-image, …
+  if (/qwen[\s._-]?image[\s._-]?2[._-]1(?:[^0-9]|$)/.test(n)) return "qwenimage21";
   if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
   if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
   if (n.includes("flux")) return "flux";
@@ -428,6 +461,7 @@ const FAMILY_VRAM_GB: Record<CatalogModelFamily, number> = {
   flux2: 20,
   zimage: 12,
   qwenimage: 20,
+  qwenimage21: 20,
   hidream: 20,
 };
 

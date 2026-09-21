@@ -51,6 +51,15 @@ describe("samplerFor", () => {
     expect(samplerFor("hidream")).toMatchObject({ cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 });
     expect(samplerFor("hidream").guidance).toBeUndefined();
   });
+  it("uses Qwen Image 2.1's independent unshifted recipe and 32-pixel resolution grid", () => {
+    expect(samplerFor("qwenimage21")).toEqual({ cfg: 1, sampler: "euler", scheduler: "simple", steps: 25 });
+    expect(resolveModelFamily("qwenimage", "qwen_image_2.1_int8_convrot.safetensors")).toBe("qwenimage21");
+    expect(nameHandlingFor("qwenimage21")).toBe("reference");
+    expect(negativeFor("qwenimage21")).toBe("");
+    expect(composeSdPositive("qwenimage21", "a fox")).toBe("a fox");
+    expect(clampResolution("qwenimage21", 2048, 2048)).toEqual({ width: 2048, height: 2048 });
+    expect(clampResolution("qwenimage21", 1000, 1000)).toEqual({ width: 992, height: 992 });
+  });
 });
 
 describe("nameHandlingFor", () => {

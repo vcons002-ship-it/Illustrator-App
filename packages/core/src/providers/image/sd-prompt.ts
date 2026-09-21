@@ -17,6 +17,7 @@ export type ModelFamily =
   | "flux2"
   | "zimage"
   | "qwenimage"
+  | "qwenimage21"
   | "hidream"
   | "unknown";
 
@@ -34,7 +35,7 @@ export function isFlux(family: ModelFamily): boolean {
  * here for prompt formatting, with the negative carved out as an exception.
  */
 export function isNaturalLanguage(family: ModelFamily): boolean {
-  return isFlux(family) || family === "zimage" || family === "qwenimage" || family === "hidream";
+  return isFlux(family) || family === "zimage" || family === "qwenimage" || family === "qwenimage21" || family === "hidream";
 }
 
 /** Sampler settings for a family. Flux uses embedded guidance (cfg≈1) + the `simple`
@@ -69,6 +70,8 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
       return { cfg: 1, sampler: "res_multistep", scheduler: "simple", steps: 8, shift: 3 };
     case "qwenimage": // real CFG 4, AuraFlow shift 3.1
       return { cfg: 4, sampler: "euler", scheduler: "simple", steps: 20, shift: 3.1 };
+    case "qwenimage21": // Official native 2.1 template: no AuraFlow/Flux guidance nodes.
+      return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 25 };
     case "hidream":
       // Default to the Full recipe (CFG-based, SD3 shift 3.0) — the safe high-quality
       // baseline for a HiDream file that isn't one of the catalog entries (those carry
@@ -86,7 +89,7 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
  *    name↔description glossary → **reference** block.
  */
 export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
-  return family === "flux2" || family === "zimage" || family === "qwenimage" || family === "hidream"
+  return family === "flux2" || family === "zimage" || family === "qwenimage" || family === "qwenimage21" || family === "hidream"
     ? "reference"
     : "inject";
 }
@@ -99,6 +102,8 @@ export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
  * 1024 — so it caps low, and the Hi-Res two-pass path is how it reaches larger canvases. */
 export function familyMaxDimension(family: ModelFamily): number {
   switch (family) {
+    case "qwenimage21":
+      return 2048;
     case "flux":
     case "flux2":
     case "qwenimage":
@@ -127,7 +132,8 @@ export function clampResolution(
   const max = familyMaxDimension(family);
   const longest = Math.max(width, height);
   const scale = longest > max ? max / longest : 1;
-  const fit = (n: number): number => Math.max(512, Math.round((n * scale) / 8) * 8);
+  const multiple = family === "qwenimage21" ? 32 : 8;
+  const fit = (n: number): number => Math.max(512, Math.round((n * scale) / multiple) * multiple);
   return { width: fit(width), height: fit(height) };
 }
 
@@ -164,6 +170,7 @@ export function hiresCeiling(family: ModelFamily, lowVram?: boolean): number {
     case "flux2":
     case "qwenimage":
     case "hidream":
+    case "qwenimage21":
       return HIRES_MAX_DIMENSION_HEAVY;
     default:
       return HIRES_MAX_DIMENSION;

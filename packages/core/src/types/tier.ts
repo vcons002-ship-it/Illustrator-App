@@ -74,7 +74,7 @@ export interface TierConfig {
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).
    */
-  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "hidream";
+  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
   /**
    * Manual component overrides for split-file local models (Flux.2 / Z-Image / Qwen-Image /
    * HiDream) when auto-detection of the text encoder / VAE picks the wrong file. Exact

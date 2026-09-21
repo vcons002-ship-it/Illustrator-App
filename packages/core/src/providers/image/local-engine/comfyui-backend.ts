@@ -876,7 +876,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     }
 
     // Flux.1 UNET-only (not a split-file catalog family): DualCLIPLoader (t5xxl + clip_l).
-    if (family !== "flux2" && family !== "zimage" && family !== "qwenimage") {
+    if (family !== "flux2" && family !== "zimage" && family !== "qwenimage" && family !== "qwenimage21") {
       const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
       const t5 = clips.find((c) => /t5/i.test(c));
       const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
@@ -966,7 +966,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       // Low-VRAM: load the UNET in fp8 (≈half the diffusion weights in VRAM). The big
       // text encoder (Qwen-3/T5/Mistral) is shrunk by the engine's --lowvram offloading,
       // not here (CLIPLoader has no dtype input). Only applies to UNETLoader families.
-      weightDtype: lowVram ? "fp8_e4m3fn" : "default",
+      weightDtype: lowVram && family !== "qwenimage21" ? "fp8_e4m3fn" : "default",
     };
   }
 
@@ -1093,6 +1093,22 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // base needs real CFG 5, unlike guidance-distilled Flux.2-dev). Natural-language
     // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
+    if (family === "qwenimage21") {
+      // This evaluation integration intentionally implements the official t2i path only.
+      // Reject edits before uploading the user's image or silently falling back to generation.
+      if (input.initImage || input.hires || input.castRegions?.length || input.styleLora) {
+        throw new Error(
+          "Qwen Image 2.1 evaluation supports text-to-image only. Turn off image editing, " +
+          "two-pass High resolution, character regions and style LoRAs for this preset.",
+        );
+      }
+      if (!(await this.nodeInfo("TextEncodeQwenImage21"))) {
+        throw new Error(
+          "Qwen Image 2.1 requires a newer ComfyUI with the native TextEncodeQwenImage21 node. " +
+          "Update your selected ComfyUI engine and reconnect; the original Qwen-Image graph is not compatible.",
+        );
+      }
+    }
     const baseSampler = catalogEntryForModel(checkpoint)?.sampler ?? samplerFor(family);
     // Steps: distilled few-step models (turbo) never scale — extra steps hurt them.
     // Natural-language families scale their recommended count by the quality level;
@@ -1811,7 +1827,43 @@ function addRegionalConditioning(
  * clip); the diffusion path uses LoraLoaderModelOnly (a UNETLoader has no clip output), so
  * LoRAs apply to Flux.2 / Z-Image / Qwen-Image too — not just SD checkpoints.
  */
+/** Native Qwen Image 2.1 t2i evaluation recipe, verified against Comfy-Org's
+ * templates/image_qwen_image_2_1_t2i.json (2026-09-20). The encoder emits BOTH
+ * conditionings; plain CLIPTextEncode and the original Qwen AuraFlow shift are wrong.
+ * EmptyLatentImage is intentional: current native ComfyUI fixes its channels/scale to
+ * the model's 64-channel, 16x latent format before sampling, as in the official template. */
+function buildQwenImage21Workflow(p: WorkflowParams): Record<string, unknown> {
+  if (p.loadKind !== "diffusion" || !p.components) {
+    throw new Error("Qwen Image 2.1 needs its diffusion model, Qwen3-VL encoder and 2.1 VAE.");
+  }
+  if (p.initImage || p.ipAdapter || p.referenceLatents?.length || p.hires || p.regions?.length || p.lora) {
+    throw new Error("Qwen Image 2.1 evaluation is text-to-image only; editing, adapters, LoRAs, regions and two-pass generation are not supported here yet.");
+  }
+  return {
+    "3": {
+      class_type: "KSampler",
+      inputs: {
+        model: ["4", 0], positive: ["6", 0], negative: ["6", 1], latent_image: ["5", 0],
+        seed: p.seed, steps: p.steps, cfg: p.sampler.cfg,
+        sampler_name: p.sampler.sampler, scheduler: p.sampler.scheduler, denoise: 1,
+      },
+    },
+    // Preserve ConvRot's stored quantization even with app Low-VRAM enabled.
+    "4": { class_type: "UNETLoader", inputs: { unet_name: p.model, weight_dtype: "default" } },
+    "5": { class_type: "EmptyLatentImage", inputs: { width: p.width, height: p.height, batch_size: 1 } },
+    "6": {
+      class_type: "TextEncodeQwenImage21",
+      inputs: { clip: ["12", 0], prompt: p.prompt, negative_prompt: p.negative, resolution: 1024 },
+    },
+    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["13", 0] } },
+    "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader-qwen21-eval", images: ["8", 0] } },
+    "12": p.components.textEncoder,
+    "13": { class_type: "VAELoader", inputs: { vae_name: p.components.vaeName } },
+  };
+}
+
 export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
+  if (p.family === "qwenimage21") return buildQwenImage21Workflow(p);
   const diffusion = p.loadKind === "diffusion";
   // Source refs for model / clip / vae, depending on the load shape. A LoRA wraps the
   // model output: node "10" (LoraLoader) on the checkpoint path, "11" (LoraLoaderModelOnly)
@@ -2363,7 +2415,13 @@ export const SPLIT_FILE_HEURISTICS: Record<
     what: "Flux.2",
   },
   zimage: { clip: /qwen.?3.?4b/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
-  qwenimage: { clip: /qwen.?2[._-]?5|qwen.*vl/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
+  qwenimage: { clip: /qwen.?2[._-]?5/i, vae: ["qwen_image_vae", "qwen-image-vae"], type: "qwen_image", what: "Qwen-Image" },
+  qwenimage21: {
+    clip: /qwen[._-]?3[._-]?vl[._-]?8b/i,
+    vae: ["qwen_image_2.1_vae", "qwen-image-2.1-vae", "qwen_image_2_1_vae"],
+    type: "qwen_image",
+    what: "Qwen Image 2.1",
+  },
 };
 
 /** Flux.2 encoder-name patterns ordered by the diffusion model's name: a **4B** Flux.2 pairs with the
