@@ -24,11 +24,11 @@ export function parsePortraitScene(value: unknown): PortraitScene | undefined {
 }
 
 export const PORTRAIT_SCENE_GUIDANCE =
-  'For assistant/reader portraits, provide "scene" when staging is specified: an object with nonempty action, setting, clothing ' +
-  "and/or composition strings (max 1200 chars each). Give each call its own scene resolved from the request/plan, " +
+  'For assistant/reader portraits, provide "scene" when staging is specified: nonempty action, setting, clothing ' +
+  "and/or composition strings (max 1200 chars). Give each call its own scene resolved from the request/plan, " +
   "including batch differences. Use SUBJECT, or ASSISTANT and READER for pairs. Omit names and permanent appearance; " +
-  'the app supplies Soul identity. For a simple portrait with no specified scene, use a neutral portrait composition. ' +
-  'Never ask the reader for structured scene fields. Ordinary images keep "prompt"; scene is optional.';
+  'the app supplies Soul identity. Default to a neutral portrait; never ask readers for scene fields. ' +
+  'Ordinary images keep "prompt"; scene is optional.';
 
 /** A repair sees only this call's text, never either Soul's identity ledger or reference photos. */
 export const PORTRAIT_SCENE_REPAIR_SYSTEM =
