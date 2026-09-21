@@ -129,7 +129,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "hidream";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -1531,6 +1531,7 @@ export function SettingsPanel({
                       | "flux2"
                       | "zimage"
                       | "qwenimage"
+                      | "qwenimage21"
                       | "hidream",
                   })
                 }
@@ -1543,9 +1544,17 @@ export function SettingsPanel({
                 <option value="flux2">Flux.2</option>
                 <option value="zimage">Z-Image</option>
                 <option value="qwenimage">Qwen-Image</option>
+                <option value="qwenimage21">Qwen Image 2.1 (evaluation only)</option>
                 <option value="hidream">HiDream</option>
               </select>
             </label>
+          )}
+          {value.imageProvider === "local" && localFamily === "qwenimage21" && (
+            <p role="note" style={{ ...rowStyle, fontSize: 12 }}>
+              Qwen Image 2.1 is for research/evaluation only, not production or commercial use.
+              This preset supports text-to-image only. Turn off two-pass High resolution,
+              character regions and style LoRAs; image editing is not enabled.
+            </p>
           )}
 
           <div style={rowStyle}>

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   chatImageVramFit,
+  catalogEntryForModel,
   comfyUrlForVideo,
   detectCheckpointFamily,
   imageModelVramCostGb,
@@ -10,6 +11,21 @@ import {
   staleA1111UrlToFree,
   staleComfyUrlToFree,
 } from "./catalog.js";
+
+describe("Qwen Image 2.1 evaluation catalog", () => {
+  it("keeps the new native recipe distinct from original Qwen-Image", () => {
+    const entry = catalogEntryForModel("qwen_image_2.1_int8_convrot.safetensors")!;
+    expect(entry.family).toBe("qwenimage21");
+    expect(entry.label).toMatch(/evaluation only/i);
+    expect(entry.note).toMatch(/not production or commercial/i);
+    expect(entry.sampler).toEqual({ cfg: 1, sampler: "euler", scheduler: "simple", steps: 25 });
+    expect(entry.files).toHaveLength(3);
+    for (const f of entry.files!) expect(f.url).toContain("/ace0edeb3791a594ddfa36ed5f41a178a394e921/");
+    expect(detectCheckpointFamily("qwen_image_2.1_bf16.safetensors")).toBe("qwenimage21");
+    expect(detectCheckpointFamily("Qwen-Image-2.1-INT8.safetensors")).toBe("qwenimage21");
+    expect(detectCheckpointFamily("qwen_image_fp8_e4m3fn.safetensors")).toBe("qwenimage");
+  });
+});
 
 describe("chatImageVramFit (keep-both-resident decision)", () => {
   it("returns 'unknown' when VRAM or a model size is unknown (caller keeps the model loaded)", () => {

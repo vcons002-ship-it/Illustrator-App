@@ -34,6 +34,47 @@ describe("buildWorkflow txt2img", () => {
   });
 });
 
+describe("Qwen Image 2.1 evaluation workflow", () => {
+  const qwen21 = {
+    ...base,
+    model: "qwen_image_2.1_int8_convrot.safetensors",
+    family: "qwenimage21" as const,
+    loadKind: "diffusion" as const,
+    negative: "",
+    steps: 25,
+    sampler: { cfg: 1, sampler: "euler", scheduler: "simple", steps: 25 },
+    components: {
+      textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_8b_int8_convrot.safetensors", type: "qwen_image" } },
+      vaeName: "qwen_image_2.1_vae_bf16.safetensors",
+      weightDtype: "default",
+    },
+  };
+
+  it("uses the official two-output encoder and unshifted full-denoise sampler", () => {
+    const g = buildWorkflow(qwen21);
+    expect(classOf(g, "6")).toBe("TextEncodeQwenImage21");
+    expect(inputsOf(g, "6")).toEqual({ clip: ["12", 0], prompt: "a fox", negative_prompt: "", resolution: 1024 });
+    expect(inputsOf(g, "3")).toMatchObject({ positive: ["6", 0], negative: ["6", 1], model: ["4", 0], cfg: 1, steps: 25, sampler_name: "euler", scheduler: "simple", denoise: 1 });
+    expect(classOf(g, "5")).toBe("EmptyLatentImage");
+    expect(classOf(g, "8")).toBe("VAEDecode");
+    expect(g["7"]).toBeUndefined();
+    expect(g["14"]).toBeUndefined(); // no FluxGuidance
+    expect(g["17"]).toBeUndefined(); // no original Qwen AuraFlow shift
+  });
+
+  it("preserves pre-quantized ConvRot weights rather than casting to fp8", () => {
+    const g = buildWorkflow({ ...qwen21, components: { ...qwen21.components, weightDtype: "fp8_e4m3fn" } });
+    expect(inputsOf(g, "4").weight_dtype).toBe("default");
+  });
+
+  it("rejects unsupported modes instead of silently generating a different task", () => {
+    expect(() => buildWorkflow({ ...qwen21, initImage: { filename: "photo.png", denoise: 0.5 } })).toThrow(/text-to-image only/);
+    expect(() => buildWorkflow({ ...qwen21, hires: { width: 1536, height: 1536, denoise: 0.5 } })).toThrow(/text-to-image only/);
+    expect(() => buildWorkflow({ ...qwen21, referenceLatents: ["photo.png"] })).toThrow(/text-to-image only/);
+    expect(() => buildWorkflow({ ...qwen21, loadKind: "checkpoint" })).toThrow(/Qwen3-VL/);
+  });
+});
+
 describe("buildWorkflow img2img", () => {
   it("encodes the base photo and denoises from it (no empty latent)", () => {
     const g = buildWorkflow({ ...base, initImage: { filename: "photo.png", denoise: 0.55 } });

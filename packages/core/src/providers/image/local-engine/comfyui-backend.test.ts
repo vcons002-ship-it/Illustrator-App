@@ -61,6 +61,53 @@ const RUNNING_QUEUE = { queue_running: [[0, "p1"]], queue_pending: [] };
 const EMPTY_QUEUE = { queue_running: [], queue_pending: [] };
 const INPUT = { prompt: "a cat by a window", anchors: [], quality: "standard" as const };
 
+describe("ComfyUIBackend Qwen Image 2.1 evaluation", () => {
+  const model = "qwen_image_2.1_int8_convrot.safetensors";
+  const nodeInfo = (node: string, key: string, options: string[]) =>
+    res({ [node]: { input: { required: { [key]: [options, {}] } } } });
+
+  it("fails actionably on an old engine before submitting a graph", async () => {
+    const { transport, calls } = routedTransport({ "/object_info/TextEncodeQwenImage21": res({}) });
+    await expect(new ComfyUIBackend({ baseUrl: BASE, transport }).generate(INPUT, model))
+      .rejects.toThrow(/newer ComfyUI.*TextEncodeQwenImage21/);
+    expect(calls.some((c) => c.url.endsWith("/prompt"))).toBe(false);
+  });
+
+  it("rejects editing before upload or any engine call", async () => {
+    const { transport, calls } = routedTransport({});
+    await expect(new ComfyUIBackend({ baseUrl: BASE, transport }).generate({
+      ...INPUT, initImage: { bytes: new ArrayBuffer(1), mimeType: "image/png" },
+    }, model)).rejects.toThrow(/text-to-image only/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("discovers the new components and submits the native graph even in Low-VRAM mode", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    try {
+      const { transport, calls } = routedTransport({
+        "/object_info/TextEncodeQwenImage21": res({ TextEncodeQwenImage21: { input: {} } }),
+        "/object_info/CheckpointLoaderSimple": nodeInfo("CheckpointLoaderSimple", "ckpt_name", []),
+        "/object_info/UNETLoader": nodeInfo("UNETLoader", "unet_name", [model]),
+        "/object_info/CLIPLoader": nodeInfo("CLIPLoader", "clip_name", ["qwen_2.5_vl_7b_fp8_scaled.safetensors", "qwen3vl_8b_int8_convrot.safetensors"]),
+        "/object_info/VAELoader": nodeInfo("VAELoader", "vae_name", ["qwen_image_vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors"]),
+        "/prompt": res({ prompt_id: "p1" }),
+        "/history/p1": res(DONE_HISTORY),
+        "/view": bytesRes(new Uint8Array([1, 2, 3]).buffer),
+      });
+      const out = await new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 }).generate({ ...INPUT, lowVram: true }, model);
+      expect(out.mimeType).toBe("image/png");
+      const body = calls.find((c) => c.url.endsWith("/prompt"))!.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> };
+      expect(body.prompt["6"]!.class_type).toBe("TextEncodeQwenImage21");
+      expect(body.prompt["4"]!.inputs.weight_dtype).toBe("default");
+      expect(body.prompt["12"]!.inputs.clip_name).toBe("qwen3vl_8b_int8_convrot.safetensors");
+      expect(body.prompt["13"]!.inputs.vae_name).toBe("qwen_image_2.1_vae_bf16.safetensors");
+      expect(body.prompt["3"]!.inputs.steps).toBe(25);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("ComfyUIBackend.generate state machine", () => {
   beforeEach(() => {
     // Node ships a global WebSocket — stub it away so the best-effort progress

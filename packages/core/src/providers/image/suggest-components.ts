@@ -37,7 +37,7 @@ export interface ComponentSuggestion {
   note: string;
 }
 
-const SPLIT_FILE: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["flux2", "zimage", "qwenimage"]);
+const SPLIT_FILE: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["flux2", "zimage", "qwenimage", "qwenimage21"]);
 
 function noteFor(family: ModelFamily, model: string): string {
   const m = model.toLowerCase();
@@ -50,6 +50,8 @@ function noteFor(family: ModelFamily, model: string): string {
       return "Z-Image → the Qwen-3-4B text encoder (NOT Flux.2 Klein's 8B) + the Z-Image VAE (ae.safetensors).";
     case "qwenimage":
       return "Qwen-Image → a Qwen-2.5-VL text encoder + the Qwen-Image VAE.";
+    case "qwenimage21":
+      return "Qwen Image 2.1 → Qwen3-VL 8B + the 2.1 VAE (not original Qwen-Image components). Research/evaluation only; text-to-image only.";
     case "flux":
       return "Flux.1 (diffusion-only) → dual encoders (t5xxl + clip_l, auto-detected) + the Flux VAE (ae.safetensors).";
     case "hidream":
