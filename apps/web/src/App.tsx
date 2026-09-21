@@ -930,6 +930,7 @@ export function App() {
     carryOverBible,
     paintForward,
     testRender,
+    testRenderCancel,
     assessImage,
     sendBuddyEmail,
     runCodingAgents,
@@ -4764,6 +4765,7 @@ export function App() {
         const p = placeholders[k]!;
         onProgress?.(k, placeholders.length);
         const res = await testRender(p.prompt, {
+          renderOwner: "chat",
           ...(p.width && p.height ? { size: { width: p.width, height: p.height } } : {}),
         });
         if (res.image) {
@@ -4780,13 +4782,22 @@ export function App() {
   );
 
   // Playground render that first spins up the deferred (low-VRAM) managed engine, then renders.
+  // Stop also invalidates an engine-start wait, before the worker has a request to cancel.
+  const playgroundRenderEpoch = useRef(0);
   const onTestRender = useCallback(
     async (text: string, opts?: Parameters<typeof testRender>[1]): ReturnType<typeof testRender> => {
+      const epoch = ++playgroundRenderEpoch.current;
+      markUserRequest();
       await ensureRenderEngineReady();
+      if (epoch !== playgroundRenderEpoch.current) return { ok: false, error: "Image generation stopped." };
       return testRender(text, opts);
     },
-    [ensureRenderEngineReady, testRender],
+    [ensureRenderEngineReady, testRender, markUserRequest],
   );
+  const onTestRenderCancel = useCallback(() => {
+    playgroundRenderEpoch.current++;
+    testRenderCancel();
+  }, [testRenderCancel]);
 
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
   // the book chat when one is open, otherwise the landing buddy, opening it so it shows.
@@ -12445,13 +12456,14 @@ export function App() {
       )}
 
       {showTestImage && (
-        <TestImageModal onRender={onTestRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
+        <TestImageModal onRender={onTestRender} onCancel={onTestRenderCancel} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
       )}
 
       {showPhoto && (
         <PhotoTransformModal
           {...(photoInitial ? { initial: photoInitial } : {})}
           onRender={onTestRender}
+          onCancel={onTestRenderCancel}
           onAddToChat={onAddImageToChat}
           onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {
@@ -13971,10 +13983,12 @@ function PasteTextModal({
  */
 function TestImageModal({
   onRender,
+  onCancel,
   onAddToChat,
   onClose,
 }: {
   onRender: (text: string, opts?: { onProgress?: (f: number) => void }) => Promise<TestRenderResult>;
+  onCancel: () => void;
   /** Drop the rendered image into the chat conversation. */
   onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
@@ -14033,6 +14047,7 @@ function TestImageModal({
               {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
             </span>
           )}
+          {busy && <button className={cx.btn} style={styles.button} onClick={onCancel}>Stop</button>}
           <button className={cx.btn} style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Render"}
           </button>
@@ -14092,6 +14107,7 @@ function TestImageModal({
 function PhotoTransformModal({
   initial,
   onRender,
+  onCancel,
   onAddToChat,
   onExtractText,
   onClose,
@@ -14106,6 +14122,7 @@ function PhotoTransformModal({
       onProgress?: (f: number) => void;
     },
   ) => Promise<TestRenderResult>;
+  onCancel: () => void;
   /** Drop the transformed image into the chat conversation. */
   onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
   /** Extract the text from the image (OCR via the vision model) and open it as a document. */
@@ -14274,6 +14291,7 @@ function PhotoTransformModal({
               🔤 Extract text
             </button>
           ) : null}
+          {busy && <button className={cx.btn} style={styles.button} onClick={onCancel}>Stop</button>}
           <button className={cx.btn} style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Transform"}
           </button>
