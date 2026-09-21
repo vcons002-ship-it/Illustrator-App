@@ -34,6 +34,57 @@ const imageRequestForTurn = callback<(previous: string, request?: string) => str
 const call = { tool: "generate_image", prompt: "A portrait combining the reader and assistant descriptions" } as const;
 const noop = () => {};
 
+describe("independent playground rendering", () => {
+  it("does not submit a render when Stop is pressed during deferred engine startup", async () => {
+    let ready!: () => void;
+    const engineReady = new Promise<void>((resolve) => { ready = resolve; });
+    const playgroundRenderEpoch = { current: 0 };
+    const testRender = vi.fn();
+    const testRenderCancel = vi.fn();
+    const markUserRequest = vi.fn();
+    const render = callback<(text: string) => Promise<{ ok: boolean; error?: string }>>("onTestRender", {
+      playgroundRenderEpoch, testRender, markUserRequest,
+      ensureRenderEngineReady: () => engineReady,
+    });
+    const stop = callback<() => void>("onTestRenderCancel", { playgroundRenderEpoch, testRenderCancel });
+
+    const result = render("A lighthouse");
+    expect(markUserRequest).toHaveBeenCalledOnce();
+    expect(testRender).not.toHaveBeenCalled();
+    stop();
+    ready();
+    await expect(result).resolves.toEqual({ ok: false, error: "Image generation stopped." });
+    expect(testRender).not.toHaveBeenCalled();
+    expect(testRenderCancel).toHaveBeenCalledOnce();
+  });
+
+  it("submits normally after startup and retains the progress callback", async () => {
+    const result = { ok: true };
+    const testRender = vi.fn().mockResolvedValue(result);
+    const render = callback<(text: string, opts: unknown) => Promise<unknown>>("onTestRender", {
+      playgroundRenderEpoch: { current: 0 }, testRender, markUserRequest: noop,
+      ensureRenderEngineReady: async () => {},
+    });
+    const opts = { onProgress: vi.fn() };
+    await expect(render("A lighthouse", opts)).resolves.toBe(result);
+    expect(testRender).toHaveBeenCalledWith("A lighthouse", opts);
+  });
+
+  it("keeps document image generation owned by its chat", async () => {
+    const testRender = vi.fn().mockResolvedValue({ ok: false });
+    const buildDocument = callback<(html: string) => Promise<unknown>>("onBuildDocument", {
+      ensureRenderEngineReady: async () => {},
+      parseDocImages: () => [{ id: "cover", prompt: "A lighthouse", width: 512, height: 768 }],
+      testRender,
+      embedDocImages: (html: string) => html,
+    });
+    await buildDocument("<article>Example</article>");
+    expect(testRender).toHaveBeenCalledWith("A lighthouse", {
+      renderOwner: "chat", size: { width: 512, height: 768 },
+    });
+  });
+});
+
 describe("image request identity survives UI approval and continuation", () => {
   it.each([undefined, "continue", "Resume!", "retry", "  try again.  "])(
     "keeps the reader's original subject and photo intent on %s",
