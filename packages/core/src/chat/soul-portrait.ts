@@ -1,5 +1,5 @@
 import { portraitSubjects, visualSoulNotes, type SoulNote } from "./souls.js";
-import type { PortraitScene } from "./portrait-scene.js";
+import { parsePortraitScene, type PortraitScene } from "./portrait-scene.js";
 
 export interface PortraitReference {
   bytes: ArrayBuffer;
@@ -63,19 +63,18 @@ export function buildSoulPortraitRender(input: {
     user: inferred.user && input.user.enabled !== false,
   };
   const selected = (["self", "user"] as const).filter((kind) => subject[kind]);
-  const scene = input.scene && [
-    input.scene.action ? `Action: ${input.scene.action}` : "",
-    input.scene.setting ? `Setting: ${input.scene.setting}` : "",
-    input.scene.clothing ? `Clothing: ${input.scene.clothing}` : "",
-    input.scene.composition ? `Composition: ${input.scene.composition}` : "",
+  const staging = parsePortraitScene(input.scene) ?? {
+    composition: selected.length === 2
+      ? "Neutral portrait of ASSISTANT and READER together, with two distinct subjects."
+      : "Neutral portrait of SUBJECT.",
+    setting: "Simple unobtrusive background, soft natural lighting.",
+  };
+  const scene = [
+    staging.action ? `Action: ${staging.action}` : "",
+    staging.setting ? `Setting: ${staging.setting}` : "",
+    staging.clothing ? `Clothing: ${staging.clothing}` : "",
+    staging.composition ? `Composition: ${staging.composition}` : "",
   ].filter(Boolean).join("\n");
-  if (selected.length && !scene) {
-    throw new Error(
-      "Soul portraits need a separate scene. Retry generate_image with scene: { action, setting, clothing, composition }. " +
-      "Describe only this image's resolved scene; refer to the person as SUBJECT (ASSISTANT and READER for a pair). " +
-      "Omit names and permanent appearance such as face, hair, eyes or body: the app supplies the selected Soul's identity.",
-    );
-  }
   const labels = {
     self: input.self.name.trim() || "the assistant",
     user: input.user.name.trim() || "the reader",

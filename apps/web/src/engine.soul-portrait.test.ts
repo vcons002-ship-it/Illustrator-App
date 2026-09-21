@@ -4,6 +4,8 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolCall } from "../../../packages/core/src/chat/chat-tools.js";
 import { buildSoulPortraitRender } from "../../../packages/core/src/chat/soul-portrait.js";
+import { portraitSubjects } from "../../../packages/core/src/chat/souls.js";
+import { parsePortraitScene, parsePortraitSceneReply, PORTRAIT_SCENE_REPAIR_SYSTEM, PORTRAIT_SCENE_SCHEMA } from "../../../packages/core/src/chat/portrait-scene.js";
 import {
   describeReferenceSources,
   referenceOutcome,
@@ -64,6 +66,7 @@ const referenceIds = (refs: Reference[] | undefined): number[] =>
   (refs ?? []).map((ref) => new Uint8Array(ref.bytes)[0]!);
 
 function harness() {
+  const chat = vi.fn(async () => '{"composition":"Neutral portrait of SUBJECT"}');
   const chatAborts = new Map<number, AbortController>();
   const post = vi.fn();
   const warmChatModel = vi.fn();
@@ -97,13 +100,22 @@ function harness() {
       [kind === "self" ? selfPhoto : readerPhoto],
     currentBook: undefined,
     buildSoulPortraitRender,
+    portraitSubjects,
+    parsePortraitScene,
+    parsePortraitSceneReply,
+    PORTRAIT_SCENE_REPAIR_SYSTEM,
+    PORTRAIT_SCENE_SCHEMA,
+    chatProviders: () => ({ llm: { id: "local-server", chat }, llmDiagnostic: { mock: false } }),
+    supportsChat: () => true,
+    withChatPriority: async (_id: string, fn: () => Promise<string>) => fn(),
+    abortError: () => new DOMException("Aborted", "AbortError"),
     renderFromText,
     describeReferenceSources,
     referenceOutcome,
     post,
     warmChatModel,
   });
-  return { handle, renderFromText, post, chatAborts, warmChatModel, provider, tier };
+  return { handle, renderFromText, post, chatAborts, warmChatModel, provider, tier, chat };
 }
 
 describe("worker Soul portrait render handoff", () => {
@@ -162,19 +174,22 @@ describe("worker Soul portrait render handoff", () => {
     }
   });
 
-  it("returns actionable feedback instead of rendering a Soul portrait without a separate scene", async () => {
+  it("repairs a main-chat portrait without exposing structured-scene errors to the reader", async () => {
     const worker = harness();
     const call: ImageCall = { tool: "generate_image", prompt: "Nick and Aria with dark hair and beards" };
     await worker.handle(103, call, [readerPhoto], "Draw yourself");
 
-    expect(worker.renderFromText).not.toHaveBeenCalled();
+    expect(worker.chat).toHaveBeenCalledTimes(1);
+    expect(worker.renderFromText).toHaveBeenCalledTimes(1);
+    expect(worker.renderFromText.mock.calls[0]![2]).toContain("Neutral portrait");
+    expect(worker.renderFromText.mock.calls[0]![2]).not.toMatch(/Nick|dark hair|beards/);
     expect(worker.post).toHaveBeenCalledTimes(1);
     expect(worker.post).toHaveBeenCalledWith(expect.objectContaining({
       type: "chatToolResult",
       requestId: 103,
       call,
-      error: expect.stringMatching(/Retry generate_image with scene/),
-    }));
+      image: expect.objectContaining({ mimeType: "image/png" }),
+    }), expect.any(Array));
     expect(worker.chatAborts.size).toBe(0);
     expect(worker.warmChatModel).toHaveBeenCalledTimes(1);
   });
@@ -187,11 +202,51 @@ describe("worker Soul portrait render handoff", () => {
     expect(worker.renderFromText).toHaveBeenCalledTimes(1);
     const [, , prompt, options] = worker.renderFromText.mock.calls[0]!;
     expect(prompt).toBe(call.prompt);
+    expect(worker.chat).not.toHaveBeenCalled();
     expect(referenceIds(options.ipAdapterRefs)).toEqual([3, 2]);
     expect(worker.post).toHaveBeenCalledWith(expect.objectContaining({
       type: "chatToolResult",
       requestId: 104,
       image: expect.objectContaining({ mimeType: "image/png" }),
     }), expect.any(Array));
+  });
+
+  it("prepares a requested cafe scene once and keeps Soul identity separate", async () => {
+    const worker = harness();
+    worker.chat.mockResolvedValue('{"action":"SUBJECT seated","setting":"a cafe","clothing":"a red coat"}');
+    await worker.handle(105, { tool: "generate_image", prompt: "Nick with a beard seated at a cafe in a red coat" }, [], "Draw yourself at a cafe in a red coat");
+    const prompt = worker.renderFromText.mock.calls[0]![2];
+    expect(prompt).toContain("a cafe");
+    expect(prompt).toContain("red coat");
+    expect(prompt).toContain("auburn hair");
+    expect(prompt).not.toMatch(/Nick|beard/);
+    expect(worker.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["invalid JSON", "{}"])("falls back safely for an unusable scene reply: %s", async (reply) => {
+    const worker = harness();
+    worker.chat.mockResolvedValue(reply);
+    await worker.handle(106, { tool: "generate_image", prompt: "Nick with a beard" }, [], "Draw yourself");
+    const prompt = worker.renderFromText.mock.calls[0]![2];
+    expect(prompt).toContain("Neutral portrait");
+    expect(prompt).not.toMatch(/Nick|beard/);
+  });
+
+  it("continues with a neutral portrait when the text service is unavailable", async () => {
+    const worker = harness();
+    worker.chat.mockRejectedValue(new Error("offline"));
+    await worker.handle(107, { tool: "generate_image", prompt: "Aria" }, [], "Draw yourself");
+    expect(worker.renderFromText.mock.calls[0]![2]).toContain("Neutral portrait");
+  });
+
+  it("does not render when stopped during scene preparation", async () => {
+    const worker = harness();
+    worker.chat.mockImplementation(async () => {
+      worker.chatAborts.get(108)!.abort();
+      return '{"setting":"a cafe"}';
+    });
+    await worker.handle(108, { tool: "generate_image", prompt: "Aria at a cafe" }, [], "Draw yourself");
+    expect(worker.renderFromText).not.toHaveBeenCalled();
+    expect(worker.post).toHaveBeenCalledWith(expect.objectContaining({ error: "Image generation stopped." }));
   });
 });

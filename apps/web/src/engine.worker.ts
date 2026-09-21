@@ -127,6 +127,11 @@ import {
   saveSoulEssence,
   soulSourceFingerprint,
   buildSoulPortraitRender,
+  portraitSubjects,
+  parsePortraitScene,
+  parsePortraitSceneReply,
+  PORTRAIT_SCENE_REPAIR_SYSTEM,
+  PORTRAIT_SCENE_SCHEMA,
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
@@ -6731,12 +6736,42 @@ async function handleChatTool(
     const portraitSelfName = storySoulCast?.self ?? selfName;
     const portraitUserName = storySoulCast?.user ?? userName;
     const [selfRefs, userRefs] = await Promise.all([loadSoulRefs(store, "self"), loadSoulRefs(store, "user")]);
+    let scene = parsePortraitScene(call.scene);
+    const subjects = portraitSubjects({
+      userText: userText ?? "", modelPrompt: call.prompt,
+      selfName: portraitSelfName, userName: portraitUserName,
+    });
+    const isPortrait = (subjects.self && (!inStory || !!storySoulCast?.self)) ||
+      (subjects.user && (!inStory || !!storySoulCast?.user));
+    // Repair legacy/model calls here, shared by main and book chat. Never reuse a mixed
+    // free-form prompt as identity. One bounded staging pass; service/JSON failures use
+    // the safe neutral composition in buildSoulPortraitRender instead of failing the image.
+    if (isPortrait && !scene) {
+      try {
+        const { llm, llmDiagnostic } = chatProviders();
+        if (!llmDiagnostic.mock && supportsChat(llm)) {
+          const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(30_000)]);
+          const reply = await withChatPriority(llm.id, () => llm.chat([
+            { role: "system", content: PORTRAIT_SCENE_REPAIR_SYSTEM },
+            { role: "user", content: JSON.stringify({
+              request: (userText ?? "").slice(0, 6000), imagePrompt: call.prompt.slice(0, 6000),
+              pair: subjects.self && subjects.user,
+            }) },
+          ], { maxTokens: 400, signal, reasoningEffort: "none", responseFormat: "json", jsonSchema: PORTRAIT_SCENE_SCHEMA }), { signal });
+          scene = parsePortraitSceneReply(reply);
+        }
+      } catch {
+        // Cancellation still stops the whole image operation, including after scene preparation.
+        if (ac.signal.aborted) throw abortError();
+      }
+    }
+    if (ac.signal.aborted) throw abortError();
     // Both chat surfaces use this same tested assembly: reader intent selects the Soul, its own
     // notes supply appearance, and old session attachments cannot silently supply another face.
     const { prompt, refs: soulRefs, sources } = buildSoulPortraitRender({
       userText: userText ?? "",
       modelPrompt: call.prompt,
-      ...(call.scene ? { scene: call.scene } : {}),
+      ...(scene ? { scene } : {}),
       self: { name: portraitSelfName, notes: selfNotes, refs: selfRefs, enabled: !inStory || !!storySoulCast?.self },
       user: { name: portraitUserName, notes: userNotes, refs: userRefs, enabled: !inStory || !!storySoulCast?.user },
       ...(refImages ? { chatRefs: refImages } : {}),
@@ -6750,7 +6785,10 @@ async function handleChatTool(
     // Say what became of the reference photos. Every way this goes wrong yields a perfectly good
     // picture that just isn't of the person, so without this the reader is left comparing faces and
     // guessing between "wrong model", "nodes missing", "upload failed" and "it worked, badly".
-    const note = referenceOutcome(soulRefs?.length ?? 0, out.references, describeReferenceSources(sources));
+    const referenceNote = referenceOutcome(soulRefs?.length ?? 0, out.references, describeReferenceSources(sources));
+    const note = isPortrait && !scene
+      ? { ok: false, text: ["Scene details could not be prepared; used a neutral portrait with the selected Soul's appearance.", referenceNote?.text].filter(Boolean).join(" ") }
+      : referenceNote;
     post(
       {
         type: "chatToolResult",

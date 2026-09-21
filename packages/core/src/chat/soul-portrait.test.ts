@@ -130,11 +130,14 @@ describe("the final Soul portrait sent to the renderer", () => {
     expect(result.prompt).not.toMatch(/Nick|beard|place we discussed/);
   });
 
-  it("fails safely with actionable retry feedback when an old Soul call has no separate scene", () => {
-    expect(() => buildSoulPortraitRender({
+  it("uses a neutral portrait without importing contaminated identity when staging is absent", () => {
+    const result = buildSoulPortraitRender({
       self, user, userText: "draw yourself", modelPrompt: "Nick with a beard",
-    })).toThrow(/Retry generate_image with scene/);
-    expect(() => render("draw yourself", "Nick", { scene: {} })).toThrow(/Retry generate_image/);
+    });
+    expect(result.prompt).toContain("Neutral portrait");
+    expect(result.prompt).toContain("auburn hair");
+    expect(result.prompt).not.toMatch(/Nick|beard/);
+    expect(render("draw yourself", "Nick", { scene: {} }).prompt).toContain("Neutral portrait");
     expect(buildSoulPortraitRender({
       self, user, userText: "draw a castle", modelPrompt: "a castle",
     }).prompt).toBe("a castle");
