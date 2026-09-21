@@ -64,7 +64,7 @@ describe("portrait scene tool guidance and schemas", () => {
     const buddy = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(CHAT_TOOLS_SYSTEM).toContain(PORTRAIT_SCENE_GUIDANCE);
     expect(buddy).toContain(PORTRAIT_SCENE_GUIDANCE);
-    expect(PORTRAIT_SCENE_GUIDANCE).toContain('"scene" is REQUIRED');
+    expect(PORTRAIT_SCENE_GUIDANCE).toContain('provide "scene" when staging is specified');
     expect(PORTRAIT_SCENE_GUIDANCE).toContain("each call its own scene");
     expect(PORTRAIT_SCENE_GUIDANCE).toContain("ASSISTANT and READER");
     expect(PORTRAIT_SCENE_GUIDANCE).toContain("Omit names and permanent appearance");
