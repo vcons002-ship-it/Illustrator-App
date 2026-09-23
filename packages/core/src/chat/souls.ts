@@ -2774,8 +2774,36 @@ const NON_APPEARANCE_LOOK_IDIOMS =
 const LOOK_WORDS_USED_AS_VERBS =
   /\b(?:to|and|or|that|which|will|would|can|could|should|may|might|must|helps?|serves?|used?|tries|try)\s+(?:mask|cap|coat|ring|crown|dress|sport|don)\b|\b(?:mask|cap|coat|ring|crown|dress)(?:s|ed|ing)?\s+(?:the|a|an|its|their|his|her|my|our|your|out|off|up)\b/gi;
 
-/** True when a note is a description of how someone LOOKS. Exported so the memory router can tell a
- * Soul fact from an app preference — see {@link rememberRouteFor}. PURE. */
+/**
+ * A BODY WORD IS NOT A BODY. The bare vocabulary lists above say a word appeared; they say nothing
+ * about whose body it belongs to, or whether a body is under discussion at all.
+ *
+ * Reported from a live Soul panel whose "Exact physical appearance" had twelve entries, of which ten
+ * were not physical. Every one of them was a single noun, used as a metaphor or about something that
+ * has no body:
+ *
+ *     "…the most human thing in science wearing nature's face"        → face
+ *     "a conversion factor wearing a constant's coat"                 → coat
+ *     "Saturday is the scar where the residue met a pantheon"         → scar
+ *     "stability is a mask for a silent archive of variations"        → mask
+ *     "the skin itself is a computational organ"                      → skin
+ *     "the eye sets the temporal code"                                → eye
+ *     "written by two 19-year-old brothers in Lahore"                 → 19-year-old
+ *
+ * From there they were handed to every image model that asked what the assistant looks like, which
+ * is how a woman acquired a beard and the wrong hair colour: the appearance channel was carrying
+ * railway frequencies and the permeability of free space.
+ *
+ * The file has fought this exact battle before, one word-family at a time — `LOOK_PHYSICAL_SCALE`
+ * and `LOOK_PHYSICAL_BUST` are elaborate precisely because "a blue scale on the chart" and "a bust
+ * of Caesar" are not bodies, and `LOOK_WORDS_USED_AS_VERBS` exists because "to mask the latency" was
+ * once filed as the reader's face. Each fix anchored ONE family and left the other hundred words
+ * bare. This is the general form of the same rule.
+ *
+ * THE RULE: vocabulary alone is evidence that a word occurred, not that a body was described. A
+ * clause resting on nothing else has to look like a DESCRIPTION — see {@link describesABody}. The
+ * anchored patterns are untouched: they already carry their own proof that a person is the subject.
+ */
 export function isAppearanceNote(text: string): boolean {
   return isLookNote(text);
 }
@@ -2787,16 +2815,123 @@ function isLookNote(text: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
   if (!literal) return false;
-  return (
-    LOOK_WORDS.test(literal) ||
+  // Anchored evidence — each of these requires a person as the subject, a possessive, or a field
+  // label, so a match is already a claim about somebody's body.
+  if (
     LOOK_CONTEXT_WORDS.test(literal) ||
-    LOOK_STRUCTURED_FACTS.test(literal) ||
+    (LOOK_STRUCTURED_FACTS.test(literal) && !onlyEvidenceIsBareAge(literal)) ||
     LOOK_STANDALONE_GENDER.test(literal) ||
-    LOOK_ADDITIONAL_WORDS.test(literal) ||
     LOOK_PHYSICAL_BUST.test(literal) ||
     LOOK_PHYSICAL_SCALE.test(literal) ||
     !!buildDescriptionMatch(literal)
+  ) {
+    return true;
+  }
+  // Bare vocabulary — the word occurred, which on its own proves nothing.
+  if (LOOK_WORDS.test(literal) || LOOK_ADDITIONAL_WORDS.test(literal) || BARE_AGE.test(literal)) {
+    return describesABody(literal);
+  }
+  return false;
+}
+
+/**
+ * An age with nobody attached. `LOOK_STRUCTURED_FACTS` is otherwise anchored — it wants a copula, a
+ * field label or a possessive — but this one clause sits in it bare, so "written by two 19-year-old
+ * brothers in Lahore" was filed as the assistant's own age. Routed through the description test with
+ * the rest of the bare vocabulary.
+ */
+const BARE_AGE = /\b\d{1,3}(?:[- ]year[- ]old| years? old)\b/i;
+function onlyEvidenceIsBareAge(literal: string): boolean {
+  return BARE_AGE.test(literal) && !LOOK_STRUCTURED_FACTS.test(literal.replace(BARE_AGE, " "));
+}
+
+/**
+ * A possessive that hands the feature to something which HAS no face, coat or scar.
+ *
+ * "nature's face" and "a constant's coat" are the whole failure in miniature: the sentence names an
+ * owner, and the owner is an abstraction. A lower-case common noun in front of the possessive is the
+ * tell — a person in these notes is `my`/`her`/`the reader`/a capitalised name, never "a constant".
+ */
+const NON_PERSON_POSSESSIVE_LOOK =
+  /\b(?:a|an|the)\s+[a-z][a-z-]*(?:'s|’s)\s+(?:[a-z-]+\s+){0,2}(?:face|coat|jacket|hair|eyes?|skin|scars?|mask|hood|cap|hat|dress|robes?|hands?|arms?|body|frame)\b|\b[a-z][a-z-]*(?:'s|’s)\s+(?:own\s+)?(?:face|coat|jacket|scar|mask)\b/i;
+
+/**
+ * The feature is predicated of, or possessed by, a PERSON — the shape every real note has.
+ *
+ * The verb has to actually REACH an appearance word. An earlier pass accepted any person + copula,
+ * which made "I am fascinated by the concept of biological latency…" a physical description of the
+ * speaker on the strength of "I am" and the word `mask` forty words later.
+ */
+const ATTRIBUTABLE_LOOK_NOUN =
+  "appearance|hair|eyes?|eyebrows?|skin|complexion|face|features?|build|frame|body|physique|height|weight|beard|moustache|stubble|scars?|tattoos?|freckles?|birthmarks?|piercings?|dimples?|hands?|arms?|legs?|feet|clothing|clothes|outfit|coat|jacket|dress|gown|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|rings?|braid|ponytail|wings?|horns?|antlers?|tail|fur|scales?";
+/** People a feature can belong to when no pronoun is used — "a masked figure in a long coat". */
+const PERSON_NOUN = "figure|woman|man|person|character|girl|boy|lady|gentleman|elf|dwarf|child|silhouette";
+const PERSON_ATTRIBUTED_LOOK = new RegExp(
+  [
+    // "my silver hair", "her eyes"
+    `\\b(?:my|your|her|his|their|our)\\s+(?:[a-z-]+\\s+){0,3}(?:${ATTRIBUTABLE_LOOK_NOUN})\\b`,
+    // "I have a long scar", "she wears wire-rimmed glasses"
+    `\\b(?:i|you|she|he|they|the\\s+(?:reader|assistant|character))\\s+(?:am|is|are|was|were|has|have|had|wears?|wore|had\\s+on)\\s+(?:[a-z0-9,'’-]+\\s+){0,4}(?:${ATTRIBUTABLE_LOOK_NOUN})\\b`,
+    /*
+     * SUBJECTLESS POSSESSION — "wears a black mask", "No longer has the chipped left horn."
+     *
+     * Soul notes are written clipped, with the subject implied, and that is still an attribution:
+     * something is being WORN or HAD. Deliberately excludes the copula — "stability is a mask" and
+     * "Saturday is the scar" have a subject, and it is not a person.
+     */
+    `\\b(?:has|have|had|wears?|wore|wearing|worn|sporting)\\s+(?:[a-z0-9,'’-]+\\s+){0,4}(?:${ATTRIBUTABLE_LOOK_NOUN})\\b`,
+    // "a masked figure", "a bearded man" — the feature is attached to a person, not an abstraction.
+    `\\b[a-z-]+ed\\s+(?:${PERSON_NOUN})\\b`,
+    // "a figure in a long coat", "a woman with green eyes"
+    `\\b(?:${PERSON_NOUN})\\s+(?:in|with|wearing)\\s+(?:[a-z0-9,'’-]+\\s+){0,4}(?:${ATTRIBUTABLE_LOOK_NOUN})\\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * Words that carry appearance regardless of which list named them — the density numerator.
+ *
+ * Built on first use, not at module load: `APPEARANCE_COLOR` is declared further down the file, and
+ * a top-level `const` reading it here would hit the temporal dead zone and throw on import.
+ */
+let lookWordTokens: RegExp | undefined;
+function lookWordTokenRe(): RegExp {
+  lookWordTokens ??= new RegExp(
+    `${LOOK_WORDS.source}|${LOOK_ADDITIONAL_WORDS.source}|\\b${APPEARANCE_COLOR}\\b|\\b(?:wears?|wore|wearing|dressed|high-waisted|oversized|knit|loungewear|cardigans?|sweaters?|blouses?|skirts?)\\b`,
+    "gi",
   );
+  return lookWordTokens;
+}
+
+/** Under this many words, any appearance word is the whole point of the note ("Blue eyes."). */
+const SHORT_DESCRIPTION_WORDS = 6;
+/**
+ * The share of a clause that must be appearance vocabulary before bare words count.
+ *
+ * A physical description is MADE of these words — "Eyes: green", "charcoal coat and black boots",
+ * "high-waisted trousers, simple knit tops, oversized cardigans" all run from a third to a half. A
+ * passage that merely mentions a body part runs at a tenth: one noun carried along by forty words
+ * about railway electrification. The gap between the two populations is wide, which is what makes a
+ * share test viable here where subject-parsing with a regex is not.
+ */
+const MIN_LOOK_WORD_SHARE = 0.2;
+
+/**
+ * Whether a clause resting only on bare vocabulary actually describes a body. PURE.
+ *
+ * Three ways to qualify, in order of strength: the feature is attributed to a person; the note is a
+ * short descriptor phrase, which is what a Soul note overwhelmingly is; or the clause is dense
+ * enough in appearance words to be a description rather than a sentence that contains one.
+ */
+function describesABody(literal: string): boolean {
+  // Owned by something that has no body — settled before anything else can rescue it.
+  if (NON_PERSON_POSSESSIVE_LOOK.test(literal)) return false;
+  if (PERSON_ATTRIBUTED_LOOK.test(literal)) return true;
+  if (APPEARANCE_FIELD_LINE.test(literal) || APPEARANCE_BLOCK_LINE.test(literal)) return true;
+  const words = literal.split(/\s+/).filter(Boolean);
+  if (words.length <= SHORT_DESCRIPTION_WORDS) return true;
+  const hits = literal.match(lookWordTokenRe())?.length ?? 0;
+  return hits / words.length >= MIN_LOOK_WORD_SHARE;
 }
 
 const TRANSIENT_VISUAL_FRAGMENT =
