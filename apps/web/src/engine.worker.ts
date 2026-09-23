@@ -118,6 +118,10 @@ import {
   storySoulCharacterizationPromptBlock,
   selectSoulContextMode,
   buildSoulEssenceDistillationPrompt,
+  buildSoulAppearanceClassificationPrompt,
+  soulAppearanceClassificationJsonSchema,
+  parseSoulAppearanceVerdicts,
+  type SoulAppearanceVerdicts,
   buildSoulEssenceMergePrompt,
   buildSoulEssenceAbstractionPrompt,
   partitionSoulNotes,
@@ -2585,6 +2589,7 @@ async function completeSoulEssence(
   onToken?: (delta: string) => void,
   onRepair?: (feedback: string, truncated: boolean) => void,
   abstractionBase?: SoulEssence,
+  appearanceVerdicts?: SoulAppearanceVerdicts,
 ): Promise<{ essence?: SoulEssence; failure?: SoulEssenceCompletionFailure }> {
   return completeSoulEssenceWithRepair({
     llm,
@@ -2592,6 +2597,7 @@ async function completeSoulEssence(
     notes,
     prompt,
     maxTokens,
+    ...(appearanceVerdicts ? { appearanceVerdicts } : {}),
     ...(signal ? { signal } : {}),
     ...(digests ? { digests } : {}),
     ...(abstractionBase ? { abstractionBase } : {}),
@@ -2656,6 +2662,54 @@ function groupSoulDigests(
   return groups;
 }
 
+/**
+ * ASK WHICH NOTES DESCRIBE A BODY, BEFORE ANYTHING IS DISTILLED.
+ *
+ * Separate pass, and it has to be: the distillation prompt is built from the NON-appearance residue,
+ * and the residue is what this question decides. One call cannot both answer it and be filtered by
+ * the answer.
+ *
+ * The model returns source IDs drawn from an enum it cannot invent, and never a character of
+ * appearance prose — see {@link SoulAppearanceVerdicts}. Failure is not an error: `undefined` means
+ * every note falls back to the word test, which is exactly what happened before this existed.
+ */
+async function classifySoulAppearance(
+  llm: LLMProvider,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  outputBudget: number,
+  signal?: AbortSignal,
+  onProgress?: SoulEssenceProgressCallback,
+): Promise<SoulAppearanceVerdicts | undefined> {
+  if (notes.length === 0 || !supportsChat(llm)) return undefined;
+  const prompt = buildSoulAppearanceClassificationPrompt(kind, notes);
+  if (prompt.sourceIds.length === 0) return undefined;
+  onProgress?.("analyzing", "Sorting which notes describe how they look…");
+  try {
+    const raw = await llm.chat(
+      [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user },
+      ],
+      {
+        // IDs are cheap; this only ever writes back the identifiers it was given.
+        maxTokens: Math.min(outputBudget, 64 + prompt.sourceIds.length * 24),
+        reasoningEffort: "none",
+        responseFormat: "json",
+        jsonSchema: soulAppearanceClassificationJsonSchema(prompt.sourceIds),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (signal?.aborted) throw abortError();
+    return parseSoulAppearanceVerdicts(raw, prompt.sourceIds);
+  } catch (err) {
+    // A reader pressing Stop must still stop; anything else falls back to the word test silently,
+    // because a Soul that cannot be classified is not a Soul that should fail to build.
+    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
+    return undefined;
+  }
+}
+
 async function distillSoulEssence(
   llm: LLMProvider,
   kind: SoulKind,
@@ -2667,6 +2721,7 @@ async function distillSoulEssence(
   signal?: AbortSignal,
   onProgress?: SoulEssenceProgressCallback,
   onToken?: (delta: string) => void,
+  appearanceVerdicts?: SoulAppearanceVerdicts,
 ): Promise<SoulEssence | undefined> {
   const modelKey = soulEssenceModelKey(llm);
   const cache = await loadSoulDigestCache(kind, modelKey);
@@ -2687,7 +2742,7 @@ async function distillSoulEssence(
     if (reuseCache && fingerprint !== rootFingerprint) {
       const cached = cache.get(fingerprint);
       const valid = cached
-        ? validateSoulEssence(cached.essence, kind, scopeNotes)
+        ? validateSoulEssence(cached.essence, kind, scopeNotes, appearanceVerdicts)
         : undefined;
       if (valid) {
         cached!.touchedAt = Date.now();
@@ -2712,6 +2767,8 @@ async function distillSoulEssence(
             : `The model missed a grounding rule; repairing pass ${activePass} with the exact missing evidence…`,
           { pass: activePass, total: activeTotal },
         ),
+      undefined,
+      appearanceVerdicts,
     );
     const essence = result.essence;
     lastCompletionFailure = result.failure;
@@ -2761,7 +2818,7 @@ async function distillSoulEssence(
       );
       const essence = await digest(
         chunk,
-        buildSoulEssenceDistillationPrompt(kind, chunk),
+        buildSoulEssenceDistillationPrompt(kind, chunk, appearanceVerdicts),
       );
       if (essence) {
         completed += 1;
@@ -2961,17 +3018,28 @@ async function ensureSoulEssence(
     // Let the ownership entry land before any synchronous provider callback can fail this job.
     await Promise.resolve();
     try {
+      const outputBudget = opts.outputBudget ?? soulDistillationOutputBudget();
+      // Which notes describe a body, decided once, before anything reads the appearance split.
+      const appearanceVerdicts = await classifySoulAppearance(
+        llm,
+        kind,
+        notes,
+        outputBudget,
+        opts.signal,
+        opts.onProgress,
+      );
       const essence = await distillSoulEssence(
         llm,
         kind,
         notes,
         opts.sourceBudget ?? soulDistillationSourceBudget(),
-        opts.outputBudget ?? soulDistillationOutputBudget(),
+        outputBudget,
         true,
         opts.force === true || opts.allowMultiPass === true,
         opts.signal,
         opts.onProgress,
         opts.onToken,
+        appearanceVerdicts,
       );
       if (opts.signal?.aborted) throw abortError();
       if (!essence) {

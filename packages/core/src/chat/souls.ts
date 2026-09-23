@@ -230,6 +230,15 @@ export interface SoulEssence {
    * their meaning, but it must never weaken or invert the actual instruction.
    */
   exactPersonalityDirections: SoulEssenceDirectionFact[];
+  /**
+   * Which notes the model judged to describe a body — see {@link SoulAppearanceVerdicts}.
+   *
+   * Stored on the essence rather than beside the notes so it travels with the thing that was built
+   * from it, and so a reader with no text model, or an essence generated before this existed, keeps
+   * working on the word test alone. Optional for that reason: its absence is the fallback, not a
+   * fault, and no stored essence is invalidated by it appearing.
+   */
+  appearanceVerdicts?: SoulAppearanceVerdicts;
 }
 
 /** The two source-exact lists a reader can prune by hand. */
@@ -403,9 +412,10 @@ export function partitionSoulNotes(
 
 function soulSourcesForPersonalityDistillation(
   notes: readonly SoulNote[],
+  verdicts?: SoulAppearanceVerdicts,
 ): SoulEssenceSource[] {
   const sources = soulNoteSources(notes);
-  const projection = reconcileSoulAppearance(notes);
+  const projection = reconcileSoulAppearance(notes, verdicts);
   const accounted = new Set(projection.accountedSourceIds);
   return sources.flatMap((source) => {
     const nonVisual = projection.nonVisualTextBySourceId[source.id]?.trim();
@@ -490,6 +500,7 @@ export function soulEssenceJsonSchema(
 export function buildSoulEssenceDistillationPrompt(
   kind: SoulKind,
   notes: readonly SoulNote[],
+  verdicts?: SoulAppearanceVerdicts,
 ): SoulEssenceDistillationPrompt {
   const sourceFingerprint = soulSourceFingerprint(notes);
   const subject = kind === "self" ? "the assistant's own identity" : "the reader's identity";
@@ -515,9 +526,111 @@ export function buildSoulEssenceDistillationPrompt(
     `Kind: ${kind}`,
     `Source fingerprint (copy exactly): ${sourceFingerprint}`,
     "Personality-relevant authoritative source clauses (use every supplied item; IDs are evidence citations):",
-    JSON.stringify(soulSourcesForPersonalityDistillation(notes)),
+    JSON.stringify(soulSourcesForPersonalityDistillation(notes, verdicts)),
   ].join("\n");
   return { system, user, sourceFingerprint };
+}
+
+/** One classification question and the fixed answer set it may be answered with. */
+export interface SoulAppearanceClassificationPrompt {
+  system: string;
+  user: string;
+  /** Every ID the model is allowed to name — the enum its answer is constrained to. */
+  sourceIds: string[];
+}
+
+/**
+ * Ask the model WHICH notes describe a body, and nothing else.
+ *
+ * It is handed the complete note set — unlike the distillation prompt, which receives only the
+ * non-appearance residue, because the residue is computed from the answer to this question. That
+ * ordering is the reason this is a separate pass rather than one more field on the essence call.
+ *
+ * The instruction is deliberately about the SUBJECT of the sentence rather than its vocabulary,
+ * since vocabulary is exactly what the word test already has and exactly what fails. PURE.
+ */
+export function buildSoulAppearanceClassificationPrompt(
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+): SoulAppearanceClassificationPrompt {
+  const sources = soulNoteSources(notes);
+  const whose = kind === "self" ? "the assistant" : "the reader";
+  const system = [
+    `Each item below is a note about ${whose}. Decide, for each one, whether it describes how ${whose} physically LOOKS.`,
+    "Answer with IDs only. Never quote, copy, summarize or rewrite any note text: the appearance wording is taken from the notes by other means, and anything you write here is discarded.",
+    "",
+    "PHYSICAL means a durable visible attribute of this person's body or what they wear: hair, eyes, skin, build, height, age, face, distinguishing marks, species traits, clothing and accessories.",
+    "",
+    "It is NOT physical when the body word belongs to something else. Judge the SUBJECT of the sentence, not the words in it:",
+    "- a metaphor — \"stability is a mask\", \"that decision is a scar\" — nothing has a body here.",
+    "- something abstract owning a feature — \"nature's face\", \"a constant's coat\".",
+    `- a body part discussed in general, or belonging to someone who is not ${whose} — "the human hand", "two 19-year-old brothers".`,
+    "- an interest, idea, value, memory, opinion or anecdote that merely mentions a body part.",
+    "",
+    `A note can be mixed; say true if any part of it genuinely describes ${whose}'s body.`,
+    "Return strict JSON only, no markdown fence or preamble:",
+    '{"appearanceSourceIds":[],"otherSourceIds":[]}',
+    "Every supplied ID must appear in exactly one of the two arrays.",
+  ].join("\n");
+  const user = JSON.stringify(
+    sources.map((source) => ({ id: source.id, text: source.text })),
+  );
+  return { system, user, sourceIds: sources.map((source) => source.id) };
+}
+
+/** Structured-output shape for the classification answer: two arrays of known IDs, nothing else. */
+export function soulAppearanceClassificationJsonSchema(
+  sourceIds: readonly string[],
+): Record<string, unknown> {
+  const idArray = {
+    type: "array",
+    items: {
+      type: "string",
+      ...(sourceIds.length > 0 ? { enum: [...sourceIds] } : {}),
+    },
+  };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["appearanceSourceIds", "otherSourceIds"],
+    properties: { appearanceSourceIds: idArray, otherSourceIds: idArray },
+  };
+}
+
+/**
+ * Read a classification answer into verdicts, keeping only what the model was actually asked about.
+ *
+ * Unknown IDs are dropped rather than failing the pass: a hallucinated ID cannot name a real note,
+ * so it can do no harm, and losing the whole answer over one would send every note back to the word
+ * test. An ID in BOTH arrays is a contradiction and is left unjudged — the fallback is the honest
+ * outcome for a question the model answered two ways. A note it never mentions stays unjudged too.
+ *
+ * Returns undefined only when the answer is unusable as a whole, so the caller can tell "the model
+ * said nothing" from "the model said none of them are appearance". PURE.
+ */
+export function parseSoulAppearanceVerdicts(
+  raw: string,
+  sourceIds: readonly string[],
+): SoulAppearanceVerdicts | undefined {
+  // The file's existing model-envelope parser: tolerant of a markdown fence, a trailing comma and a
+  // response that hit its ceiling mid-array, all of which a small local model does routinely.
+  const record = parseGeneratedJsonObject(raw);
+  if (!record) return undefined;
+  const known = new Set(sourceIds);
+  const list = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === "string" && known.has(id))
+      : [];
+  const yes = list(record.appearanceSourceIds);
+  const no = list(record.otherSourceIds);
+  if (!Array.isArray(record.appearanceSourceIds) && !Array.isArray(record.otherSourceIds)) {
+    return undefined;
+  }
+  const contradicted = new Set(yes.filter((id) => no.includes(id)));
+  const verdicts: SoulAppearanceVerdicts = {};
+  for (const id of no) if (!contradicted.has(id)) verdicts[id] = false;
+  for (const id of yes) if (!contradicted.has(id)) verdicts[id] = true;
+  return verdicts;
 }
 
 function sourceIdentity(source: Pick<SoulEssenceSource, "text" | "at">): string {
@@ -1008,11 +1121,33 @@ function facetRepeatsSourceAppearance(
   });
 }
 
+/**
+ * Read a stored verdict map back, keeping only booleans against IDs the current notes still have.
+ *
+ * Storage stays strict: a note that was edited changes its content-addressed ID, so its old verdict
+ * simply stops matching and that note falls back to the word test until the next classification —
+ * which is the correct outcome, since the text the model judged is no longer the text on file. PURE.
+ */
+function soulAppearanceVerdictsFrom(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+): SoulAppearanceVerdicts | undefined {
+  const record = objectRecord(value);
+  if (!record) return undefined;
+  const verdicts: SoulAppearanceVerdicts = {};
+  for (const [id, verdict] of Object.entries(record)) {
+    if (typeof verdict === "boolean" && knownIds.has(id)) verdicts[id] = verdict;
+  }
+  return Object.keys(verdicts).length > 0 ? verdicts : undefined;
+}
+
 function normaliseSoulEssence(
   value: unknown,
   kind: SoulKind,
   notes: readonly SoulNote[],
   generatedAtOverride?: number,
+  /** Fresh verdicts from a classification pass; they replace anything on the record. */
+  verdictsOverride?: SoulAppearanceVerdicts,
 ): SoulEssence | undefined {
   const envelope = objectRecord(value);
   const record = objectRecord(envelope?.essence) ?? envelope;
@@ -1022,7 +1157,9 @@ function normaliseSoulEssence(
 
   const sources = soulNoteSources(notes);
   const knownIds = new Set(sources.map((source) => source.id));
-  const appearanceProjection = reconcileSoulAppearance(notes);
+  const appearanceVerdicts =
+    verdictsOverride ?? soulAppearanceVerdictsFrom(record.appearanceVerdicts, knownIds);
+  const appearanceProjection = reconcileSoulAppearance(notes, appearanceVerdicts);
   const appearanceValidationFacts = soulAppearanceValidationFacts(notes, sources);
   const appearanceOnlyIds = new Set(
     appearanceProjection.accountedSourceIds.filter(
@@ -1148,6 +1285,7 @@ function normaliseSoulEssence(
     facets,
     exactAppearance,
     exactPersonalityDirections: exactDirections,
+    ...(appearanceVerdicts ? { appearanceVerdicts } : {}),
   };
 }
 
@@ -1156,8 +1294,9 @@ export function validateSoulEssence(
   value: unknown,
   kind: SoulKind,
   notes: readonly SoulNote[],
+  verdicts?: SoulAppearanceVerdicts,
 ): SoulEssence | undefined {
-  return normaliseSoulEssence(value, kind, notes);
+  return normaliseSoulEssence(value, kind, notes, undefined, verdicts);
 }
 
 /** Tolerantly unwrap model JSON, then strictly validate its schema, fingerprint, and evidence. PURE. */
@@ -1166,9 +1305,10 @@ export function parseSoulEssence(
   kind: SoulKind,
   notes: readonly SoulNote[],
   generatedAt?: number,
+  verdicts?: SoulAppearanceVerdicts,
 ): SoulEssence | undefined {
   const parsed = parseJsonObject(raw);
-  return parsed ? normaliseSoulEssence(parsed, kind, notes, generatedAt) : undefined;
+  return parsed ? normaliseSoulEssence(parsed, kind, notes, generatedAt, verdicts) : undefined;
 }
 
 /**
@@ -1185,6 +1325,7 @@ export function parseGeneratedSoulEssence(
   kind: SoulKind,
   notes: readonly SoulNote[],
   generatedAt?: number,
+  verdicts?: SoulAppearanceVerdicts,
 ): SoulEssence | undefined {
   const parsed = parseGeneratedJsonObject(raw);
   const record = generatedEssenceRecord(parsed);
@@ -1236,6 +1377,7 @@ export function parseGeneratedSoulEssence(
     kind,
     notes,
     generatedAt,
+    verdicts,
   );
 }
 
@@ -1270,8 +1412,9 @@ export function soulEssenceRepairFeedback(
   raw: string,
   kind: SoulKind,
   notes: readonly SoulNote[],
+  verdicts?: SoulAppearanceVerdicts,
 ): string {
-  if (parseGeneratedSoulEssence(raw, kind, notes)) return "";
+  if (parseGeneratedSoulEssence(raw, kind, notes, undefined, verdicts)) return "";
   const parsed = parseGeneratedJsonObject(raw);
   const record = generatedEssenceRecord(parsed);
   if (!record) {
@@ -1284,7 +1427,9 @@ export function soulEssenceRepairFeedback(
 
   const sources = soulNoteSources(notes);
   const knownIds = new Set(sources.map((source) => source.id));
-  const appearanceProjection = reconcileSoulAppearance(notes);
+  // The same verdicts the prompt was built from. Judging the answer against a different projection
+  // would report a note as uncited that the model was never shown.
+  const appearanceProjection = reconcileSoulAppearance(notes, verdicts);
   const appearanceValidationFacts = soulAppearanceValidationFacts(notes, sources);
   const pureAppearanceIds = new Set(
     appearanceProjection.accountedSourceIds.filter(
@@ -1930,7 +2075,7 @@ export function soulEssenceViewForNotes(
           }
         : { text: "", sourceIds: [] },
     },
-    exactAppearance: reconcileSoulAppearance(notes).activeFacts,
+    exactAppearance: reconcileSoulAppearance(notes, essence.appearanceVerdicts).activeFacts,
     exactPersonalityDirections: directions,
   };
 }
@@ -2347,7 +2492,7 @@ export function soulEvidencePromptBlock(
     return lines.join("\n");
   }
   const sources = soulNoteSources(notes);
-  const appearanceProjection = reconcileSoulAppearance(notes);
+  const appearanceProjection = reconcileSoulAppearance(notes, essence?.appearanceVerdicts);
   const appearanceAccounted = new Set(appearanceProjection.accountedSourceIds);
   const mixedAppearanceRequest = APPEARANCE_QUESTION.test(categoryRequest);
   const candidates = notes
@@ -2981,6 +3126,30 @@ interface SoulAppearanceNoteAnalysis {
   nonVisualText: string;
   resetPrefixes: string[];
 }
+
+/**
+ * WHICH SOURCE NOTES DESCRIBE A BODY — one verdict per note, keyed by its stable source ID.
+ *
+ * Selection and transcription are two different jobs, and only one of them must never be handed to
+ * a language model. Rewriting "auburn hair" as "reddish-brown" is corruption the reader cannot see,
+ * so appearance TEXT stays copied verbatim by code — that rule is unchanged and load-bearing.
+ * Deciding *which notes are about a body* is a judgement, and a word test cannot make it: it files
+ * "a conversion factor wearing a constant's coat" under clothing because the word `coat` occurred.
+ *
+ * So the model answers the judgement and nothing else. It returns POINTERS — source IDs drawn from a
+ * fixed enum it cannot invent — and code does every byte of the copying. The model never emits a
+ * single character of appearance prose.
+ *
+ * A verdict is authoritative in BOTH directions, which is the whole point: `false` overrides a word
+ * test that fired on a metaphor, `true` rescues a description the vocabulary lists never covered.
+ * A note with no verdict falls back to {@link isAppearanceNote} — that is the standing behaviour for
+ * a brand-new note, for a reader with no text model configured, and for the window before the first
+ * idle refresh has run.
+ *
+ * Stable across refreshes for free: source IDs are content-addressed over the note's text and
+ * timestamp, so an unchanged note keeps its verdict and a hand-pruned entry stays pruned.
+ */
+export type SoulAppearanceVerdicts = Record<string, boolean>;
 
 /**
  * The current source-exact appearance projected from the append-only Soul ledger. Older visual
@@ -3762,6 +3931,8 @@ function analyseAppearanceNote(
   note: SoulNote,
   source: SoulEssenceSource,
   sourceIndex: number,
+  /** The model's verdict for this note, when one exists — see {@link SoulAppearanceVerdicts}. */
+  verdict?: boolean,
 ): SoulAppearanceNoteAnalysis {
   const contributions: SoulAppearanceContribution[] = [];
   const nonVisual: string[] = [];
@@ -3769,7 +3940,30 @@ function analyseAppearanceNote(
   let snapshot = false;
   let pendingSnapshot = false;
   let historical = false;
-  let appearanceBlock = false;
+  /*
+   * A note judged NOT to describe a body contributes nothing, whatever words it contains. This is
+   * the direction the word test cannot reach on its own: `scar`, `mask` and `coat` really are in
+   * the text of "Saturday is the scar where the residue met a pantheon", and no amount of grammar
+   * around them turns that into a face. The whole note becomes non-visual residue, which is exactly
+   * what it is — material for the personality distillation.
+   */
+  if (verdict === false) {
+    return {
+      contributions: [],
+      accounted: false,
+      snapshot: false,
+      historical: false,
+      nonVisualText: note.text.trim(),
+      resetPrefixes: [],
+    };
+  }
+  /*
+   * A note judged TO describe a body is read like an explicit "Physical description:" block: its
+   * clauses are appearance unless they are plainly personality, so a real description survives even
+   * when its vocabulary is outside the lists ("she has her mother's colouring"). Clause-level
+   * personality filtering stays on, because a mixed note is still mixed.
+   */
+  let appearanceBlock = verdict === true;
   let implicitFieldLabel = "";
   let pairedEyeCount = 0;
   let sequence = 0;
@@ -4040,7 +4234,10 @@ function analyseAppearanceNote(
  * Singleton fields are patches (newest wins); marks and nonhuman features are additive unless a
  * later tombstone or explicit current/updated snapshot removes them.
  */
-export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppearanceProjection {
+export function reconcileSoulAppearance(
+  notes: readonly SoulNote[],
+  verdicts?: SoulAppearanceVerdicts,
+): SoulAppearanceProjection {
   const singleton = new Map<string, SoulAppearanceContribution>();
   const additive = new Map<string, SoulAppearanceContribution>();
   const accounted = new Set<string>();
@@ -4085,7 +4282,7 @@ export function reconcileSoulAppearance(notes: readonly SoulNote[]): SoulAppeara
     return true;
   };
   for (const { source, note, index } of chronologicalSoulSources(notes)) {
-    const analysis = analyseAppearanceNote(note, source, index);
+    const analysis = analyseAppearanceNote(note, source, index, verdicts?.[source.id]);
     if (analysis.nonVisualText) nonVisualTextBySourceId[source.id] = analysis.nonVisualText;
     if (analysis.accounted) accounted.add(source.id);
     if (analysis.historical) historical.add(source.id);
