@@ -224,7 +224,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const openLocalFileRef = useRef<(path: string) => void>(() => {});
   // DESKTOP: probe/auto-start a self-hosted engine the PHONE tapped Connect for (it owns the network +
   // filesystem). Assigned in App.tsx, since onConnectLocalServer is declared later.
-  const connectLocalServerRef = useRef<(backend: LocalBackendId, url: string) => void>(() => {});
+  const connectLocalServerRef = useRef<(backend: LocalBackendId, url: string, model?: string) => void>(() => {});
   // DESKTOP: download the managed ffmpeg the PHONE tapped the button for (it owns the filesystem).
   // Assigned in App.tsx, since onDownloadFfmpeg is declared later.
   const downloadFfmpegRef = useRef<() => void>(() => {});
@@ -706,7 +706,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
           case "vrcmd:connectLocalServer":
             // The phone tapped Connect for AUTOMATIC1111 / ComfyUI; probe + auto-start it HERE (we have
             // the network + install folder), and the resulting settings mirror back via vrsync:settings.
-            connectLocalServerRef.current(msg.backend, msg.url);
+            connectLocalServerRef.current(msg.backend, msg.url, msg.model);
             break;
           case "vrcmd:installIpAdapter":
             // The phone asked for reference-photo support; install it HERE — the nodes go in this

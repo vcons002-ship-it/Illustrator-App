@@ -375,7 +375,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatAgentDeny"; id: number } // deny one queued coding-agent step
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
-  | { type: "vrcmd:connectLocalServer"; backend: "a1111" | "comfyui"; url: string } // phone tapped Connect for a self-hosted engine → the DESKTOP probes/auto-starts it (it owns the network + filesystem); the resulting settings mirror back
+  | { type: "vrcmd:connectLocalServer"; backend: "a1111" | "comfyui"; url: string; model?: string } // Desktop commits backend/model after a successful connection; resulting settings mirror back.
   | { type: "vrcmd:downloadFfmpeg" } // phone tapped "Download ffmpeg" → the DESKTOP fetches it (it owns the filesystem); progress mirrors back via EngineInventory.ffmpegProgress
   // Phone tapped "Set up reference photos" → the DESKTOP installs the IP-Adapter nodes + models (it
   // owns the engine folder AND is the machine that renders), and the download progress mirrors back

@@ -114,7 +114,7 @@ export interface ChatBuddyPanelProps {
     /** Apply an option's `connect` — switching the active local image backend needs a real connect
      * (probe, auto-start, engineBaseUrl), not just a stored preference. Absent → picks that would
      * change backend still apply their patch, they just don't re-point the engine. */
-    onConnectBackend?: (backend: LocalBackendId, url: string) => void;
+    onConnectBackend?: (backend: LocalBackendId, url: string, model?: string) => void;
   };
   /**
    * LIVE CONTROL's on/off switch, beside the model button.
@@ -1655,8 +1655,8 @@ function ModelMenuPopover({
 }: {
   groups: ModelMenuGroup[];
   onSelect: (patch: Partial<ReaderSettings>) => void;
-  /** Run an option's `connect` after its patch — see ModelMenuOption.connect. */
-  onConnectBackend?: (backend: LocalBackendId, url: string) => void;
+  /** Connect and commit the requested model only after the backend answers. */
+  onConnectBackend?: (backend: LocalBackendId, url: string, model?: string) => void;
   /** The outer panel's outside-click ref — attached here so clicks inside don't close the popover. */
   menuRef: Ref<HTMLDivElement>;
 }) {
@@ -1682,13 +1682,13 @@ function ModelMenuPopover({
     .map((s) => ({ section: s, options: filterOptions(s.options, query) }))
     .filter(({ section, options }) => options.length > 0 || section.backendPicker);
 
-  // PATCH FIRST, THEN CONNECT. The patch carries the model + its encoder/VAE; the connect probes the
-  // server and sets the transient engineBaseUrl/engineBackend the provider actually renders through.
-  // In this order the connect's own functional settings updates land last and can't be clobbered by
-  // the patch's spread of a possibly-stale settings object.
+  // Do not mark an offline backend/model as selected. The host commits model + components on success.
   const pick = (o: ModelMenuOption) => {
-    onSelect(o.patch);
-    if (o.connect) onConnectBackend?.(o.connect.backend, o.connect.url);
+    if (o.connect && onConnectBackend) {
+      onConnectBackend(o.connect.backend, o.connect.url, o.patch.localModel);
+    } else {
+      onSelect(o.patch);
+    }
   };
 
   const item = (o: ModelMenuOption) => (
@@ -1779,7 +1779,13 @@ function ModelMenuPopover({
                 {shownBackendModels.map(item)}
                 {shownBackendModels.length === 0 && (
                   <div style={modelNoteStyle}>
-                    {query.trim() ? "No matching checkpoints." : "No checkpoints installed for this backend."}
+                    {query.trim() ? "No matching checkpoints." : "No models discovered. The server may be offline."}
+                    {!query.trim() && onConnectBackend && backendId && (
+                      <button className={cx.btn} onClick={() => {
+                        const backend = backends.find((b) => b.id === backendId);
+                        if (backend?.url) onConnectBackend(backend.id, backend.url);
+                      }}>Connect and use this engine</button>
+                    )}
                   </div>
                 )}
               </>

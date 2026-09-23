@@ -7,6 +7,16 @@ const groupsOf = (s: Partial<ReaderSettings>, lists?: { textModels?: InstalledMo
   buildModelMenu({ ...DEFAULT_SETTINGS, ...s }, { textModels: lists?.textModels ?? [], imageModels: lists?.imageModels ?? [] }, { isDesktop });
 
 describe("buildModelMenu", () => {
+  it("offers a configured offline backend without borrowing the ComfyUI inventory", () => {
+    const image = buildModelMenu({ ...DEFAULT_SETTINGS, a1111Path: "C:/a1111", engineBackend: "comfyui", localBackend: "a1111" }, {
+      textModels: [], imageModels: [], imageModelsByBackend: { comfyui: [model("qwen21")] },
+    }, { isDesktop: true }).find((g) => g.key === "image")!;
+    expect(image.localBackends?.find((b) => b.id === "comfyui")?.active).toBe(true);
+    expect(image.localBackends?.find((b) => b.id === "a1111")?.active).toBe(false);
+    expect(image.localModelsByBackend?.a1111).toEqual([]);
+    expect(image.localModelsByBackend?.comfyui?.[0]?.label).toBe("qwen21");
+  });
+
   it("builds chat / image / video groups", () => {
     const groups = groupsOf({ imageProvider: "local" }, { imageModels: [model("sdxl.safetensors")] });
     expect(groups.map((g) => g.key)).toEqual(["llm", "image", "video"]);
@@ -94,8 +104,8 @@ describe("buildModelMenu", () => {
     // No flat mixed list — checkpoints only live under localModelsByBackend now.
     expect(image.options.some((o) => o.id.startsWith("image:local:"))).toBe(false);
     expect(image.localBackends).toEqual([
-      { id: "comfyui", label: "ComfyUI", active: true },
-      { id: "a1111", label: "AUTOMATIC1111", active: false },
+      { id: "comfyui", label: "ComfyUI", active: true, url: "http://127.0.0.1:8188" },
+      { id: "a1111", label: "AUTOMATIC1111", active: false, url: "http://127.0.0.1:7860" },
     ]);
     const comfy = image.localModelsByBackend!.comfyui!;
     expect(comfy).toHaveLength(1);

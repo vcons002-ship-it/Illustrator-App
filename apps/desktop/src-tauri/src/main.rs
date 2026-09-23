@@ -3605,6 +3605,13 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
         ));
     }
     let mut cmd = command_for("cmd", show_console);
+    // Keep launch output even when the engine console is hidden. Read only a bounded tail
+    // on failure; never leave pipe buffers undrained while Python is starting.
+    let log_path = std::env::temp_dir().join("visual-reader-a1111-startup.log");
+    let log = std::fs::File::create(&log_path)
+        .map_err(|e| format!("Could not create AUTOMATIC1111 startup log: {e}"))?;
+    let stderr = log.try_clone().map_err(|e| e.to_string())?;
+    cmd.stdout(Stdio::from(log)).stderr(Stdio::from(stderr));
     cmd.arg("/c")
         .arg(&bat)
         .env("COMMANDLINE_ARGS", format!("--api --port {A1111_PORT}"))
@@ -3615,6 +3622,9 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
     adopt_child(&child); // dies with the app even on crash/task-kill (see job_object)
     let base = format!("http://127.0.0.1:{A1111_PORT}");
     for _ in 0..180 {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Err(a1111_startup_failure(&log_path, &format!("Launcher exited with {status}")));
+        }
         if a1111_health_ok(&base) {
             return Ok(child);
         }
@@ -3623,7 +3633,20 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
     // Never answered, but the python tree under `cmd /c` is running and holding VRAM — kill the
     // whole tree before erroring, or the handle drops and the process is orphaned.
     kill_tree(&mut child);
-    Err("AUTOMATIC1111 did not become ready in time.".into())
+    Err(a1111_startup_failure(&log_path, "API did not become ready within 180 seconds"))
+}
+
+fn a1111_startup_failure(log_path: &Path, reason: &str) -> String {
+    use std::io::{Seek, SeekFrom};
+    let tail = (|| -> std::io::Result<String> {
+        let mut file = std::fs::File::open(log_path)?;
+        let len = file.metadata()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(4096)))?;
+        let mut bytes = Vec::new();
+        file.take(4096).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).trim().to_string())
+    })().unwrap_or_default();
+    format!("AUTOMATIC1111: {reason}. Startup log: {}\n{tail}", log_path.display())
 }
 
 /// Is an AUTOMATIC1111 REST API answering at `base`? `/sdapi/v1/sd-models` is 200 only when launched
@@ -4127,6 +4150,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a1111_failure_includes_bounded_log_and_cause() {
+        let path = std::env::temp_dir().join(format!("visual-reader-a1111-test-{}.log", std::process::id()));
+        std::fs::write(&path, format!("{}\nPython launch failed", "x".repeat(8000))).unwrap();
+        let message = super::a1111_startup_failure(&path, "Launcher exited with code 1");
+        assert!(message.contains("Launcher exited with code 1"));
+        assert!(message.contains("Python launch failed"));
+        assert!(message.len() < 5000);
+        std::fs::remove_file(path).unwrap();
+    }
     use super::{
         ffmpeg_path_operands, guard_fetch_target, is_loopback_host, is_private_host,
         link_token_in_query, manifest_with_start_url,
