@@ -46,7 +46,7 @@ export interface ModelMenuGroup {
   /** Image group only, when the caller supplies `imageModelsByBackend`: pick a local backend first, then
    * `localModelsByBackend[id]` lists ONLY that backend's installed checkpoints — instead of the flat,
    * backend-mixed list `options` would otherwise carry. */
-  localBackends?: { id: LocalBackendId; label: string; active: boolean }[];
+  localBackends?: { id: LocalBackendId; label: string; active: boolean; url?: string }[];
   localModelsByBackend?: Partial<Record<LocalBackendId, ModelMenuOption[]>>;
   /** Label for the group's active selection when it isn't in `options` yet — e.g. a configured local
    * chat server model before its model list has been fetched. Lets the tab summary show the real model
@@ -107,6 +107,7 @@ export function sectionizeGroup(g: ModelMenuGroup): ModelMenuSection[] {
     sections.push({
       label: "Local",
       options: local,
+      ...(g.warning ? { warning: g.warning } : {}),
       ...(g.key === "image" && g.note ? { note: g.note } : {}),
       ...(hasBackendPicker ? { backendPicker: true } : {}),
     });
@@ -235,7 +236,7 @@ export function buildModelMenu(
       patch: { imageProvider: p.id as ReaderSettings["imageProvider"] },
     });
   }
-  const activeBackend = s.localBackend ?? "comfyui";
+  const activeBackend = s.engineBackend ?? s.localBackend ?? "comfyui";
   let localBackends: ModelMenuGroup["localBackends"];
   let localModelsByBackend: ModelMenuGroup["localModelsByBackend"];
   // WHICH MODE, decided by whether there are actually BACKENDS to choose between — not by whether the
@@ -249,10 +250,14 @@ export function buildModelMenu(
   // chat and video show up. It bit exactly the readers with a purely local image setup, since a cloud
   // image key would have put an option in `image` and kept the tab alive by accident.
   const backendIds = Object.keys(lists.imageModelsByBackend ?? {}) as LocalBackendId[];
+  if (backendIds.length && (s.a1111Path || s.localServerUrlByBackend?.a1111) && !backendIds.includes("a1111")) {
+    backendIds.push("a1111");
+  }
   if (backendIds.length > 0) {
     // Provider-first: list ComfyUI/AUTOMATIC1111 as backends to choose between, each with ONLY its own
     // installed checkpoints beneath it (never mixed with the other backend's models).
-    localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend }));
+    localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend,
+      url: s.localServerUrlByBackend?.[id]?.trim() || LOCAL_ENGINE_DEFAULT_URL[id] }));
     localModelsByBackend = {};
     for (const id of backendIds) {
       // CONNECT WHEN THE ENGINE ISN'T ALREADY UP ON THIS BACKEND — which is a broader test than

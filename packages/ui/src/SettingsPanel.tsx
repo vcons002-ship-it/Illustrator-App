@@ -2923,7 +2923,7 @@ export function SettingsPanel({
               isDesktop={isDesktop}
               remote={remote}
               installedModels={installedModels}
-              backend={value.localBackend ?? "a1111"}
+              backend={value.engineBackend ?? value.localBackend ?? "comfyui"}
               serverUrl={value.localServerUrl ?? ""}
               serverUrlByBackend={value.localServerUrlByBackend ?? {}}
               a1111Path={value.a1111Path ?? ""}

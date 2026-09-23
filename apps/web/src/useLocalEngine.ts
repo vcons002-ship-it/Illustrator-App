@@ -50,7 +50,7 @@ import type { AppSyncMessage } from "./remote-sync.js";
  * (app-managed ComfyUI or a user-run ComfyUI/AUTOMATIC1111 — "who launched it" is resolved inside,
  * never a setting), the low-VRAM deferred start, the bundled/local-server text-model bring-up, and
  * every Settings download (checkpoints, LoRAs, video models, ffmpeg, Ollama pulls) + Connect
- * handler. The resolver chain (probe → self-provision → managed fallback) is private; the hook
+ * handler. The resolver chain (probe → start the requested engine) is private; the hook
  * returns only what the UI wires up. Inventory/progress/status live in App state — the hook writes
  * them through the passed setters so the render (and the phone mirror) see them unchanged.
  */
@@ -84,7 +84,7 @@ export interface LocalEngineDeps {
   setConnectingLocalText: (v: boolean) => void;
   /** Phone-relay seams from useRemoteMirror: the hook assigns its Connect / ffmpeg handlers here so
    * the early-registered relay handler reaches them. */
-  connectLocalServerRef: MutableRefObject<(backend: LocalBackendId, url: string) => void>;
+  connectLocalServerRef: MutableRefObject<(backend: LocalBackendId, url: string, model?: string) => void>;
   downloadFfmpegRef: MutableRefObject<() => void>;
   /** Assigned so a phone's vrcmd:installIpAdapter runs the real install HERE. */
   installIpAdapterRef: MutableRefObject<() => void>;
@@ -142,6 +142,7 @@ export function useLocalEngine(deps: LocalEngineDeps) {
   // skipped the eager start; `managedBaseUrlRef` holds the app-managed ComfyUI's URL the moment IT starts
   // (read race-free, before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
   const engineDeferredRef = useRef(false);
+  const connectingBackendRef = useRef(false);
   const managedBaseUrlRef = useRef<string | undefined>(undefined);
   const engineStartingRef = useRef<
     Promise<{ ok: true; baseUrl: string; backend: LocalBackendId } | { ok: false; reason: string }> | undefined
@@ -257,7 +258,9 @@ export function useLocalEngine(deps: LocalEngineDeps) {
       const needsLowVram =
         vram === undefined ? !!s.lowVram : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
       const baseUrl = await ensureEngine(needsLowVram, s.showEngineConsole);
-      const models = await listLocalModels();
+      // ComfyUI's API includes extra_model_paths.yaml; a managed-folder scan does not.
+      const inventory = new ComfyUIBackend({ baseUrl, transport: new DirectTransport(desktopFetch) });
+      const models = await inventory.listModels();
       const loras = await listLoras();
       // Detect each LoRA's base architecture (reads only the safetensors header) so the UI can flag
       // one that won't load on the active model.
@@ -290,6 +293,8 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         ...cur,
         engineBaseUrl: baseUrl,
         engineBackend: "comfyui",
+        localBackend: "comfyui",
+        localServerUrl: baseUrl,
         // Remember the managed ComfyUI URL per-backend so VIDEO routing (comfyUrlForVideo) still finds it
         // even when the user's IMAGE backend is AUTOMATIC1111 — the two engines run side by side.
         localServerUrlByBackend: { ...cur.localServerUrlByBackend, comfyui: baseUrl },
@@ -304,8 +309,8 @@ export function useLocalEngine(deps: LocalEngineDeps) {
 
   // Probe a self-hosted SD server (ComfyUI/A1111): list its models + components and, on success,
   // point the ACTIVE engine at it (engineBaseUrl + engineBackend) and pick a sensible model. Throws
-  // if the server can't be reached (so the resolver / connect handler can fall back).
-  const probeServer = useCallback(async (backend: LocalBackendId, url: string): Promise<void> => {
+  // if the server can't be reached; failed explicit switches keep the current engine intact.
+  const probeServer = useCallback(async (backend: LocalBackendId, url: string, requestedModel?: string): Promise<void> => {
     if (!url) throw new Error("no server URL set");
     // On desktop, reach the server through the Rust HTTP bridge (CORS-exempt) — the same path
     // generation uses. A plain browser fetch is CORS-bound, and in the PACKAGED app the WebView
@@ -317,6 +322,9 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         ? new Automatic1111Backend({ baseUrl: url, ...(transport ? { transport } : {}) })
         : new ComfyUIBackend({ baseUrl: url, ...(transport ? { transport } : {}) });
     const models = await engine.listModels(); // throws when the server is unreachable
+    if (requestedModel && !models.some((m) => m.id === requestedModel)) {
+      throw new Error(`The selected model is no longer available on ${backend}: ${requestedModel}`);
+    }
     setInstalledModels(models);
     setInstalledModelsByBackend((m) => ({ ...m, [backend]: models }));
     try {
@@ -335,14 +343,18 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     setSettings((s) => {
       const base: ReaderSettings = {
         ...s,
+        imageProvider: "local",
         engineBaseUrl: url,
         engineBackend: backend,
+        localBackend: backend,
+        localServerUrl: url,
         // Persist this backend's URL so the OTHER engine's URL survives — video always routes to the
         // remembered ComfyUI URL even while images run on AUTOMATIC1111 (both alive at once).
         localServerUrlByBackend: { ...s.localServerUrlByBackend, [backend]: url },
       };
       // Keep the current model if the server still has it; otherwise pick its first + restore that
       // model's remembered encoder/VAE combo.
+      if (requestedModel) return applyLocalModelComponents(base, requestedModel);
       if (s.localModel && models.some((m) => m.id === s.localModel)) return base;
       const localModel = models[0]?.id;
       return localModel ? applyLocalModelComponents(base, localModel) : base;
@@ -357,8 +369,8 @@ export function useLocalEngine(deps: LocalEngineDeps) {
 
   // Get SOME engine running for `backend`: try a remembered URL first (a server the user is already
   // running costs us nothing to just probe), then self-provision (app-managed ComfyUI, or auto-launch
-  // AUTOMATIC1111 from its install folder) — falling back to the app-managed ComfyUI on total failure so
-  // images never fully dead-end. Both backends are the SAME kind of thing here: an HTTP engine that's
+  // AUTOMATIC1111 from its install folder). Never substitute a different backend on failure.
+  // Both backends are the SAME kind of thing here: an HTTP engine that's
   // either already reachable or ours to launch — "who started it" is resolved inside this one function,
   // not a separate setting. Reused by boot resolution, the low-VRAM deferred-start unstick paths, and the
   // interactive Connect button's fallback.
@@ -380,15 +392,15 @@ export function useLocalEngine(deps: LocalEngineDeps) {
           setEngineStatus("Starting AUTOMATIC1111…");
           try {
             await ensureA1111(s.a1111Path, s.showEngineConsole);
-          } catch {
-            /* couldn't auto-start — the retry probe below still tries a manually-started one */
+          } catch (err) {
+            return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+          } finally {
+            setEngineStatus("");
           }
           setEngineStatus("");
           if (await tryProbe()) return { ok: true, baseUrl: url, backend: "a1111" };
         }
-        // Nothing reachable (and nothing more of ours to launch) — fall back to the app-managed ComfyUI.
-        const managed = await startManagedEngine();
-        return managed === true ? { ok: true, baseUrl: managedBaseUrlRef.current ?? "", backend: "comfyui" } : { ok: false, reason: managed };
+        return { ok: false, reason: `AUTOMATIC1111 is not reachable at ${url}. Set its install folder or start it with --api. No backend switch was applied.` };
       }
       const url = knownUrlFor(settingsRef.current, "comfyui");
       if (url) {
@@ -405,8 +417,7 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     [knownUrlFor, probeServer, startManagedEngine],
   );
 
-  // Resolve which local engine actually renders for the chosen backend, falling back to the OTHER engine
-  // when it can't be reached (so a bad URL or an unreachable server never dead-ends).
+  // Resolve the requested local engine; report failures rather than silently choosing another backend.
   const resolveLocalEngine = useCallback(async (): Promise<void> => {
     const s = settingsRef.current;
     if (s.imageProvider !== "local") return;
@@ -525,7 +536,8 @@ export function useLocalEngine(deps: LocalEngineDeps) {
       try {
         const [models, loras] = await Promise.all([listLocalModels(), listLoras()]);
         if (cancelled) return;
-        if (models.length) setInstalledModels(models);
+        // Seed only ComfyUI, never label its folder scan as another backend's inventory.
+        if (models.length) setInstalledModelsByBackend((m) => m.comfyui ? m : { ...m, comfyui: models });
         if (loras.length) setInstalledLoras(loras);
       } catch {
         /* managed engine not installed yet — nothing to list */
@@ -535,6 +547,28 @@ export function useLocalEngine(deps: LocalEngineDeps) {
       cancelled = true;
     };
   }, []);
+
+  // Inventory discovery never activates or starts an engine. Probe both backends independently,
+  // including external ComfyUI model directories, even if another backend is selected.
+  useEffect(() => {
+    if (isRemoteClient) return;
+    let cancelled = false;
+    const s = settingsRef.current;
+    for (const backend of ["comfyui", "a1111"] as const) {
+      const url = knownUrlFor(s, backend) || LOCAL_ENGINE_DEFAULT_URL[backend];
+      const transport = isDesktop ? new DirectTransport(desktopFetch) : undefined;
+      const engine = backend === "comfyui"
+        ? new ComfyUIBackend({ baseUrl: url, ...(transport ? { transport } : {}) })
+        : new Automatic1111Backend({ baseUrl: url, ...(transport ? { transport } : {}) });
+      void engine.listModels().then((models) => {
+        if (cancelled) return;
+        setInstalledModelsByBackend((m) => ({ ...m, [backend]: models }));
+        const current = settingsRef.current;
+        if ((current.engineBackend ?? current.localBackend ?? "comfyui") === backend) setInstalledModels(models);
+      }).catch(() => { /* offline is not an empty installed inventory */ });
+    }
+    return () => { cancelled = true; };
+  }, [isRemoteClient, settings.localServerUrl, settings.localServerUrlByBackend, knownUrlFor]);
 
   // Download a catalog model: every component file of a split-file model (diffusion
   // model + text encoder + VAE, each into its ComfyUI subfolder), or the single
@@ -804,49 +838,41 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     }
   }, []);
 
-  // Connect to a backend (AUTOMATIC1111 / ComfyUI): probe it and make it the active image engine,
-  // remembering the URL UNDER its backend so reconnecting later restores it. On failure, fall back to
-  // the app-managed ComfyUI (desktop) instead of dead-ending.
+  // Explicit switches are transactional: a failed connection preserves the working engine/model.
   const onConnectLocalServer = useCallback(
-    async (backend: LocalBackendId, url: string) => {
+    async (backend: LocalBackendId, url: string, requestedModel?: string) => {
       // On a linked PHONE there's no engine of its own — the DESKTOP owns the network + install folder.
-      // Remember the URL locally (so the field/mirror keep it), then relay Connect: the desktop probes /
+      // Relay Connect without changing the active selection: the desktop probes /
       // auto-starts the server and mirrors the resulting settings (engineBaseUrl/models) back.
       if (isRemoteClient) {
-        setSettings((s) => ({
-          ...s,
-          localBackend: backend,
-          localServerUrl: url,
-          localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
-        }));
-        sendAppSync({ type: "vrcmd:connectLocalServer", backend, url });
+        sendAppSync({ type: "vrcmd:connectLocalServer", backend, url, ...(requestedModel ? { model: requestedModel } : {}) });
         return;
       }
+      if (connectingBackendRef.current) return;
+      connectingBackendRef.current = true;
       setLocalError("");
       setConnectingLocal(true);
       const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
-      // Persist the choice + per-backend URL memory whether or not the probe succeeds, so the field
-      // keeps what the user typed and reconnecting restores it.
-      const remember = (s: ReaderSettings): ReaderSettings => ({
-        ...s,
-        localBackend: backend,
-        localServerUrl: url,
-        localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
-      });
       // Auto-start AUTOMATIC1111 from its install folder (desktop) so the user doesn't have to launch it
       // by hand. Best-effort: if there's no folder set / it isn't an A1111 install / non-desktop, fall
       // through to a plain connect (which surfaces its own "is it running?" hint on failure).
       const cur = settingsRef.current;
-      if (backend === "a1111" && isDesktop && cur.a1111Path) {
-        try {
-          await ensureA1111(cur.a1111Path, cur.showEngineConsole);
-        } catch {
-          /* couldn't auto-start — probeServer below still tries to connect to a manually-started one */
-        }
-      }
       try {
-        await probeServer(backend, url); // sets engineBaseUrl/engineBackend/models on success
-        setSettings(remember);
+        if (backend === "a1111" && isDesktop && cur.a1111Path) {
+          setEngineStatus("Starting AUTOMATIC1111…");
+          await ensureA1111(cur.a1111Path, cur.showEngineConsole);
+        }
+        try {
+          await probeServer(backend, url, requestedModel); // commit only after the API answers
+        } catch (err) {
+          // Auto-start only the requested managed ComfyUI endpoint, never a substitute server
+          // for a custom/remote URL or an AUTOMATIC1111 failure.
+          if (backend !== "comfyui" || !isDesktop ||
+              !/^https?:\/\/(?:localhost|127\.0\.0\.1):8188\/?$/.test(url)) throw err;
+          setEngineStatus("Starting ComfyUI…");
+          await ensureEngine(!!cur.lowVram, cur.showEngineConsole);
+          await probeServer(backend, url, requestedModel);
+        }
         // Both engines alive: when images run on A1111, also make sure the managed ComfyUI (for VIDEO) is up
         // and its URL is current — but ONLY if it was set up before (a remembered URL), so we never trigger a
         // surprise multi-GB ComfyUI download just from connecting A1111. Doesn't touch the active image engine.
@@ -860,17 +886,10 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         }
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
-        setSettings(remember);
-        // Fallback so a bad URL doesn't leave the user with no engine.
-        const managed = await startActiveLocalEngine("comfyui");
-        if (managed.ok) {
-          setLocalError(`Couldn't reach ${name} at ${url} — using the app-managed engine instead. (${why})`);
-        } else {
-          setLocalError(
-            `Couldn't reach ${name} at ${url}: ${why}. Make sure it's running with its API and CORS enabled for ${location.origin}.`,
-          );
-        }
+        setLocalError(`Could not switch to ${name} at ${url}: ${why}. The current image engine and model were not changed.`);
       } finally {
+        connectingBackendRef.current = false;
+        setEngineStatus("");
         setConnectingLocal(false);
       }
     },

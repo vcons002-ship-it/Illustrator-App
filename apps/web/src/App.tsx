@@ -11066,15 +11066,16 @@ export function App() {
   // provider local↔cloud), applied via onSettingsChange (which also relays to a linked phone).
   const modelMenu = useMemo(
     () => ({
-      groups: buildModelMenu(settings, { textModels, imageModels: installedModels, imageModelsByBackend: installedModelsByBackend }, { isDesktop }),
+      groups: buildModelMenu(settings, { textModels, imageModels: installedModels, imageModelsByBackend: installedModelsByBackend }, { isDesktop })
+        .map((g) => g.key === "image" && localError ? { ...g, warning: localError } : g),
       onSelect: (patch: Partial<ReaderSettings>) => onSettingsChange({ ...settings, ...patch }),
       // Switching the active image backend from the quick menu takes the SAME route the Settings
       // panel's "Use for images" button takes — probe the server, auto-start A1111, set the transient
       // engineBaseUrl/engineBackend the provider renders through. Storing `localBackend` alone left
       // the engine on the old server.
-      onConnectBackend: (backend: LocalBackendId, url: string) => void onConnectLocalServer(backend, url),
+      onConnectBackend: (backend: LocalBackendId, url: string, model?: string) => void onConnectLocalServer(backend, url, model),
     }),
-    [settings, textModels, installedModels, installedModelsByBackend, onSettingsChange, onConnectLocalServer],
+    [settings, textModels, installedModels, installedModelsByBackend, onSettingsChange, onConnectLocalServer, localError],
   );
 
   // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero
