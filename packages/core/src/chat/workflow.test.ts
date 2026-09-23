@@ -15,6 +15,7 @@ import {
   compileWorkflow,
   doneWhenToNeeds,
   evaluateStep,
+  finishedByToolResult,
   inferDoneWhen,
   isPlanningStep,
   isWebSearchStep,
@@ -25,6 +26,7 @@ import {
   recompileWorkflow,
   resumeWorkflow,
   stepDirective,
+  stepTickedDirective,
   workflowToPlan,
 } from "./workflow.js";
 
@@ -1279,5 +1281,69 @@ describe("the settle-time judge can see an in-worker tool", () => {
       text: "",
     };
     expect(evaluateStep(step, evidence).done).toBe(true);
+  });
+});
+
+/**
+ * A step whose contract is "this tool succeeded" is finished the moment the tool returns — and ONLY
+ * that kind of step. See buddy-session.test.ts, "a tool step is judged when its tool returns", for the
+ * search loop this ends.
+ */
+describe("finishedByToolResult", () => {
+  const plan: BuddyPlan = {
+    steps: [
+      { text: "Search the web for today's top stock market news, 10 articles max", status: "pending", needs: "search_web" },
+      { text: "Analyze the news for potential trades", status: "pending", needs: "text" },
+    ],
+  };
+  const wf = compileWorkflow(plan);
+  const search = wf.steps[0]!;
+  const analyse = wf.steps[1]!;
+  const hit = (result: BuddyToolResultPayload): StepEvidence => ({
+    toolResults: [{ call: { tool: "search_web", query: "q" } as BuddyToolCall, result }],
+    text: "",
+  });
+
+  it("is true the moment a search step's search succeeds", () => {
+    expect(finishedByToolResult(search, hit({ search: [{ title: "t", link: "https://x", snippet: "s" }] } as BuddyToolResultPayload))).toBe(true);
+  });
+
+  it("is false for a search that failed", () => {
+    expect(finishedByToolResult(search, hit({ error: "provider unavailable" }))).toBe(false);
+  });
+
+  it("never finishes a TEXT step from a tool round — the reply is not written yet", () => {
+    // "Let me search a bit more" beside a tool call is not an analysis, and a text contract with a
+    // one-character minimum would otherwise accept it.
+    const withProse: StepEvidence = { ...hit({ search: [] } as unknown as BuddyToolResultPayload), text: "Let me look a bit further." };
+    expect(finishedByToolResult(analyse, withProse)).toBe(false);
+  });
+});
+
+describe("stepTickedDirective", () => {
+  const plan: BuddyPlan = {
+    steps: [
+      { text: "Search the web for today's top stock market news", status: "done", needs: "search_web" },
+      { text: "Analyze the news for potential trades", status: "pending", needs: "text" },
+    ],
+  };
+  const after = adoptPlanProgress(compileWorkflow(plan), plan);
+
+  it("says the tick already happened, so the model does not tick the NEXT step by mistake", () => {
+    // complete_step ticks the first PENDING step. A model that ticked step 1 again would tick step 2.
+    const line = stepTickedDirective(after, after.steps[0]!, activeStep(after));
+    expect(line).toContain("step 1 of 2 is done");
+    expect(line).toContain("the search_web result above satisfies it");
+    expect(line).toContain("complete_step is not needed for it");
+    expect(line).toContain("Step 2 of 2 is now current: Analyze the news for potential trades");
+  });
+
+  it("states rather than commands, like every other checklist line", () => {
+    const line = stepTickedDirective(after, after.steps[0]!, activeStep(after));
+    expect(line).not.toMatch(/\b(?:you must|do not|don't|now do|stop)\b/i);
+  });
+
+  it("says when it was the last step", () => {
+    expect(stepTickedDirective(after, after.steps[0]!, undefined)).toContain("That was the last step.");
   });
 });

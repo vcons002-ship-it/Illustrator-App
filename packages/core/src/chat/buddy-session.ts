@@ -553,6 +553,20 @@ export async function runBuddyTurn(opts: {
    * of the run's state in play, and the one in here would be the stale one.
    */
   appManagedTick?: (evidence: { toolResults: BuddyTurnOutcome["toolResults"]; text: string }) => AppManagedNext;
+  /**
+   * Judge the active step AFTER a round of in-turn tool results — the one moment `appManagedTick`
+   * never sees, since it runs only on a round with no tool call.
+   *
+   * A step whose contract is "this tool succeeded" is finished the instant the result lands. Left
+   * to the no-tool-call judge, a research step never finishes: the model keeps searching, every
+   * search is a tool round, and on a local model in app-managed mode the step's own grammar admits
+   * nothing but another search. Returns the line to hand the model, or undefined when the step is
+   * not finished — a tool round that did not finish its step is work in progress, never a failure,
+   * and must not spend an attempt. See `finishedByToolResult`.
+   */
+  afterToolRound?: (evidence: { toolResults: BuddyTurnOutcome["toolResults"]; text: string }) =>
+    | { directive: string; advanced: boolean }
+    | undefined;
   /** Native tool schemas (Ollama `tools`) for a tool-capable local model — passed to the provider so
    * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
    * universal fallback. Build with `ollamaToolSchemas`. */
@@ -1651,7 +1665,19 @@ export async function runBuddyTurn(opts: {
       }
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
-      if (lastWasCompleteStep) proseAtLastTick = roundProse;
+      if (lastWasCompleteStep) {
+        proseAtLastTick = roundProse;
+        /*
+         * WHAT FINISHED THE LAST STEP DOES NOT COUNT TOWARD THE NEXT.
+         *
+         * Only an app-managed advance used to move this, because only app-managed mode judged steps
+         * from evidence. `afterToolRound` judges them in model-driven mode too, and a research
+         * checklist is where it matters: step 1 and step 3 both need `search_web`, so without this
+         * the search that finished step 1 would finish step 3 the moment step 3 became current, and
+         * the "expert analysis" research would never be done.
+         */
+        stepEvidenceFrom = toolResults.length;
+      }
     }
     // The tool RESULTS are the durable record of what happened — they belong in the persisted
     // transcript. What gets appended after them is TURN-LOCAL steering: "re-issue the deferred host
@@ -1663,6 +1689,14 @@ export async function runBuddyTurn(opts: {
     // from calling tools in a conversation where no limit was in play. Context-ONLY, exactly like the
     // re-issue and wrap-up nudges above.
     const results = feedbacks.join("\n\n");
+    // Did this round's tool results finish the step they were for? Judged here, where they land, and
+    // not only on a round with no tool call — see `afterToolRound`. The line rides the round's
+    // steering, context-only, like every other in-loop directive.
+    const toolTick =
+      toolResults.length > stepEvidenceFrom
+        ? opts.afterToolRound?.({ toolResults: toolResults.slice(stepEvidenceFrom), text: "" })
+        : undefined;
+    if (toolTick?.advanced) stepEvidenceFrom = toolResults.length;
     // Whether this round was ONLY "I have more to send". Three separate decisions below turn on it,
     // and it has to be known before the steering line is built.
     const seriesOnly = calls.length > 0 && calls.every((c) => c.tool === "send_message" || c.tool === "keep_going");
@@ -1674,6 +1708,7 @@ export async function runBuddyTurn(opts: {
       // the nudge buys nothing and costs the thing they asked for: "Just finished R, now sending S."
       // landed in the same bubble as S, which is not one letter per message.
       (seriesOnly ? "" : progressNudge(round)) +
+      (toolTick ? `\n\n${toolTick.directive}` : "") +
       toolLimitNudge(round, effectiveMax);
     // The recap rides `messages` beside `steering` and NOT the transcript — context for the loop it
     // belongs to, gone when the turn settles. That split is why carrying reasoning here is safe: in
