@@ -553,8 +553,12 @@ export function useLocalEngine(deps: LocalEngineDeps) {
   useEffect(() => {
     if (isRemoteClient) return;
     let cancelled = false;
+    const inFlight = new Set<LocalBackendId>();
+    const discover = () => {
     const s = settingsRef.current;
     for (const backend of ["comfyui", "a1111"] as const) {
+      if (inFlight.has(backend)) continue;
+      inFlight.add(backend);
       const url = knownUrlFor(s, backend) || LOCAL_ENGINE_DEFAULT_URL[backend];
       const transport = isDesktop ? new DirectTransport(desktopFetch) : undefined;
       const engine = backend === "comfyui"
@@ -565,9 +569,14 @@ export function useLocalEngine(deps: LocalEngineDeps) {
         setInstalledModelsByBackend((m) => ({ ...m, [backend]: models }));
         const current = settingsRef.current;
         if ((current.engineBackend ?? current.localBackend ?? "comfyui") === backend) setInstalledModels(models);
-      }).catch(() => { /* offline is not an empty installed inventory */ });
+      }).catch(() => { /* offline is not an empty installed inventory */ }).finally(() => inFlight.delete(backend));
     }
-    return () => { cancelled = true; };
+    };
+    discover();
+    // Engines often finish starting after the initial inventory probe. Refresh without
+    // requiring a backend switch, and never overlap slow probes or restart engines here.
+    const refresh = setInterval(discover, 30_000);
+    return () => { cancelled = true; clearInterval(refresh); };
   }, [isRemoteClient, settings.localServerUrl, settings.localServerUrlByBackend, knownUrlFor]);
 
   // Download a catalog model: every component file of a split-file model (diffusion

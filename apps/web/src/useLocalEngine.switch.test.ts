@@ -47,6 +47,30 @@ function harness() {
 }
 
 describe("local engine transactional switches", () => {
+  it("refreshes a late-starting engine without a backend switch and cancels the timer on cleanup", async () => {
+    let online = false;
+    let tick = () => {};
+    const clearInterval = vi.fn();
+    const inventory = vi.fn();
+    const discovery = callback("inventory", {
+      isDesktop: false, isRemoteClient: false, settingsRef: { current: { engineBackend: "comfyui" } },
+      knownUrlFor: () => "", LOCAL_ENGINE_DEFAULT_URL: { comfyui: "http://localhost:8188", a1111: "http://localhost:7860" },
+      ComfyUIBackend: class { async listModels() { if (!online) throw new Error("starting"); return [{ id: "qwen21" }]; } },
+      Automatic1111Backend: class { async listModels() { throw new Error("offline"); } },
+      setInstalledModelsByBackend: inventory, setInstalledModels: vi.fn(),
+      setInterval: (fn: () => void, ms: number) => { expect(ms).toBe(30_000); tick = fn; return 123; }, clearInterval,
+    });
+    const cleanup = discovery();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(inventory).not.toHaveBeenCalled();
+    online = true;
+    tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(inventory.mock.calls[0]![0]({})).toEqual({ comfyui: [{ id: "qwen21" }] });
+    cleanup();
+    expect(clearInterval).toHaveBeenCalledWith(123);
+  });
+
   it("discovers external ComfyUI models while A1111 is selected, without switching engines", async () => {
     const inventories: Record<string, unknown> = {};
     const setInstalledModels = vi.fn();
@@ -59,12 +83,13 @@ describe("local engine transactional switches", () => {
       setInstalledModelsByBackend: (f: any) => Object.assign(inventories, f(inventories)),
       setInstalledModels,
     });
-    discovery();
+    const cleanup = discovery();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(inventories.comfyui).toEqual([{ id: "qwen_image_2.1_int8_convrot.safetensors" }]);
     expect(inventories.a1111).toBeUndefined();
     expect(setInstalledModels).not.toHaveBeenCalled();
     expect(settings.engineBackend).toBe("a1111");
+    cleanup();
   });
 
   it("keeps the current backend, model and inventory when A1111 startup fails", async () => {
