@@ -5,6 +5,7 @@ import {
   soulEssenceAbstractionJsonSchema,
   soulEssenceAbstractionRepairFeedback,
   soulEssenceJsonSchema,
+  type SoulAppearanceVerdicts,
   soulEssenceMergeRepairFeedback,
   soulEssenceRepairFeedback,
   soulNoteSources,
@@ -37,6 +38,9 @@ export interface CompleteSoulEssenceOptions {
   digests?: readonly SoulEssenceDigestInput[];
   /** Grounded integrated result carried forward during the minimal final abstraction pass. */
   abstractionBase?: SoulEssence;
+  /** Which notes describe a body, from the classification pass — the prompt was built with these,
+   * so validation and repair feedback must judge the answer against the same projection. */
+  appearanceVerdicts?: SoulAppearanceVerdicts;
   onToken?: (delta: string) => void;
   onRepair?: (feedback: string, truncated: boolean) => void;
 }
@@ -130,7 +134,7 @@ export async function completeSoulEssenceWithRepair(
         )
       : opts.digests
         ? parseSoulEssenceMerge(raw, opts.kind, opts.notes, opts.digests, Date.now())
-        : parseGeneratedSoulEssence(raw, opts.kind, opts.notes, Date.now());
+        : parseGeneratedSoulEssence(raw, opts.kind, opts.notes, Date.now(), opts.appearanceVerdicts);
     if (essence) return { essence };
 
     wasTruncated = truncated;
@@ -143,7 +147,7 @@ export async function completeSoulEssenceWithRepair(
         )
       : opts.digests
         ? soulEssenceMergeRepairFeedback(raw, opts.kind, opts.notes, opts.digests)
-        : soulEssenceRepairFeedback(raw, opts.kind, opts.notes);
+        : soulEssenceRepairFeedback(raw, opts.kind, opts.notes, opts.appearanceVerdicts);
     feedback = [
       ...(truncated
         ? ["The response ended at the provider's output-token limit before validation completed."]
