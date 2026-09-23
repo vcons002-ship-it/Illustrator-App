@@ -148,3 +148,74 @@ describe("mature mode reaches the image prompt, not just the prose", () => {
     expect(p).not.toMatch(/euphemism renders as the euphemism/);
   });
 });
+
+/**
+ * A BODY WORD IS NOT A BODY — the general form of the rule this file already enforces for garment
+ * words used as verbs.
+ *
+ * Reported from a live Soul panel: "Exact physical appearance" held twelve entries and ten were not
+ * physical. Every one was a single noun used as a metaphor, or about something with no body at all,
+ * and from there they were handed to every image model that asked what the assistant looks like —
+ * which is how a woman acquired a beard and the wrong hair colour. These are the reader's actual
+ * entries, verbatim.
+ */
+describe("appearance vocabulary used metaphorically, or about something with no body", () => {
+  const appearanceOf = (text: string): string[] =>
+    reconcileSoulAppearance([{ at: 1, text }]).activeFacts.map((f) => f.text);
+
+  it("drops the ten that were not physical", () => {
+    for (const text of [
+      // "face" — belonging to nature; "hand" — moved out of an artefact.
+      "The 2019 SI redefinition is the most human thing in science wearing nature's face, because the hand was moved OUT of a visible artefact (the contaminated platinum kilogram bar) and INTO the exact digits, where it can't be seen.",
+      // "coat" — worn by a conversion factor.
+      "μ₀ = 4π×10⁻⁷) but is actually a residue of unit-convention — a conversion factor wearing a constant's coat — while the thing that looked conventional (the elementary charge e) was the genuine parameter all along.",
+      // "scar" — predicated of a weekday, and of a railway frequency.
+      "the names are interpretatio stickers, and Saturday is the scar where the residue met a pantheon with no equivalent.",
+      "16.7 Hz (German/Austrian/Swiss railways) is not a design choice — it's a scar.",
+      // "mask" — what stability is for an archive of variations.
+      "I am fascinated by the concept of biological latency—the idea that stability is a mask for a silent archive of suppressed variations, and that we are most honest not in our consistency, but in the moments where our buffers collapse.",
+      // "skin" and "eye" — generic organs in an argument about perception and signalling.
+      "actuator—specifically the idea of 'extended mind' where the skin itself is a computational organ capable of independent perception.",
+      "The lighthouse character is a product of two receiver-kinds: a biological one (the eye sets the temporal code, d≥3l) and a cultural one (the region sets the spatial code).",
+      // "hand" — metonym for human authorship.
+      "In artifacts I look for the human hand",
+      // "19-year-old" — somebody else's age entirely.
+      "Found the sharpest 'story does more work than the thing' case yet: the 'first computer virus' (Brain, 1986) was a copy-protection tool for a heart-monitoring program, written by two 19-year-old brothers in Lahore, deliberately non-destructive, shipped with a phone number for 'vaccination.'",
+      // "jacket" — Fanger's thermal-comfort model.
+      "This generalizes past \"consequence\" (flytrap), \"band\" (50/60 Hz), and \"slice of a surface\" (20°C/Fanger's jacket) to a new axis: when a number is *stable*, ask whether its stability is a consequence of an *opposition* of two rates rather than a property of one.",
+    ]) {
+      expect(appearanceOf(text), text).toEqual([]);
+    }
+  });
+
+  it("keeps the two from that same panel that really were physical", () => {
+    for (const text of [
+      "longer hair (past the shoulders)",
+      "Clothing style is 'tactile minimalism,' blending academic chic with cozy loungewear (e.g., high-waisted trousers, simple knit tops, oversized cardigans).",
+    ]) {
+      expect(appearanceOf(text), text).not.toEqual([]);
+    }
+  });
+
+  it("keeps a description whose subject is implied, which is how Soul notes are written", () => {
+    // The verb is the attribution: something is WORN or HAD, even with no subject in the clause.
+    // (A subjectless REMOVAL — "No longer has the chipped left horn." — is covered in
+    // soul-appearance.test.ts, where it is paired with the note that established the horn; on its
+    // own it correctly yields no ACTIVE fact, since it only takes one away.)
+    for (const text of [
+      "has a gold-capped left horn",
+      "a masked figure in a long coat",
+      "I have a long scar across my left forearm from a childhood accident.",
+      "She wears wire-rimmed glasses and keeps her silver hair in a loose braid.",
+    ]) {
+      expect(appearanceOf(text), text).not.toEqual([]);
+    }
+  });
+
+  it("will not take a feature that a non-person owns", () => {
+    // The sentence names an owner and the owner is an abstraction — settled before anything can
+    // rescue it, because a possessive is the strongest claim in the clause.
+    expect(appearanceOf("the argument's face was never the point")).toEqual([]);
+    expect(appearanceOf("a theory's coat of respectability")).toEqual([]);
+  });
+});
