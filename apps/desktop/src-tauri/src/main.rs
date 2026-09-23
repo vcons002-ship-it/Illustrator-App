@@ -3605,6 +3605,18 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
         ));
     }
     let mut cmd = command_for("cmd", show_console);
+    // GUI launches may inherit a stale PATH. A1111's webui-user.bat commonly clears PYTHON,
+    // so use its already-installed venv on the CHILD's PATH, without editing user launchers
+    // or selecting an unrelated system Python. Do not create/install an environment here.
+    let python_dir = dir.join("venv").join("Scripts");
+    if python_dir.join("python.exe").is_file() {
+        let mut paths = vec![python_dir];
+        if let Some(path) = std::env::var_os("PATH") { paths.extend(std::env::split_paths(&path)); }
+        if let Ok(path) = std::env::join_paths(paths) { cmd.env("PATH", path); }
+    }
+    // Batch error handlers often PAUSE. With no interactive input they should exit so
+    // try_wait can report the real error, not spend three minutes waiting for a key.
+    cmd.stdin(Stdio::null());
     // Keep launch output even when the engine console is hidden. Read only a bounded tail
     // on failure; never leave pipe buffers undrained while Python is starting.
     let log_path = std::env::temp_dir().join("visual-reader-a1111-startup.log");
