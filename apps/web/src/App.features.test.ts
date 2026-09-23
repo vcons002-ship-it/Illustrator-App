@@ -1172,6 +1172,25 @@ describe("the per-chat workspace layout", () => {
     expect(WORKER).toContain('`${t.role === "system" ? "NOTE" : t.role.toUpperCase()}: ${t.content}`');
   });
 
+  /**
+   * "IT NEVER CHECKS OFF THE FIRST STEP AND JUST KEEPS SEARCHING MORE."
+   *
+   * A search step's contract is satisfied by its first successful search, but every judge ran only on
+   * a round with NO tool call — and in app-managed mode on a local model, the step's grammar admits
+   * nothing but another search. The worker now judges a tool step when its tool returns, in BOTH
+   * checklist modes. The turn-loop behaviour is proven in buddy-session.test.ts; this pins the wiring.
+   */
+  it("judges a tool step when its tool returns, in both checklist modes", () => {
+    const WORKER = readFileSync(join(__dirname, "engine.worker.ts"), "utf8");
+    expect(WORKER).toContain("      afterToolRound,\n");
+    // App-managed: delegate to the tick, but ONLY once the step is finished — the tick's retry and
+    // nudge paths are written for a round with no tool call and would spend attempts on a search.
+    expect(WORKER).toMatch(/if \(wf && appManagedTick\) \{\s*const step = activeStep\(wf\);\s*if \(!step \|\| !finishedByToolResult\(step, evidence\)\) return undefined;/);
+    // Model-driven: tick exactly as complete_step would, and say so.
+    expect(WORKER).toContain('plan.steps[i] = { ...plan.steps[i]!, status: "done" };');
+    expect(WORKER).toContain("return { directive: stepTickedDirective(after, step, activeStep(after)), advanced: true };");
+  });
+
   it("tells the reader when compaction fails, instead of failing silently", () => {
     // A failed compaction leaves the conversation exactly as over-budget as it was, so the reader
     // needs to know their next turns will be trimmed.

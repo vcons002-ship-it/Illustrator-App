@@ -238,6 +238,8 @@ import {
   scanHealthNote,
   harvestTaskContext,
   completeStepById,
+  finishedByToolResult,
+  stepTickedDirective,
   setTaskPlanComplete,
   nextReadyStep,
   tasksIndexBlock,
@@ -6416,6 +6418,44 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         }
       : undefined;
     /**
+     * JUDGE A TOOL STEP WHEN ITS TOOL RETURNS — in both checklist modes. See `finishedByToolResult`.
+     *
+     * App-managed: delegate to the tick, which already knows how to advance, post the plan with
+     * `origin:"app"`, and hand over the next directive. It is only reached when the step is finished,
+     * so none of the tick's retry/nudge/progress paths — all written for a round with no tool call —
+     * can run on a tool round and spend an attempt on work in progress.
+     *
+     * Model-driven: the checklist is the model's to tick, and it does not tick a step it is still
+     * busy doing. The app ticks it exactly as complete_step would — first pending step, same post —
+     * and says so, because a model that ticked it again would tick the NEXT step instead.
+     */
+    const afterToolRound = (evidence: {
+      toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
+      text: string;
+    }): { directive: string; advanced: boolean } | undefined => {
+      if (wf && appManagedTick) {
+        const step = activeStep(wf);
+        if (!step || !finishedByToolResult(step, evidence)) return undefined;
+        const next = appManagedTick(evidence);
+        if (next.kind === "continue") return { directive: next.directive, advanced: next.advanced === true };
+        // Finished the whole checklist: the next round is the wrap-up, not more research.
+        return {
+          directive: "[Checklist: that was the last step, and it is done. What remains is the reply to the reader.]",
+          advanced: true,
+        };
+      }
+      if (msg.appManagedSteps || !plan || !planHasPendingStep(plan)) return undefined;
+      const live = adoptPlanProgress(compileWorkflow(plan), plan);
+      const step = activeStep(live);
+      if (!step || !finishedByToolResult(step, evidence)) return undefined;
+      const i = plan.steps.findIndex((st) => st.status === "pending");
+      if (i < 0) return undefined;
+      plan.steps[i] = { ...plan.steps[i]!, status: "done" };
+      post({ type: "buddyPlan", requestId: msg.requestId, plan });
+      const after = adoptPlanProgress(compileWorkflow(plan), plan);
+      return { directive: stepTickedDirective(after, step, activeStep(after)), advanced: true };
+    };
+    /**
      * G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
      * demands, so a stubborn small model can't narrate instead of acting. Only for a concrete tool
      * need (the step's `needs` token is a tool name); text/narration steps stay free. Local-server
@@ -6480,6 +6520,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       contextChars: budgets.input,
       loadedToolsets,
       ...(appManagedTick ? { appManagedTick } : {}),
+      afterToolRound,
       // The document is DERIVED from the same prompt options, so what the model loads is exactly the
       // text the prompt would have carried — there is no second copy to fall out of date.
       toolsetDoc: (id: string) => toolsetDoc(id, { ...promptOpts, loadedToolsets }),

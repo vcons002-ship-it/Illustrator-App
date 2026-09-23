@@ -8,8 +8,10 @@ import {
   type AppManagedNext,
   MIN_CONTINUABLE_CHARS,
   type BuddyTurnEvent,
+  type BuddyTurnOutcome,
 } from "./buddy-session.js";
-import { LIVE_REPEAT_LIMIT, MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
+import { LIVE_REPEAT_LIMIT, MAX_BUDDY_TOOL_ROUNDS, planHasPendingStep, type BuddyOpenedInfo, type BuddyPlan } from "./buddy-tools.js";
+import { activeStep, adoptPlanProgress, compileWorkflow, finishedByToolResult, stepTickedDirective } from "./workflow.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
 function scriptedLlm(replies: string[]): ChatCapable & { calls: ChatTurn[][] } {
@@ -2724,5 +2726,172 @@ describe("an app-managed checklist runs inside one turn", () => {
     });
     expect(outcome.text).toBe("Paris.");
     expect(llm.calls).toHaveLength(1);
+  });
+});
+
+/**
+ * "IT NEVER CHECKS OFF THE FIRST STEP AND JUST KEEPS SEARCHING MORE."
+ *
+ * A daily research task, reported from use. Step 1 is "Search the web for today's top stock market
+ * news and movers, 10 articles max · search_web", whose contract — `tool_ok("search_web")` — the
+ * FIRST successful search satisfies. Nothing looked: every judge in the run was reached only on a
+ * round with no tool call, and a model doing research calls tools. In app-managed mode on a local
+ * model it was worse than a habit — the step's own grammar admitted nothing BUT another search, so
+ * the one event that could end the step was the one the sampler forbade.
+ *
+ * These drive the real turn loop with a hook built from the real workflow functions, the same way
+ * the worker builds it for a model-driven checklist.
+ */
+describe("a tool step is judged when its tool returns", () => {
+  const STOCK_PLAN = (): BuddyPlan => ({
+    goal: "Daily stock market research report",
+    steps: [
+      { text: "Search the web for today's top stock market news and movers, 10 articles max", status: "pending", needs: "search_web" },
+      { text: "Analyze the news for potential trades and emerging trends", status: "pending", needs: "text" },
+      { text: "Find expert analysis from reputable sources to back up the findings, 10 max", status: "pending", needs: "search_web" },
+      { text: "Write a concise, easy-to-read report that clearly states it is not financial advice", status: "pending", needs: "text" },
+    ],
+  });
+
+  /** The worker's model-driven hook, built from the same functions it uses. */
+  function modelDriven(plan: BuddyPlan) {
+    const ticks: string[] = [];
+    const hook = (evidence: { toolResults: BuddyTurnOutcome["toolResults"]; text: string }) => {
+      if (!planHasPendingStep(plan)) return undefined;
+      const live = adoptPlanProgress(compileWorkflow(plan), plan);
+      const step = activeStep(live);
+      if (!step || !finishedByToolResult(step, evidence)) return undefined;
+      const i = plan.steps.findIndex((s) => s.status === "pending");
+      plan.steps[i] = { ...plan.steps[i]!, status: "done" };
+      ticks.push(step.instruction);
+      const after = adoptPlanProgress(compileWorkflow(plan), plan);
+      return { directive: stepTickedDirective(after, step, activeStep(after)), advanced: true };
+    };
+    return { hook, ticks };
+  }
+
+  const searching = { ...baseDeps, searchWeb: async () => [{ title: "Markets rally", link: "https://news.test/a", snippet: "S&P up" }] };
+
+  it("ticks step 1 on the first search and tells the model, instead of letting it search forever", async () => {
+    const plan = STOCK_PLAN();
+    const { hook, ticks } = modelDriven(plan);
+    const llm = scriptedLlm([
+      '{"tool":"search_web","query":"top stock market news today"}',
+      '{"tool":"search_web","query":"biggest stock movers today"}',
+      "The market rallied on rate-cut hopes.",
+    ]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "run the daily stock market report" }],
+      deps: { ...searching, completeStep: () => plan },
+      afterToolRound: hook,
+    });
+    expect(ticks, "step 1 was never ticked").toEqual([STOCK_PLAN().steps[0]!.text]);
+    expect(plan.steps[0]!.status).toBe("done");
+    // The very next request carries the tick, so the model's second round is made KNOWING step 1 is
+    // finished — that is what stops the search loop, not a limit.
+    const second = llm.calls[1]!.map((m) => m.content).join("\n");
+    expect(second).toContain("step 1 of 4 is done");
+    expect(second).toContain("ticked already, so complete_step is not needed for it");
+    expect(second).toContain("Step 2 of 4 is now current: Analyze the news");
+  });
+
+  it("does not let step 1's search finish step 3, which needs a search of its own", async () => {
+    // Steps 1 and 3 share a contract. Without scoping, the search that finished step 1 is still in
+    // the evidence when step 3 becomes current, and the expert-analysis research is never done.
+    const plan = STOCK_PLAN();
+    const { hook, ticks } = modelDriven(plan);
+    // The model ticks step 1 ITSELF, in the same round as its search — so the app's tick never runs
+    // and never resets the evidence. The search is still sitting there when step 3 becomes current.
+    const llm = scriptedLlm([
+      '{"tool":"search_web","query":"top stock market news today"}\n{"tool":"complete_step","note":"news gathered"}',
+      // …then writes step 2's analysis and ticks that too (with prose, or the anti-skip guard would
+      // rightly refuse it). Step 3 — a search — is now current.
+      'The rally is broad: rate-cut hopes lifted tech and small caps alike.\n{"tool":"complete_step","note":"analysed"}',
+      "Nothing more for now.",
+    ]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "run the daily stock market report" }],
+      deps: {
+        ...searching,
+        completeStep: () => {
+          const i = plan.steps.findIndex((s) => s.status === "pending");
+          plan.steps[i] = { ...plan.steps[i]!, status: "done" };
+          return plan;
+        },
+      },
+      afterToolRound: hook,
+    });
+    expect(ticks, "the app ticked a step on a search that belonged to step 1").toEqual([]);
+    expect(plan.steps.map((s) => s.status)).toEqual(["done", "done", "pending", "pending"]);
+  });
+
+  it("finishes step 3 with its OWN search once it is current", async () => {
+    const plan = STOCK_PLAN();
+    plan.steps[0]!.status = "done";
+    plan.steps[1]!.status = "done";
+    const { hook, ticks } = modelDriven(plan);
+    await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"search_web","query":"analyst views on the rally"}', "Done."]),
+      system: "sys",
+      history: [{ role: "user", content: "continue" }],
+      deps: { ...searching, completeStep: () => plan },
+      afterToolRound: hook,
+    });
+    expect(ticks).toEqual([STOCK_PLAN().steps[2]!.text]);
+  });
+
+  it("leaves a step alone when the round did not finish it — work in progress is not a failure", async () => {
+    const plan = STOCK_PLAN();
+    const { hook, ticks } = modelDriven(plan);
+    await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"calculate","expression":"2+2"}', "4."]),
+      system: "sys",
+      history: [{ role: "user", content: "run the daily stock market report" }],
+      deps: { ...searching, completeStep: () => plan },
+      afterToolRound: hook,
+    });
+    expect(ticks).toEqual([]);
+    expect(plan.steps.every((s) => s.status === "pending")).toBe(true);
+  });
+
+  it("does not count a FAILED search as the step being done", async () => {
+    const plan = STOCK_PLAN();
+    const { hook, ticks } = modelDriven(plan);
+    await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"search_web","query":"top stock market news"}', "The search failed."]),
+      system: "sys",
+      history: [{ role: "user", content: "run the daily stock market report" }],
+      deps: {
+        ...baseDeps,
+        searchWeb: async () => {
+          throw new Error("search provider unavailable");
+        },
+        completeStep: () => plan,
+      },
+      afterToolRound: hook,
+    });
+    expect(ticks).toEqual([]);
+  });
+
+  it("scopes the next step's evidence after an advance, so the in-turn judge sees only new work", async () => {
+    // App-managed: after the tool-round tick advances, `appManagedTick` must not be handed the search
+    // that finished the previous step, or a text step would be judged against research results.
+    const seen: number[] = [];
+    await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"search_web","query":"top stock market news"}', "The market rallied."]),
+      system: "sys",
+      history: [{ role: "user", content: "run it" }],
+      deps: searching,
+      afterToolRound: () => ({ directive: "[Checklist: step 2 of 4 is now current.]", advanced: true }),
+      appManagedTick: (e) => {
+        seen.push(e.toolResults.length);
+        return { kind: "stop" };
+      },
+    });
+    expect(seen).toEqual([0]);
   });
 });

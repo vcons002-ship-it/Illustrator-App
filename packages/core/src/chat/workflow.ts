@@ -633,6 +633,47 @@ export function stepDirective(
   return `[${lead} ${step.instruction}.${context} ${tail}]`;
 }
 
+/**
+ * A STEP A TOOL RESULT FINISHES ON ITS OWN — so it is judged the moment that result lands, not the
+ * next time the model happens to stop calling tools.
+ *
+ * Reported as a daily research task stuck on "Search the web for today's top stock market news, 10
+ * articles max": it searched, searched again, and never ticked step 1. The step's contract is
+ * `tool_ok("search_web")`, which the FIRST successful search satisfies. Nothing looked. Every
+ * judge in the run is reached only on a round with no tool call — and in app-managed mode on a
+ * local model, the grammar for a `search_web` step admits nothing BUT a `search_web` call. So the
+ * one event that could end the step was the one the sampler forbade: a deadlock by construction,
+ * with "10 articles max" unenforceable because nothing else could be emitted.
+ *
+ * Only `tool_ok`. A text or narration contract is about the REPLY, and a reply is not written until
+ * the model stops calling tools — "Let me search a bit more" beside a tool call is not an analysis.
+ * An image, file or command contract belongs to a host tool, which suspends the turn and is judged
+ * by the host already. PURE.
+ */
+export function finishedByToolResult(step: WorkflowStep, evidence: StepEvidence): boolean {
+  return step.doneWhen.kind === "tool_ok" && evaluateStep(step, evidence).done;
+}
+
+/**
+ * What the model is told when the app ticks a step it was still working — MODEL-DRIVEN mode, where
+ * the checklist is otherwise the model's to tick with complete_step.
+ *
+ * Stated, not commanded (see {@link stepDirective}), and it says the tick already happened. That
+ * half is load-bearing: complete_step ticks the first PENDING step, so a model that went on to tick
+ * step 1 itself would silently tick step 2 — the analysis it had not written yet.
+ */
+export function stepTickedDirective(wf: Workflow, done: WorkflowStep, next: WorkflowStep | undefined): string {
+  const total = wf.steps.length;
+  const n = wf.steps.findIndex((s) => s.id === done.id) + 1;
+  const tool = done.doneWhen.kind === "tool_ok" ? done.doneWhen.tool : "its tool";
+  const ticked =
+    `Checklist: step ${n} of ${total} is done — the ${tool} result above satisfies it, and it has been ` +
+    "ticked already, so complete_step is not needed for it.";
+  if (!next) return `[${ticked} That was the last step.]`;
+  const m = wf.steps.findIndex((s) => s.id === next.id) + 1;
+  return `[${ticked} Step ${m} of ${total} is now current: ${next.instruction}.]`;
+}
+
 /** The step currently being worked (the single `active` one), or undefined when none. */
 export function activeStep(wf: Workflow | undefined): WorkflowStep | undefined {
   return wf?.steps.find((s) => s.status === "active");
