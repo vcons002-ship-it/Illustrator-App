@@ -388,7 +388,7 @@ function ReferenceGallery({
           reader on Gemini was being told their uploads did nothing — and on ComfyUI it overpromised
           the other way, since IP-Adapter only attaches to SD 1.5 / SDXL checkpoints. */}
       <span style={{ opacity: 0.5, fontSize: 11 }}>
-        Used by Gemini and gpt-image-1, and locally by Flux.2 (built in, nothing to install) and
+        Used by Gemini and gpt-image-1, and locally by Flux.2 / Qwen Image 2.1 (built in, no adapter needed) and
         SD 1.5 / SDXL (needs the IP-Adapter nodes — set them up in Settings). 2–3 angles of the same
         face work best.
       </span>

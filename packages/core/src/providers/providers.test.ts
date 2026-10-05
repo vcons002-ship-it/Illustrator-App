@@ -2047,6 +2047,8 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(referenceLatentSupports("flux2") && !ipAdapterSupports("flux2")).toBe(true);
     expect(referencePhotoSupports("sd15")).toBe(true);
     expect(referencePhotoSupports("flux2")).toBe(true);
+    expect(referencePhotoSupports("qwenimage21")).toBe(true);
+    expect(referenceLatentSupports("qwenimage21")).toBe(false); // native multimodal encoder, not Flux's chain
     for (const f of ["flux", "zimage", "qwenimage", "hidream"] as const) {
       expect(referencePhotoSupports(f), f).toBe(false);
     }

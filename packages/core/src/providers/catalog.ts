@@ -337,7 +337,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     id: "qwen-image-2.1-int8-eval",
     label: "Qwen Image 2.1 (INT8 ConvRot · evaluation only)",
     sizeGB: 17.3,
-    note: "Research/evaluation only — not production or commercial use. Text-to-image only; requires native TextEncodeQwenImage21 support in ComfyUI.",
+    note: "Research/evaluation only — not production or commercial use. Native reference photos and instruction editing (up to 10 images total); requires TextEncodeQwenImage21 support in ComfyUI.",
     filename: "qwen_image_2.1_int8_convrot.safetensors",
     url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/ace0edeb3791a594ddfa36ed5f41a178a394e921/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
     family: "qwenimage21",

@@ -68,10 +68,27 @@ describe("Qwen Image 2.1 evaluation workflow", () => {
   });
 
   it("rejects unsupported modes instead of silently generating a different task", () => {
-    expect(() => buildWorkflow({ ...qwen21, initImage: { filename: "photo.png", denoise: 0.5 } })).toThrow(/text-to-image only/);
-    expect(() => buildWorkflow({ ...qwen21, hires: { width: 1536, height: 1536, denoise: 0.5 } })).toThrow(/text-to-image only/);
-    expect(() => buildWorkflow({ ...qwen21, referenceLatents: ["photo.png"] })).toThrow(/text-to-image only/);
+    expect(() => buildWorkflow({ ...qwen21, hires: { width: 1536, height: 1536, denoise: 0.5 } })).toThrow(/not supported/);
     expect(() => buildWorkflow({ ...qwen21, loadKind: "checkpoint" })).toThrow(/Qwen3-VL/);
+  });
+  it.each([1, 2, 10])("wires %i references into the vision encoder and VAE, keeping the requested scene canvas", (count) => {
+    const references = Array.from({ length: count }, (_, i) => `person-${i}.png`);
+    const g = buildWorkflow({ ...qwen21, referenceLatents: references });
+    expect(inputsOf(g, "6").vae).toEqual(["13", 0]);
+    references.forEach((filename, i) => {
+      expect(inputsOf(g, "6")[`images.image_${i + 1}`]).toEqual([String(30 + i), 0]);
+      expect(inputsOf(g, String(30 + i)).image).toBe(filename);
+    });
+    expect(inputsOf(g, "3").latent_image).toEqual(["5", 0]);
+    expect(Object.keys(g).some((id) => classOf(g, id) === "ReferenceLatent")).toBe(false);
+  });
+  it("puts the edit target first and uses the native matching-size latent, capped at ten total images", () => {
+    const g = buildWorkflow({ ...qwen21, initImage: { filename: "target.png", denoise: 0.5 }, referenceLatents: Array(10).fill("person.png") });
+    expect(inputsOf(g, "30").image).toBe("target.png");
+    expect(inputsOf(g, "31").image).toBe("person.png");
+    expect(g["40"]).toBeUndefined();
+    expect(g["5"]).toBeUndefined();
+    expect(inputsOf(g, "3")).toMatchObject({ latent_image: ["6", 2], denoise: 1 });
   });
 });
 

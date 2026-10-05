@@ -51,7 +51,7 @@ function noteFor(family: ModelFamily, model: string): string {
     case "qwenimage":
       return "Qwen-Image → a Qwen-2.5-VL text encoder + the Qwen-Image VAE.";
     case "qwenimage21":
-      return "Qwen Image 2.1 → Qwen3-VL 8B + the 2.1 VAE (not original Qwen-Image components). Research/evaluation only; text-to-image only.";
+      return "Qwen Image 2.1 → Qwen3-VL 8B + the 2.1 VAE (not original Qwen-Image components). Research/evaluation only; native references and instruction editing, up to 10 images total.";
     case "flux":
       return "Flux.1 (diffusion-only) → dual encoders (t5xxl + clip_l, auto-detected) + the Flux VAE (ae.safetensors).";
     case "hidream":
