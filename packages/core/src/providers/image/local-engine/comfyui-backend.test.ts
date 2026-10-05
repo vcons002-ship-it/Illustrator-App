@@ -73,15 +73,15 @@ describe("ComfyUIBackend Qwen Image 2.1 evaluation", () => {
     expect(calls.some((c) => c.url.endsWith("/prompt"))).toBe(false);
   });
 
-  it("rejects editing before upload or any engine call", async () => {
+  it("rejects unsupported two-pass generation before upload or any engine call", async () => {
     const { transport, calls } = routedTransport({});
     await expect(new ComfyUIBackend({ baseUrl: BASE, transport }).generate({
-      ...INPUT, initImage: { bytes: new ArrayBuffer(1), mimeType: "image/png" },
-    }, model)).rejects.toThrow(/text-to-image only/);
+      ...INPUT, hires: true,
+    }, model)).rejects.toThrow(/Turn off/);
     expect(calls).toHaveLength(0);
   });
 
-  it("discovers the new components and submits the native graph even in Low-VRAM mode", async () => {
+  it.each([[0, false], [1, false], [2, false], [11, false], [11, true]] as const)("submits %i references with edit=%s in Low-VRAM mode", async (count, editing) => {
     vi.stubGlobal("WebSocket", undefined);
     try {
       const { transport, calls } = routedTransport({
@@ -93,8 +93,9 @@ describe("ComfyUIBackend Qwen Image 2.1 evaluation", () => {
         "/prompt": res({ prompt_id: "p1" }),
         "/history/p1": res(DONE_HISTORY),
         "/view": bytesRes(new Uint8Array([1, 2, 3]).buffer),
+        "/upload/image": res({ name: "reference.png" }),
       });
-      const out = await new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 }).generate({ ...INPUT, lowVram: true }, model);
+      const out = await new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 }).generate({ ...INPUT, lowVram: true, ipAdapterRefs: Array.from({ length: count }, () => ({ bytes: new Uint8Array([1, 2, 3]).buffer, mimeType: "image/png", weight: 0.5 })), ...(editing ? { initImage: { bytes: new Uint8Array([4, 5, 6]).buffer, mimeType: "image/png" } } : {}) }, model);
       expect(out.mimeType).toBe("image/png");
       const body = calls.find((c) => c.url.endsWith("/prompt"))!.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> };
       expect(body.prompt["6"]!.class_type).toBe("TextEncodeQwenImage21");
@@ -102,9 +103,25 @@ describe("ComfyUIBackend Qwen Image 2.1 evaluation", () => {
       expect(body.prompt["12"]!.inputs.clip_name).toBe("qwen3vl_8b_int8_convrot.safetensors");
       expect(body.prompt["13"]!.inputs.vae_name).toBe("qwen_image_2.1_vae_bf16.safetensors");
       expect(body.prompt["3"]!.inputs.steps).toBe(25);
+      if (count) {
+        expect(out.references).toMatchObject({ supplied: count, used: Math.min(editing ? 9 : 10, count), how: "native" });
+        expect(body.prompt["6"]!.inputs["images.image_1"]).toEqual(["30", 0]);
+        expect(body.prompt["6"]!.inputs.vae).toEqual(["13", 0]);
+      }
+      if (editing) expect(body.prompt["3"]!.inputs.latent_image).toEqual(["6", 2]);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+  it("fails closed when a requested reference cannot be uploaded", async () => {
+    const { transport, calls } = routedTransport({
+      "/object_info/TextEncodeQwenImage21": res({ TextEncodeQwenImage21: { input: {} } }),
+      "/upload/image": res({}, 500),
+    });
+    await expect(new ComfyUIBackend({ baseUrl: BASE, transport }).generate({ ...INPUT,
+      ipAdapterRefs: [{ bytes: new ArrayBuffer(3), mimeType: "image/png", weight: 1 }],
+    }, model)).rejects.toThrow(/reference upload failed/);
+    expect(calls.some(c => c.url.endsWith("/prompt"))).toBe(false);
   });
 });
 

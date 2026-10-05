@@ -1552,8 +1552,9 @@ export function SettingsPanel({
           {value.imageProvider === "local" && localFamily === "qwenimage21" && (
             <p role="note" style={{ ...rowStyle, fontSize: 12 }}>
               Qwen Image 2.1 is for research/evaluation only, not production or commercial use.
-              This preset supports text-to-image only. Turn off two-pass High resolution,
-              character regions and style LoRAs; image editing is not enabled.
+              Supports reference photos and instruction editing, up to 10 images total.
+              Edits follow the source aspect ratio and use full denoise (the strength slider does not apply).
+              Turn off two-pass High resolution, character regions and style LoRAs.
             </p>
           )}
 
@@ -2828,8 +2829,8 @@ export function SettingsPanel({
                 <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
                   Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
                   condition local renders (add photos per character in Characters). Works on{" "}
-                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2 needs none of this</strong> — it reads
-                  reference photos itself, with nothing to install. Flux.1, Z-Image, Qwen-Image and HiDream can&rsquo;t
+                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2 and Qwen Image 2.1 need no adapter</strong> — they read
+                  reference photos natively. Flux.1, Z-Image, original Qwen-Image and HiDream can&rsquo;t
                   use them here by either route.{" "}
                   <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
                   Cloud Gemini and gpt-image-1 take reference photos on any of their models, with nothing to install.

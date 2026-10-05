@@ -108,8 +108,8 @@ export interface ImageGenerationInput {
    * The name is historical: this began as ComfyUI IP-Adapter conditioning, but the natively
    * multimodal cloud models take reference photos directly and three providers now read it:
    *
-   *   - ComfyUI (local) — IP-Adapter, and ONLY when its nodes + models are installed; otherwise
-   *     the render silently falls back to seed-only consistency.
+   *   - ComfyUI (local) — native Flux.2 / Qwen Image 2.1 references, or SD IP-Adapter.
+   *     Qwen reference upload failures fail the request rather than silently losing identity.
    *   - Gemini native image — each ref rides as an inline image part.
    *   - OpenAI native (gpt-image-1) — each ref is a file on /images/edits.
    *
@@ -132,7 +132,8 @@ export interface ImageGenerationInput {
   initImage?: { bytes: ArrayBuffer; mimeType: string };
   /**
    * img2img strength 0..1 — how much the init image may change. Lower stays closer
-   * to the photo, higher reinvents more. Only meaningful with `initImage`; the
+   * to the photo, higher reinvents more. Qwen Image 2.1 uses native instruction editing
+   * at full denoise instead; this slider is not used by that model. Otherwise, with `initImage`, the
    * backend defaults to ~0.65 when unset.
    */
   denoise?: number;

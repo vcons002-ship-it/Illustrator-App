@@ -394,7 +394,7 @@ export function referenceLatentSupports(family: ModelFamily): boolean {
 
 /** Can a reference photo condition a local render on this family AT ALL, by either route? PURE. */
 export function referencePhotoSupports(family: ModelFamily): boolean {
-  return ipAdapterSupports(family) || referenceLatentSupports(family);
+  return ipAdapterSupports(family) || referenceLatentSupports(family) || family === "qwenimage21";
 }
 
 /**
@@ -1094,11 +1094,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
     if (family === "qwenimage21") {
-      // This evaluation integration intentionally implements the official t2i path only.
-      // Reject edits before uploading the user's image or silently falling back to generation.
-      if (input.initImage || input.hires || input.castRegions?.length || input.styleLora) {
+      // Reference photos and edits use the native multimodal encoder, not IP-Adapter.
+      if (input.hires || input.castRegions?.length || input.styleLora) {
         throw new Error(
-          "Qwen Image 2.1 evaluation supports text-to-image only. Turn off image editing, " +
+          "Qwen Image 2.1 supports native references and editing. Turn off " +
           "two-pass High resolution, character regions and style LoRAs for this preset.",
         );
       }
@@ -1187,16 +1186,18 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // Why references didn't reach the model, when they didn't. Every branch below already knows;
     // this is what carries that out to the reader instead of leaving it in a console line.
     let refsSkipped: string | undefined;
-    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && referenceLatentSupports(family)) {
+    const nativeReferenceLimit = REFERENCE_LATENT_MAX_REFS - (family === "qwenimage21" && input.initImage ? 1 : 0);
+    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && (referenceLatentSupports(family) || family === "qwenimage21")) {
       // This family reads the photo itself — no adapter, and nothing to install. Same reference
       // images, a different route into the same render.
       try {
         referenceLatents = await Promise.all(
           input.ipAdapterRefs
-            .slice(0, REFERENCE_LATENT_MAX_REFS)
+            .slice(0, nativeReferenceLimit)
             .map((ref) => this.uploadedReference(ref.bytes, ref.mimeType)),
         );
       } catch {
+        if (family === "qwenimage21") throw new Error("Qwen Image 2.1 reference upload failed; no image was generated. Reconnect ComfyUI and retry.");
         referenceLatents = undefined; // upload failed → render without the reference, not at all
         refsSkipped = "the engine wouldn't accept the upload";
       }
@@ -1266,6 +1267,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const denoise = Math.min(1, Math.max(0.05, input.denoise ?? 0.65));
         initImage = { filename, denoise };
       } catch {
+        if (family === "qwenimage21") throw new Error("Qwen Image 2.1 edit image upload failed; no image was generated. Reconnect ComfyUI and retry.");
         initImage = undefined; // upload failed → fall back to txt2img
       }
     }
@@ -1349,7 +1351,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const capped =
         used > 0 && used < supplied
           ? referenceLatents
-            ? `this model takes at most ${REFERENCE_LATENT_MAX_REFS}`
+            ? `this model takes at most ${nativeReferenceLimit} references${family === "qwenimage21" && input.initImage ? " alongside the edit image" : ""}`
             : `IP-Adapter uses at most ${IPADAPTER_MAX_REFS}`
           : refsSkipped;
       return {
@@ -1372,7 +1374,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
               references: {
                 supplied,
                 used,
-                ...(used > 0 ? { how: referenceLatents ? ("reference-latent" as const) : ("ipadapter" as const) } : {}),
+                ...(used > 0 ? { how: family === "qwenimage21" ? ("native" as const) : referenceLatents ? ("reference-latent" as const) : ("ipadapter" as const) } : {}),
                 ...(capped ? { why: capped } : {}),
               },
             }
@@ -1718,7 +1720,7 @@ interface WorkflowParams {
   ipAdapter?: IpAdapterGraph;
   /** img2img: an already-uploaded base image (LoadImage name) + denoise strength. */
   initImage?: { filename: string; denoise: number };
-  /** Uploaded reference-photo filenames conditioned through a ReferenceLatent chain (Flux.2). */
+  /** Uploaded reference-photo filenames: ReferenceLatent (Flux.2) or native encoder (Qwen 2.1). */
   referenceLatents?: readonly string[];
   /** Hi-Res two-pass: upscale the first pass's latent to this target size, then refine
    * at `denoise`. The first pass renders at `width`/`height` (the native-safe size). */
@@ -1836,10 +1838,11 @@ function buildQwenImage21Workflow(p: WorkflowParams): Record<string, unknown> {
   if (p.loadKind !== "diffusion" || !p.components) {
     throw new Error("Qwen Image 2.1 needs its diffusion model, Qwen3-VL encoder and 2.1 VAE.");
   }
-  if (p.initImage || p.ipAdapter || p.referenceLatents?.length || p.hires || p.regions?.length || p.lora) {
-    throw new Error("Qwen Image 2.1 evaluation is text-to-image only; editing, adapters, LoRAs, regions and two-pass generation are not supported here yet.");
+  if (p.ipAdapter || p.hires || p.regions?.length || p.lora) {
+    throw new Error("Qwen Image 2.1 adapters, LoRAs, regions and two-pass generation are not supported here yet.");
   }
-  return {
+  const refs = [...(p.initImage ? [p.initImage.filename] : []), ...(p.referenceLatents ?? [])].slice(0, REFERENCE_LATENT_MAX_REFS);
+  const graph: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
     "3": {
       class_type: "KSampler",
       inputs: {
@@ -1860,6 +1863,22 @@ function buildQwenImage21Workflow(p: WorkflowParams): Record<string, unknown> {
     "12": p.components.textEncoder,
     "13": { class_type: "VAELoader", inputs: { vae_name: p.components.vaeName } },
   };
+  if (refs.length) {
+    const encoder = graph["6"]!.inputs;
+    encoder.vae = ["13", 0];
+    refs.forEach((filename, index) => {
+      const id = String(30 + index);
+      graph[id] = { class_type: "LoadImage", inputs: { image: filename } };
+      encoder[`images.image_${index + 1}`] = [id, 0];
+    });
+    if (p.initImage) {
+      // Native instruction editing: sample fresh noise at the target image's size,
+      // not partial denoising of a VAEEncode latent. Additional images stay references.
+      graph["3"]!.inputs.latent_image = ["6", 2];
+      delete graph["5"];
+    }
+  }
+  return graph;
 }
 
 export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {

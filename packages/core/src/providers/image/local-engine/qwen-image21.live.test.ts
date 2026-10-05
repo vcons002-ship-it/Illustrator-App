@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { catalogEntryForModel } from "../../catalog.js";
@@ -66,21 +66,33 @@ describe.skipIf(!mode)("Qwen Image 2.1 opt-in live app-provider evaluation", () 
         throw new Error("ComfyUI has queued/running work (or its queue could not be verified). Wait before running this evaluation; nothing was interrupted.");
       }
       const provider = new ManagedEngineImageProvider(backend, model);
+      const refPath = process.env.QWEN21_REFERENCE_PNG;
+      const refBytes = refPath ? new Uint8Array(await readFile(refPath)).buffer : undefined;
+      const editing = process.env.QWEN21_EDIT === "1";
+      const refCount = Number(process.env.QWEN21_REFERENCE_COUNT ?? "1");
+      if (!Number.isInteger(refCount) || refCount < 1 || refCount > 10) throw new Error("Reference count must be 1..10");
+      if (editing && !refBytes) throw new Error("Editing requires QWEN21_REFERENCE_PNG");
       const output = await provider.generate({
-        prompt: "A small red fox sitting beside a blue ceramic teapot on a wooden table, soft window light, detailed storybook illustration. No text.",
+        prompt: editing ? "Keep the subject in <image1>, change the background to a snowy forest. No text." : "A small red fox sitting beside a blue ceramic teapot on a wooden table, soft window light, detailed storybook illustration. No text.",
         anchors: [], quality: "standard", renderQuality: "standard",
         width: size, height: size, seed: 21092026,
         stepsOverride: 25, cfgOverride: 1, lowVram: true,
+        ...(refBytes && !editing ? { ipAdapterRefs: Array.from({ length: refCount }, () => ({ bytes: refBytes, mimeType: "image/png", weight: 1 })) } : {}),
+        ...(refBytes && editing ? { initImage: { bytes: refBytes, mimeType: "image/png" } } : {}),
       });
       expect(output.mimeType).toBe("image/png");
       png = new Uint8Array(output.bytes);
       expect(Array.from(png.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
       const header = new DataView(output.bytes);
-      expect(header.getUint32(16)).toBe(size);
-      expect(header.getUint32(20)).toBe(size);
+      if (!editing) {
+        expect(header.getUint32(16)).toBe(size);
+        expect(header.getUint32(20)).toBe(size);
+      }
+      if (refBytes && !editing) expect(output.references).toMatchObject({ supplied: refCount, used: refCount, how: "native" });
       Object.assign(receipt, {
         generationCompleted: true, provider: provider.id, mimeType: output.mimeType,
-        width: size, height: size, bytes: png.byteLength,
+        width: header.getUint32(16), height: header.getUint32(20), bytes: png.byteLength,
+        referenceCount: refBytes ? (editing ? 1 : refCount) : 0, editing, references: output.references,
         sha256: createHash("sha256").update(png).digest("hex"),
         actualPromptRecord: output.prompt, submittedWorkflow,
       });
@@ -93,6 +105,6 @@ describe.skipIf(!mode)("Qwen Image 2.1 opt-in live app-provider evaluation", () 
       await writeFile(join(outDir, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
       console.info(`Qwen Image 2.1 ${mode} evidence: ${outDir}`);
     }
-    console.info(`Qwen Image 2.1 ${mode}: verified${png ? `; ${size}x${size} PNG via the real app provider` : "; no GPU generation requested"}.`);
+    console.info(`Qwen Image 2.1 ${mode}: verified${png ? `; ${receipt.width}x${receipt.height} PNG via the real app provider` : "; no GPU generation requested"}.`);
   }, 30 * 60 * 1000);
 });
