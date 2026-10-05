@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title Visual Reader - Desktop (packaged build)
+call "%~dp0scripts\windows-tool-path.bat"
 
 echo ================================================
 echo   Visual Reader - Desktop (PACKAGED build)
@@ -16,6 +17,19 @@ echo The first build can take several minutes. Re-run this after every update
 echo (update.bat / git pull) so the phone gets the new UI.
 echo.
 pause
+
+call node --version >nul 2>nul
+if errorlevel 1 (
+  echo [X] Node.js was not found. Run install.bat once first.
+  pause
+  exit /b 1
+)
+call pnpm --version >nul 2>nul
+if errorlevel 1 (
+  echo [X] pnpm was not found or could not start. Run install.bat once first.
+  pause
+  exit /b 1
+)
 
 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 call cargo tauri --version >nul 2>nul
