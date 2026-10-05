@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title Visual Reader - Desktop setup
+call "%~dp0scripts\windows-tool-path.bat"
 
 echo ==============================================
 echo    Visual Reader - desktop app setup
