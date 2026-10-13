@@ -105,6 +105,7 @@ describe("image request identity survives UI approval and continuation", () => {
     const turnUserTextRef = { current: original };
     const stopBeforeWorker = new Error("Stop before unrelated worker setup");
     const dispatch = callback<(history: unknown[], text: string, bubble?: string) => Promise<void>>("dispatchBuddyTurn", {
+      projectMutationRef: { current: false },
       buddyTurnSeq: { current: 1 },
       planCompiledThisTurn: { current: false },
       turnUserTextRef,

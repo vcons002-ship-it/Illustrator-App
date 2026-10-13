@@ -27,6 +27,18 @@ describe("project workspace controls", () => {
     expect(html).not.toContain("Rename project");
     expect(html).not.toContain("Move chat to");
   });
+  it("shows create, rename and move on a capable phone without desktop folder-picker buttons", () => {
+    const html = render({ activeProjectId: "alpha", remote: true, onCreate: async () => {}, onRename: async () => {}, onAssign: async () => {} });
+    expect(html).toContain("New project"); expect(html).toContain("Rename project"); expect(html).toContain("Move chat to");
+    expect(html).toContain("linked desktop"); expect(html).toContain("min-height:44px");
+    expect(html).not.toContain("Approve folder"); expect(html).not.toContain("Browse");
+  });
+  it("leaves navigation available but disables new management actions for an older desktop", () => {
+    const html = render({ activeProjectId: "alpha", remote: true, managementDisabled: true, onCreate: async () => {}, onRename: async () => {}, onAssign: async () => {} });
+    expect(html).toContain("Update/reconnect");
+    expect(html).toMatch(/disabled=""[^>]*>New project/);
+    expect(html).not.toMatch(/<select[^>]*disabled=/);
+  });
   it("makes unavailable project metadata visible instead of claiming a default root", () => {
     const html = render({ activeProjectId: "missing", error: "Couldn't load projects" });
     expect(html).toContain("Unavailable project");
