@@ -624,7 +624,7 @@ describe("the per-chat workspace layout", () => {
     // directory and hands back its absolute path — no new Rust command, no new approval.
     expect(APP_RAW).toMatch(/writeWorkspaceFile\(`\$\{folder\}\/README\.md`, readme\)/);
     // A folder the reader chose themselves is never overridden.
-    expect(APP_RAW).toContain("buddyWorkingDirRef.current || (await ensureChatWorkspace())");
+    expect(APP_RAW).toContain("sessionWorkspaceDir(session, chatProjectsRef.current, chatWorkspaceRef.current.get(activeBuddyIdRef.current)) || (await ensureChatWorkspace())");
   });
 
   it("sorts a written file into its kind folder", () => {

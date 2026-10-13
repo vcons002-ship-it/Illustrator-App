@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createChatProject } from "./project-workspaces.js";
 import {
   BUNDLED_LLM,
   IndexedDbStore,
@@ -51,6 +52,11 @@ import {
   parseUiAutomationOutput,
   MAX_STEP_REMINDERS,
   buildWorkspaceReadme,
+  PROJECTS_MEMO_KEY,
+  parseChatProjects,
+  sessionWorkspaceDir,
+  assignSessionProject,
+  type ChatProject,
   chatFolderName,
   codeFileNameFor,
   readmeChatId,
@@ -532,6 +538,8 @@ const MAX_AUTO_STEP_TRIES = 2;
 interface BuddySession {
   id: string;
   workingDir: string;
+  /** Project membership shares a workspace, never history or personal identity data. */
+  projectId?: string;
   /** A user-set display name; falls back to the folder name, then "Chat N". */
   label?: string;
   /** CLOSED (✕), not deleted: hidden from the switcher, but its history, plan and file ledger are all
@@ -1990,7 +1998,15 @@ export function App() {
   // survive reloads.
   const [buddySessions, setBuddySessions] = useState<BuddySession[]>([{ id: BUDDY_CHAT_ID, workingDir: "" }]);
   const [activeBuddyId, setActiveBuddyId] = useState(BUDDY_CHAT_ID);
-  const buddyWorkingDir = buddySessions.find((s) => s.id === activeBuddyId)?.workingDir ?? "";
+  const [chatProjects, setChatProjects] = useState<ChatProject[]>([]);
+  const [projectsReady, setProjectsReady] = useState(false);
+  const [projectLoadError, setProjectLoadError] = useState("");
+  const chatProjectsRef = useRef(chatProjects);
+  chatProjectsRef.current = chatProjects;
+  const activeProjectId = buddySessions.find(s => s.id === activeBuddyId)?.projectId;
+  const buddyWorkingDir = activeProjectId
+    ? chatProjects.find(p => p.id === activeProjectId)?.workspaceDir ?? ""
+    : buddySessions.find((s) => s.id === activeBuddyId)?.workingDir ?? "";
   /**
    * Refs for the per-chat workspace helper, which runs inside an async tool handler and so cannot
    * read render-time state without lagging a commit behind — the same reason every other handler in
@@ -2116,6 +2132,8 @@ export function App() {
   const ensureChatWorkspace = useCallback(async (): Promise<string | undefined> => {
     if (!isDesktop || isRemoteClient) return undefined;
     const id = activeBuddyIdRef.current;
+    const session = buddySessionsRef.current.find(s => s.id === id);
+    if (session?.projectId) return sessionWorkspaceDir(session, chatProjectsRef.current);
     const held = chatWorkspaceRef.current.get(id);
     if (held) return held;
     // THE NAME THE READER SEES, not the one stored on the session. A chat is only given a stored
@@ -2167,6 +2185,7 @@ export function App() {
     async (id: string): Promise<void> => {
       if (!isDesktop || isRemoteClient || chatWorkspaceRef.current.has(id)) return;
       const list = buddySessionsRef.current;
+      if (list.find(s => s.id === id)?.projectId) return;
       const stored = list.find((s) => s.id === id)?.chatDir;
       if (stored) {
         rememberChatDir(id, stored);
@@ -2208,13 +2227,20 @@ export function App() {
   /** The folder to work in for this chat: the reader's own choice first, else the chat's — CREATING
    * the chat's folder if this is the first time it's needed. */
   const workspaceForWrite = useCallback(
-    async (): Promise<string | undefined> => buddyWorkingDirRef.current || (await ensureChatWorkspace()),
+    async (): Promise<string | undefined> => {
+      const session = buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current);
+      return sessionWorkspaceDir(session, chatProjectsRef.current, chatWorkspaceRef.current.get(activeBuddyIdRef.current)) || (await ensureChatWorkspace());
+    },
     [ensureChatWorkspace],
   );
   /** The same folder, but WITHOUT creating one. For the reads that happen on every turn (the project
    * guide, the plan's file check): a chat that only ever talks must not grow a folder on disk. */
   const workspaceDirNow = useCallback(
-    (): string | undefined => buddyWorkingDirRef.current || chatWorkspaceRef.current.get(activeBuddyIdRef.current) || undefined,
+    (): string | undefined => sessionWorkspaceDir(
+      buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current),
+      chatProjectsRef.current,
+      chatWorkspaceRef.current.get(activeBuddyIdRef.current),
+    ),
     [],
   );
   /**
@@ -2230,6 +2256,7 @@ export function App() {
    */
   const refreshWorkspaceReadme = useCallback(async (): Promise<void> => {
     const id = activeBuddyIdRef.current;
+    if (buddySessionsRef.current.find(s => s.id === id)?.projectId) return; // Never rewrite a shared project's README from one chat's ledger.
     const dir = chatWorkspaceRef.current.get(id);
     if (!dir || buddyWorkingDirRef.current) return;
     // The same name the folder was made under, and the same one the picker shows.
@@ -4126,13 +4153,15 @@ export function App() {
         ...(s.closed ? { closed: true as const } : {}),
         ...(s.hidden ? { hidden: true as const } : {}),
         ...(s.chatDir ? { chatDir: s.chatDir } : {}),
+        ...(s.projectId ? { projectId: s.projectId } : {}),
       })),
+      projects: chatProjects,
       activeId: activeBuddyId,
       messages: boundChatHistoryForMirror(buddyMessages),
       persona: buddyPersona,
       busy: buddyBusy,
     }),
-    [buddySessions, activeBuddyId, buddyMessages, buddyPersona, buddyBusy],
+    [buddySessions, chatProjects, activeBuddyId, buddyMessages, buddyPersona, buddyBusy],
   );
   useEffect(() => {
     chatMirrorRef.current = chatMirror;
@@ -4143,6 +4172,9 @@ export function App() {
   // are gated on isRemoteClient), so this mirror is its only source of chat state.
   const applyChat = useCallback((c: ChatMirror) => {
     setChatSynced(true); // the desktop's conversation has arrived — an empty list now means empty
+    setChatProjects(c.projects ?? []);
+    chatProjectsRef.current = c.projects ?? [];
+    setProjectsReady(true);
 
     setBuddySessions(
       c.sessions.map((s) => ({
@@ -4154,6 +4186,7 @@ export function App() {
         // The folder the DESKTOP resolved. The phone can't work one out for itself, so without this
         // its bar has nothing to name and says "Default workspace" while the turn runs elsewhere.
         ...(s.chatDir ? { chatDir: s.chatDir } : {}),
+        ...(s.projectId ? { projectId: s.projectId } : {}),
       })),
     );
     // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
@@ -5086,6 +5119,13 @@ export function App() {
     if (isRemoteClient) return;
     let cancelled = false;
     void (async () => {
+      let projects: ChatProject[] = [];
+      let projectsError = "";
+      try {
+        projects = parseChatProjects(await libraryStore.getMemo?.(PROJECTS_MEMO_KEY));
+      } catch {
+        projectsError = "Couldn't load the saved projects. The saved data has not been changed. Reload before creating or renaming projects.";
+      }
       const rawSessions = await libraryStore.getMemo?.("buddy-sessions").catch(() => undefined);
       let sessions: BuddySession[] = [];
       try {
@@ -5106,6 +5146,8 @@ export function App() {
               // is gone on the next reload — which is what put every scheduled task's workspace back
               // into the chat switcher after a restart, the one place they are meant never to appear.
               ...(s.hidden ? { hidden: true as const } : {}),
+              ...(typeof s.chatDir === "string" && s.chatDir ? { chatDir: s.chatDir } : {}),
+              ...(typeof s.projectId === "string" && s.projectId ? { projectId: s.projectId } : {}),
             }));
         }
       } catch {
@@ -5124,7 +5166,12 @@ export function App() {
       const savedWorkflow = await loadBuddyWorkflow(active);
       const savedLedger = await loadFileLedger(active);
       if (cancelled) return;
+      setChatProjects(projects);
+      chatProjectsRef.current = projects;
+      setProjectLoadError(projectsError);
+      setProjectsReady(true);
       setBuddySessions(sessions);
+      buddySessionsRef.current = sessions;
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
       createdFilesRef.current = savedLedger; // the active session's written-files ledger (pushed per turn)
@@ -5726,7 +5773,7 @@ export function App() {
     setBuddyBusy(true);
     setBuddyActivity(`Searching your files for “${query}”…`);
     try {
-      const ranked = rankLocalFiles(query, await searchLocalFiles(query, buddyWorkingDir || undefined), 15);
+      const ranked = rankLocalFiles(query, await searchLocalFiles(query, workspaceDirNow()), 15);
       // The model-facing result of the search, fed back so the buddy can read/open the file next.
       const feedback = modelTurns
         ? formatBuddyToolResult({ tool: "find_files", query }, { files: ranked.map((f) => ({ path: f.path, name: f.name })) })
@@ -5869,7 +5916,7 @@ export function App() {
     setBuddyActivity(describeBuddyToolActivity(call));
     let ui: UiAutomationResult;
     try {
-      const r = await runCommand(uiAutomationCommand(call), undefined, buddyWorkingDir || undefined, "powershell");
+      const r = await runCommand(uiAutomationCommand(call), undefined, workspaceDirNow(), "powershell");
       // The script reports its OWN failures as JSON on stdout and exits 1, so a non-zero code is
       // expected and stdout is still the answer. Only fall back to stderr when stdout had nothing —
       // that is the case where PowerShell itself failed (not on Windows, assembly missing).
@@ -6178,6 +6225,7 @@ export function App() {
         return;
       // Their project is theirs. This only ever touches a folder the app made for this chat.
       if (buddyWorkingDirRef.current) return;
+      if (buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current)?.projectId) return;
       const dir = chatWorkspaceRef.current.get(activeBuddyIdRef.current);
       if (!dir) return;
       try {
@@ -6674,14 +6722,15 @@ export function App() {
       new Promise<BuddyToolResultPayload>((resolve) => {
         const requestId = ++hostToolReqId.current;
         hostToolPending.current.set(requestId, resolve);
-        sendAppSync({ type: "vrcmd:hostTool", requestId, call, ...(buddyWorkingDir ? { cwd: buddyWorkingDir } : {}) });
+        const cwd = workspaceDirNow();
+        sendAppSync({ type: "vrcmd:hostTool", requestId, call, ...(cwd ? { cwd } : {}) });
         setTimeout(() => {
           if (hostToolPending.current.delete(requestId)) {
             resolve({ error: "The desktop didn't respond — check the phone link." });
           }
         }, 600_000);
       }),
-    [sendAppSync, buddyWorkingDir],
+    [sendAppSync, workspaceDirNow],
   );
 
   // Run a host tool wherever the runtime is: directly on the desktop, or relayed to it from a phone.
@@ -9849,18 +9898,18 @@ export function App() {
     [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow, loadFileLedger, setFileLedger],
   );
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
-  const onNewBuddySession = useCallback(() => {
+  const onNewBuddySession = useCallback((projectId = buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current)?.projectId) => {
     if (isRemoteClient) {
-      sendAppSync({ type: "vrcmd:chatNew" }); // create on the desktop; the mirror brings it back
+      sendAppSync({ type: "vrcmd:chatNew", projectId: projectId ?? "" }); // create on the desktop; the mirror brings it back
       return;
     }
-    const id = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+    if (projectId && !chatProjectsRef.current.some(p => p.id === projectId)) return;
+    const id = `${BUDDY_CHAT_ID}-${crypto.randomUUID()}`;
     resetBuddyView();
-    setBuddySessions((prev) => {
-      const next = [...prev, { id, workingDir: "" }];
-      persistSessions(next);
-      return next;
-    });
+    const next = [...buddySessionsRef.current, { id, workingDir: "", ...(projectId ? { projectId } : {}) }];
+    buddySessionsRef.current = next;
+    setBuddySessions(next);
+    persistSessions(next);
     setActiveBuddyId(id);
     activeBuddyIdRef.current = id;
     setBuddyMessages([]);
@@ -9869,6 +9918,41 @@ export function App() {
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
   }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView, setFileLedger]);
   onNewBuddySessionRef.current = onNewBuddySession; // so onLeaveChat (declared earlier) can reach it
+  const onSelectProject = (projectId?: string) => {
+    if (buddyBusy || buddyPendingTool || agentApprovals.length) return;
+    const session = buddySessionsRef.current.find(s => !s.closed && !s.hidden && (s.projectId ?? "") === (projectId ?? ""));
+    if (session) onSwitchBuddySession(session.id);
+    else onNewBuddySession(projectId ?? "");
+  };
+  const onAssignChatProject = (projectId?: string) => {
+    if (isRemoteClient || buddyBusy || buddyPendingTool || agentApprovals.length) return;
+    if (projectId && !chatProjectsRef.current.some(p => p.id === projectId)) throw new Error("Choose an available project.");
+    const next = assignSessionProject(buddySessionsRef.current, activeBuddyIdRef.current, projectId);
+    buddySessionsRef.current = next;
+    setBuddySessions(next);
+    seenFilesRef.current = new Set(); // A different root must not inherit permission to edit unseen files.
+    persistSessions(next);
+  };
+  const saveChatProjects = async (projects: ChatProject[]) => {
+    if (!projectsReady || projectLoadError) throw new Error("Reload the project list before making changes.");
+    if (!libraryStore.putMemo) throw new Error("Project storage is unavailable.");
+    await libraryStore.putMemo(PROJECTS_MEMO_KEY, JSON.stringify(projects));
+    chatProjectsRef.current = projects;
+    setChatProjects(projects);
+  };
+  const onCreateChatProject = async (name: string, folder?: string) => {
+    if (!isDesktop || isRemoteClient || buddyBusy) throw new Error("Create projects on the idle desktop app.");
+    if (!projectsReady || projectLoadError) throw new Error("Reload the project list before creating a project.");
+    const id = crypto.randomUUID();
+    const project = await createChatProject(name, id, chatProjectsRef.current, folder);
+    await saveChatProjects([...chatProjectsRef.current, project]);
+    if (!buddyBusyRef.current) onNewBuddySession(id); // A turn may have started while storage was saving.
+  };
+  const onRenameChatProject = async (id: string, name: string) => {
+    const title = name.trim().slice(0, 60);
+    if (!title) throw new Error("Enter a project name.");
+    await saveChatProjects(chatProjectsRef.current.map(p => p.id === id ? { ...p, name: title } : p));
+  };
   const onDeleteBuddySession = useCallback(
     (id: string) => {
       if (isRemoteClient) {
@@ -10228,7 +10312,7 @@ export function App() {
           onReopenChatRef.current?.(c.id);
           break;
         case "vrcmd:chatNew":
-          onNewBuddySession();
+          onNewBuddySession(c.projectId);
           break;
         case "vrcmd:chatDelete":
           onDeleteBuddySession(c.id);
@@ -11133,10 +11217,24 @@ export function App() {
           id: s.id,
           label: displayLabel(s.id),
           ...(s.closed ? { closed: true } : {}),
+          ...(s.projectId ? { projectId: s.projectId } : {}),
         }))}
+      {...(isDesktop || isRemoteClient ? { projectWorkspace: {
+        projects: chatProjects,
+        ...(activeProjectId ? { activeProjectId } : {}),
+        disabled: !projectsReady || buddyBusy || !!buddyPendingTool || agentApprovals.length > 0,
+        ...(projectLoadError ? { error: projectLoadError } : {}),
+        onSelect: onSelectProject,
+        ...(isDesktop && !isRemoteClient ? {
+          onAssign: onAssignChatProject,
+          onCreate: onCreateChatProject,
+          onRename: onRenameChatProject,
+          onPickFolder: pickFolder,
+        } : {}),
+      } } : {})}
       activeSessionId={activeBuddyId}
       onSwitchSession={onSwitchBuddySession}
-      onNewSession={onNewBuddySession}
+      onNewSession={() => onNewBuddySession()}
       onRenameSession={onRenameBuddySession}
       onDeleteSession={onDeleteBuddySession}
       // ALWAYS passed — see leaveChatTargetId. Gating this is what hid the button in real setups.
