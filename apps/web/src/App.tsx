@@ -56,6 +56,7 @@ import {
   parseChatProjects,
   sessionWorkspaceDir,
   assignSessionProject,
+  formatCodingTaskReceipt,
   type ChatProject,
   chatFolderName,
   codeFileNameFor,
@@ -6513,7 +6514,9 @@ export function App() {
     setBuddyBusy(true);
     setBuddyActivity("Delegating to the coding agent…");
     let payload: { ok: boolean; installed: boolean; summary: string };
+    let codingWorkspace: string | undefined;
     try {
+      codingWorkspace = workspaceDirNow();
       const editorModel = (settings.subAgentModel ?? "").trim();
       const r = await delegateCodingTask({
         task: call.task,
@@ -6525,7 +6528,7 @@ export function App() {
         ...(call.verify ? { verify: call.verify } : {}),
         // The chat's own folder, like every other file tool — a delegated job that edited somewhere
         // other than where write_file/edit_file work would be editing a different copy of the code.
-        ...((() => { const d = workspaceDirNow(); return d ? { cwd: d } : {}; })()),
+        ...((() => { const d = codingWorkspace; return d ? { cwd: d } : {}; })()),
         ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
         ...(settings.commandShell ? { shell: settings.commandShell } : {}),
       });
@@ -6547,15 +6550,17 @@ export function App() {
       appendBuddy({
         role: "tool",
         text: r.installed
-          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}\n\n${r.summary.replace(/^\[|\]$/g, "").trim()}`
+          ? r.receipt
+            ? `🤝 ${formatCodingTaskReceipt(r.receipt)}`
+            : `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}\n\n${r.summary.replace(/^\[|\]$/g, "").trim()}`
           : (settings.codingAgentBackend ?? "aider") === "codex"
-            ? "🤝 Codex isn't installed — install it (npm i -g @openai/codex) to delegate coding jobs."
-            : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
+            ? `⚠ Codex did not start.\nWorkspace requested: ${codingWorkspace || "Default workspace (not resolved)"}\n${r.summary}\nInstall it (npm i -g @openai/codex) if it is missing.`
+            : `⚠ Aider did not start.\nWorkspace requested: ${codingWorkspace || "Default workspace (not resolved)"}\n${r.summary}\nInstall it (pipx install aider-chat) if it is missing.`,
         turns: [],
       });
     } catch (err) {
       payload = { ok: false, installed: true, summary: `[delegate_coding_task failed: ${err instanceof Error ? err.message : String(err)}]` };
-      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed.\nWorkspace requested: ${codingWorkspace || "Not resolved"}\n${err instanceof Error ? err.message : String(err)}`, turns: [] });
     }
     if (direct) {
       // /code is an explicit hand-off, not an invitation for the chat model to redo

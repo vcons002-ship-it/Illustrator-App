@@ -7,7 +7,7 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
-import { base64ToBytes, classifyLoraHeader, parseNvidiaVramCsv, summarizeVram, type LocalFile, type CodingAgentBackend, type VramSummary } from "@visual-reader/core";
+import { base64ToBytes, classifyLoraHeader, parseNvidiaVramCsv, summarizeVram, type LocalFile, type CodingAgentBackend, type CodingFileChange, type CodingTaskReceipt, type VramSummary } from "@visual-reader/core";
 
 type UnlistenFn = () => void;
 
@@ -551,6 +551,8 @@ export interface DelegateCodingResult {
   summary: string;
   /** Workspace-relative paths the agent changed (for the host's file ledger + attachments). */
   files: string[];
+  /** Host-measured before/after receipt. Separate from the model-facing instructions. */
+  receipt?: CodingTaskReceipt;
 }
 
 export interface DelegateCodingOpts {
@@ -592,7 +594,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell } =
+  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell, formatCodingTaskReceipt } =
     await import("@visual-reader/core");
   const shell = codingAgentShell(opts.shell, typeof navigator !== "undefined" && /Win/i.test(navigator.platform));
   const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined);
@@ -600,9 +602,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // 1) Is the chosen agent installed?
   try {
     const v = await run(`${bin} --version`);
-    if (v.code !== 0) return { ok: false, installed: false, summary: `${label} isn't installed.`, files: [] };
-  } catch {
-    return { ok: false, installed: false, summary: `${label} isn't installed.`, files: [] };
+    if (v.code !== 0) return { ok: false, installed: false, summary: `${label} version check failed (exit ${v.code}). ${(v.stderr || v.stdout).trim().slice(-600)}`, files: [] };
+  } catch (e) {
+    return { ok: false, installed: false, summary: `${label} could not start: ${e instanceof Error ? e.message : String(e)}`, files: [] };
   }
 
   // 2) Stage the prompt as a file + record the pre-run commit (for the diff).
@@ -664,6 +666,15 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   } catch {
     repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
+  let snapshotTree = "";
+  let trackingNote = "";
+  try {
+    if (!workDir) throw new Error("The working folder could not be resolved.");
+    const snapshot = await invoke<{ tree: string; workspace: string }>("coding_workspace_snapshot", { dir: workDir });
+    snapshotTree = snapshot.tree;
+  } catch (e) {
+    trackingNote = `Detailed before/after tracking unavailable: ${e instanceof Error ? e.message : String(e)}`;
+  }
 
   // 3) Build + run the agent against the local model. Aider takes the prompt via --message-file;
   //    Codex `exec -` reads it from STDIN (we redirect the same staged file in). They are pointed at
@@ -704,15 +715,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // the long deadline; the version probe and the git plumbing above keep the normal one.
   const agent = await runCommand(command, opts.githubToken, opts.cwd, shell, false, AGENT_TIMEOUT_SECS);
 
-  // 4) Summarize what changed.
-  //
-  // AGAINST THE INDEX, not between two commits. `git diff <sha> HEAD` compares two COMMITS, so it saw
-  // nothing at all unless the agent committed — and Codex, unlike Aider, edits the working tree and
-  // leaves committing to you. A NEW file is worse still: untracked, so a plain `git diff` misses it
-  // whether or not anything was committed. Staging everything first and diffing the INDEX against the
-  // pre-run commit catches all three cases — committed, modified-not-committed, and brand new — with
-  // one formulation. Staging is not committing; the reader's tree is left as the agent made it.
-  let stat = "";
+  // 4) Legacy, best-effort filename fallback for older desktop hosts or snapshot failures.
+  // The native comparison below is authoritative: its alternate index compares the actual
+  // pre-call working tree with the post-call tree, including previously dirty/untracked files.
   let names: string[] = [];
   try {
     const range = beforeSha ? ` ${beforeSha}` : "";
@@ -720,7 +725,6 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // repository from any subdirectory, so in a workspace that sits inside the reader's own project
     // it would sweep up work that has nothing to do with this task — and a baseline commit would
     // then bury it. Nothing here modifies the index or the tree.
-    stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
     const changedExisting: string[] = [];
     const unchangedExisting = new Set<string>();
     await Promise.all(Array.from(beforeContents, async ([path, hash]) => {
@@ -736,24 +740,38 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
       exclude: [CODING_TASK_FILE],
       excludeDirs: [CODEX_HOME_DIR],
     }).filter(path => !unchangedExisting.has(path));
-    if (unchangedExisting.size) stat = "";
   } catch {
     /* diff is best-effort */
+  }
+  let changes: CodingFileChange[] = [];
+  let trackingComplete = false;
+  if (snapshotTree) {
+    try {
+      changes = await invoke<CodingFileChange[]>("coding_workspace_changes", { dir: workDir, before: snapshotTree });
+      names = changes.map(change => change.path);
+      trackingComplete = true;
+    } catch (e) {
+      trackingNote = `Detailed before/after comparison failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  if (!trackingComplete) {
+    names = names.map(path => repoPrefix && path.startsWith(repoPrefix) ? path.slice(repoPrefix.length) : path);
+    changes = names.map(path => ({ path, kind: "unknown", added: null, removed: null, binary: false }));
   }
   const changed = names.length > 0;
 
   // 5) Optional verify (build/test) so success is checked, not assumed.
-  let verifyLine = "";
   let verifyOk = true;
+  let verification: CodingTaskReceipt["verify"] = { status: "not_requested" };
   if (opts.verify) {
     try {
       const vr = await run(opts.verify);
-      verifyOk = vr.code === 0;
+      verifyOk = vr.code === 0 && !vr.timedOut;
       const tail = (vr.stdout + vr.stderr).trim().slice(-1200);
-      verifyLine = `\nVerify \`${opts.verify}\`: ${verifyOk ? "PASSED" : `FAILED (exit ${vr.code})`}${tail ? `\n${tail}` : ""}`;
+      verification = { status: verifyOk ? "passed" : "failed", command: opts.verify, ...(tail ? { output: tail } : {}) };
     } catch (e) {
       verifyOk = false;
-      verifyLine = `\nVerify \`${opts.verify}\`: could not run (${e instanceof Error ? e.message : String(e)})`;
+      verification = { status: "failed", command: opts.verify, output: `Could not run verification: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
 
@@ -808,30 +826,23 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     ? `\n${label} was STOPPED at the ${Math.round(AGENT_TIMEOUT_SECS / 60)}-minute deadline, so whatever it had ` +
       `done so far is what is on disk. Split the job into smaller delegated tasks rather than retrying this one.`
     : "";
-  // NAME THE FILES, ALWAYS. "changed 1 file(s)" is a claim with nothing behind it, and a reader —
-  // human or model — has no way to notice it is wrong. It was wrong: an untracked directory of our
-  // own leaked into the count, an agent that had done nothing looked like it had produced a project,
-  // and the assistant went hunting for files that were never written. A list can be checked; a
-  // number cannot. `--stat` covers only what was COMMITTED, so the names go beside it, not instead.
-  const fileList = names.length ? `\nFiles: ${names.join(", ")}` : "";
   // SHOW WHAT THE AGENT SAID whenever the run did not cleanly succeed — not only when it changed
   // nothing. An agent that failed halfway explains itself in its own output, and that explanation
   // used to be dropped in exactly the case where it mattered most.
   // Keep the final agent message visible even when noisy CLI telemetry fills stderr.
   const tail = [agent.stdout.trim().slice(-800), agent.stderr.trim().slice(-400)].filter(Boolean).join("\n");
-  const tailLine = ok
-    ? (agent.stdout.trim() ? `\n${label} result:\n${agent.stdout.trim().slice(-1200)}` : "")
-    : (!tail ? "" : `\n${label} output (tail):\n${tail}`);
-  const summary = changed
-    ? `[delegate_coding_task: ${label} changed ${names.length} file(s).${fileList}${stat ? `\n${stat}` : ""}` +
-      `${timedOutLine}${verifyLine}${tailLine}${repoNote}` +
-      `\nCHECK the files above actually contain the work before reporting success — an agent's claim is ` +
-      `not evidence. If something's off, fix it with edit_file or delegate again with a sharper task.]`
-    : `[delegate_coding_task: ${label} ran but changed NO files (exit ${agent.code}).${timedOutLine}${folderLine}` +
-      `\n${label} output (tail):\n${tail}${verifyLine}${repoNote}` +
-      `\nNothing was written, so there is nothing to review. Do the change yourself with ` +
-      `write_file/edit_file, or delegate again with a clearer task.]`;
-  return { ok, installed: true, summary, files: names };
+  const receipt: CodingTaskReceipt = {
+    agent: label, model: opts.model, workspace: agent.cwd || workDir,
+    exitCode: agent.code, timedOut: agent.timedOut, changes, trackingComplete,
+    ...(trackingNote ? { trackingNote } : {}), verify: verification,
+    agentOutput: ok ? agent.stdout.trim().slice(-1200) : tail,
+  };
+  const report = formatCodingTaskReceipt(receipt);
+  // Keep no-op folder diagnostics and model-facing guidance, but display ONLY the measured
+  // receipt to the reader. An agent's own claims never supply file/line counts.
+  const measuredSummary = `[delegate_coding_task:\n${report}${folderLine}${timedOutLine}${repoNote}\n` +
+    `CHECK the listed files and verification before reporting success. Workspace changes are not proof the requested behavior works.]`;
+  return { ok, installed: true, summary: measuredSummary, files: names.filter(path => !changes.some(c => c.path === path && c.kind === "deleted")), receipt };
 }
 
 // ----------------------------------------------------------- Git worktrees

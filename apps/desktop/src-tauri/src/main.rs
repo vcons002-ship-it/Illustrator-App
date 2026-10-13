@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+mod coding_receipt;
 
 // Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
 // loader pops up for a broken executable — without this, probing a corrupt/incomplete binary (a
@@ -3313,6 +3314,22 @@ async fn git_ensure_repo(dir: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn coding_workspace_snapshot(app: AppHandle, dir: String) -> Result<coding_receipt::Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &dir) { return Err(OUTSIDE_APPROVED_ROOTS.to_string()); }
+        coding_receipt::snapshot(Path::new(&dir))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn coding_workspace_changes(app: AppHandle, dir: String, before: String) -> Result<Vec<coding_receipt::FileChange>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &dir) { return Err(OUTSIDE_APPROVED_ROOTS.to_string()); }
+        coding_receipt::changes(Path::new(&dir), &before)
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Add a worktree + branch for one agent, OUTSIDE the repo (in a temp dir) so it never
 /// pollutes the working tree. Branch names are caller-controlled (e.g. "vr-agent-1").
 #[tauri::command]
@@ -4147,6 +4164,8 @@ fn main() {
             git_repo_root,
             app_repo_root,
             git_ensure_repo,
+            coding_workspace_snapshot,
+            coding_workspace_changes,
             git_worktree_create,
             git_commit_all,
             git_worktree_diff,
