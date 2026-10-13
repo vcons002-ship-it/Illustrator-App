@@ -144,6 +144,7 @@ export interface ChatSessionInfo {
    * were not, on the device they were actually reading it on.
    */
   chatDir?: string;
+  projectId?: string;
 }
 
 /**
@@ -156,6 +157,7 @@ export interface ChatSessionInfo {
  */
 export interface ChatMirror {
   sessions: ChatSessionInfo[];
+  projects?: import("@visual-reader/core").ChatProject[];
   activeId: string;
   /** Full history of the ACTIVE session (the only one the phone displays at a time). */
   messages: StoredChatMessage[];
@@ -345,7 +347,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
   | { type: "vrcmd:chatClose"; id: string } // close (hide, KEEP history) — not a delete
   | { type: "vrcmd:chatReopen"; id: string } // bring a closed session back into the switcher
-  | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
+  | { type: "vrcmd:chatNew"; projectId?: string } // start a fresh chat session on the desktop
   | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
   | { type: "vrcmd:chatDeleteMessage"; index: number } // delete one message from the active session on the desktop (it persists + re-mirrors)
   | { type: "vrcmd:memory"; notes: MemoryNote[] } // phone edited the Memory panel → save the whole list on the desktop (it owns the store + re-mirrors)

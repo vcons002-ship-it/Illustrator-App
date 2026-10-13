@@ -24,6 +24,7 @@ export * from "./imageStatus.js";
 export * from "./activitySteps.js";
 export * from "./ChatPanel.js";
 export * from "./ChatBuddyPanel.js";
+export * from "./ProjectWorkspaceBar.js";
 export * from "./model-menu.js";
 export * from "./popover-position.js";
 export * from "./AnchoredMenu.js";

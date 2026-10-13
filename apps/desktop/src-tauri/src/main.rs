@@ -2261,8 +2261,8 @@ fn is_app_repo_root(path: &Path) -> bool {
 }
 
 /// Resolve the optional `cwd` parameter of run_command / the workspace file ops: an existing
-/// directory must be inside the approved roots (the picked session folder always is); a missing /
-/// not-a-directory value keeps the old silent fallback to the sandbox workspace (`None`).
+/// directory must be inside the approved roots (the picked session folder always is). An explicitly
+/// chosen missing folder must fail, never redirect a project's work into the default workspace.
 ///
 /// The app's OWN checkout counts as approved. The in-app updater runs `git pull` / `pnpm install` /
 /// `pnpm -r build` THERE, and that folder is not (and should not become) a reader-picked root — so
@@ -2271,9 +2271,17 @@ fn is_app_repo_root(path: &Path) -> bool {
 /// working folder), never taken from a tool call, so the only caller that can name this path is the
 /// app's own updater.
 fn resolve_approved_cwd(app: &AppHandle, cwd: Option<String>) -> Result<Option<PathBuf>, String> {
-    match cwd.filter(|c| !c.is_empty()).map(PathBuf::from).filter(|p| p.is_dir()) {
+    match requested_working_directory(cwd)? {
         Some(p) if is_approved_path(app, &p) || is_app_repo_root(&p) => Ok(Some(p)),
         Some(_) => Err(OUTSIDE_APPROVED_ROOTS.to_string()),
+        None => Ok(None),
+    }
+}
+
+fn requested_working_directory(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
+    match cwd.filter(|c| !c.trim().is_empty()).map(PathBuf::from) {
+        Some(p) if p.is_dir() => Ok(Some(p)),
+        Some(p) => Err(format!("The selected workspace folder does not exist or is not a directory: {}. Select an existing folder before continuing.", p.display())),
         None => Ok(None),
     }
 }
@@ -4191,6 +4199,15 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_missing_workspace_never_falls_back() {
+        let missing = std::env::temp_dir().join(format!("vr-missing-project-{}", std::process::id())).join("not-created");
+        assert!(super::requested_working_directory(Some(missing.to_string_lossy().into())).is_err());
+        assert!(super::requested_working_directory(Some(file!().into())).is_err());
+        assert!(super::requested_working_directory(Some(std::env::temp_dir().to_string_lossy().into())).unwrap().is_some());
+        assert!(super::requested_working_directory(None).unwrap().is_none());
+        assert!(super::requested_working_directory(Some("   ".into())).unwrap().is_none());
+    }
     #[test]
     fn workspace_dotfiles_keep_their_names() {
         assert_eq!(super::sanitize_workspace_component(".vr-coding-task.md"), ".vr-coding-task.md");

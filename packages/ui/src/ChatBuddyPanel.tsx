@@ -50,6 +50,7 @@ import {
 } from "./ParticleField.js";
 import { useSharedParticleField } from "./ParticleBackdrop.js";
 import { StepQueue } from "./StepQueue.js";
+import { ProjectWorkspaceBar, type ProjectWorkspaceBarProps } from "./ProjectWorkspaceBar.js";
 import { useStickToBottom } from "./useStickToBottom.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
@@ -129,7 +130,8 @@ export interface ChatBuddyPanelProps {
   /** Multiple chat sessions (each its own history + folder); switch/create/delete. */
   /** `closed` sessions are hidden from the picker and offered under a "Closed" group to reopen —
    * closing keeps a chat's history, unlike deleting it. */
-  sessions?: { id: string; label: string; closed?: boolean }[];
+  sessions?: { id: string; label: string; closed?: boolean; projectId?: string }[];
+  projectWorkspace?: ProjectWorkspaceBarProps;
   activeSessionId?: string;
   onSwitchSession?: (id: string) => void;
   onNewSession?: () => void;
@@ -697,6 +699,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 .filter((s) => !s.closed || s.id === props.activeSessionId)
                 .map((s) => (
                   <option key={s.id} value={s.id}>
+                    {s.projectId ? `${props.projectWorkspace?.projects.find(p => p.id === s.projectId)?.name ?? "Unavailable project"} · ` : ""}
                     {s.label}
                   </option>
                 ))}
@@ -707,6 +710,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                     .filter((s) => s.closed && s.id !== props.activeSessionId)
                     .map((s) => (
                       <option key={s.id} value={s.id}>
+                        {s.projectId ? `${props.projectWorkspace?.projects.find(p => p.id === s.projectId)?.name ?? "Unavailable project"} · ` : ""}
                         {s.label}
                       </option>
                     ))}
@@ -841,7 +845,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         </span>
       </div>
 
-      {props.onSetWorkingDir && !minimized && (
+      {props.projectWorkspace && !minimized && <ProjectWorkspaceBar {...props.projectWorkspace} />}
+      {props.onSetWorkingDir && !props.projectWorkspace?.activeProjectId && !minimized && (
         <WorkingFolderBar
           workingDir={props.workingDir ?? ""}
           {...(props.chatFolder ? { chatFolder: props.chatFolder } : {})}
