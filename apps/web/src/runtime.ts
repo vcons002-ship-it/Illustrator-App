@@ -592,9 +592,10 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase } =
+  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell } =
     await import("@visual-reader/core");
-  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined);
+  const shell = codingAgentShell(opts.shell, typeof navigator !== "undefined" && /Win/i.test(navigator.platform));
+  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined);
 
   // 1) Is the chosen agent installed?
   try {
@@ -618,6 +619,20 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   let beforeSha = "";
   let dirtyBefore = "";
   let workDir = opts.cwd ?? "";
+  // Exclude Codex's thousands of cache/plugin files BEFORE the host caps command output.
+  // Filtering afterwards can lose every real project filename beyond that cap.
+  const statusCommand = 'git status --porcelain -uall -- . ":(exclude).vr-codex/**" ":(exclude).vr-coding-task.md"';
+  let repoPrefix = "";
+  const beforeContents = new Map<string, string>();
+  const fingerprint = async (path: string): Promise<string | undefined> => {
+    try {
+      const localPath = repoPrefix && path.startsWith(repoPrefix) ? path.slice(repoPrefix.length) : path;
+      const file = await invoke<{ exists: boolean; bodyBase64: string }>("read_workspace_file", { relPath: localPath, ...(workDir ? { cwd: workDir } : {}) });
+      if (!file.exists) return "missing";
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.bodyBase64));
+      return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+    } catch { return undefined; }
+  };
   try {
     // `probe.cwd` is the folder the command ACTUALLY ran in, which is the one to work with —
     // `opts.cwd` is optional and the host resolves its own default when it is absent, so trusting it
@@ -639,7 +654,13 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // reported as its doing. Read-only — see the diff step for why nothing here stages or commits.
     // `-uall` lists the FILES inside an untracked directory instead of collapsing it to one `dir/`
     // entry — the collapsed form cannot be excluded by path and cannot be shown to the reader.
-    dirtyBefore = (await run("git status --porcelain -uall -- .")).stdout;
+    dirtyBefore = (await run(statusCommand)).stdout;
+    repoPrefix = (await run("git rev-parse --show-prefix")).stdout.trim();
+    const existingDirty = agentChangedFiles({ dirtyBefore: "", dirtyAfter: dirtyBefore, committed: "", exclude: [CODING_TASK_FILE], excludeDirs: [CODEX_HOME_DIR] });
+    await Promise.all(existingDirty.map(async path => {
+      const hash = await fingerprint(path);
+      if (hash !== undefined) beforeContents.set(path, hash);
+    }));
   } catch {
     repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
@@ -652,7 +673,6 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // The shell the reader actually uses. It is passed to buildAgentCommand rather than collapsed to a
   // Windows/not-Windows flag, because cmd and PowerShell agree on none of the three things this
   // command needs: setting an environment variable, joining two statements, and stdin redirection.
-  const shell = opts.shell;
   const isWin = shell === "cmd" || shell === "powershell";
   let command: string;
   if (backend === "codex") {
@@ -663,7 +683,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // `OLLAMA_HOST`, set here before, is not a variable Codex reads at all.
     await writeWorkspaceFile(
       `${CODEX_HOME_DIR}/config.toml`,
-      buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) }),
+      buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl), windows: isWin }),
       opts.cwd,
     );
     const home = workDir ? `${workDir}/${CODEX_HOME_DIR}` : CODEX_HOME_DIR;
@@ -682,7 +702,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // ordinary four-minute command ceiling killed it mid-edit and then reported that nothing changed —
   // the worst of both, a half-applied change and a run that looked like a no-op. Only THIS call gets
   // the long deadline; the version probe and the git plumbing above keep the normal one.
-  const agent = await runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, AGENT_TIMEOUT_SECS);
+  const agent = await runCommand(command, opts.githubToken, opts.cwd, shell, false, AGENT_TIMEOUT_SECS);
 
   // 4) Summarize what changed.
   //
@@ -701,13 +721,22 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // it would sweep up work that has nothing to do with this task — and a baseline commit would
     // then bury it. Nothing here modifies the index or the tree.
     stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
+    const changedExisting: string[] = [];
+    const unchangedExisting = new Set<string>();
+    await Promise.all(Array.from(beforeContents, async ([path, hash]) => {
+      const after = await fingerprint(path);
+      if (after === undefined) return;
+      if (after === hash) unchangedExisting.add(path);
+      else changedExisting.push(path);
+    }));
     names = agentChangedFiles({
       dirtyBefore,
-      dirtyAfter: (await run("git status --porcelain -uall -- .")).stdout,
-      committed: (await run(`git diff --name-only${range} -- .`)).stdout,
+      dirtyAfter: (await run(statusCommand)).stdout,
+      committed: [(await run(`git diff --name-only${range} -- .`)).stdout, ...changedExisting].join("\n"),
       exclude: [CODING_TASK_FILE],
       excludeDirs: [CODEX_HOME_DIR],
-    });
+    }).filter(path => !unchangedExisting.has(path));
+    if (unchangedExisting.size) stat = "";
   } catch {
     /* diff is best-effort */
   }
@@ -759,7 +788,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
         .map((e) => e.trim())
         .filter((e) => e && !e.startsWith(".vr-"))
         .slice(0, 40);
-      folderLine = entries.length
+      folderLine = ls.code !== 0
+        ? `\nCouldn't list the working folder: ${(ls.stderr || ls.stdout).trim().slice(-400)}.`
+        : entries.length
         ? `\nThe folder it ran in (${workDir || "the workspace"}) contains: ${entries.join(", ")}.` +
           `\nIf a file the task names is NOT in that list, it is not there to edit — write it first with write_file, ` +
           `then delegate again.`
@@ -769,7 +800,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     }
   }
 
-  const ok = (agent.code === 0 || changed) && verifyOk && !agent.timedOut;
+  const ok = agent.code === 0 && verifyOk && !agent.timedOut;
   // A DEADLINE IS NOT A NO-OP, and saying so is the difference between a useful next step and a
   // wasted one. "Changed no files" reads as "the task was wrong, rewrite it"; being stopped after
   // three hours means the opposite — the task was too big, split it. It was silent before.
@@ -786,8 +817,11 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // SHOW WHAT THE AGENT SAID whenever the run did not cleanly succeed — not only when it changed
   // nothing. An agent that failed halfway explains itself in its own output, and that explanation
   // used to be dropped in exactly the case where it mattered most.
-  const tail = (agent.stdout + agent.stderr).trim().slice(-1200);
-  const tailLine = ok || !tail ? "" : `\n${label} output (tail):\n${tail}`;
+  // Keep the final agent message visible even when noisy CLI telemetry fills stderr.
+  const tail = [agent.stdout.trim().slice(-800), agent.stderr.trim().slice(-400)].filter(Boolean).join("\n");
+  const tailLine = ok
+    ? (agent.stdout.trim() ? `\n${label} result:\n${agent.stdout.trim().slice(-1200)}` : "")
+    : (!tail ? "" : `\n${label} output (tail):\n${tail}`);
   const summary = changed
     ? `[delegate_coding_task: ${label} changed ${names.length} file(s).${fileList}${stat ? `\n${stat}` : ""}` +
       `${timedOutLine}${verifyLine}${tailLine}${repoNote}` +

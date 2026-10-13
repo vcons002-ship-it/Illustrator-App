@@ -49,7 +49,7 @@ describe("buildCodexArgs", () => {
   it("runs exec non-interactive, reading the prompt from stdin", () => {
     const args = buildCodexArgs({ model: "gpt-oss:20b" });
     expect(args[0]).toBe("exec");
-    expect(args).toEqual(expect.arrayContaining(["-m", "gpt-oss:20b", "--full-auto", "--skip-git-repo-check"]));
+    expect(args).toEqual(expect.arrayContaining(["-m", "gpt-oss:20b", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
     expect(args[args.length - 1]).toBe("-"); // prompt comes from stdin
   });
 });
@@ -91,9 +91,9 @@ describe("the delegation runtime's failure modes", () => {
     // ordinary four-minute command ceiling killed it mid-edit, leaving a half-applied change AND a
     // report that nothing happened.
     expect(RUNTIME).toContain("const AGENT_TIMEOUT_SECS = 90 * 60;");
-    expect(RUNTIME).toContain("opts.shell, false, AGENT_TIMEOUT_SECS)");
+    expect(RUNTIME).toContain("shell, false, AGENT_TIMEOUT_SECS)");
     // Only that one call: the version probe and the git plumbing keep the normal ceiling.
-    expect(RUNTIME).toContain("runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined)");
+    expect(RUNTIME).toContain("runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined)");
   });
 
   it("bounds what a caller may ask for, in both directions", () => {
@@ -114,7 +114,7 @@ describe("the delegation runtime's failure modes", () => {
     // "changed 1 file(s)" is a claim with nothing behind it; a list can be checked, a number cannot.
     expect(RUNTIME).toContain("const fileList = names.length ? `\\nFiles: ${names.join(\", \")}` : \"\";");
     // And the agent's own output is shown whenever the run did not cleanly succeed.
-    expect(RUNTIME).toContain("const tailLine = ok || !tail ?");
+    expect(RUNTIME).toContain("const tailLine = ok");
   });
 
   it("reports what changed WITHOUT staging or committing anything", () => {
@@ -125,7 +125,7 @@ describe("the delegation runtime's failure modes", () => {
     expect(RUNTIME).not.toMatch(/\$\{beforeSha\} HEAD/);
     expect(RUNTIME, "the delegation runner must never stage").not.toMatch(/run\("git add -A"\)/);
     expect(RUNTIME, "the delegation runner must never commit").not.toMatch(/git commit -m "before delegate/);
-    expect(RUNTIME).toContain('await run("git status --porcelain -uall -- .")');
+    expect(RUNTIME).toContain('await run(statusCommand)');
     expect(RUNTIME).toContain("names = agentChangedFiles({");
     // Our own scaffolding is not the agent's work.
     expect(RUNTIME).toContain("exclude: [CODING_TASK_FILE],");
@@ -136,7 +136,7 @@ describe("the delegation runtime's failure modes", () => {
     // and `OLLAMA_HOST` — which this used to set — is not a variable Codex reads.
     expect(RUNTIME).not.toContain("OLLAMA_HOST=");
     expect(RUNTIME).toContain('const CODEX_HOME_DIR = ".vr-codex";');
-    expect(RUNTIME).toContain("buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) })");
+    expect(RUNTIME).toContain("buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl), windows: isWin })");
     // The env var is no longer spelled into a cmd string here — buildAgentCommand writes it in the
     // reader's actual shell, because `set "K=v"` is a PowerShell VARIABLE and never reached Codex.
     expect(RUNTIME).toContain("env: { CODEX_HOME: home }");
@@ -182,7 +182,8 @@ describe("buildCodexArgs", () => {
   it("reads the task from stdin and applies without prompting", () => {
     const args = buildCodexArgs({ model: "m" });
     expect(args[0]).toBe("exec");
-    expect(args).toContain("--full-auto");
+    expect(args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write"]));
+    expect(args).not.toContain("--full-auto");
     expect(args.at(-1)).toBe("-");
   });
 });
@@ -200,6 +201,13 @@ describe("buildCodexConfigToml", () => {
 
   it("asks for no API key, so a local run never needs one", () => {
     expect(toml).not.toContain("env_key");
+  });
+
+  it("enables a restricted native sandbox in the isolated Windows Codex home", () => {
+    const config = buildCodexConfigToml({ model: "m", baseUrl: "http://localhost:11434/v1", windows: true });
+    expect(config).toContain('[windows]\nsandbox = "unelevated"');
+    expect(config).toContain('approval_policy = "never"');
+    expect(toml).not.toContain("[windows]");
   });
 
   it("quotes values as TOML, whatever the model id contains", () => {

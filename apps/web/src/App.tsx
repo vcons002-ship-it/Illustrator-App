@@ -6443,7 +6443,7 @@ export function App() {
   // Delegate a hard, multi-file coding job to an EXTERNAL agent (Aider) running headless on the same
   // local model, in the workspace; capture its diff and feed a summary back. Mirrors runEditFile's
   // shape (capture pre-context, run, ledger the changed files, react in the workflow or plainly).
-  const runDelegateCodingTask = async (call: Extract<BuddyToolCall, { tool: "delegate_coding_task" }>): Promise<void> => {
+  const runDelegateCodingTask = async (call: Extract<BuddyToolCall, { tool: "delegate_coding_task" }>, direct = false): Promise<void> => {
     setBuddyPendingTool(undefined);
     const pre = pendingBuddyTranscript.current;
     const preHistory = pendingBuddyHistory.current;
@@ -6508,6 +6508,13 @@ export function App() {
     } catch (err) {
       payload = { ok: false, installed: true, summary: `[delegate_coding_task failed: ${err instanceof Error ? err.message : String(err)}]` };
       appendBuddy({ role: "tool", text: `⚠ Coding delegation failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+    }
+    if (direct) {
+      // /code is an explicit hand-off, not an invitation for the chat model to redo
+      // the job after Codex finishes. The result is already visible in the tool bubble.
+      setBuddyBusy(false);
+      setBuddyActivity("");
+      return;
     }
     const feedback = formatBuddyToolResult(call, { delegateCoding: payload });
     if (appManagedActive && buddyWorkflowRef.current) {
@@ -8730,7 +8737,7 @@ export function App() {
       const code = /^\/code\s+([\s\S]+)$/i.exec(text.trim());
       if (code) {
         appendBuddy({ role: "user", text });
-        await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() });
+        await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() }, true);
         return;
       }
       /**

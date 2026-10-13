@@ -427,6 +427,25 @@ fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        // Explorer and long-lived GUI processes can retain an old PATH. npm-installed
+        // coding tools need both their shim folder and Node in every child environment.
+        let mut dirs = Vec::new();
+        for (var, suffix) in [
+            ("ProgramFiles", "nodejs"),
+            ("LOCALAPPDATA", "Programs/nodejs"),
+            ("APPDATA", "npm"),
+            ("LOCALAPPDATA", "pnpm"),
+            ("USERPROFILE", ".cargo/bin"),
+        ] {
+            if let Some(base) = std::env::var_os(var) {
+                let dir = PathBuf::from(base).join(suffix);
+                if dir.is_dir() { dirs.push(dir); }
+            }
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            dirs.extend(std::env::split_paths(&path));
+        }
+        if let Ok(path) = std::env::join_paths(dirs) { cmd.env("PATH", path); }
     }
     cmd
 }
@@ -2013,7 +2032,7 @@ async fn write_workspace_file(
             if p.is_empty() || p == "." || p == ".." {
                 continue;
             }
-            dest.push(sanitize_filename(p));
+            dest.push(sanitize_workspace_component(p));
             any = true;
         }
         if !any {
@@ -2075,7 +2094,7 @@ async fn read_workspace_file(
             if p.is_empty() || p == "." || p == ".." {
                 continue;
             }
-            dest.push(sanitize_filename(p));
+            dest.push(sanitize_workspace_component(p));
             any = true;
         }
         if !any {
@@ -2110,6 +2129,16 @@ fn sanitize_filename(name: &str) -> String {
         .filter(|c| !matches!(c, '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
         .collect();
     let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() { "export".to_string() } else { trimmed.to_string() }
+}
+
+/// Workspace dotfiles are meaningful (Codex config/prompt), unlike export names.
+/// The callers reject standalone dot/parent components before joining them.
+fn sanitize_workspace_component(name: &str) -> String {
+    let cleaned: String = name.chars()
+        .filter(|c| !matches!(c, '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '/' | '\\'))
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches('.');
     if trimmed.is_empty() { "export".to_string() } else { trimmed.to_string() }
 }
 
@@ -4162,6 +4191,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_dotfiles_keep_their_names() {
+        assert_eq!(super::sanitize_workspace_component(".vr-coding-task.md"), ".vr-coding-task.md");
+        assert_eq!(super::sanitize_workspace_component(".vr-codex"), ".vr-codex");
+        assert_eq!(super::sanitize_workspace_component("config.toml"), "config.toml");
+        assert_eq!(super::sanitize_workspace_component("a:b?c"), "abc");
+        assert_eq!(super::sanitize_workspace_component("..."), "export");
+    }
     #[test]
     fn a1111_failure_includes_bounded_log_and_cause() {
         let path = std::env::temp_dir().join(format!("visual-reader-a1111-test-{}.log", std::process::id()));
