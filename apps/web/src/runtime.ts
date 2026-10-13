@@ -506,6 +506,21 @@ export function writeWorkspaceFileBytes(relPath: string, bytes: Uint8Array, cwd?
   return invoke<string>("write_workspace_file", { relPath, contentBase64: bytesToBase64(bytes), ...(cwd ? { cwd } : {}) });
 }
 
+export interface WorkspaceUploadSaved {
+  path: string;
+  absolutePath: string;
+  bytes: number;
+  renamed: boolean;
+  extractedPath?: string | null;
+  extractedError?: string | null;
+}
+
+/** Preserve original bytes in uploads/ using atomic no-overwrite creation and explicit scope. */
+export function saveWorkspaceUpload(filename: string, bytes: ArrayBuffer, dir: string, extractedText?: string): Promise<WorkspaceUploadSaved> {
+  if (!dir.trim()) return Promise.reject(new Error("An explicit upload workspace is required."));
+  return invoke<WorkspaceUploadSaved>("save_workspace_upload", { filename, dir, bodyBase64: bytesToBase64(new Uint8Array(bytes)), ...(extractedText !== undefined ? { extractedText } : {}) });
+}
+
 /**
  * Read a workspace-RELATIVE file (the counterpart to {@link writeWorkspaceFile}): the Rust side resolves
  * + sanitizes the path the SAME way (never escapes the workspace) and returns `{ exists, text }` —

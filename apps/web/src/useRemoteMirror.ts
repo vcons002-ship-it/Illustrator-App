@@ -211,6 +211,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "assistant", busy: false });
   const applyChatRef = useRef<(c: ChatMirror) => void>(() => {});
   const chatCommandRef = useRef<(c: CmdToDesktop) => void>(() => {});
+  const uploadSavedRef = useRef<(c: Extract<AppSyncMessage, { type: "vrsync:uploadSaved" }>) => void>(() => {});
   // The live in-flight-turn state (streaming/thinking/activity/steps/pending approvals/usage) — held
   // in a ref so the connect snapshot carries it and the throttled push effect (in App.tsx) can land
   // a trailing send; `applyChatLiveRef` is the phone's adopt-the-live-state setter.
@@ -461,6 +462,9 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             }
             break;
           }
+          case "vrsync:uploadSaved":
+            uploadSavedRef.current(msg);
+            break;
           case "vrsync:fileData": {
             // The desktop is returning a file's bytes (vrcmd:fetchFile), CHUNKED — accumulate until all
             // `total` pieces arrive, then reassemble and resolve. `total === 0` ⇒ the desktop couldn't find it.
@@ -665,6 +669,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             }
             break;
           }
+          case "vrcmd:saveUpload":
           case "vrcmd:chatSend":
           case "vrcmd:storyStart":
           case "vrcmd:chatSwitch":
@@ -986,6 +991,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     runUpdateForPhoneRef,
     phoneUpdatePending,
     runHostToolForRemoteRef,
+    uploadSavedRef,
     hostToolPending,
     fileFetchPending,
     fileChunkBufs,
