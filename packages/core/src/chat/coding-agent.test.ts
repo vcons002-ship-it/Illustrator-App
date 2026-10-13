@@ -112,9 +112,10 @@ describe("the delegation runtime's failure modes", () => {
 
   it("names the changed files instead of only counting them", () => {
     // "changed 1 file(s)" is a claim with nothing behind it; a list can be checked, a number cannot.
-    expect(RUNTIME).toContain("const fileList = names.length ? `\\nFiles: ${names.join(\", \")}` : \"\";");
+    expect(RUNTIME).toContain("const report = formatCodingTaskReceipt(receipt)");
+    expect(RUNTIME).toContain("changes = await invoke<CodingFileChange[]>");
     // And the agent's own output is shown whenever the run did not cleanly succeed.
-    expect(RUNTIME).toContain("const tailLine = ok");
+    expect(RUNTIME).toContain("agentOutput: ok ? agent.stdout.trim()");
   });
 
   it("reports what changed WITHOUT staging or committing anything", () => {

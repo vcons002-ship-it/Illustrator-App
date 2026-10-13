@@ -55,8 +55,11 @@ import {
   PROJECTS_MEMO_KEY,
   parseChatProjects,
   sessionWorkspaceDir,
+  sameWorkspacePath,
   assignSessionProject,
+  formatCodingTaskReceipt,
   type ChatProject,
+  type CodingChatContext,
   chatFolderName,
   codeFileNameFor,
   readmeChatId,
@@ -6491,6 +6494,30 @@ export function App() {
   // Delegate a hard, multi-file coding job to an EXTERNAL agent (Aider) running headless on the same
   // local model, in the workspace; capture its diff and feed a summary back. Mirrors runEditFile's
   // shape (capture pre-context, run, ledger the changed files, react in the workflow or plainly).
+  const codingChatScopeNow = useCallback((): string => {
+    const id = activeBuddyIdRef.current;
+    const s = buddySessionsRef.current.find(session => session.id === id);
+    const project = chatProjectsRef.current.find(p => p.id === s?.projectId);
+    return JSON.stringify([id, s?.projectId, s?.workingDir, project?.workspaceDir]);
+  }, []);
+  const snapshotCodingChatContext = useCallback((pending: ChatTurn[] = []): CodingChatContext => {
+    const id = activeBuddyIdRef.current;
+    const session = buddySessionsRef.current.find(s => s.id === id);
+    const project = chatProjectsRef.current.find(p => p.id === session?.projectId);
+    // Select visible fields explicitly; never serialize StoredChatMessage's hidden turns/thinking.
+    const messages = buddyMessagesRef.current.map(m => ({ role: m.role, text: m.text }));
+    for (const turn of pending) {
+      if (turn.role === "user" && !messages.some(m => m.role === "user" && m.text === turn.content))
+        messages.push({ role: "user", text: turn.content });
+    }
+    const plan = buddyPlanRef.current;
+    return {
+      chatId: id, chatLabel: displayLabel(id), ...(project ? { projectName: project.name } : {}),
+      messages, ...(plan ? { plan: { ...plan, steps: plan.steps.map(s => ({ ...s })) } } : {}),
+      referencedFiles: createdFilesRef.current.map(f => f.path),
+    };
+  }, [displayLabel]);
+
   const runDelegateCodingTask = async (call: Extract<BuddyToolCall, { tool: "delegate_coding_task" }>, direct = false): Promise<void> => {
     setBuddyPendingTool(undefined);
     const pre = pendingBuddyTranscript.current;
@@ -6513,10 +6540,17 @@ export function App() {
     setBuddyBusy(true);
     setBuddyActivity("Delegating to the coding agent…");
     let payload: { ok: boolean; installed: boolean; summary: string };
+    let codingWorkspace: string | undefined;
     try {
+      const scopeAtStart = codingChatScopeNow();
+      const chatContext = snapshotCodingChatContext(pre);
+      codingWorkspace = await workspaceForWrite();
+      if (!codingWorkspace || activeBuddyIdRef.current !== chatContext.chatId || codingChatScopeNow() !== scopeAtStart)
+        throw new Error("The chat changed or its workspace could not be resolved. Retry from the intended project/chat.");
       const editorModel = (settings.subAgentModel ?? "").trim();
       const r = await delegateCodingTask({
         task: call.task,
+        chatContext,
         backend: settings.codingAgentBackend ?? "aider",
         model,
         ...(editorModel ? { editorModel } : {}),
@@ -6525,7 +6559,7 @@ export function App() {
         ...(call.verify ? { verify: call.verify } : {}),
         // The chat's own folder, like every other file tool — a delegated job that edited somewhere
         // other than where write_file/edit_file work would be editing a different copy of the code.
-        ...((() => { const d = workspaceDirNow(); return d ? { cwd: d } : {}; })()),
+        ...((() => { const d = codingWorkspace; return d ? { cwd: d } : {}; })()),
         ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
         ...(settings.commandShell ? { shell: settings.commandShell } : {}),
       });
@@ -6547,15 +6581,17 @@ export function App() {
       appendBuddy({
         role: "tool",
         text: r.installed
-          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}\n\n${r.summary.replace(/^\[|\]$/g, "").trim()}`
+          ? r.receipt
+            ? `🤝 ${formatCodingTaskReceipt(r.receipt)}`
+            : `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}\n\n${r.summary.replace(/^\[|\]$/g, "").trim()}`
           : (settings.codingAgentBackend ?? "aider") === "codex"
-            ? "🤝 Codex isn't installed — install it (npm i -g @openai/codex) to delegate coding jobs."
-            : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
+            ? `⚠ Codex did not start.\nWorkspace requested: ${codingWorkspace || "Default workspace (not resolved)"}\n${r.summary}\nInstall it (npm i -g @openai/codex) if it is missing.`
+            : `⚠ Aider did not start.\nWorkspace requested: ${codingWorkspace || "Default workspace (not resolved)"}\n${r.summary}\nInstall it (pipx install aider-chat) if it is missing.`,
         turns: [],
       });
     } catch (err) {
       payload = { ok: false, installed: true, summary: `[delegate_coding_task failed: ${err instanceof Error ? err.message : String(err)}]` };
-      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed.\nWorkspace requested: ${codingWorkspace || "Not resolved"}\n${err instanceof Error ? err.message : String(err)}`, turns: [] });
     }
     if (direct) {
       // /code is an explicit hand-off, not an invitation for the chat model to redo
@@ -6682,15 +6718,24 @@ export function App() {
           if (!model || !serverUrl || !isOllama)
             return { delegateCoding: { ok: false, installed: true, summary: "[delegate_coding_task needs a connected Ollama model on the desktop.]" } };
           const editorModel = (settings.subAgentModel ?? "").trim();
+          // A phone override can select another workspace. Never attach this desktop chat to it.
+          const scopeAtStart = codingChatScopeNow();
+          const selectedDir = workspaceDirNow();
+          const chatContext = !cwdOverride || (selectedDir && sameWorkspacePath(dir ?? "", selectedDir))
+            ? snapshotCodingChatContext() : undefined;
+          const codingDir = dir || await workspaceForWrite();
+          if (!codingDir || (chatContext && (activeBuddyIdRef.current !== chatContext.chatId || codingChatScopeNow() !== scopeAtStart)))
+            return { error: "Coding workspace changed or could not be resolved. Retry from the intended chat." };
           const r = await delegateCodingTask({
             task: call.task,
+            ...(chatContext ? { chatContext } : {}),
             backend: settings.codingAgentBackend ?? "aider",
             model,
             ...(editorModel ? { editorModel } : {}),
             textServerUrl: serverUrl,
             ...(call.files ? { files: call.files } : {}),
             ...(call.verify ? { verify: call.verify } : {}),
-            ...(dir ? { cwd: dir } : {}),
+            cwd: codingDir,
             ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
             ...(settings.commandShell ? { shell: settings.commandShell } : {}),
           });
@@ -6710,7 +6755,7 @@ export function App() {
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [workspaceDirNow, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
+    [workspaceDirNow, workspaceForWrite, snapshotCodingChatContext, codingChatScopeNow, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
   );
   useEffect(() => {
     runHostToolForRemoteRef.current = runHostToolForRemote;

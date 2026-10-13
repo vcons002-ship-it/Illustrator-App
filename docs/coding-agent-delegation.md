@@ -1,5 +1,8 @@
 # External coding-agent delegation
 
+The app now also provides a bounded [active-chat/project context handoff](./coding-context-handoff.md)
+for `/code` and ordinary delegation. The task should still describe the current change clearly.
+
 The app can hand a hard, multi-file coding job to an **external open-source coding agent**
 ([Aider](https://aider.chat) by default, or [Codex CLI](https://developers.openai.com/codex/cli)
 as a backup — a settings toggle) instead of grinding it out edit-by-edit with the in-app
@@ -14,7 +17,7 @@ integration. **"Option B" (ACP)** is the documented future upgrade — see the b
 ## How it works
 
 - Tool: `delegate_coding_task` (in `packages/core/src/chat/buddy-tools.ts`). Args: `task`
-  (a full self-contained spec — the agent doesn't see the chat), optional `files` (known
+  (the current change spec, supplemented by bounded chat/plan/project context), optional `files` (known
   starting files), optional `verify` (a build/test command run after).
 - Gating: desktop + **Allow commands** + the **"Delegate hard coding jobs to an external
   agent (Aider)"** setting + an Ollama chat model. The tool is only advertised to the model

@@ -1037,6 +1037,7 @@ describe("the per-chat workspace layout", () => {
    * the model reasoned wrongly about it there was nothing to compare its account against.
    */
   it("shows the reader what the coding agent actually reported", () => {
+    expect(APP_RAW).toContain("formatCodingTaskReceipt(r.receipt)");
     expect(APP_RAW).toContain("r.summary.replace(");
     expect(APP_RAW).toContain('changed ${r.files.length} file(s)');
   });

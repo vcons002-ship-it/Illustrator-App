@@ -1406,7 +1406,7 @@ export function buildBuddySystemPrompt(raw: {
         "hand a HARD, multi-file coding job to an EXTERNAL coding agent (Aider or Codex) that runs headless on the SAME local " +
         "model, in the workspace, and edits the files itself; the app captures the resulting diff. Use it for a job " +
         "that would take many edit_file/write_file rounds (refactor across files, implement a feature touching several " +
-        "modules). Put the FULL spec in `task` (it doesn't see this chat); name known starting `files`; give a `verify` " +
+        "modules). Put the FULL current spec in `task`; the app also hands off bounded recent visible chat, the active plan and selected workspace notes (not the entire chat). Name known starting `files`; give a `verify` " +
         "build/test command so success is checked, not assumed. For a small one- or two-line change, just edit_file it " +
         "yourself — this has real startup cost. If the reader ASKS for this tool by name, USE IT: writing the files " +
         "yourself instead is not the same job, however well it turns out.\n"
@@ -3914,7 +3914,7 @@ export function ollamaToolSchemas(opts: {
         "delegate_coding_task",
         "Hand a hard multi-file coding job to an external coding agent (Aider) that edits the workspace itself.",
         {
-          task: strParam("Full self-contained spec of what to build/change (the agent doesn't see this chat)."),
+          task: strParam("Full current spec of what to build/change. The app adds bounded active-chat/plan context and selected workspace notes; repeat essential older constraints explicitly."),
           files: { type: "array", description: "Known starting files (workspace-relative).", items: { type: "string" } },
           verify: strParam("Optional build/test command run after, to check success."),
         },
