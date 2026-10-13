@@ -6,11 +6,16 @@ vi.mock("@visual-reader/core", async () => ({
 
 afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
 
-async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0, cacheFlood = false) {
+async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0, cacheFlood = false, priorEdit?: "tracked-unchanged" | "untracked-changed") {
   const writes = new Map<string, string>();
   const commands: { command: string; shell: string | undefined }[] = [];
   let statusCalls = 0;
+  let reads = 0;
   const invoke = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (name === "read_workspace_file") {
+      const bodyBase64 = priorEdit === "untracked-changed" && reads++ > 0 ? "YWZ0ZXI=" : "YmVmb3Jl";
+      return { exists: true, path: `C:/evaluation/${args.relPath}`, bodyBase64 };
+    }
     if (name === "write_workspace_file") {
       writes.set(String(args.relPath), String(args.contentBase64));
       return `C:/evaluation/${args.relPath}`;
@@ -24,14 +29,17 @@ async function delegateFixture(agentExit: number, changed: boolean, listingExit 
     if (command === "codex --version") stdout = "codex-cli 0.147.0";
     else if (command === "git rev-parse --show-toplevel") stdout = "C:/evaluation";
     else if (command === "git rev-parse HEAD") stdout = "abc123";
+    else if (command === "git rev-parse --show-prefix") stdout = "";
     else if (command.startsWith("git status")) {
       statusCalls++;
+      if (priorEdit) stdout = (priorEdit === "tracked-unchanged" ? " M " : "?? ") + "invoice-total.mjs\n";
       if (statusCalls > 1) {
         const cache = cacheFlood ? "?? .vr-codex/cache/plugin.json\n".repeat(3000) : "?? .vr-codex/config.toml\n?? .vr-coding-task.md\n";
-        stdout = ((command.includes('":(exclude).vr-codex/**"') ? "" : cache) + (changed ? "?? normalize-title.mjs\n" : "")).slice(0, 24000);
+        stdout += ((command.includes('":(exclude).vr-codex/**"') ? "" : cache) + (changed ? "?? normalize-title.mjs\n" : "")).slice(0, 24000);
       }
     } else if (command.startsWith("set ")) { code = agentExit; stderr = agentExit ? "unexpected argument --full-auto" : ""; }
     else if (command === "dir /b") { code = listingExit; stdout = listingExit ? "" : "invoice-total.mjs\ninvoice-total.test.mjs"; stderr = listingExit ? "directory query failed" : ""; }
+    else if (command.startsWith("git diff --name-only") && priorEdit === "tracked-unchanged") stdout = "invoice-total.mjs\n";
     else if (!command.startsWith("git diff")) throw new Error(`Unexpected command: ${command}`);
     return { stdout, stderr, code, timedOut: false, cwd: "C:/evaluation" };
   });
@@ -78,5 +86,13 @@ describe("live delegation bridge behavior", () => {
   it("reports project edits even when Codex's cache exceeds the host output cap", async () => {
     const { result } = await delegateFixture(0, true, 0, true);
     expect(result.files).toEqual(["normalize-title.mjs"]);
+  });
+  it("does not count an unchanged edit from an earlier job", async () => {
+    const { result } = await delegateFixture(0, true, 0, false, "tracked-unchanged");
+    expect(result.files).toEqual(["normalize-title.mjs"]);
+  });
+  it("detects edits to files that were already untracked", async () => {
+    const { result } = await delegateFixture(0, false, 0, false, "untracked-changed");
+    expect(result.files).toEqual(["invoice-total.mjs"]);
   });
 });

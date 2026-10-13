@@ -622,6 +622,17 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // Exclude Codex's thousands of cache/plugin files BEFORE the host caps command output.
   // Filtering afterwards can lose every real project filename beyond that cap.
   const statusCommand = 'git status --porcelain -uall -- . ":(exclude).vr-codex/**" ":(exclude).vr-coding-task.md"';
+  let repoPrefix = "";
+  const beforeContents = new Map<string, string>();
+  const fingerprint = async (path: string): Promise<string | undefined> => {
+    try {
+      const localPath = repoPrefix && path.startsWith(repoPrefix) ? path.slice(repoPrefix.length) : path;
+      const file = await invoke<{ exists: boolean; bodyBase64: string }>("read_workspace_file", { relPath: localPath, ...(workDir ? { cwd: workDir } : {}) });
+      if (!file.exists) return "missing";
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.bodyBase64));
+      return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+    } catch { return undefined; }
+  };
   try {
     // `probe.cwd` is the folder the command ACTUALLY ran in, which is the one to work with —
     // `opts.cwd` is optional and the host resolves its own default when it is absent, so trusting it
@@ -644,6 +655,12 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // `-uall` lists the FILES inside an untracked directory instead of collapsing it to one `dir/`
     // entry — the collapsed form cannot be excluded by path and cannot be shown to the reader.
     dirtyBefore = (await run(statusCommand)).stdout;
+    repoPrefix = (await run("git rev-parse --show-prefix")).stdout.trim();
+    const existingDirty = agentChangedFiles({ dirtyBefore: "", dirtyAfter: dirtyBefore, committed: "", exclude: [CODING_TASK_FILE], excludeDirs: [CODEX_HOME_DIR] });
+    await Promise.all(existingDirty.map(async path => {
+      const hash = await fingerprint(path);
+      if (hash !== undefined) beforeContents.set(path, hash);
+    }));
   } catch {
     repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
@@ -704,13 +721,22 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // it would sweep up work that has nothing to do with this task — and a baseline commit would
     // then bury it. Nothing here modifies the index or the tree.
     stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
+    const changedExisting: string[] = [];
+    const unchangedExisting = new Set<string>();
+    await Promise.all(Array.from(beforeContents, async ([path, hash]) => {
+      const after = await fingerprint(path);
+      if (after === undefined) return;
+      if (after === hash) unchangedExisting.add(path);
+      else changedExisting.push(path);
+    }));
     names = agentChangedFiles({
       dirtyBefore,
       dirtyAfter: (await run(statusCommand)).stdout,
-      committed: (await run(`git diff --name-only${range} -- .`)).stdout,
+      committed: [(await run(`git diff --name-only${range} -- .`)).stdout, ...changedExisting].join("\n"),
       exclude: [CODING_TASK_FILE],
       excludeDirs: [CODEX_HOME_DIR],
-    });
+    }).filter(path => !unchangedExisting.has(path));
+    if (unchangedExisting.size) stat = "";
   } catch {
     /* diff is best-effort */
   }
