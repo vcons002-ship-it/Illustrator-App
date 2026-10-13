@@ -619,6 +619,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   let beforeSha = "";
   let dirtyBefore = "";
   let workDir = opts.cwd ?? "";
+  // Exclude Codex's thousands of cache/plugin files BEFORE the host caps command output.
+  // Filtering afterwards can lose every real project filename beyond that cap.
+  const statusCommand = 'git status --porcelain -uall -- . ":(exclude).vr-codex/**" ":(exclude).vr-coding-task.md"';
   try {
     // `probe.cwd` is the folder the command ACTUALLY ran in, which is the one to work with —
     // `opts.cwd` is optional and the host resolves its own default when it is absent, so trusting it
@@ -640,7 +643,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // reported as its doing. Read-only — see the diff step for why nothing here stages or commits.
     // `-uall` lists the FILES inside an untracked directory instead of collapsing it to one `dir/`
     // entry — the collapsed form cannot be excluded by path and cannot be shown to the reader.
-    dirtyBefore = (await run("git status --porcelain -uall -- .")).stdout;
+    dirtyBefore = (await run(statusCommand)).stdout;
   } catch {
     repoNote = "\n(Couldn't prepare a git baseline, so the list of changed files may be incomplete.)";
   }
@@ -703,7 +706,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     stat = (await run(`git diff --stat${range} -- .`)).stdout.trim();
     names = agentChangedFiles({
       dirtyBefore,
-      dirtyAfter: (await run("git status --porcelain -uall -- .")).stdout,
+      dirtyAfter: (await run(statusCommand)).stdout,
       committed: (await run(`git diff --name-only${range} -- .`)).stdout,
       exclude: [CODING_TASK_FILE],
       excludeDirs: [CODEX_HOME_DIR],

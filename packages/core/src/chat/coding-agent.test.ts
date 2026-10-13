@@ -125,7 +125,7 @@ describe("the delegation runtime's failure modes", () => {
     expect(RUNTIME).not.toMatch(/\$\{beforeSha\} HEAD/);
     expect(RUNTIME, "the delegation runner must never stage").not.toMatch(/run\("git add -A"\)/);
     expect(RUNTIME, "the delegation runner must never commit").not.toMatch(/git commit -m "before delegate/);
-    expect(RUNTIME).toContain('await run("git status --porcelain -uall -- .")');
+    expect(RUNTIME).toContain('await run(statusCommand)');
     expect(RUNTIME).toContain("names = agentChangedFiles({");
     // Our own scaffolding is not the agent's work.
     expect(RUNTIME).toContain("exclude: [CODING_TASK_FILE],");

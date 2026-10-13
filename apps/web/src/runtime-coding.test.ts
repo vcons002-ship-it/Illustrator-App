@@ -6,7 +6,7 @@ vi.mock("@visual-reader/core", async () => ({
 
 afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
 
-async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0) {
+async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0, cacheFlood = false) {
   const writes = new Map<string, string>();
   const commands: { command: string; shell: string | undefined }[] = [];
   let statusCalls = 0;
@@ -26,7 +26,10 @@ async function delegateFixture(agentExit: number, changed: boolean, listingExit 
     else if (command === "git rev-parse HEAD") stdout = "abc123";
     else if (command.startsWith("git status")) {
       statusCalls++;
-      if (statusCalls > 1) stdout = "?? .vr-codex/config.toml\n?? .vr-coding-task.md\n" + (changed ? "?? normalize-title.mjs\n" : "");
+      if (statusCalls > 1) {
+        const cache = cacheFlood ? "?? .vr-codex/cache/plugin.json\n".repeat(3000) : "?? .vr-codex/config.toml\n?? .vr-coding-task.md\n";
+        stdout = ((command.includes('":(exclude).vr-codex/**"') ? "" : cache) + (changed ? "?? normalize-title.mjs\n" : "")).slice(0, 24000);
+      }
     } else if (command.startsWith("set ")) { code = agentExit; stderr = agentExit ? "unexpected argument --full-auto" : ""; }
     else if (command === "dir /b") { code = listingExit; stdout = listingExit ? "" : "invoice-total.mjs\ninvoice-total.test.mjs"; stderr = listingExit ? "directory query failed" : ""; }
     else if (!command.startsWith("git diff")) throw new Error(`Unexpected command: ${command}`);
@@ -71,5 +74,9 @@ describe("live delegation bridge behavior", () => {
     const { result } = await delegateFixture(1, false, 1);
     expect(result.summary).toContain("Couldn't list the working folder");
     expect(result.summary).not.toContain("EMPTY");
+  });
+  it("reports project edits even when Codex's cache exceeds the host output cap", async () => {
+    const { result } = await delegateFixture(0, true, 0, true);
+    expect(result.files).toEqual(["normalize-title.mjs"]);
   });
 });
