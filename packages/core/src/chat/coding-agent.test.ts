@@ -136,7 +136,7 @@ describe("the delegation runtime's failure modes", () => {
     // and `OLLAMA_HOST` — which this used to set — is not a variable Codex reads.
     expect(RUNTIME).not.toContain("OLLAMA_HOST=");
     expect(RUNTIME).toContain('const CODEX_HOME_DIR = ".vr-codex";');
-    expect(RUNTIME).toContain("buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) })");
+    expect(RUNTIME).toContain("buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl), windows: isWin })");
     // The env var is no longer spelled into a cmd string here — buildAgentCommand writes it in the
     // reader's actual shell, because `set "K=v"` is a PowerShell VARIABLE and never reached Codex.
     expect(RUNTIME).toContain("env: { CODEX_HOME: home }");
@@ -201,6 +201,13 @@ describe("buildCodexConfigToml", () => {
 
   it("asks for no API key, so a local run never needs one", () => {
     expect(toml).not.toContain("env_key");
+  });
+
+  it("enables a restricted native sandbox in the isolated Windows Codex home", () => {
+    const config = buildCodexConfigToml({ model: "m", baseUrl: "http://localhost:11434/v1", windows: true });
+    expect(config).toContain('[windows]\nsandbox = "unelevated"');
+    expect(config).toContain('approval_policy = "never"');
+    expect(toml).not.toContain("[windows]");
   });
 
   it("quotes values as TOML, whatever the model id contains", () => {

@@ -663,7 +663,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     // `OLLAMA_HOST`, set here before, is not a variable Codex reads at all.
     await writeWorkspaceFile(
       `${CODEX_HOME_DIR}/config.toml`,
-      buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl) }),
+      buildCodexConfigToml({ model: opts.model, baseUrl: codexBaseUrl(opts.textServerUrl), windows: isWin }),
       opts.cwd,
     );
     const home = workDir ? `${workDir}/${CODEX_HOME_DIR}` : CODEX_HOME_DIR;
@@ -788,7 +788,8 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // SHOW WHAT THE AGENT SAID whenever the run did not cleanly succeed — not only when it changed
   // nothing. An agent that failed halfway explains itself in its own output, and that explanation
   // used to be dropped in exactly the case where it mattered most.
-  const tail = (agent.stdout + agent.stderr).trim().slice(-1200);
+  // Keep the final agent message visible even when noisy CLI telemetry fills stderr.
+  const tail = [agent.stdout.trim().slice(-800), agent.stderr.trim().slice(-400)].filter(Boolean).join("\n");
   const tailLine = ok || !tail ? "" : `\n${label} output (tail):\n${tail}`;
   const summary = changed
     ? `[delegate_coding_task: ${label} changed ${names.length} file(s).${fileList}${stat ? `\n${stat}` : ""}` +
