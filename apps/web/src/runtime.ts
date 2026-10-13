@@ -592,9 +592,10 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase } =
+  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell } =
     await import("@visual-reader/core");
-  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined);
+  const shell = codingAgentShell(opts.shell, typeof navigator !== "undefined" && /Win/i.test(navigator.platform));
+  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined);
 
   // 1) Is the chosen agent installed?
   try {
@@ -652,7 +653,6 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // The shell the reader actually uses. It is passed to buildAgentCommand rather than collapsed to a
   // Windows/not-Windows flag, because cmd and PowerShell agree on none of the three things this
   // command needs: setting an environment variable, joining two statements, and stdin redirection.
-  const shell = opts.shell;
   const isWin = shell === "cmd" || shell === "powershell";
   let command: string;
   if (backend === "codex") {
@@ -682,7 +682,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // ordinary four-minute command ceiling killed it mid-edit and then reported that nothing changed —
   // the worst of both, a half-applied change and a run that looked like a no-op. Only THIS call gets
   // the long deadline; the version probe and the git plumbing above keep the normal one.
-  const agent = await runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, AGENT_TIMEOUT_SECS);
+  const agent = await runCommand(command, opts.githubToken, opts.cwd, shell, false, AGENT_TIMEOUT_SECS);
 
   // 4) Summarize what changed.
   //
@@ -759,7 +759,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
         .map((e) => e.trim())
         .filter((e) => e && !e.startsWith(".vr-"))
         .slice(0, 40);
-      folderLine = entries.length
+      folderLine = ls.code !== 0
+        ? `\nCouldn't list the working folder: ${(ls.stderr || ls.stdout).trim().slice(-400)}.`
+        : entries.length
         ? `\nThe folder it ran in (${workDir || "the workspace"}) contains: ${entries.join(", ")}.` +
           `\nIf a file the task names is NOT in that list, it is not there to edit — write it first with write_file, ` +
           `then delegate again.`
@@ -769,7 +771,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     }
   }
 
-  const ok = (agent.code === 0 || changed) && verifyOk && !agent.timedOut;
+  const ok = agent.code === 0 && verifyOk && !agent.timedOut;
   // A DEADLINE IS NOT A NO-OP, and saying so is the difference between a useful next step and a
   // wasted one. "Changed no files" reads as "the task was wrong, rewrite it"; being stopped after
   // three hours means the opposite — the task was too big, split it. It was silent before.

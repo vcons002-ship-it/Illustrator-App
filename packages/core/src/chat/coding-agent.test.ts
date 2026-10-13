@@ -49,7 +49,7 @@ describe("buildCodexArgs", () => {
   it("runs exec non-interactive, reading the prompt from stdin", () => {
     const args = buildCodexArgs({ model: "gpt-oss:20b" });
     expect(args[0]).toBe("exec");
-    expect(args).toEqual(expect.arrayContaining(["-m", "gpt-oss:20b", "--full-auto", "--skip-git-repo-check"]));
+    expect(args).toEqual(expect.arrayContaining(["-m", "gpt-oss:20b", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
     expect(args[args.length - 1]).toBe("-"); // prompt comes from stdin
   });
 });
@@ -91,9 +91,9 @@ describe("the delegation runtime's failure modes", () => {
     // ordinary four-minute command ceiling killed it mid-edit, leaving a half-applied change AND a
     // report that nothing happened.
     expect(RUNTIME).toContain("const AGENT_TIMEOUT_SECS = 90 * 60;");
-    expect(RUNTIME).toContain("opts.shell, false, AGENT_TIMEOUT_SECS)");
+    expect(RUNTIME).toContain("shell, false, AGENT_TIMEOUT_SECS)");
     // Only that one call: the version probe and the git plumbing keep the normal ceiling.
-    expect(RUNTIME).toContain("runCommand(command, opts.githubToken, opts.cwd, opts.shell, false, undefined)");
+    expect(RUNTIME).toContain("runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined)");
   });
 
   it("bounds what a caller may ask for, in both directions", () => {
@@ -182,7 +182,8 @@ describe("buildCodexArgs", () => {
   it("reads the task from stdin and applies without prompting", () => {
     const args = buildCodexArgs({ model: "m" });
     expect(args[0]).toBe("exec");
-    expect(args).toContain("--full-auto");
+    expect(args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write"]));
+    expect(args).not.toContain("--full-auto");
     expect(args.at(-1)).toBe("-");
   });
 });
