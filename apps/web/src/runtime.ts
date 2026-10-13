@@ -793,7 +793,9 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // used to be dropped in exactly the case where it mattered most.
   // Keep the final agent message visible even when noisy CLI telemetry fills stderr.
   const tail = [agent.stdout.trim().slice(-800), agent.stderr.trim().slice(-400)].filter(Boolean).join("\n");
-  const tailLine = ok || !tail ? "" : `\n${label} output (tail):\n${tail}`;
+  const tailLine = ok
+    ? (agent.stdout.trim() ? `\n${label} result:\n${agent.stdout.trim().slice(-1200)}` : "")
+    : (!tail ? "" : `\n${label} output (tail):\n${tail}`);
   const summary = changed
     ? `[delegate_coding_task: ${label} changed ${names.length} file(s).${fileList}${stat ? `\n${stat}` : ""}` +
       `${timedOutLine}${verifyLine}${tailLine}${repoNote}` +

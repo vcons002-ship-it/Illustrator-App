@@ -1332,7 +1332,7 @@ describe("the file card's More menu escapes its bubble", () => {
 describe("forcing a job through the external coding agent", () => {
   it("intercepts on the main thread and calls the runner directly", () => {
     expect(APP_RAW).toMatch(/const code = \/\^\\\/code/);
-    expect(APP_RAW).toContain('await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() });');
+    expect(APP_RAW).toContain('await runDelegateCodingTask({ tool: "delegate_coding_task", task: code[1]!.trim() }, true);');
   });
 
   it("is intercepted BEFORE anything that would start a model turn", () => {
