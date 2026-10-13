@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 mod coding_receipt;
+mod coding_context;
 
 // Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
 // loader pops up for a broken executable — without this, probing a corrupt/incomplete binary (a
@@ -3315,6 +3316,14 @@ async fn git_ensure_repo(dir: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn read_coding_context_file(app: AppHandle, dir: String, rel_path: String) -> Result<coding_context::ContextRead, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &dir) { return Err(OUTSIDE_APPROVED_ROOTS.to_string()); }
+        coding_context::read_note(Path::new(&dir), &rel_path)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn coding_workspace_snapshot(app: AppHandle, dir: String) -> Result<coding_receipt::Snapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         if !is_git_dir_allowed(&app, &dir) { return Err(OUTSIDE_APPROVED_ROOTS.to_string()); }
@@ -4164,6 +4173,7 @@ fn main() {
             git_repo_root,
             app_repo_root,
             git_ensure_repo,
+            read_coding_context_file,
             coding_workspace_snapshot,
             coding_workspace_changes,
             git_worktree_create,

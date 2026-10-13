@@ -1,5 +1,8 @@
 # Coding call receipts
 
+Receipts also show a [context handoff manifest](./coding-context-handoff.md): active chat/project,
+message counts, plan and file references, workspace document availability, and truncation/redactions.
+
 Codex and Aider calls now display host-measured changes before the agent's own explanation:
 
 ```text

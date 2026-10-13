@@ -7,7 +7,7 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
-import { base64ToBytes, classifyLoraHeader, parseNvidiaVramCsv, summarizeVram, type LocalFile, type CodingAgentBackend, type CodingFileChange, type CodingTaskReceipt, type VramSummary } from "@visual-reader/core";
+import { base64ToBytes, classifyLoraHeader, parseNvidiaVramCsv, summarizeVram, type LocalFile, type CodingAgentBackend, type CodingFileChange, type CodingTaskReceipt, type CodingChatContext, type CodingContextDocument, type VramSummary } from "@visual-reader/core";
 
 type UnlistenFn = () => void;
 
@@ -557,6 +557,8 @@ export interface DelegateCodingResult {
 
 export interface DelegateCodingOpts {
   task: string;
+  /** Frozen visible context from the originating chat, never the whole app state. */
+  chatContext?: CodingChatContext;
   /** Which external agent to drive: "aider" (default) or "codex". A user setting. */
   backend?: CodingAgentBackend;
   /** Ollama model id (Aider prefixes "ollama/"; Codex takes it bare via --oss). */
@@ -594,7 +596,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   const backend: CodingAgentBackend = opts.backend ?? "aider";
   const label = backend === "codex" ? "Codex" : "Aider";
   const bin = backend === "codex" ? "codex" : "aider";
-  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell, formatCodingTaskReceipt } =
+  const { buildAgentCommand, buildAiderArgs, buildCodexArgs, buildCodexConfigToml, buildDelegatedTask, codexBaseUrl, agentChangedFiles, ollamaApiBase, codingAgentShell, formatCodingTaskReceipt, buildCodingContext, CODING_CONTEXT_FILES } =
     await import("@visual-reader/core");
   const shell = codingAgentShell(opts.shell, typeof navigator !== "undefined" && /Win/i.test(navigator.platform));
   const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, shell, false, undefined);
@@ -615,8 +617,17 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
   // repo when there is one (so a folder inside the reader's own project is left alone) and otherwise
   // inits one with a base commit — which also hands the reader a real undo for whatever the agent
   // does next.
-  // The agent never sees the chat, so the workspace's conventions have to travel with the job.
-  await writeWorkspaceFile(CODING_TASK_FILE, buildDelegatedTask(opts.task), opts.cwd);
+  // Context notes are read through a bounded, symlink-confined native command, never a shell.
+  // An older host reports notes unavailable; it must not silently read from a different folder.
+  const documents: CodingContextDocument[] = await Promise.all(CODING_CONTEXT_FILES.map(async path => {
+    if (!opts.cwd) return { path, status: "unavailable" as const };
+    try {
+      const r = await invoke<{ exists: boolean; text: string; truncated: boolean }>("read_coding_context_file", { dir: opts.cwd, relPath: path });
+      return { path, status: r.exists ? "included" as const : "missing" as const, text: r.text, truncated: r.truncated };
+    } catch { return { path, status: "unavailable" as const }; }
+  }));
+  const context = buildCodingContext(opts.chatContext, documents, opts.files);
+  await writeWorkspaceFile(CODING_TASK_FILE, buildDelegatedTask(opts.task, context.text), opts.cwd);
   let repoNote = "";
   let beforeSha = "";
   let dirtyBefore = "";
@@ -836,6 +847,7 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     exitCode: agent.code, timedOut: agent.timedOut, changes, trackingComplete,
     ...(trackingNote ? { trackingNote } : {}), verify: verification,
     agentOutput: ok ? agent.stdout.trim().slice(-1200) : tail,
+    context: context.manifest,
   };
   const report = formatCodingTaskReceipt(receipt);
   // Keep no-op folder diagnostics and model-facing guidance, but display ONLY the measured

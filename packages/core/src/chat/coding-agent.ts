@@ -20,8 +20,8 @@ export const MAX_DELEGATE_TASK_CHARS = 32_000;
 /**
  * WHAT THE EXTERNAL AGENT IS TOLD BESIDES THE JOB ITSELF.
  *
- * The delegated agent runs headless and, as the tool's own description says, "doesn't see this chat" —
- * so none of the workspace's conventions reach it. Left to itself it produces exactly what an agent
+ * The delegated agent runs headless. The runtime now attaches a bounded chat/project context packet;
+ * these short defaults still help when no workspace guidance exists. Left to itself it produces what an agent
  * with no context produces: `main.py`, `test_main.py`, `app.js`. Reported by the reader as everything
  * being named something generic and the workspace becoming hard to look through.
  *
@@ -33,15 +33,15 @@ export const DELEGATED_CONVENTIONS =
   "--- workspace conventions (from the app, not the task) ---\n" +
   "NAME FILES FOR WHAT THEY DO, in words: `tide-clock.py`, `parse-invoice.ts`, `retry-policy.md`. " +
   "`main.py`, `app.js`, `index.js`, `script.py` and `code.html` are NOT names — this folder holds one " +
-  "conversation's work and every generic name collides with the last thing that was called that.\n" +
+  "project or conversation's work and generic names can collide with earlier work. Follow existing project conventions when editing an established codebase.\n" +
   "No dates or version numbers in filenames; revise a file IN PLACE rather than making `-v2`.\n" +
   "Change what the task asks for. Do not add a project scaffold, a README, a licence or a CI config " +
   "that was not requested.";
 
-/** The job as the external agent receives it: the model's spec, then the conventions it cannot see. */
-export function buildDelegatedTask(task: string): string {
+/** The current job first, app defaults next, then the actual bounded chat/project context packet. */
+export function buildDelegatedTask(task: string, context = ""): string {
   const spec = task.trim();
-  return spec ? `${spec}\n\n${DELEGATED_CONVENTIONS}\n` : `${DELEGATED_CONVENTIONS}\n`;
+  return `${spec ? `${spec}\n\n` : ""}${DELEGATED_CONVENTIONS}\n${context ? `\n${context}\n` : ""}`;
 }
 
 /**

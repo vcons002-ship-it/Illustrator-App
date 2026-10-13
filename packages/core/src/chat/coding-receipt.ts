@@ -1,3 +1,5 @@
+import { formatCodingContextManifest, type CodingContextManifest } from "./coding-context.js";
+
 export interface CodingFileChange {
   /** Relative to the workspace shown in the receipt, not the enclosing repository. */
   path: string;
@@ -18,6 +20,7 @@ export interface CodingTaskReceipt {
   trackingNote?: string;
   verify: { status: "passed" | "failed" | "not_requested"; command?: string; output?: string };
   agentOutput: string;
+  context?: CodingContextManifest;
 }
 
 /** Render a path as a single safe code span, even if it contains Markdown/control characters. */
@@ -53,6 +56,7 @@ export function formatCodingTaskReceipt(receipt: CodingTaskReceipt): string {
   }
   lines.push("", "Scope: Git-tracked and non-ignored workspace files; app prompt/config/cache files excluded. Renames appear as a deletion and a creation.");
   if (receipt.trackingNote) lines.push(`Tracking: ${receipt.trackingNote}`);
+  if (receipt.context) lines.push("", formatCodingContextManifest(receipt.context), "");
   lines.push(receipt.verify.status === "not_requested"
     ? "Verification: No separate build/test command requested."
     : `Verification: ${receipt.verify.status === "passed" ? "PASSED" : "FAILED"}${receipt.verify.command ? ` — ${code(receipt.verify.command)}` : ""}`);

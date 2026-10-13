@@ -3,16 +3,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@visual-reader/core", async () => ({
   ...(await import("../../../packages/core/src/chat/coding-agent.js")),
   ...(await import("../../../packages/core/src/chat/coding-receipt.js")),
+  ...(await import("../../../packages/core/src/chat/coding-context.js")),
 }));
 
 afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
 
-async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0, cacheFlood = false, priorEdit?: "tracked-unchanged" | "untracked-changed", measured?: import("../../../packages/core/src/chat/coding-receipt.js").CodingFileChange[], compareFails = false, verifyMode?: "passed" | "failed" | "timedout") {
+async function delegateFixture(agentExit: number, changed: boolean, listingExit = 0, cacheFlood = false, priorEdit?: "tracked-unchanged" | "untracked-changed", measured?: import("../../../packages/core/src/chat/coding-receipt.js").CodingFileChange[], compareFails = false, verifyMode?: "passed" | "failed" | "timedout", withContext = false) {
   const writes = new Map<string, string>();
   const commands: { command: string; shell: string | undefined }[] = [];
   let statusCalls = 0;
   let reads = 0;
   const invoke = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (name === "read_coding_context_file") {
+      if (!withContext) throw new Error("Older host: context note reader unavailable");
+      if (args.relPath === "CONVENTIONS.md") throw new Error("Note points outside selected workspace");
+      return args.relPath === "notes/decisions.md"
+        ? { exists: true, text: "Invoice totals must be rounded only at display time.", truncated: false }
+        : { exists: false, text: "", truncated: false };
+    }
     if (name === "coding_workspace_snapshot") {
       if (!measured) throw new Error("This older desktop does not support detailed tracking");
       return { tree: "a".repeat(40), workspace: "C:/evaluation" };
@@ -56,11 +64,37 @@ async function delegateFixture(agentExit: number, changed: boolean, listingExit 
   vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
   vi.stubGlobal("navigator", { platform: "Win32" });
   const { delegateCodingTask } = await import("./runtime.js");
-  const result = await delegateCodingTask({ task: "Create a utility", backend: "codex", model: "local-model", textServerUrl: "http://localhost:11434", cwd: "C:/evaluation", ...(verifyMode ? { verify: "verify-coding-task" } : {}) });
+  const result = await delegateCodingTask({ task: "Create a utility", backend: "codex", model: "local-model", textServerUrl: "http://localhost:11434", cwd: "C:/evaluation", ...(verifyMode ? { verify: "verify-coding-task" } : {}), ...(withContext ? { chatContext: {
+    chatId: "invoice-chat", chatLabel: "Invoice chat", projectName: "Billing",
+    messages: [{ role: "user" as const, text: "Use integer cents for money." }],
+    plan: { goal: "Repair invoice totals", steps: [{ text: "Test rounding", status: "pending" as const }] },
+    referencedFiles: ["invoice-total.mjs"],
+  } } : {}) });
   return { result, writes, commands, invoke };
 }
 
 describe("live delegation bridge behavior", () => {
+  it("stages actual chat, plan, file hints and project note contents before launch in the same workspace", async () => {
+    const { writes, result, invoke } = await delegateFixture(0, false, 0, false, undefined, [], false, undefined, true);
+    const prompt = Buffer.from(writes.get(".vr-coding-task.md")!, "base64").toString("utf8");
+    expect(prompt.startsWith("Create a utility")).toBe(true);
+    for (const text of ["Use integer cents for money.", "Test rounding", "invoice-total.mjs", "Invoice totals must be rounded only at display time."]) expect(prompt).toContain(text);
+    expect(result.summary).toContain("Context sent to coding agent:");
+    expect(result.summary).toContain("CONVENTIONS.md: unavailable");
+    expect(result.receipt?.context?.messagesIncluded).toBe(1);
+    const launch = invoke.mock.calls.findIndex(c => c[0] === "run_command" && String(c[1].command).startsWith("set "));
+    invoke.mock.calls.forEach((c, index) => {
+      if (c[0] === "read_coding_context_file") { expect(index).toBeLessThan(launch); expect(c[1].dir).toBe("C:/evaluation"); }
+      if (c[0] === "write_workspace_file") expect(c[1].cwd).toBe("C:/evaluation");
+    });
+  });
+  it("flags unavailable context notes on an older host instead of silently claiming they were loaded", async () => {
+    const { writes, result } = await delegateFixture(0, false);
+    expect(result.summary).toContain("AGENTS.md: unavailable");
+    expect(result.receipt?.context?.documents.every(d => d.status === "unavailable")).toBe(true);
+    const prompt = Buffer.from(writes.get(".vr-coding-task.md")!, "base64").toString("utf8");
+    expect(prompt).toContain('"status":"unavailable"');
+  });
   it("uses cmd for older Windows settings and passes the exact staged dotfile paths", async () => {
     const { result, writes, commands } = await delegateFixture(0, true);
     expect(result.ok).toBe(true);
