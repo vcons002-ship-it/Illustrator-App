@@ -171,14 +171,12 @@ exit /b 0
 
 :launch
 echo.
-echo [OK] Setup complete. Building and starting the desktop app...
-echo     The first build compiles the Rust shell and may take several minutes.
-echo     A desktop window opens when it's ready. Keep this window open while
-echo     using the app; press Ctrl+C here to stop.
+echo [OK] Setup complete. Building and starting the packaged desktop app...
+echo     This uses the same saved chats and settings as the desktop shortcut.
+echo     Developer mode is separate: run-desktop.bat --dev
 echo.
-cd /d "%~dp0apps\desktop\src-tauri"
-call cargo tauri dev
-exit /b 0
+call "%~dp0desktop-prod.bat"
+exit /b %errorlevel%
 
 :end_fail
 echo.

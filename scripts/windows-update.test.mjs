@@ -70,3 +70,55 @@ test('packaged launcher checks for running app before its build', () => {
   assert.ok(source.indexOf('windows-desktop-closed.bat') < source.indexOf('call cargo tauri build'));
   assert.doesNotMatch(source.slice(0, source.indexOf('windows-desktop-closed.bat')), /^pause$/m);
 });
+
+test('desktop setup and normal launch use the shortcut data origin, with dev explicitly opt-in', () => {
+  const setup = readFileSync(join(root, 'desktop.bat'), 'utf8');
+  assert.match(setup.slice(setup.indexOf(':launch\n') >= 0 ? setup.indexOf(':launch\n') : setup.indexOf(':launch\r\n')), /call "%~dp0desktop-prod\.bat"/);
+  assert.doesNotMatch(setup, /call cargo tauri dev/);
+  const launch = readFileSync(join(root, 'run-desktop.bat'), 'utf8');
+  assert.match(launch, /if \/i "%~1"=="--dev" goto :dev/);
+  assert.match(launch, /start "" "%EXE%"/);
+  assert.ok(launch.indexOf('windows-desktop-closed.bat') < launch.indexOf('start "" "%EXE%"'));
+  assert.ok(launch.indexOf(':dev') < launch.indexOf('call cargo tauri dev'));
+  assert.match(launch, /separate data store/);
+});
+
+function runLauncher({ dev = false, buildExit = 0, running = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'visual-reader-launch-test-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    mkdirSync(join(dir, 'apps/desktop/src-tauri'), { recursive: true });
+    copyFileSync(join(root, 'run-desktop.bat'), join(dir, 'run-desktop.bat'));
+    copyFileSync(join(root, 'scripts/windows-desktop-closed.bat'), join(dir, 'scripts/windows-desktop-closed.bat'));
+    writeFileSync(join(dir, 'scripts/windows-tool-path.bat'), '@exit /b 0\r\n');
+    writeFileSync(join(dir, 'tasklist.cmd'), running ? '@echo visual-reader-desktop.exe 1234 Console\r\n' : '@echo INFO: No tasks match.\r\n');
+    writeFileSync(join(dir, 'desktop-prod.bat'), `@echo MOCK_PACKAGED_BUILD\r\n@exit /b ${buildExit}\r\n`);
+    writeFileSync(join(dir, 'cargo.cmd'), `@echo off\r\nif "%2"=="--version" exit /b 0\r\necho MOCK_CARGO %*\r\nexit /b ${buildExit}\r\n`);
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
+    env.PATH = `${dir};${env.SystemRoot}\\System32;${env.SystemRoot}`;
+    env.USERPROFILE = dir;
+    return spawnSync(process.env.ComSpec, ['/d', '/s', '/c', `run-desktop.bat${dev ? ' --dev' : ''}`], {
+      cwd: dir, env, input: '\r\n', encoding: 'utf8', timeout: 15000,
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('missing packaged executable builds packaged mode and propagates failure', windows, () => {
+  const result = runLauncher({ buildExit: 7 });
+  assert.equal(result.status, 7, result.stdout + result.stderr);
+  assert.match(result.stdout, /MOCK_PACKAGED_BUILD/);
+  assert.doesNotMatch(result.stdout, /MOCK_CARGO|DEVELOPER MODE/);
+});
+test('normal desktop launch refuses a second running desktop without building', windows, () => {
+  const result = runLauncher({ running: true });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout, /MOCK_PACKAGED_BUILD|MOCK_CARGO/);
+});
+test('explicit dev launch warns about the separate data store and propagates failure', windows, () => {
+  const result = runLauncher({ dev: true, buildExit: 7 });
+  assert.equal(result.status, 7, result.stdout + result.stderr);
+  assert.match(result.stdout, /DEVELOPER MODE/);
+  assert.match(result.stdout, /MOCK_CARGO tauri dev/);
+  assert.doesNotMatch(result.stdout, /MOCK_PACKAGED_BUILD/);
+});
