@@ -13,12 +13,13 @@ echo and Chrome extension. (The per-version scripts only rebuild the code you
 echo already have on disk; this also fetches new code.)
 echo.
 
+call "%~dp0scripts\windows-desktop-closed.bat" || goto :end_fail
 call :git_update   || goto :end_fail
 call :check_node   || goto :end_fail
 call :check_pnpm   || goto :end_fail
 call :install_deps || goto :end_fail
 call :build_all    || goto :end_fail
-call :desktop_opt
+call :desktop_opt || goto :end_fail
 call :finish
 goto :eof
 
@@ -35,12 +36,11 @@ if not exist ".git" (
   exit /b 1
 )
 echo [..] Pulling the latest code...
-call git pull
+call git pull --ff-only
 if errorlevel 1 (
   echo.
-  echo [X] "git pull" failed. If you changed files locally, set them aside first:
-  echo        git stash
-  echo     then run update.bat again.
+  echo [X] Fast-forward update failed. Local files have not been discarded.
+  echo     Check git status and resolve local changes or branch divergence before retrying.
   exit /b 1
 )
 echo [OK] Code updated
@@ -104,14 +104,25 @@ if errorlevel 1 (
   exit /b 0
 )
 set "ANS="
-set /p "ANS=Rebuild the desktop app too? It can take a few minutes. (y/N): "
-if /i not "%ANS%"=="y" (
-  echo Skipped the desktop rebuild ^(run-desktop.bat recompiles on launch anyway^).
+set /p "ANS=Rebuild the desktop app too? It can take a few minutes. (Y/n): "
+if /i "%ANS%"=="n" (
+  echo Skipped the desktop rebuild. The desktop shortcut still runs the OLD build.
+  echo Run desktop-prod.bat when you are ready to update the desktop executable.
   exit /b 0
 )
 echo [..] Rebuilding the desktop app...
 cd /d "%~dp0apps\desktop\src-tauri"
-call cargo tauri build
+call cargo tauri build --no-bundle
+if errorlevel 1 (
+  cd /d "%~dp0"
+  echo [X] Desktop build failed. The desktop executable was NOT updated successfully.
+  exit /b 1
+)
+if not exist "target\release\visual-reader-desktop.exe" (
+  cd /d "%~dp0"
+  echo [X] Build returned success but the desktop executable is missing.
+  exit /b 1
+)
 cd /d "%~dp0"
 echo [OK] Desktop app rebuilt
 exit /b 0
@@ -122,7 +133,8 @@ echo ==============================================
 echo  Update complete.
 echo ==============================================
 echo.
-echo  Start it again with start.bat ^(or run.bat / run-desktop.bat^).
+echo  Open your desktop shortcut after a successful desktop rebuild.
+echo  For the web app, use start.bat ^(or run.bat^).
 echo  Using the Chrome extension? Click the refresh icon on the Visual Reader
 echo  card at chrome://extensions to load the new build.
 echo  Updating ComfyUI too? Run:  comfyui-setup.bat --upgrade

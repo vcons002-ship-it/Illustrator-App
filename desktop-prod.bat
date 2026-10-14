@@ -16,7 +16,11 @@ echo.
 echo The first build can take several minutes. Re-run this after every update
 echo (update.bat / git pull) so the phone gets the new UI.
 echo.
-pause
+call "%~dp0scripts\windows-desktop-closed.bat"
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
 
 call node --version >nul 2>nul
 if errorlevel 1 (

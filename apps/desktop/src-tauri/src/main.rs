@@ -444,12 +444,22 @@ fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
                 if dir.is_dir() { dirs.push(dir); }
             }
         }
-        if let Some(path) = std::env::var_os("PATH") {
-            dirs.extend(std::env::split_paths(&path));
-        }
-        if let Ok(path) = std::env::join_paths(dirs) { cmd.env("PATH", path); }
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        if let Ok(path) = windows_tool_path(&inherited, dirs) { cmd.env("PATH", path); }
     }
     cmd
+}
+
+/// Keep a malformed inherited PATH from disabling discovery of installed build tools.
+/// Quotes cannot be directory-name characters on Windows; remove wrapping/stray quotes
+/// only in the child environment, preserving spaces and the parent/registry unchanged.
+#[cfg(target_os = "windows")]
+fn windows_tool_path(inherited: &std::ffi::OsStr, mut dirs: Vec<PathBuf>)
+    -> Result<std::ffi::OsString, std::env::JoinPathsError>
+{
+    let normalized = inherited.to_string_lossy().replace('"', "");
+    dirs.extend(std::env::split_paths(&normalized));
+    std::env::join_paths(dirs)
 }
 
 /// Open a URL in the reader's DEFAULT BROWSER.
@@ -4228,6 +4238,25 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_path_removes_stray_quotes_without_losing_tool_folders() {
+        let inherited = std::ffi::OsStr::new("C:\\Windows\\System32;C:\\broken\"");
+        let tool = std::path::PathBuf::from("C:\\Program Files\\nodejs");
+        let path = super::windows_tool_path(inherited, vec![tool.clone()]).unwrap();
+        assert_eq!(std::env::split_paths(&path).collect::<Vec<_>>(), vec![
+            tool, std::path::PathBuf::from("C:\\Windows\\System32"), std::path::PathBuf::from("C:\\broken"),
+        ]);
+        assert_eq!(inherited, std::ffi::OsStr::new("C:\\Windows\\System32;C:\\broken\""));
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_path_preserves_spaces_in_quoted_directories() {
+        let path = super::windows_tool_path(std::ffi::OsStr::new("\"C:\\Program Files\\nodejs\";C:\\Tools"), vec![]).unwrap();
+        assert_eq!(std::env::split_paths(&path).collect::<Vec<_>>(), vec![
+            std::path::PathBuf::from("C:\\Program Files\\nodejs"), std::path::PathBuf::from("C:\\Tools"),
+        ]);
+    }
     #[test]
     fn explicit_missing_workspace_never_falls_back() {
         let missing = std::env::temp_dir().join(format!("vr-missing-project-{}", std::process::id())).join("not-created");
