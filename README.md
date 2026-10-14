@@ -35,6 +35,10 @@ planning. Reading and illustration are one capability among many, not the only d
 | Chrome extension | **`extension.bat`** | Opens the folder + Chrome to load it. Re-open with **`run-extension.bat`**. |
 
 Each file installs anything it needs on its own (Node.js, Rust, etc.).
+Desktop setup, normal desktop launch, and the desktop shortcut use the packaged app's
+saved chats and settings. **`run-desktop.bat --dev`** is explicitly developer-only:
+its localhost origin has separate browser storage. Switching modes does not migrate
+or delete either store. Use `update.bat` to rebuild the packaged desktop executable.
 **`full-install.bat`** is the simplest if you just want everything ready;
 **`start.bat`** is the simplest once things are installed.
 

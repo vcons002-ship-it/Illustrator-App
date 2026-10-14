@@ -1,6 +1,10 @@
 @echo off
 rem Called by launchers before probing tools. Deliberately no setlocal: the
 rem caller owns the environment scope, and child builds need this PATH too.
+rem Quotes are not part of Windows directory names. An unmatched quote in an
+rem inherited PATH can make cmd report pnpm missing even when where finds it.
+rem Normalize only this process's PATH; never rewrite the Windows registry.
+set "PATH=%PATH:"=%"
 rem Preserve tools already on PATH; append only existing standard installs.
 if exist "%ProgramFiles%\nodejs\node.exe" set "PATH=%PATH%;%ProgramFiles%\nodejs"
 if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "PATH=%PATH%;%LOCALAPPDATA%\Programs\nodejs"
