@@ -158,6 +158,9 @@ export interface ChatSessionInfo {
 export interface ChatMirror {
   sessions: ChatSessionInfo[];
   projects?: import("@visual-reader/core").ChatProject[];
+  /** Capability advertised by an updated desktop; older hosts remain navigation-only. */
+  canManageProjects?: boolean;
+  projectError?: string;
   activeId: string;
   /** Full history of the ACTIVE session (the only one the phone displays at a time). */
   messages: StoredChatMessage[];
@@ -285,6 +288,7 @@ export type SyncToPhone =
   // Result of a desktop-runtime host tool the phone relayed (vrcmd:hostTool) — file search/read,
   // run_command, write_file, screenshot — run on the desktop, fed back to the phone's buddy turn.
   | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload }
+  | ({ type: "vrsync:projectResult" } & import("./project-management.js").ProjectReply)
   // The bytes of a file card the mirror stripped (vrcmd:fetchFile), sent back so the phone can show /
   // download / open a large or older generated image on demand. CHUNKED so any-size file syncs in
   // pieces instead of being dropped for exceeding one tunnel frame: `total` chunks, `seq` 0..total-1,
@@ -293,6 +297,7 @@ export type SyncToPhone =
 
 /** Phone → desktop commands. */
 export type CmdToDesktop =
+  | ({ type: "vrcmd:project" } & import("./project-management.js").ProjectRequest)
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
   | { type: "vrcmd:libraryDelete"; bookId: string } // phone deleted a library book → delete it on the desktop (it owns the library; a local-only delete is re-clobbered by vrsync:library)

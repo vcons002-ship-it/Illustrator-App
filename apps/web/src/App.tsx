@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChatProject } from "./project-workspaces.js";
+import { ProjectRequestClient, ProjectCommandHost, type ProjectOperation } from "./project-management.js";
 import {
   BUNDLED_LLM,
   IndexedDbStore,
@@ -2004,6 +2005,9 @@ export function App() {
   const [chatProjects, setChatProjects] = useState<ChatProject[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
   const [projectLoadError, setProjectLoadError] = useState("");
+  const [remoteProjectManagement, setRemoteProjectManagement] = useState(false);
+  const [projectMutationPending, setProjectMutationPending] = useState(false);
+  const projectMutationRef = useRef(false);
   const chatProjectsRef = useRef(chatProjects);
   chatProjectsRef.current = chatProjects;
   const activeProjectId = buddySessions.find(s => s.id === activeBuddyId)?.projectId;
@@ -3226,6 +3230,7 @@ export function App() {
     runUpdateForPhoneRef,
     phoneUpdatePending,
     runHostToolForRemoteRef,
+    projectResultRef,
     hostToolPending,
     fileFetchPending,
     fileChunkBufs,
@@ -4159,12 +4164,14 @@ export function App() {
         ...(s.projectId ? { projectId: s.projectId } : {}),
       })),
       projects: chatProjects,
+      canManageProjects: isDesktop && projectsReady && !projectLoadError,
+      ...(projectLoadError ? { projectError: projectLoadError } : {}),
       activeId: activeBuddyId,
       messages: boundChatHistoryForMirror(buddyMessages),
       persona: buddyPersona,
-      busy: buddyBusy,
+      busy: buddyBusy || projectMutationPending,
     }),
-    [buddySessions, chatProjects, activeBuddyId, buddyMessages, buddyPersona, buddyBusy],
+    [buddySessions, chatProjects, activeBuddyId, buddyMessages, buddyPersona, buddyBusy, projectMutationPending, projectsReady, projectLoadError],
   );
   useEffect(() => {
     chatMirrorRef.current = chatMirror;
@@ -4178,6 +4185,8 @@ export function App() {
     setChatProjects(c.projects ?? []);
     chatProjectsRef.current = c.projects ?? [];
     setProjectsReady(true);
+    setRemoteProjectManagement(c.canManageProjects === true);
+    setProjectLoadError(c.projectError ?? "");
 
     setBuddySessions(
       c.sessions.map((s) => ({
@@ -7980,6 +7989,7 @@ export function App() {
     /** Trusted Story-setup mapping, never serialized into the user/model-authored `/story` text. */
     storySoulCast?: { self: string; user: string },
   ): Promise<string | undefined> => {
+    if (projectMutationRef.current) { appendBuddy({ role: "tool", text: "Wait for the project change to finish before starting a chat task.", turns: [] }); return; }
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
     // Tool feedback and executor nudges have no bubble. The Continue action does, but it is still
@@ -8772,6 +8782,7 @@ export function App() {
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      if (projectMutationRef.current) { buddyNoteRef.current("Wait for the project change to finish before starting a chat task."); return; }
       /**
        * A SEND FROM A PHONE RUNS ON THE DESKTOP. Every branch below this line does its work HERE —
        * dispatches a turn, searches the filesystem, opens a book — and on a linked phone "here" is
@@ -9916,6 +9927,7 @@ export function App() {
   }, [buddyCancel]);
   const onSwitchBuddySession = useCallback(
     (id: string) => {
+      if (projectMutationRef.current) return;
       if (id === activeBuddyId) return;
       if (isRemoteClient) {
         sendAppSync({ type: "vrcmd:chatSwitch", id }); // switch on the desktop; mirror reflects it
@@ -9944,6 +9956,7 @@ export function App() {
   );
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback((projectId = buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current)?.projectId) => {
+    if (projectMutationRef.current) return;
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatNew", projectId: projectId ?? "" }); // create on the desktop; the mirror brings it back
       return;
@@ -9969,14 +9982,40 @@ export function App() {
     if (session) onSwitchBuddySession(session.id);
     else onNewBuddySession(projectId ?? "");
   };
-  const onAssignChatProject = (projectId?: string) => {
-    if (isRemoteClient || buddyBusy || buddyPendingTool || agentApprovals.length) return;
-    if (projectId && !chatProjectsRef.current.some(p => p.id === projectId)) throw new Error("Choose an available project.");
-    const next = assignSessionProject(buddySessionsRef.current, activeBuddyIdRef.current, projectId);
-    buddySessionsRef.current = next;
-    setBuddySessions(next);
-    seenFilesRef.current = new Set(); // A different root must not inherit permission to edit unseen files.
-    persistSessions(next);
+  const projectRequestClient = useMemo(() => new ProjectRequestClient(
+    request => sendAppSync({ type: "vrcmd:project", ...request }), () => activeBuddyIdRef.current,
+  ), [sendAppSync]);
+  const projectCommandHost = useRef(new ProjectCommandHost());
+  useEffect(() => {
+    projectResultRef.current = result => { projectRequestClient.receive(result); if (result.ok) sendAppSync({ type: "vrcmd:hello" }); };
+    return () => projectRequestClient.dispose();
+  }, [projectRequestClient, projectResultRef, sendAppSync]);
+  const requestRemoteProject = async (operation: ProjectOperation) => {
+    if (!chatSynced || !remoteProjectManagement) throw new Error("Update/reconnect the linked desktop to enable mobile project changes.");
+    return projectRequestClient.run(operation);
+  };
+  const withProjectChange = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    if (!isDesktop || isRemoteClient) throw new Error("Project changes must run on the linked desktop.");
+    if (buddyBusyRef.current || buddyPendingTool || agentApprovals.length || projectMutationRef.current)
+      throw new Error("Wait for the current task, approval or project change to finish.");
+    if (!projectsReady || projectLoadError) throw new Error("Reload the project list before making changes.");
+    projectMutationRef.current = true;
+    setProjectMutationPending(true);
+    try { return await operation(); }
+    finally { projectMutationRef.current = false; setProjectMutationPending(false); }
+  };
+  const onAssignChatProject = async (projectId?: string, expectedChatId = activeBuddyIdRef.current) => {
+    if (isRemoteClient) { await requestRemoteProject({ action: "assign", chatId: expectedChatId, ...(projectId ? { projectId } : {}) }); return; }
+    await withProjectChange(async () => {
+      if (activeBuddyIdRef.current !== expectedChatId) throw new Error("The active chat changed. Retry the move from the intended chat.");
+      if (projectId && !chatProjectsRef.current.some(p => p.id === projectId)) throw new Error("Choose an available project.");
+      if (!libraryStore.putMemo) throw new Error("Chat storage is unavailable.");
+      const next = assignSessionProject(buddySessionsRef.current, expectedChatId, projectId);
+      await libraryStore.putMemo("buddy-sessions", JSON.stringify(next));
+      buddySessionsRef.current = next;
+      setBuddySessions(next);
+      seenFilesRef.current = new Set(); // A different root must not inherit permission to edit unseen files.
+    });
   };
   const saveChatProjects = async (projects: ChatProject[]) => {
     if (!projectsReady || projectLoadError) throw new Error("Reload the project list before making changes.");
@@ -9985,18 +10024,30 @@ export function App() {
     chatProjectsRef.current = projects;
     setChatProjects(projects);
   };
-  const onCreateChatProject = async (name: string, folder?: string) => {
-    if (!isDesktop || isRemoteClient || buddyBusy) throw new Error("Create projects on the idle desktop app.");
-    if (!projectsReady || projectLoadError) throw new Error("Reload the project list before creating a project.");
-    const id = crypto.randomUUID();
-    const project = await createChatProject(name, id, chatProjectsRef.current, folder);
-    await saveChatProjects([...chatProjectsRef.current, project]);
-    if (!buddyBusyRef.current) onNewBuddySession(id); // A turn may have started while storage was saving.
+  const onCreateChatProject = async (name: string, folder?: string, stableId?: string): Promise<ChatProject> => {
+    if (isRemoteClient) {
+      const reply = await requestRemoteProject({ action: "create", name: name.trim(), ...(folder?.trim() ? { folder: folder.trim() } : {}) });
+      if (!reply.project) throw new Error("The desktop did not return the created project. Check the project list before retrying.");
+      return reply.project;
+    }
+    const chatAtStart = activeBuddyIdRef.current;
+    const project = await withProjectChange(async () => {
+      const id = stableId ?? crypto.randomUUID();
+      const project = await createChatProject(name, id, chatProjectsRef.current, folder);
+      await saveChatProjects([...chatProjectsRef.current, project]);
+      return project;
+    });
+    if (!buddyBusyRef.current && activeBuddyIdRef.current === chatAtStart) onNewBuddySession(project.id);
+    return project;
   };
   const onRenameChatProject = async (id: string, name: string) => {
+    if (isRemoteClient) { await requestRemoteProject({ action: "rename", id, name: name.trim() }); return; }
     const title = name.trim().slice(0, 60);
     if (!title) throw new Error("Enter a project name.");
-    await saveChatProjects(chatProjectsRef.current.map(p => p.id === id ? { ...p, name: title } : p));
+    await withProjectChange(async () => {
+      if (!chatProjectsRef.current.some(p => p.id === id)) throw new Error("This project is unavailable. Refresh the project list.");
+      await saveChatProjects(chatProjectsRef.current.map(p => p.id === id ? { ...p, name: title } : p));
+    });
   };
   const onDeleteBuddySession = useCallback(
     (id: string) => {
@@ -10319,7 +10370,18 @@ export function App() {
   // the result to the phone. Kept in a ref (chatCommandRef) so the early-registered relay reaches it.
   const runChatCommand = useCallback(
     (c: CmdToDesktop) => {
+      if (projectMutationRef.current && c.type !== "vrcmd:project") { buddyNoteRef.current("Wait for the project change to finish before starting another chat action."); return; }
       switch (c.type) {
+        case "vrcmd:project":
+          void projectCommandHost.current.handle(c, {
+            context: () => ({ desktop: isDesktop && !isRemoteClient, ready: projectsReady && !projectLoadError,
+              idle: !buddyBusyRef.current && !buddyPendingTool && !agentApprovals.length && !projectMutationRef.current,
+              chatId: activeBuddyIdRef.current, projects: chatProjectsRef.current }),
+            create: (name, folder, id) => onCreateChatProject(name, folder, id),
+            rename: onRenameChatProject,
+            assign: (chatId, projectId) => onAssignChatProject(projectId, chatId),
+          }).then(result => sendAppSync({ type: "vrsync:projectResult", ...result }));
+          break;
         case "vrcmd:chatSend":
           void runBuddyTurnWithAttachments(c.text, c.attachments ?? []);
           break;
@@ -10398,6 +10460,15 @@ export function App() {
     },
     [
       runBuddyTurnWithAttachments,
+      onCreateChatProject,
+      onRenameChatProject,
+      onAssignChatProject,
+      sendAppSync,
+      projectsReady,
+      projectLoadError,
+      buddyPendingTool,
+      agentApprovals.length,
+      isRemoteClient,
       onSwitchBuddySession,
       onNewBuddySession,
       onDeleteBuddySession,
@@ -11232,7 +11303,7 @@ export function App() {
       {...(buddyThinking ? { thinking: buddyThinking } : {})}
       thinkingOpen={thinkingOpen}
       onThinkingOpenChange={setThinkingOpen}
-      busy={buddyBusy}
+      busy={buddyBusy || projectMutationPending}
       {...(buddyActivity ? { activity: buddyActivity } : {})}
       {...(buddySteps.length ? { steps: buddySteps } : {})}
       {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
@@ -11267,15 +11338,14 @@ export function App() {
       {...(isDesktop || isRemoteClient ? { projectWorkspace: {
         projects: chatProjects,
         ...(activeProjectId ? { activeProjectId } : {}),
-        disabled: !projectsReady || buddyBusy || !!buddyPendingTool || agentApprovals.length > 0,
+        disabled: !projectsReady || buddyBusy || projectMutationPending || !!buddyPendingTool || agentApprovals.length > 0,
+        ...(isRemoteClient ? { remote: true, managementDisabled: !chatSynced || !remoteProjectManagement } : {}),
         ...(projectLoadError ? { error: projectLoadError } : {}),
         onSelect: onSelectProject,
-        ...(isDesktop && !isRemoteClient ? {
-          onAssign: onAssignChatProject,
-          onCreate: onCreateChatProject,
-          onRename: onRenameChatProject,
-          onPickFolder: pickFolder,
-        } : {}),
+        onAssign: onAssignChatProject,
+        onCreate: async (name: string, folder?: string) => { await onCreateChatProject(name, folder); },
+        onRename: onRenameChatProject,
+        ...(isDesktop && !isRemoteClient ? { onPickFolder: pickFolder } : {}),
       } } : {})}
       activeSessionId={activeBuddyId}
       onSwitchSession={onSwitchBuddySession}
