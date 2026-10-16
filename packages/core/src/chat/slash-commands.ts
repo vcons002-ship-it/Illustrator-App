@@ -1,6 +1,7 @@
 import type { BookSummary } from "../storage/store.js";
 import { parseToolCall, type ToolCall } from "./chat-tools.js";
 import { parseBuddyToolCall, type BuddyToolCall } from "./buddy-tools.js";
+import { stripTurnStamp } from "./chat-session.js";
 
 /**
  * Slash commands — the deterministic way to call a chat tool. Typing "/" in
@@ -117,7 +118,10 @@ export function buddySlashCommands(desktop: boolean, canDelegateCoding = false):
 
 /** "/web foo bar" → { name: "web", args: "foo bar" }; undefined for non-slash text. */
 function splitSlash(text: string): { name: string; args: string } | undefined {
-  const m = /^\/(\S*)\s*([\s\S]*)$/.exec(text.trim());
+  // The host timestamps the current user turn before sending it to the worker.
+  // Commands remain deterministic control flow, not an LLM prompt: ignore only
+  // the app's recognized metadata, never search inside arbitrary quoted prose.
+  const m = /^\/(\S*)\s*([\s\S]*)$/.exec(stripTurnStamp(text.trim()).trim());
   if (!m) return undefined;
   return { name: m[1]!.toLowerCase(), args: m[2]!.trim() };
 }
