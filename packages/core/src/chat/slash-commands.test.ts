@@ -1,12 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { buddySlashCommands, parseBuddySlashCommand, parseChatSlashCommand } from "./slash-commands.js";
 import type { BookSummary } from "../storage/store.js";
+import { stampTurnContent } from "./chat-session.js";
 
 const library: BookSummary[] = [
   { id: "bk-1", title: "Frankenstein", addedAt: 1 },
   { id: "bk-2", title: "Fourth Wing", addedAt: 2 },
   { id: "bk-3", title: "The Time Machine", addedAt: 3 },
 ];
+
+describe("timestamped commands from the real chat host", () => {
+  const at = new Date(2026, 9, 16, 8, 10, 1, 234).getTime();
+  it("keeps main-chat /draw deterministic instead of asking the LLM to interpret it", () => {
+    const text = "/draw a green teapot\nsoft studio lighting";
+    expect(parseBuddySlashCommand(stampTurnContent(text, at), library)).toEqual(parseBuddySlashCommand(text, library));
+    expect(parseBuddySlashCommand(stampTurnContent(text, at), library)).toEqual({
+      call: { tool: "generate_image", prompt: "a green teapot\nsoft studio lighting" },
+    });
+  });
+  it("keeps marked-search reference adoption deterministic", () => {
+    const text = "/reference https://example.com/selected-image.png";
+    expect(parseBuddySlashCommand(stampTurnContent(text, at), library)).toEqual({
+      call: { tool: "use_image_reference", url: "https://example.com/selected-image.png" },
+    });
+  });
+  it("handles stamped book commands and reports unknown commands normally", () => {
+    expect(parseChatSlashCommand(stampTurnContent("/draw a castle", at))).toEqual({ call: { tool: "generate_image", prompt: "a castle" } });
+    expect(parseBuddySlashCommand(stampTurnContent("/frobnicate now", at), library)).toMatchObject({ error: expect.stringContaining("Unknown command") });
+  });
+  it("never promotes commands inside ordinary or quoted content", () => {
+    for (const text of ["Explain /draw a teapot", "[Attached text]\n/draw a teapot", 'The page says "/reference https://example.com/a.png"']) {
+      expect(parseBuddySlashCommand(stampTurnContent(text, at), library)).toBeUndefined();
+    }
+    expect(parseBuddySlashCommand("[not a timestamp] /draw teapot", library)).toBeUndefined();
+  });
+});
 
 describe("parseChatSlashCommand", () => {
   it("ignores ordinary messages", () => {
