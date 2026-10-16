@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-function runUpdate({ buildExit = 0, backupExit = 0, running = false, input = '\r\n', producesExe = true } = {}) {
+function runUpdate({ buildExit = 0, backupExit = 0, running = false, replacesScripts = false, input = '\r\n', producesExe = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'visual-reader-update-test-'));
   try {
     mkdirSync(join(dir, 'scripts'));
     mkdirSync(join(dir, '.git'));
     mkdirSync(join(dir, 'apps/desktop/src-tauri/target/release'), { recursive: true });
     copyFileSync(join(root, 'update.bat'), join(dir, 'update.bat'));
+    copyFileSync(join(root, 'scripts/windows-update-worker.bat'), join(dir, 'scripts/windows-update-worker.bat'));
     copyFileSync(join(root, 'scripts/windows-desktop-closed.bat'), join(dir, 'scripts/windows-desktop-closed.bat'));
     writeFileSync(join(dir, 'scripts/windows-tool-path.bat'), '@exit /b 0\r\n');
     writeFileSync(join(dir, 'tasklist.cmd'), running ? '@echo visual-reader-desktop.exe 1234 Console\r\n' : '@echo INFO: No tasks match.\r\n');
@@ -21,6 +22,7 @@ function runUpdate({ buildExit = 0, backupExit = 0, running = false, input = '\r
       writeFileSync(join(dir, `${tool}.cmd`), `@echo MOCK_${tool} %*\r\n@exit /b 0\r\n`);
     }
     writeFileSync(join(dir, 'node.cmd'), `@echo MOCK_node %*\r\n@exit /b ${backupExit}\r\n`);
+    if (replacesScripts) writeFileSync(join(dir, 'git.cmd'), '@echo MOCK_git %*\r\n@echo @exit /b 99 > update.bat\r\n@echo @exit /b 98 > scripts\\windows-update-worker.bat\r\n@exit /b 0\r\n');
     writeFileSync(join(dir, 'cargo.cmd'), `@echo off\r\nif "%2"=="--version" exit /b 0\r\necho MOCK_DESKTOP_BUILD %*\r\nexit /b ${buildExit}\r\n`);
     if (producesExe) writeFileSync(join(dir, 'apps/desktop/src-tauri/target/release/visual-reader-desktop.exe'), 'fixture');
     const env = { ...process.env };
@@ -28,6 +30,7 @@ function runUpdate({ buildExit = 0, backupExit = 0, running = false, input = '\r
     // Keep the real toolchain out: these tests must never pull or build the user's app.
     env.PATH = `${dir};${env.SystemRoot}\\System32;${env.SystemRoot}`;
     env.USERPROFILE = dir;
+    env.TEMP = dir;
     return spawnSync(process.env.ComSpec, ['/d', '/s', '/c', 'update.bat'], {
       cwd: dir, env, input, encoding: 'utf8', timeout: 15000,
     });
@@ -36,6 +39,14 @@ function runUpdate({ buildExit = 0, backupExit = 0, running = false, input = '\r
   }
 }
 const windows = { skip: process.platform !== 'win32' };
+test('a pull replacing both updater scripts cannot corrupt the running update', windows, () => {
+  const r = runUpdate({ replacesScripts: true });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /MOCK_git pull --ff-only/);
+  assert.match(r.stdout, /MOCK_pnpm install/);
+  assert.match(r.stdout, /MOCK_DESKTOP_BUILD/);
+  assert.match(r.stdout, /Update complete/);
+});
 test('backup failure stops before pulling or building', windows, () => {
   const r = runUpdate({ backupExit: 1 });
   assert.equal(r.status, 1, r.stdout + r.stderr);

@@ -35,5 +35,11 @@ with the install root as Start in and no developer flags. Its historical name do
 not restrict image models. It does not migrate data or change WebView2 profiles.
 After each deployment, repeat step 4 from Explorer before calling it verified.
 
+The batch entry point copies its worker to a unique temporary `.bat` before any
+pull. The call/exit block is parsed in advance, so replacing either repository
+script during a pull cannot make cmd resume at the wrong byte offset. The small
+temporary worker is retained for diagnostics. The installation root is passed
+explicitly, not inferred from the temporary script's location.
+
 Do not delete AppData, reset browser storage, use `--dev` to test recovery, weaken
 Windows security, or copy a live LevelDB over another live LevelDB.
