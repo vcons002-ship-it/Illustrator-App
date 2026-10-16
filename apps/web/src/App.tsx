@@ -3364,6 +3364,18 @@ export function App() {
       if (!root) {
         return { status: "error", message: "Couldn't find the Visual Reader project folder — update with update.bat instead." };
       }
+      // Export from THIS window's IndexedDB before any update. Copying AppData from a build
+      // process is not proof it sees the same profile as an Explorer-launched desktop app.
+      onProgress("Saving a recovery backup of this window's data…");
+      try {
+        const { dataBackupPayload, updateBackupFilename } = await import("./data-backup.js");
+        const data = await libraryStore.exportData();
+        await saveExportFile(updateBackupFilename(), JSON.stringify(dataBackupPayload(
+          data, localStorage.getItem("vr-settings") ?? undefined, location.origin,
+        )), "application/json");
+      } catch (e) {
+        return { status: "error", message: `Update stopped: couldn't save the recovery backup. ${e instanceof Error ? e.message : String(e)}` };
+      }
       onProgress("Checking for updates…");
       const pull = await runCommand("git pull --ff-only", token, root);
       if (pull.timedOut || pull.code !== 0) {
@@ -3475,7 +3487,7 @@ export function App() {
       setTimeout(() => window.location.reload(), 1200);
       return { status: "updated", message: `Updated${at} — reloading the app… Settings will show this build once it's back.` };
     },
-    [settings.keys],
+    [settings.keys, libraryStore],
   );
 
   // Settings → Restart app (and the "Restart now" button after a core update). The native command
@@ -3919,9 +3931,10 @@ export function App() {
       /* storage blocked */
     }
     const stamp = new Date().toISOString().slice(0, 10);
+    const { dataBackupPayload } = await import("./data-backup.js");
     await saveExportFile(
       `visual-reader-backup-${stamp}.json`,
-      JSON.stringify({ ...data, settings: storedSettings }),
+      JSON.stringify(dataBackupPayload(data, storedSettings, location.origin)),
       "application/json",
     );
   }, [libraryStore]);

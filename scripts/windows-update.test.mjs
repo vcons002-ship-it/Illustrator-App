@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-function runUpdate({ buildExit = 0, running = false, input = '\r\n', producesExe = true } = {}) {
+function runUpdate({ buildExit = 0, backupExit = 0, running = false, input = '\r\n', producesExe = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'visual-reader-update-test-'));
   try {
     mkdirSync(join(dir, 'scripts'));
@@ -20,6 +20,7 @@ function runUpdate({ buildExit = 0, running = false, input = '\r\n', producesExe
     for (const tool of ['git', 'node', 'pnpm']) {
       writeFileSync(join(dir, `${tool}.cmd`), `@echo MOCK_${tool} %*\r\n@exit /b 0\r\n`);
     }
+    writeFileSync(join(dir, 'node.cmd'), `@echo MOCK_node %*\r\n@exit /b ${backupExit}\r\n`);
     writeFileSync(join(dir, 'cargo.cmd'), `@echo off\r\nif "%2"=="--version" exit /b 0\r\necho MOCK_DESKTOP_BUILD %*\r\nexit /b ${buildExit}\r\n`);
     if (producesExe) writeFileSync(join(dir, 'apps/desktop/src-tauri/target/release/visual-reader-desktop.exe'), 'fixture');
     const env = { ...process.env };
@@ -35,6 +36,12 @@ function runUpdate({ buildExit = 0, running = false, input = '\r\n', producesExe
   }
 }
 const windows = { skip: process.platform !== 'win32' };
+test('backup failure stops before pulling or building', windows, () => {
+  const r = runUpdate({ backupExit: 1 });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /backup-desktop-profile/);
+  assert.doesNotMatch(r.stdout, /MOCK_git|MOCK_pnpm|MOCK_DESKTOP_BUILD/);
+});
 test('desktop failure propagates without false success', windows, () => {
   const r = runUpdate({ buildExit: 7 });
   assert.equal(r.status, 1, r.stdout + r.stderr);

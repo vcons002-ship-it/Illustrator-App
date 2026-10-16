@@ -484,6 +484,8 @@ function BackupRow({
       <span style={{ opacity: 0.55, fontSize: 11 }}>
         Moves your library, chats, tasks, memories &amp; skills (and settings) between installs — e.g. from the
         dev build to the packaged app. API keys aren&apos;t included (re-enter them after restoring).
+        {" "}This window&apos;s storage origin: {typeof location === "undefined" ? "unknown" : location.origin}.
+        {" "}If data looks missing after updating, do not reset it. Restore a backup, then close and reopen your actual desktop shortcut to verify it.
       </span>
     </div>
   );
