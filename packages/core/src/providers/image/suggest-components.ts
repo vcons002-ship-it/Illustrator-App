@@ -37,11 +37,13 @@ export interface ComponentSuggestion {
   note: string;
 }
 
-const SPLIT_FILE: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["flux2", "zimage", "qwenimage", "qwenimage21"]);
+const SPLIT_FILE: ReadonlySet<ModelFamily> = new Set<ModelFamily>(["flux2", "flux3", "zimage", "qwenimage", "qwenimage21"]);
 
 function noteFor(family: ModelFamily, model: string): string {
   const m = model.toLowerCase();
   switch (family) {
+    case "flux3":
+      return "FLUX 3 Image Klein → Qwen3-VL 4B (not Flux.2's Qwen3 encoder), Flux.2 VAE and FLUX 3 prompt upsampler. Native edits and up to 10 references total. Gated BFL license.";
     case "flux2":
       if (/klein/.test(m)) return "Flux.2 Klein → the Qwen-3-8B text encoder (NOT Z-Image's 4B) + the Flux.2 VAE.";
       if (/dev|pro/.test(m)) return "Flux.2 dev/pro → a Mistral-Small text encoder + the Flux.2 VAE.";

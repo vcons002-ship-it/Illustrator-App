@@ -129,7 +129,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "flux3" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -1531,6 +1531,7 @@ export function SettingsPanel({
                       | "sdxl"
                       | "flux"
                       | "flux2"
+                      | "flux3"
                       | "zimage"
                       | "qwenimage"
                       | "qwenimage21"
@@ -1544,6 +1545,7 @@ export function SettingsPanel({
                 <option value="sdxl">SDXL</option>
                 <option value="flux">Flux.1</option>
                 <option value="flux2">Flux.2</option>
+                <option value="flux3">FLUX 3 Image Klein</option>
                 <option value="zimage">Z-Image</option>
                 <option value="qwenimage">Qwen-Image</option>
                 <option value="qwenimage21">Qwen Image 2.1 (evaluation only)</option>

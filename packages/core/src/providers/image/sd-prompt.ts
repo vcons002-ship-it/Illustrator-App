@@ -15,6 +15,7 @@ export type ModelFamily =
   | "sdxl"
   | "flux"
   | "flux2"
+  | "flux3"
   | "zimage"
   | "qwenimage"
   | "qwenimage21"
@@ -23,7 +24,7 @@ export type ModelFamily =
 
 /** Flux.1 or Flux.2 — natural-language prompts, no negatives, no SD tags. */
 export function isFlux(family: ModelFamily): boolean {
-  return family === "flux" || family === "flux2";
+  return family === "flux" || family === "flux2" || family === "flux3";
 }
 
 /**
@@ -66,6 +67,8 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
       return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 20, guidance: 3.5 };
     case "flux2":
       return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 24, guidance: 4.0 };
+    case "flux3":
+      return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 16 };
     case "zimage": // 8-step turbo: cfg 1, res_multistep, AuraFlow shift 3
       return { cfg: 1, sampler: "res_multistep", scheduler: "simple", steps: 8, shift: 3 };
     case "qwenimage": // real CFG 4, AuraFlow shift 3.1
@@ -89,7 +92,7 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
  *    name↔description glossary → **reference** block.
  */
 export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
-  return family === "flux2" || family === "zimage" || family === "qwenimage" || family === "qwenimage21" || family === "hidream"
+  return family === "flux2" || family === "flux3" || family === "zimage" || family === "qwenimage" || family === "qwenimage21" || family === "hidream"
     ? "reference"
     : "inject";
 }
@@ -106,6 +109,7 @@ export function familyMaxDimension(family: ModelFamily): number {
       return 2048;
     case "flux":
     case "flux2":
+    case "flux3":
     case "qwenimage":
       return 1536;
     case "zimage":
@@ -168,6 +172,7 @@ export function hiresCeiling(family: ModelFamily, lowVram?: boolean): number {
   if (lowVram) return HIRES_MAX_DIMENSION_LOWVRAM;
   switch (family) {
     case "flux2":
+    case "flux3":
     case "qwenimage":
     case "hidream":
     case "qwenimage21":

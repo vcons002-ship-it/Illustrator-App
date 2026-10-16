@@ -394,7 +394,7 @@ export function referenceLatentSupports(family: ModelFamily): boolean {
 
 /** Can a reference photo condition a local render on this family AT ALL, by either route? PURE. */
 export function referencePhotoSupports(family: ModelFamily): boolean {
-  return ipAdapterSupports(family) || referenceLatentSupports(family) || family === "qwenimage21";
+  return ipAdapterSupports(family) || referenceLatentSupports(family) || family === "qwenimage21" || family === "flux3";
 }
 
 /**
@@ -876,7 +876,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     }
 
     // Flux.1 UNET-only (not a split-file catalog family): DualCLIPLoader (t5xxl + clip_l).
-    if (family !== "flux2" && family !== "zimage" && family !== "qwenimage" && family !== "qwenimage21") {
+    if (family !== "flux2" && family !== "flux3" && family !== "zimage" && family !== "qwenimage" && family !== "qwenimage21") {
       const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
       const t5 = clips.find((c) => /t5/i.test(c));
       const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
@@ -960,13 +960,21 @@ export class ComfyUIBackend implements LocalEngineBackend {
           "folder. Try the image again.)",
       );
     }
+    const promptUpsampler = family === "flux3"
+      ? clips.find((name) => /flux3.*prompt[_-]?upsampler/i.test(name))
+      : undefined;
+    if (family === "flux3" && !promptUpsampler) {
+      this.forgetNodeInfo("CLIPLoader");
+      throw new Error("FLUX 3 Image Klein needs its Qwen3.5 9B FLUX 3 prompt upsampler in models/text_encoders. It is not the Qwen3-VL image encoder. Download the official gated component and reconnect.");
+    }
     return {
       textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: clipType } },
+      ...(promptUpsampler ? { promptUpsampler } : {}),
       vaeName: vae,
       // Low-VRAM: load the UNET in fp8 (≈half the diffusion weights in VRAM). The big
       // text encoder (Qwen-3/T5/Mistral) is shrunk by the engine's --lowvram offloading,
       // not here (CLIPLoader has no dtype input). Only applies to UNETLoader families.
-      weightDtype: lowVram && family !== "qwenimage21" ? "fp8_e4m3fn" : "default",
+      weightDtype: lowVram && family !== "qwenimage21" && family !== "flux3" ? "fp8_e4m3fn" : "default",
     };
   }
 
@@ -1093,6 +1101,22 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // base needs real CFG 5, unlike guidance-distilled Flux.2-dev). Natural-language
     // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
+    if (family === "flux3") {
+      if (!/(?:^|[._-])sd(?:[._-]|$)|distilled/i.test(checkpoint)) {
+        throw new Error("This preset supports distilled FLUX 3 Image Klein (_sd_ filename), not the base/fine-tuning checkpoint.");
+      }
+      if (input.hires || input.styleLora || input.castRegions?.length) {
+        throw new Error("FLUX 3 Image Klein supports native references and editing. Turn off two-pass High resolution, style LoRAs and legacy character-region masks for this preset. Native bounding-box UI is not yet supported.");
+      }
+      // Probe the encoder type as well as node names: old ComfyUI has CLIPLoader but no flux3 loader.
+      const clipInfo = await this.nodeInfo("CLIPLoader");
+      const typeSchema = clipInfo?.input?.required?.type;
+      const types: unknown = Array.isArray(typeSchema) ? typeSchema[0] : undefined;
+      if (!Array.isArray(types) || !types.includes("flux3") || !(await this.nodeInfo("TextGenerate")) || !(await this.nodeInfo("ReferenceMultiLatent"))) {
+        this.forgetNodeInfo("CLIPLoader", "TextGenerate", "ReferenceMultiLatent");
+        throw new Error("FLUX 3 Image Klein needs current ComfyUI with CLIPLoader type flux3, TextGenerate and ReferenceMultiLatent. If ComfyUI is offline, start/reconnect it first; a failed probe does not prove nodes are missing.");
+      }
+    }
     if (family === "qwenimage21") {
       // Reference photos and edits use the native multimodal encoder, not IP-Adapter.
       if (input.hires || input.castRegions?.length || input.styleLora) {
@@ -1115,7 +1139,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const recommended = baseSampler.steps;
     const level = input.renderQuality ?? "standard";
     let steps =
-      recommended <= 10
+      recommended <= 10 || family === "flux3"
         ? recommended
         : isNaturalLanguage(family)
           ? scaleSteps(recommended, level)
@@ -1186,8 +1210,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // Why references didn't reach the model, when they didn't. Every branch below already knows;
     // this is what carries that out to the reader instead of leaving it in a console line.
     let refsSkipped: string | undefined;
-    const nativeReferenceLimit = REFERENCE_LATENT_MAX_REFS - (family === "qwenimage21" && input.initImage ? 1 : 0);
-    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && (referenceLatentSupports(family) || family === "qwenimage21")) {
+    const nativeReferenceLimit = REFERENCE_LATENT_MAX_REFS - ((family === "qwenimage21" || family === "flux3") && input.initImage ? 1 : 0);
+    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0 && (referencePhotoSupports(family) && !ipAdapterSupports(family))) {
       // This family reads the photo itself — no adapter, and nothing to install. Same reference
       // images, a different route into the same render.
       try {
@@ -1197,6 +1221,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
             .map((ref) => this.uploadedReference(ref.bytes, ref.mimeType)),
         );
       } catch {
+        if (family === "flux3") throw new Error("FLUX 3 reference upload failed; no image was generated. Reconnect ComfyUI and retry.");
         if (family === "qwenimage21") throw new Error("Qwen Image 2.1 reference upload failed; no image was generated. Reconnect ComfyUI and retry.");
         referenceLatents = undefined; // upload failed → render without the reference, not at all
         refsSkipped = "the engine wouldn't accept the upload";
@@ -1267,6 +1292,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const denoise = Math.min(1, Math.max(0.05, input.denoise ?? 0.65));
         initImage = { filename, denoise };
       } catch {
+        if (family === "flux3") throw new Error("FLUX 3 edit image upload failed; no image was generated. Reconnect ComfyUI and retry.");
         if (family === "qwenimage21") throw new Error("Qwen Image 2.1 edit image upload failed; no image was generated. Reconnect ComfyUI and retry.");
         initImage = undefined; // upload failed → fall back to txt2img
       }
@@ -1691,6 +1717,8 @@ interface IpAdapterGraph {
 
 /** Loaders + filenames for a separate-component (Flux.2 / UNET-only) model. */
 interface DiffusionComponents {
+  /** FLUX 3 runs a separate caption model before encoding the prompt. */
+  promptUpsampler?: string;
   /** Text-encoder loader node (DualCLIPLoader for Flux.1; a single CLIPLoader for Flux.2). */
   textEncoder: { class_type: string; inputs: Record<string, unknown> };
   /** VAE filename for VAELoader. */
@@ -1881,7 +1909,53 @@ function buildQwenImage21Workflow(p: WorkflowParams): Record<string, unknown> {
   return graph;
 }
 
+/** Native FLUX 3 recipe, not a Flux.2 graph. Init images are edit references, not img2img noise. */
+function buildFlux3Workflow(p: WorkflowParams): Record<string, unknown> {
+  if (!p.components?.promptUpsampler) throw new Error("FLUX 3 requires its prompt upsampler.");
+  const refs = [...(p.initImage ? [p.initImage.filename] : []), ...(p.referenceLatents ?? [])].slice(0, 10);
+  const graph: Record<string, unknown> = {
+    "4": { class_type: "UNETLoader", inputs: { unet_name: p.model, weight_dtype: "default" } },
+    "12": p.components.textEncoder,
+    "13": { class_type: "VAELoader", inputs: { vae_name: p.components.vaeName } },
+    "20": { class_type: "CLIPLoader", inputs: { clip_name: p.components.promptUpsampler, type: "flux3" } },
+    "21": { class_type: "TextGenerate", inputs: {
+      clip: ["20", 0], prompt: p.prompt, max_length: 3584, sampling_mode: "off",
+      thinking: false, use_default_template: true, mtp: "off",
+      system_prompt: refs.length
+        ? "Expand the request into one concrete image editing or composition instruction. Inspect all attached reference images in order. Preserve identities and every explicit constraint, describe requested changes, lighting and composition, and state what remains unchanged. For multiple references say what to take from each ordinal image. Output only English prose, no commentary."
+        : "Expand the request into one detailed scene caption for an image generator. Preserve every explicit subject, identity, count, wording, style and composition constraint. Describe framing, actions, materials, background and lighting concretely. Do not add unrequested people. Output only the caption as continuous English prose.",
+      ...(refs.length ? { image: ["22", 0] } : {}),
+    } },
+    "6": { class_type: "CLIPTextEncode", inputs: { text: ["21", 0], clip: ["12", 0] } },
+    "7": { class_type: "ConditioningZeroOut", inputs: { conditioning: ["6", 0] } },
+    "5": { class_type: "EmptyFlux2LatentImage", inputs: { width: p.width, height: p.height, batch_size: 1 } },
+    "3": { class_type: "KSampler", inputs: {
+      model: ["4", 0], positive: refs.length ? ["23", 0] : ["6", 0],
+      negative: refs.length ? ["23", 1] : ["7", 0], latent_image: ["5", 0],
+      seed: p.seed, steps: p.steps, cfg: p.sampler.cfg,
+      sampler_name: p.sampler.sampler, scheduler: p.sampler.scheduler, denoise: 1,
+    } },
+    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["13", 0] } },
+    "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader-flux3", images: ["8", 0] } },
+  };
+  if (refs.length) {
+    const images: Record<string, unknown> = {};
+    refs.forEach((filename, i) => {
+      const id = String(100 + i);
+      graph[id] = { class_type: "LoadImage", inputs: { image: filename } };
+      images[`images.image${i}`] = [id, 0];
+    });
+    graph["22"] = { class_type: "BatchImagesNode", inputs: images };
+    graph["23"] = { class_type: "ReferenceMultiLatent", inputs: {
+      positive: ["6", 0], negative: ["7", 0], vae: ["13", 0],
+      resolution: "resize", "resolution.megapixels": 1, ...images,
+    } };
+  }
+  return graph;
+}
+
 export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
+  if (p.family === "flux3") return buildFlux3Workflow(p);
   if (p.family === "qwenimage21") return buildQwenImage21Workflow(p);
   const diffusion = p.loadKind === "diffusion";
   // Source refs for model / clip / vae, depending on the load shape. A LoRA wraps the
@@ -2432,6 +2506,12 @@ export const SPLIT_FILE_HEURISTICS: Record<
     vae: ["flux2", "flux.2", "flux-2", "flux_2", "flux", "encoder"],
     type: "flux2",
     what: "Flux.2",
+  },
+  flux3: {
+    clip: /qwen[._-]?3[._-]?vl[._-]?4b/i,
+    vae: ["flux2-vae", "flux2_vae", "flux.2-vae"],
+    type: "flux3",
+    what: "FLUX 3 Image Klein",
   },
   zimage: { clip: /qwen.?3.?4b/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
   qwenimage: { clip: /qwen.?2[._-]?5/i, vae: ["qwen_image_vae", "qwen-image-vae"], type: "qwen_image", what: "Qwen-Image" },

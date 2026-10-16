@@ -124,6 +124,7 @@ export type CatalogModelFamily =
   | "sdxl"
   | "flux"
   | "flux2"
+  | "flux3"
   | "zimage"
   | "qwenimage"
   | "qwenimage21"
@@ -174,6 +175,28 @@ const HIDREAM_SHARED_FILES: ModelComponentFile[] = [
   { filename: "llama_3.1_8b_instruct_fp8_scaled.safetensors", folder: "text_encoders", url: `${HIDREAM_TE_BASE}/llama_3.1_8b_instruct_fp8_scaled.safetensors`, sizeGB: 8.1 },
   { filename: "ae.safetensors", folder: "vae", url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/vae/ae.safetensors", sizeGB: 0.3 },
 ];
+
+const FLUX3_IMAGE_KLEIN: LocalModelCatalogEntry = {
+    id: "flux3-image-klein",
+    label: "FLUX 3 Image Klein (distilled, int8)",
+    sizeGB: 20.8,
+    note: "Experimental · Gated BFL license. Native edits + up to 10 references; needs current ComfyUI and prompt upsampler.",
+    filename: "flux3_image_klein_sd_int8_convrot.safetensors",
+    url: "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors",
+    family: "flux3",
+    clipType: "flux3",
+    sampler: { cfg: 1, sampler: "euler", scheduler: "simple", steps: 16 },
+    files: [
+      { folder: "text_encoders", filename: "qwen3vl_4b_int8_convrot.safetensors", sizeGB: 4.9,
+        url: "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3vl_4b_int8_convrot.safetensors" },
+      { folder: "vae", filename: "flux2-vae.safetensors", sizeGB: 0.3,
+        url: "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/vae/flux2-vae.safetensors" },
+      { folder: "text_encoders", filename: "qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors", sizeGB: 9.8,
+        url: "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors" },
+      { folder: "diffusion_models", filename: "flux3_image_klein_sd_int8_convrot.safetensors", sizeGB: 5.8,
+        url: "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors" },
+    ],
+};
 
 export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
@@ -415,6 +438,9 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   },
 ];
 
+// Keep the existing default/recommendation order; a gated experimental preset is opt-in.
+LOCAL_IMAGE_MODELS.push(FLUX3_IMAGE_KLEIN);
+
 /** The catalog entry for a model, matched by id or main filename (else undefined). */
 export function catalogEntryForModel(name: string): LocalModelCatalogEntry | undefined {
   const n = name.toLowerCase();
@@ -443,6 +469,7 @@ export function detectCheckpointFamily(name: string): CatalogModelFamily | undef
   if (/qwen[\s._-]?image[\s._-]?2[._-]1(?:[^0-9]|$)/.test(n)) return "qwenimage21";
   if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
   if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
+  if (/flux[\s._-]?3/.test(n)) return "flux3";
   if (n.includes("flux")) return "flux";
   if (n.includes("xl")) return "sdxl"; // sdxl, sd_xl, realvisxl, juggernautxl, …
   if (/(^|[^0-9])1[._-]?5|v1-5|sd15|sd1\.5/.test(n)) return "sd15";
@@ -459,6 +486,7 @@ const FAMILY_VRAM_GB: Record<CatalogModelFamily, number> = {
   sdxl: 7,
   flux: 12,
   flux2: 20,
+  flux3: 24,
   zimage: 12,
   qwenimage: 20,
   qwenimage21: 20,
