@@ -3,6 +3,7 @@ import { createChatProject } from "./project-workspaces.js";
 import { ProjectRequestClient, ProjectCommandHost, type ProjectOperation } from "./project-management.js";
 import {
   BUNDLED_LLM,
+  DirectTransport,
   IndexedDbStore,
   LocalServerLLMProvider,
   computeBloomTarget,
@@ -408,6 +409,7 @@ import { selectMirroredSoulEssence } from "./remote-soul-essence.js";
 import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, EngineVram, PlannerCommand, PlannerMirror, SoulEssenceJobProgress } from "./remote-sync.js";
 import {
   gpuVramUsage,
+  desktopFetch,
   restartApp,
   isPackagedDesktop,
   rebuildDesktopApp,
@@ -2850,13 +2852,14 @@ export function App() {
     if (isRemoteClient) return;
     const server = settings.localTextServer ?? "ollama";
     const url = settings.localServerTextUrl;
-    const model = settings.localServerTextModel;
+    const model = (settings.chatTextProvider ?? "local") === "local"
+      ? settings.chatLocalModel || settings.localServerTextModel : settings.localServerTextModel;
     if (settings.localTextBackend !== "server" || server !== "ollama" || !url || !model) {
       setTextModelContext(undefined);
       return;
     }
     let cancelled = false;
-    void LocalServerLLMProvider.contextLength(url, model)
+    void LocalServerLLMProvider.contextLength(url, model, isDesktop ? new DirectTransport(desktopFetch) : undefined)
       .then((info) => {
         if (!cancelled) setTextModelContext(info ?? undefined);
       })
@@ -2866,7 +2869,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [isRemoteClient, settings.localTextServer, settings.localServerTextUrl, settings.localServerTextModel, settings.localTextBackend]);
+  }, [isRemoteClient, settings.localTextServer, settings.localServerTextUrl, settings.localServerTextModel, settings.localTextBackend, settings.chatTextProvider, settings.chatLocalModel]);
   // Isolated from the rest of modelProgress (checkpoint/LoRA downloads never mirror to a phone — the
   // phone gets picker-only for those) so engineInventory only recomputes for an actual ffmpeg change.
   const ffmpegProgress = modelProgress.ffmpeg;

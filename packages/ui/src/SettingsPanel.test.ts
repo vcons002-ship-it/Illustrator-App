@@ -3,6 +3,25 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isComfyBackend, panelStyle } from "./SettingsPanel.js";
 import { t } from "./design/tokens.js";
+import ts from "typescript";
+
+describe("local chat context controls", () => {
+  it("keeps server/context controls in their own group, not behind the book-provider choice", () => {
+    const source = ts.createSourceFile("settings.tsx", readFileSync(join(__dirname, "SettingsPanel.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let localGroup: ts.JsxElement | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === "Group" &&
+        node.openingElement.attributes.getText(source).includes('title="Local text — server & context"')) localGroup = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(localGroup).toBeDefined();
+    expect(localGroup!.getText(source)).toContain("Context window (tokens)");
+    expect(localGroup!.getText(source)).toContain("How to run it");
+    expect(localGroup!.getText(source)).not.toContain('value.textProvider === "local" &&');
+    expect(ts.isJsxElement(localGroup!.parent)).toBe(true);
+  });
+});
 
 /**
  * The settings card renders through a PORTAL, at the top of the document rather than inside the app.

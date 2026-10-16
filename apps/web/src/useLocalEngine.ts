@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { connectLocalText } from "./local-text-connection.js";
 import {
   Automatic1111Backend,
   BUNDLED_LLM,
@@ -33,6 +34,7 @@ import {
   downloadModel,
   ensureA1111,
   ensureEngine,
+  ensureOllama,
   gpuVramMb,
   installIpAdapterNodes,
   isDesktop,
@@ -223,7 +225,9 @@ export function useLocalEngine(deps: LocalEngineDeps) {
       LOCAL_TEXT_SERVER_DEFAULT_URL[settings.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER];
     if (!url) return;
     let cancelled = false;
-    void LocalServerLLMProvider.listModels(url)
+    void connectLocalText(settings.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER, url, {
+      desktopFetch, ensureOllama,
+    })
       .then((models) => {
         if (!cancelled && models.length) setTextModels(models);
       })
@@ -915,13 +919,14 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     setLocalError("");
     setConnectingLocalText(true);
     try {
-      const models = await LocalServerLLMProvider.listModels(url);
+      const models = await connectLocalText(server, url, isDesktop ? { desktopFetch, ensureOllama } : {});
       setTextModels(models);
       setSettings((s) => {
         const keep = s.localServerTextModel && models.some((m) => m.id === s.localServerTextModel);
         const localServerTextModel = keep ? s.localServerTextModel : models[0]?.id;
         return {
           ...s,
+          localTextBackend: "server",
           localTextServer: server,
           localServerTextUrl: url,
           ...(localServerTextModel ? { localServerTextModel } : {}),
@@ -930,7 +935,7 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     } catch (err) {
       setLocalError(
         `Couldn't reach ${server} at ${url}: ${err instanceof Error ? err.message : String(err)}. ` +
-          `Make sure it's running, and (for Ollama in a browser) set OLLAMA_ORIGINS to ${location.origin}.`,
+          (isDesktop ? "Check the server's startup log; the desktop connection does not require browser CORS changes." : "Make sure the server is running and permits this browser's origin."),
       );
     } finally {
       setConnectingLocalText(false);
