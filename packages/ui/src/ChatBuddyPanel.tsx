@@ -52,6 +52,7 @@ import { useSharedParticleField } from "./ParticleBackdrop.js";
 import { StepQueue } from "./StepQueue.js";
 import { ProjectWorkspaceBar, type ProjectWorkspaceBarProps } from "./ProjectWorkspaceBar.js";
 import { useStickToBottom } from "./useStickToBottom.js";
+import { CollapsibleSidebar } from "./CollapsibleSidebar.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -283,9 +284,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       document.removeEventListener("keydown", onKey);
     };
   }, [modelsOpen]);
-  // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
-  // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
+  // Secondary controls live in a drawer; neither project paths nor context pills cost chat height.
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
   const commands = useMemo(
     () => buddySlashCommands((props.desktop ?? false) || (props.remote ?? false), props.canDelegateCoding ?? false),
     [props.desktop, props.remote, props.canDelegateCoding],
@@ -682,9 +683,22 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       {sharedFieldRef.current === null && (
         <ParticleField className={cx.field} handleRef={ownFieldRef} />
       )}
-      <div style={minimized ? { ...headerStyle, paddingBottom: 0 } : headerStyle}>
+      <div style={{ ...headerStyle, padding: "4px 8px", minWidth: 0 }}>
+        {!minimized && <button className={cx.btn} style={{ ...smallButtonStyle, minHeight: 44, flexShrink: 0 }}
+          onClick={() => setToolsOpen(v => !v)} aria-expanded={toolsOpen}>Chats & project</button>}
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>
+          {props.sessions?.find(s => s.id === props.activeSessionId)?.label ?? "Chat"}
+        </span>
+        {props.onToggleHistory && <button className={cx.btn} style={{ ...smallButtonStyle, minHeight: 44 }}
+          onClick={props.onToggleHistory} aria-expanded={!props.historyCollapsed}
+          title={props.historyCollapsed ? "Show chat history" : "Hide chat history (keep the input bar)"}>
+          {props.historyCollapsed ? "▴ History" : "▾ History"}
+        </button>}
+      </div>
+      <CollapsibleSidebar open={showTools} title="Chats & project" onClose={() => setToolsOpen(false)}>
+      <div style={{ ...headerStyle, flexWrap: "wrap" }}>
         {props.sessions && props.onSwitchSession ? (
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
             <select className={cx.input}
               value={props.activeSessionId}
               onChange={(e) => {
@@ -717,8 +731,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 </optgroup>
               )}
             </select>
-            {/* Always available (not behind the ⋯ tools), because it's the way OUT of this chat —
-                hiding it is what left Delete looking like the only exit. CLOSE ≠ DELETE: this drops
+            {/* Keep the non-destructive exit beside the session picker. CLOSE ≠ DELETE: this drops
                 the chat from the picker and keeps everything; 🗑 below destroys the history. */}
             {props.onCloseSession && !minimized && (
               <button className={cx.btn}
@@ -771,7 +784,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         ) : (
           <strong style={{ fontSize: 14 }}>Chat</strong>
         )}
-        <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {showTools && <span style={personaGroupStyle}>{planToggle}</span>}
           {showTools && props.onLoadModel && (
             <button className={cx.btn}
@@ -819,29 +832,6 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Clear
             </button>
           )}
-          {/* Small ⋯ toggle that reveals/hides the secondary controls above — saves header space.
-              Gone while minimized: the controls it reveals are hidden anyway, so it would do nothing. */}
-          {!minimized && (
-          <button className={cx.btn}
-            style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: t.accent.text } : smallButtonStyle}
-            onClick={() => setToolsOpen((v) => !v)}
-            title={toolsOpen ? "Hide chat tools" : "More chat tools (new, rename, clear, …)"}
-            aria-expanded={toolsOpen}
-            aria-label="Chat tools"
-          >
-            ⋯
-          </button>
-          )}
-          {props.onToggleHistory && (
-            <button className={cx.btn}
-              style={smallButtonStyle}
-              onClick={props.onToggleHistory}
-              title={props.historyCollapsed ? "Show chat history" : "Hide chat history (keep the input bar)"}
-              aria-expanded={!props.historyCollapsed}
-            >
-              {props.historyCollapsed ? "▴ History" : "▾ History"}
-            </button>
-          )}
         </span>
       </div>
 
@@ -861,6 +851,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           intro="Tell me what you want in plain language — I'll use these tools when they help. You can also run any of them directly by typing the command:"
         />
       )}
+      </CollapsibleSidebar>
 
       <div
         ref={scrollRef}
@@ -1325,7 +1316,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           ))}
         </div>
       )}
-      <div style={utilityRowStyle}>
+      <div className="vr-chat-utilities" hidden={!utilitiesOpen} style={utilitiesOpen ? utilityRowStyle : { display: "none" }}>
         {props.onAttachFile && (
           <>
             <input className={cx.input}
@@ -1375,31 +1366,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             ⚙ Models
           </button>
         )}
-        {props.liveControl && (
+        {props.liveControl && !props.liveControl.on && (
           <button className={cx.btn}
-            style={
-              props.liveControl.on
-                ? { ...smallButtonStyle, ...liveActiveStyle }
-                : smallButtonStyle
-            }
-            onClick={() => props.liveControl!.onToggle(!props.liveControl!.on)}
-            // The ON title says what is true RIGHT NOW and how to end it; the OFF title says what
-            // turning it on would let happen. Someone reaching for this needs the consequence, not
-            // the feature name.
-            title={
-              props.liveControl.on
-                ? "Live control is ON — I can work your open programs (click and type into them) and keep going without asking between actions. Click to turn off."
-                : "Live control — let me work your open programs directly: read a window's controls, click and type into them, and keep going until the job is done instead of asking after every action. Desktop; Windows for the control part."
-            }
-            aria-pressed={props.liveControl.on}
+            style={smallButtonStyle}
+            onClick={() => props.liveControl!.onToggle(true)}
+            title="Live control — let me work your open programs directly: read a window's controls, click and type into them, and keep going until the job is done instead of asking after every action. Desktop; Windows for the control part."
+            aria-pressed={false}
           >
-            {props.liveControl.on ? "🔴 Live" : "🖱 Live"}
+            🖱 Live
           </button>
         )}
       </div>
       <div
         ref={composerRef}
-        className={cx.input}
+        className={`${cx.input} vr-chat-composer`}
         style={inputRowStyle}
         onAnimationEnd={(e) => {
           // Drop the class as soon as the burst finishes, so the element is clean for the next
@@ -1407,6 +1387,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           if (e.animationName === "vr-send-burst") e.currentTarget.classList.remove(cx.sent);
         }}
       >
+        <button className={cx.btn} style={{ ...smallButtonStyle, minHeight: 44 }}
+          onClick={() => { setUtilitiesOpen(v => !v); setModelsOpen(false); }} aria-expanded={utilitiesOpen}
+          aria-label="Composer tools" title="Attachments, models, story and live control">＋</button>
         <textarea className={cx.input}
           ref={textareaRef}
           value={draft}
@@ -1431,9 +1414,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 : "Ask anything, or tell me what to do… (Enter to send, / for commands)"
           }
           rows={2}
-          style={textareaStyle}
+          style={{ ...textareaStyle, minWidth: 0 }}
         />
-        {speechApi ? (
+        {props.liveControl?.on && <button className={cx.btn}
+          style={{ ...smallButtonStyle, ...liveActiveStyle, minHeight: 44 }}
+          aria-pressed={true} title="Live control is ON — click to turn off"
+          onClick={() => props.liveControl!.onToggle(false)}>🔴 Live</button>}
+        {speechApi && (utilitiesOpen || listening) ? (
           <button className={cx.btn}
             style={listening ? { ...smallButtonStyle, borderColor: t.state.danger, color: t.state.danger } : smallButtonStyle}
             onClick={toggleMic}
@@ -1444,7 +1431,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {listening ? "● Rec" : "🎤"}
           </button>
         ) : null}
-        {ttsSupported ? (
+        {ttsSupported && (utilitiesOpen || speakOn) ? (
           <button className={cx.btn}
             style={speakOn ? { ...smallButtonStyle, borderColor: t.state.good, color: t.state.good } : smallButtonStyle}
             onClick={toggleSpeak}
@@ -1483,8 +1470,7 @@ const panelStyle = {
   overflow: "hidden",
 } as const;
 
-/** Secondary actions (attach / story / models) — their own row above the input, so they never
- * squeeze the textarea's width on narrow screens. Wraps if it still doesn't fit. */
+/** Optional actions expand above the input only while the composer-tools disclosure is open. */
 const utilityRowStyle = {
   display: "flex",
   flexWrap: "wrap",

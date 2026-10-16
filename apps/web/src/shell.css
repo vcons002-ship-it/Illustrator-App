@@ -1,0 +1,4 @@
+/* Standalone app only. Never put document resets in the UI package used by the extension. */
+html, body { margin: 0; padding: 0; }
+body { background: var(--vr-bg); }
+#root { min-height: 100dvh; }

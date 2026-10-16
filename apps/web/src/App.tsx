@@ -376,6 +376,7 @@ import {
   t,
   usePointerFeedback,
   ModalShell,
+  CollapsibleSidebar,
   type FileActions,
   type FileRef,
   type InstalledModel,
@@ -2436,12 +2437,10 @@ export function App() {
       /* CSS.escape unavailable / node gone — non-fatal, same as the beat jump */
     }
   }, []);
-  // The "Tools" caret is gone: the header is five grouped menus, so there is no longer a wall of
-  // buttons to hide. Collapsing it was only ever a workaround for the row being too long.
-  // The book's own tools (illustrate, redo, characters, export…) are a fenced-off group with their
-  // own caret, so the reader can put the whole book workflow away without losing the app's tools —
-  // or keep it and collapse everything else. Default collapsed on phones, like the toolbar.
+  // App menus now live in Navigation. The book keeps its own disclosure inside that drawer;
+  // active workflow progress stays outside, so collapsing controls never hides running work.
   const [bookToolsOpen, setBookToolsOpen] = useState(() => !narrow);
+  const [shellDrawer, setShellDrawer] = useState<"navigation" | "details" | null>(null);
   /** Which world-bible list is open ("" = closed) — the Places / Creatures buttons. */
   const [showWorld, setShowWorld] = useState<"" | "places" | "creatures">("");
   /**
@@ -11497,7 +11496,7 @@ export function App() {
     // `vr-app` is the root every global rule hangs off — never <body>, because the browser
     // extension mounts these same components into arbitrary websites with no shadow DOM.
     <div
-      className={`${cx.app} ${cx.appBackdrop}${dockMode === "full" ? ` ${cx.shellChatting}` : ""}${
+      className={`${cx.app} ${cx.appBackdrop}${!book ? " vr-home-chat" : ""}${book && dockMode === "full" ? ` ${cx.shellChatting}` : ""}${
         railLayout ? ` ${cx.railLayout}` : ""
       }`}
       style={styles.shell}
@@ -11552,7 +11551,17 @@ export function App() {
       )}
       <header style={styles.header}>
         <div style={styles.headerRow}>
+        <button className={cx.btn} style={styles.shellToggle} aria-expanded={shellDrawer === "navigation"}
+          onClick={() => setShellDrawer(v => v === "navigation" ? null : "navigation")}>
+          ☰ Navigation
+        </button>
         <strong>Visual Reader</strong>
+        <button className={cx.btn} style={styles.shellToggle} aria-expanded={shellDrawer === "details"}
+          onClick={() => setShellDrawer(v => v === "details" ? null : "details")}>
+          Details{unseenCount(actionHistory, actionsViewedAt) > 0 ? " •" : ""}
+        </button>
+        </div>
+        <CollapsibleSidebar open={shellDrawer === "navigation"} title="Navigation" onClose={() => setShellDrawer(null)}>
         <div style={styles.headerControls}>
           {book && (
             <button
@@ -11955,7 +11964,6 @@ export function App() {
           onDisconnectGoogle={onDisconnectGoogle}
         />
         </div>
-        </div>
         {/* THE BOOK'S OWN TOOLBAR — a separate bar with its own caret, not a section of the app's
             toolbar. Sharing that caret meant putting the app's tools away took the book's with them,
             and the two kinds sat indistinguishable in one wrapping row. */}
@@ -12246,6 +12254,7 @@ export function App() {
             )}
           </div>
         )}
+        </CollapsibleSidebar>
         {/* One of TWO copies — the other is in the rail. Both are always rendered and CSS shows
             exactly one, so no code path can lose the strip. See `workflowStrip`. */}
         {workflowStrip && <div className={cx.workflowHeader}>{workflowStrip}</div>}
@@ -12260,6 +12269,7 @@ export function App() {
 
       {/* On a linked phone the engine lives on the desktop — show the link, not a "set up a model"
           nag or local-provider badges (those reflect a model the phone will never run). */}
+      <CollapsibleSidebar open={shellDrawer === "details"} title="Models & status" side="right" onClose={() => setShellDrawer(null)}>
       {isRemoteClient ? (
         // On a linked phone, show the link badge AND the desktop's mirrored model tags + GPU VRAM,
         // so the phone can see which image/LLM models are active and what the GPU is doing.
@@ -12288,9 +12298,28 @@ export function App() {
         <ProviderBadges providers={providers} engineStatus={engineStatus} vram={effectiveVram} />
       )}
 
+      <ActivityCenter activities={activities} />
+      {actionHistory.length > 0 && (
+        <button
+          style={{ ...styles.badge, ...styles.badgeOk, cursor: "pointer" }}
+          title="What the assistant did (scans, planning, scheduled tasks) since you last looked"
+          onClick={() => {
+            setPanelNewSince(actionsViewedAt);
+            setShowActionHistory(true);
+            void markActionsViewed(libraryStore).catch(() => {});
+            setActionsViewedAt(Date.now());
+          }}
+        >
+          🗒️ Activity{unseenCount(actionHistory, actionsViewedAt) > 0 ? ` (${unseenCount(actionHistory, actionsViewedAt)} new)` : ""}
+        </button>
+      )}
+      </CollapsibleSidebar>
+
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
           running after you leave the Tasks window, so this is how you keep an eye on it). */}
-      <ActivityCenter activities={activities} />
+      {activities.some(a => a.status === "active" || a.status === "queued" || a.status === "error") && (
+        <ActivityCenter activities={activities} />
+      )}
       {/* App-wide toasts: errors (every setLocalError) + confirmations, visible in every view. */}
       <ToastHost toasts={toasts} onDismiss={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))} />
       {/* App-wide download indicator: every in-flight model/video/LoRA download + Ollama text-model pull,
@@ -12302,20 +12331,6 @@ export function App() {
         labelFor={downloadLabelFor}
         hideKey={isVideoChildFile}
       />
-      {actionHistory.length > 0 && (
-        <button
-          style={{ ...styles.badge, ...styles.badgeOk, cursor: "pointer" }}
-          title="What the assistant did (scans, planning, scheduled tasks) since you last looked"
-          onClick={() => {
-            setPanelNewSince(actionsViewedAt); // highlight entries newer than the PREVIOUS view
-            setShowActionHistory(true);
-            void markActionsViewed(libraryStore).catch(() => {});
-            setActionsViewedAt(Date.now()); // badge now reads 0 new
-          }}
-        >
-          🗒️ Activity{unseenCount(actionHistory, actionsViewedAt) > 0 ? ` (${unseenCount(actionHistory, actionsViewedAt)} new)` : ""}
-        </button>
-      )}
 
       {!book && (status || localError) && (
         <div style={styles.status}>{localError || status}</div>
@@ -12325,7 +12340,7 @@ export function App() {
           chat instead docks at the bottom of the page (below the reader) — see the dock after this
           scroll region. */}
       {!book && (
-        <section style={styles.buddySection}>{renderBuddyChat(false)}</section>
+        <section className="vr-home-conversation">{renderBuddyChat(true)}</section>
       )}
 
       {book && viewAs === "code" && codeEditMode ? (
@@ -14746,7 +14761,7 @@ const styles: Record<string, React.CSSProperties> = {
   // Full-height flex column: fixed header on top, a scrolling content region in the middle, and a
   // fixed-height chat dock pinned at the bottom (when a book is open).
   shell: {
-    height: "100vh",
+    height: "100dvh",
     display: "flex",
     flexDirection: "column",
     // NO BACKGROUND. `.vr-app` already declares the identical `var(--vr-bg)`, and an inline value
@@ -14769,7 +14784,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 6,
-    padding: "12px 20px 8px",
+    padding: "4px 8px",
     background: "rgba(17,19,26,0.92)",
     borderBottom: `1px solid ${t.border.faint}`,
     backdropFilter: "blur(8px)",
@@ -14777,10 +14792,11 @@ const styles: Record<string, React.CSSProperties> = {
   headerRow: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 16,
+    alignItems: "center",
+    gap: 8,
   },
-  headerControls: { display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" },
+  shellToggle: { background: t.fill.base, color: "inherit", border: `1px solid ${t.border.button}`, borderRadius: 6, padding: "6px 10px", cursor: "pointer", minHeight: 44 },
+  headerControls: { display: "flex", gap: 10, alignItems: "stretch", flexDirection: "column" },
   /**
    * The book's OWN toolbar — a separate bar under the app's, not a section of it.
    *
@@ -14967,7 +14983,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "rgba(230,90,90,0.5)",
     color: t.state.danger,
   },
-  buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
   // With a book open the chat docks at the bottom of the page (full width), beneath the reader. It's
   // a fixed-height flex child of the shell; its inner panel scrolls. The story workflow/cadence
   // controls sit above it when the book is a "story as you go".

@@ -3,6 +3,7 @@
 // `import "./x.css"` would fail typecheck. One import at the entry gives every component
 // (including portalled ones, since the tokens are declared on :root) the whole system.
 import "@visual-reader/ui/styles.css";
+import "./shell.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
