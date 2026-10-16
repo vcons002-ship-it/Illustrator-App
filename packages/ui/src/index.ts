@@ -28,6 +28,7 @@ export * from "./ProjectWorkspaceBar.js";
 export * from "./model-menu.js";
 export * from "./popover-position.js";
 export * from "./AnchoredMenu.js";
+export * from "./CollapsibleSidebar.js";
 export * from "./ContextUsageDonut.js";
 export * from "./DocumentPolishPanel.js";
 export * from "./DocBlocksView.js";

@@ -279,3 +279,38 @@
   overflow-y: auto;
   transition: max-height var(--vr-dur-3) var(--vr-spring);
 }
+/* Drawers overlay rather than reserve chat width. Menus (40+) and dialogs (100+) sit above them. */
+.vr-sidebar {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  width: min(390px, 100vw);
+  box-sizing: border-box;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--vr-bg);
+  border: 1px solid var(--vr-border-subtle);
+  box-shadow: 0 8px 32px rgba(0,0,0,.45);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--vr-font-ui);
+  outline: none;
+}
+.vr-sidebar[hidden] { display: none; }
+.vr-sidebar[data-side="right"] { left: auto; right: 0; }
+.vr-sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vr-sidebar-content { overflow-y: auto; overflow-x: hidden; min-height: 0; padding-top: 12px; }
+.vr-sidebar-content button, .vr-sidebar-content select { min-height: 44px; }
+.vr-sidebar-content input, .vr-sidebar-content select { max-width: 100%; box-sizing: border-box; }
+.vr-home-chat > .vr-reader-yield { display: flex; flex-direction: column; overflow: hidden; }
+.vr-home-chat .vr-home-conversation { flex: 1; min-height: 0; display: flex; padding: 0 8px; }
+.vr-home-conversation > .vr-chat-open { width: 100%; height: 100%; min-width: 0; }
+.vr-chat-composer > button { min-height: 44px; flex-shrink: 0; }
+.vr-chat-utilities button { min-height: 44px; }
+.vr-home-conversation .vr-chat-composer { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
+@media (max-width: 600px) {
+  .vr-home-chat .vr-home-conversation { padding: 0; }
+  .vr-home-conversation > .vr-chat-open { border-radius: 0; }
+}
