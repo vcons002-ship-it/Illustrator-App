@@ -14,8 +14,10 @@ echo already have on disk; this also fetches new code.)
 echo.
 
 call "%~dp0scripts\windows-desktop-closed.bat" || goto :end_fail
-call :git_update   || goto :end_fail
 call :check_node   || goto :end_fail
+call node "%~dp0scripts\backup-desktop-profile.mjs"
+if errorlevel 1 goto :end_fail
+call :git_update   || goto :end_fail
 call :check_pnpm   || goto :end_fail
 call :install_deps || goto :end_fail
 call :build_all    || goto :end_fail
