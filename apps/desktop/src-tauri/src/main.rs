@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 mod coding_receipt;
 mod coding_context;
+mod remote_relay;
 
 // Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
 // loader pops up for a broken executable — without this, probing a corrupt/incomplete binary (a
@@ -448,6 +449,52 @@ fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
         if let Ok(path) = windows_tool_path(&inherited, dirs) { cmd.env("PATH", path); }
     }
     cmd
+}
+
+/// Reuse the user's Ollama service, or start its already-installed CLI on the default
+/// loopback endpoint. This deliberately does not install it or relax network security.
+#[tauri::command]
+async fn ensure_ollama(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        static START: Mutex<()> = Mutex::new(());
+        let _start = START.lock().map_err(|_| "Ollama startup lock failed")?;
+        let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(2))
+            .build().map_err(|e| e.to_string())?;
+        let ready = || client.get("http://127.0.0.1:11434/api/version").send().ok()
+            .filter(|r| r.status().is_success())
+            .and_then(|r| r.json::<serde_json::Value>().ok())
+            .is_some_and(|v| v.get("version").and_then(|v| v.as_str()).is_some());
+        if ready() { return Ok(()); }
+        if let Ok(host) = std::env::var("OLLAMA_HOST") {
+            let host = host.trim().trim_end_matches('/');
+            if !host.is_empty() && !["127.0.0.1:11434", "localhost:11434", "http://127.0.0.1:11434", "http://localhost:11434"].contains(&host) {
+                return Err("OLLAMA_HOST uses a custom endpoint. Start that server manually or correct its saved URL; the app will not change its bind address.".into());
+            }
+        }
+        let installed = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+            .map(|p| p.join("Programs").join("Ollama").join("ollama.exe"))
+            .filter(|p| p.is_file());
+        let program = installed.unwrap_or_else(|| PathBuf::from("ollama"));
+        let logs = engine_root(&app).join("logs");
+        std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+        let log = std::fs::OpenOptions::new().create(true).append(true)
+            .open(logs.join("ollama-server.log")).map_err(|e| e.to_string())?;
+        let mut child = quiet_command(program).arg("serve").stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
+            .stderr(Stdio::from(log)).spawn()
+            .map_err(|e| format!("Could not start installed Ollama: {e}. Install/open Ollama first."))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if ready() { return Ok(()); }
+            if let Some(code) = child.try_wait().map_err(|e| e.to_string())? {
+                return Err(format!("Ollama exited ({code}); see logs/ollama-server.log in the VisualReader data folder."));
+            }
+            if Instant::now() >= deadline {
+                return Err("Ollama is still starting. Check logs/ollama-server.log, then retry Connect.".into());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Keep a malformed inherited PATH from disabling discovery of installed build tools.
@@ -1628,10 +1675,6 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// Cap concurrent WebSocket peers on the internet-exposable relay: an unauthenticated flood must not
 /// exhaust memory/handles before the token check runs. Phone pairing needs only a couple of peers.
 const MAX_RELAY_WS_CONNS: usize = 32;
-/// Per-message size limit for relay frames — well above any legitimate control-JSON/payload frame,
-/// far below tokio-tungstenite's 64 MB default, so a pre-auth peer can't buffer a giant frame.
-const RELAY_MAX_WS_MSG_BYTES: usize = 4 * 1024 * 1024;
-
 /// RAII counter for live relay WS connections — decrements on drop so a dropped/aborted task frees
 /// its slot (see `MAX_RELAY_WS_CONNS`).
 struct RelayConnGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
@@ -1652,34 +1695,17 @@ async fn run_remote_server(
     stop: std::sync::Arc<tokio::sync::Notify>,
     app: AppHandle,
 ) -> Result<(), String> {
-    use futures_util::{SinkExt, StreamExt};
     let (tx, _rx) = tokio::sync::broadcast::channel::<(u64, String)>(256);
     let mut next_id: u64 = 0;
-    // Live WS-peer count (see MAX_RELAY_WS_CONNS) — HTTP asset requests aren't counted (they're short).
+    // Bound all peers, including HTTP requests and incomplete handshakes.
     let conns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     loop {
         let (stream, _addr) = tokio::select! {
             _ = stop.notified() => return Ok(()),
             accepted = listener.accept() => accepted.map_err(|e| e.to_string())?,
         };
-        // Peek (non-consuming) to tell a WebSocket upgrade from a plain HTTP request. Use a large
-        // buffer: through Cloudflare (Access) the request carries big headers + the CF_Authorization
-        // JWT cookie, which can push the `Upgrade: websocket` header well past the first KB.
-        let mut head = [0u8; 8192];
-        let n = match stream.peek(&mut head).await {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        let head_str = String::from_utf8_lossy(&head[..n]).to_ascii_lowercase();
-        if !head_str.contains("upgrade: websocket") {
-            // Serve the bundled SPA so the phone can load the app from this port.
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                serve_http_asset(stream, &app).await;
-            });
-            continue;
-        }
-        // Enforce the concurrent-peer cap BEFORE upgrading, so a flood is dropped cheaply.
+        // Bound HTTP/handshake peers too, and classify them INSIDE their own task. A silent or
+        // partial TCP client must not hold up accept() and every reconnect behind it.
         use std::sync::atomic::Ordering;
         if conns.fetch_add(1, Ordering::SeqCst) >= MAX_RELAY_WS_CONNS {
             conns.fetch_sub(1, Ordering::SeqCst);
@@ -1689,63 +1715,25 @@ async fn run_remote_server(
         let peer_id = next_id;
         next_id += 1;
         let tx = tx.clone();
-        let mut rx = tx.subscribe();
         let token = token.clone();
+        let app = app.clone();
+        let stop = stop.clone();
         tauri::async_runtime::spawn(async move {
-            // Held for the connection's lifetime; frees the slot on drop (normal exit or abort).
             let _conn_guard = conn_guard;
-            // Bound each frame's size so a pre-auth peer can't buffer a huge message (tungstenite's
-            // default is 64 MB).
-            let mut ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
-            ws_config.max_message_size = Some(RELAY_MAX_WS_MSG_BYTES);
-            ws_config.max_frame_size = Some(RELAY_MAX_WS_MSG_BYTES);
-            let ws = match tokio_tungstenite::accept_async_with_config(stream, Some(ws_config)).await {
-                Ok(ws) => ws,
-                Err(_) => return,
+            let upgrade = tokio::select! {
+                _ = stop.notified() => return,
+                result = remote_relay::is_websocket(&stream) => result,
             };
-            let (mut write, mut read) = ws.split();
-            // Authorize: the first frame must carry the pairing token.
-            let mut authorized = false;
-            loop {
-                tokio::select! {
-                    incoming = read.next() => {
-                        let Some(Ok(msg)) = incoming else { break };
-                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
-                            if !authorized {
-                                // Constant-time compare so a network timing side-channel can't probe the
-                                // pairing token byte-by-byte (it now also gates an internet-exposed tunnel).
-                                let ok = serde_json::from_str::<serde_json::Value>(&txt)
-                                    .ok()
-                                    .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| ct_eq(s.as_bytes(), token.as_bytes())))
-                                    .unwrap_or(false);
-                                if !ok {
-                                    // Small fixed delay before dropping a bad-token peer, to blunt online
-                                    // brute-forcing over the tunnel (the ct_eq compare above stays constant-time).
-                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                    break;
-                                }
-                                authorized = true;
-                                // FALL THROUGH — do NOT swallow this frame. There is no separate
-                                // handshake: EVERY frame is `{token, payload}` (see encodeFrame), so a
-                                // peer's first frame is already a real message. For a phone that is
-                                // `vrcmd:hello`, the request that asks the desktop for its state
-                                // snapshot — dropping it left a freshly-linked phone showing an empty
-                                // chat until the reader happened to send something (which, as the
-                                // SECOND frame, relayed normally and made everything appear at once).
-                                // Relaying the token along with it is by design, not a leak: a peer can
-                                // only decode a frame whose token matches the one it already holds, and
-                                // only authorized peers ever receive a broadcast (see the recv arm).
-                            }
-                            // Relay this peer's frame to the others.
-                            let _ = tx.send((peer_id, txt));
-                        }
-                    }
-                    bcast = rx.recv() => {
-                        let Ok((from, txt)) = bcast else { continue };
-                        if from == peer_id || !authorized { continue; }
-                        if write.send(tokio_tungstenite::tungstenite::Message::Text(txt)).await.is_err() { break; }
+            match upgrade {
+                Ok(true) => {
+                    if let Err(reason) = remote_relay::serve_peer(stream, token, peer_id, tx, stop).await {
+                        eprintln!("phone relay peer {peer_id}: {reason}");
                     }
                 }
+                Ok(false) => {
+                    let _ = tokio::time::timeout(Duration::from_secs(10), serve_http_asset(stream, &app)).await;
+                }
+                Err(reason) => eprintln!("phone relay handshake: {reason}"),
             }
         });
     }
@@ -4153,6 +4141,7 @@ fn main() {
         .manage(LlmState::default())
         .manage(RemoteServerState::default())
         .invoke_handler(tauri::generate_handler![
+            ensure_ollama,
             ensure_engine,
             ensure_a1111,
             ensure_llm,

@@ -793,7 +793,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     transport?: Transport,
   ): Promise<{ id: string; label: string }[]> {
     const t = transport ?? new DirectTransport();
-    const res = await t.send({ url: `${baseUrl.replace(/\/$/, "")}/models`, method: "GET" });
+    const res = await t.send({ url: `${baseUrl.replace(/\/$/, "")}/models`, method: "GET", signal: AbortSignal.timeout(8_000) });
     if (!res.ok) throw new Error(`Local LLM server listModels failed with status ${res.status}`);
     const data = await res.json<ModelsResponse>();
     return (data.data ?? []).map((m) => ({ id: m.id, label: m.id }));

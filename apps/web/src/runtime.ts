@@ -115,6 +115,12 @@ export function ensureLocalLlm(): Promise<LocalLlm> {
   return invoke<LocalLlm>("ensure_llm");
 }
 
+/** Start the already-installed default loopback Ollama if its API is stopped. No install,
+ * firewall changes, origin relaxation, or model download. Existing servers are reused. */
+export function ensureOllama(): Promise<void> {
+  return invoke<void>("ensure_ollama");
+}
+
 /** Stop the bundled text model to free its VRAM for a burst of local image renders on the same
  * GPU. The next {@link ensureLocalLlm} relaunches it cold. No-op on the web / when nothing runs. */
 export function stopLocalLlm(): Promise<void> {

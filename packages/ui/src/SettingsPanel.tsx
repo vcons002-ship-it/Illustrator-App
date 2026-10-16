@@ -796,11 +796,9 @@ export function SettingsPanel({
   const textInfo = getProvider("text", value.textProvider);
   const imageInfo = getProvider("image", value.imageProvider);
 
-  // ONE canonical local-text-backend fallback — the desktop AND a linked phone (which mirrors the
-  // desktop's engine) default to the bundled model, plain web to on-device WebGPU. Several hand-rolled
-  // copies of this expression had drifted (one omitted `remote`, one defaulted to webgpu everywhere),
-  // so the panel could list the wrong model set for the actually-active backend.
-  const textBackend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
+  // Legacy settings without a backend are handled as WebGPU by buildProviders, not bundled.
+  // Never display a different backend than the one actually serving the conversation.
+  const textBackend = value.localTextBackend ?? "webgpu";
 
   // Resolved per-model sampler defaults, surfaced in the Advanced "auto = …" placeholders
   // so the user can see what blank actually does (mirrors the backend's resolution order:
@@ -1252,7 +1250,20 @@ export function SettingsPanel({
             </select>
           </label>
           {textInfo?.needsKey && <KeyField info={textInfo} value={value.keys[textInfo.id] ?? ""} onChange={(k) => setKey(textInfo.id, k)} />}
-          {value.textProvider === "local" && (
+          </Group>
+          <Group
+            q={query}
+            order={13}
+            title="Local text — server & context"
+            keywords="chat context size window tokens num_ctx ollama local server backend connect"
+            defaultOpen
+          >
+            <p style={{ opacity: 0.7, fontSize: 12 }}>
+              Shared by chat and book analysis whenever either uses Local. These controls remain
+              available even when the book uses a cloud provider. Changing providers does not reset
+              the saved context values.
+            </p>
+          {(
             <div style={rowStyle}>
               <span>How to run it</span>
               <select className={cx.input}
@@ -1313,7 +1324,8 @@ export function SettingsPanel({
                 // CPU-offloaded generation. Stored per model id (mirrors localComponentsByModel).
                 const backend = textBackend;
                 const server = value.localTextServer ?? "ollama";
-                const model = value.localServerTextModel;
+                const model = (value.chatTextProvider ?? "local") === "local"
+                  ? value.chatLocalModel || value.localServerTextModel : value.localServerTextModel;
                 if (backend !== "server" || server !== "ollama" || !model) return null;
                 const cur = value.localContextByModel?.[model];
                 const setForModel = (n: number | undefined) => {
@@ -1354,13 +1366,13 @@ export function SettingsPanel({
                       32 GB card.{" "}
                       {textModelContext?.loaded || textModelContext?.max ? (
                         <>
-                          This model currently loads at{" "}
+                          Ollama Modelfile default{" "}
                           <b>{textModelContext.loaded ? textModelContext.loaded.toLocaleString() : "Ollama's default"}</b>
                           {textModelContext.max ? <> · architecture max <b>{textModelContext.max.toLocaleString()}</b></> : null}.
-                          Blank = leave it at that.
+                          Blank = the app's automatic window shown above, capped by the model maximum.
                         </>
                       ) : (
-                        <>Per-model; leave blank to use Ollama's own default (often very large).</>
+                        <>Per-model; blank uses the app's automatic window shown above.</>
                       )}
                     </span>
                   </label>
@@ -1391,8 +1403,9 @@ export function SettingsPanel({
                   window (Ollama = <code>OLLAMA_CONTEXT_LENGTH</code> or a Modelfile <code>num_ctx</code>),
                   regardless of how short the chat is — so a 256k window reserves a 256k cache even for
                   "hi". To cut VRAM / fix CPU-offload slowness, LOWER that on the server (16k–32k);
-                  set this field to match so we don't over-stuff the prompt. Auto reads Ollama's
-                  Modelfile num_ctx, else assumes ~4k.
+                  set this field to match so we don't over-stuff the prompt. For Ollama, the per-model
+                  loaded window above takes priority; Auto budgets to the window the app requests.
+                  This field alone does not increase a WebGPU model's compiled context limit.
                 </span>
               </label>
               {(() => {
