@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { suggestComponents } from "./suggest-components.js";
 
 const flux2Files = {
-  textEncoders: ["qwen_3_8b_fp8mixed.safetensors", "mistral_small_3.1.safetensors", "clip_l.safetensors"],
+  textEncoders: ["qwen_3_8b_fp8mixed.safetensors", "qwen_3_4b.safetensors", "mistral_small_3.1.safetensors", "clip_l.safetensors"],
   vaes: ["flux2_vae.safetensors", "ae.safetensors"],
 };
 
@@ -29,13 +29,17 @@ describe("suggestComponents", () => {
     expect(s.note).toMatch(/all-in-one/i);
   });
 
-  it("Flux.2 Klein → recommends the Qwen-3 encoder (not Mistral) + a Flux.2 VAE", () => {
+  it("Flux.2 Klein 4B → recommends Qwen-3 4B (not 8B/Mistral) + a Flux.2 VAE", () => {
     const s = suggestComponents("flux-2-klein-4b-fp8.safetensors", "flux2", flux2Files);
     expect(s.usesComponents).toBe(true);
     expect(s.encoderApplies).toBe(true);
-    expect(s.recommendedEncoder).toBe("qwen_3_8b_fp8mixed.safetensors");
+    expect(s.recommendedEncoder).toBe("qwen_3_4b.safetensors");
     expect(s.recommendedVae).toBe("flux2_vae.safetensors");
     expect(s.note).toMatch(/Klein.*Qwen-3/i);
+    expect(suggestComponents("flux-2-klein-9b-fp8.safetensors", "flux2", flux2Files).recommendedEncoder).toBe("qwen_3_8b_fp8mixed.safetensors");
+    expect(suggestComponents("flux-2-klein-4b-fp8.safetensors", "flux2", {
+      ...flux2Files, textEncoders: ["qwen_3_8b_fp8mixed.safetensors", "mistral_small_3.1.safetensors"],
+    }).recommendedEncoder).toBeUndefined();
   });
 
   it("Flux.2 dev → recommends the Mistral encoder first", () => {

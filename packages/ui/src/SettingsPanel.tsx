@@ -129,7 +129,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "flux3" | "zimage" | "qwenimage" | "qwenimage21" | "hidream";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -1531,6 +1531,7 @@ export function SettingsPanel({
                       | "sdxl"
                       | "flux"
                       | "flux2"
+                      | "flux3"
                       | "zimage"
                       | "qwenimage"
                       | "qwenimage21"
@@ -1544,6 +1545,7 @@ export function SettingsPanel({
                 <option value="sdxl">SDXL</option>
                 <option value="flux">Flux.1</option>
                 <option value="flux2">Flux.2</option>
+                <option value="flux3">FLUX 3 Image Klein</option>
                 <option value="zimage">Z-Image</option>
                 <option value="qwenimage">Qwen-Image</option>
                 <option value="qwenimage21">Qwen Image 2.1 (evaluation only)</option>
@@ -1557,6 +1559,15 @@ export function SettingsPanel({
               Supports reference photos and instruction editing, up to 10 images total.
               Edits follow the source aspect ratio and use full denoise (the strength slider does not apply).
               Turn off two-pass High resolution, character regions and style LoRAs.
+            </p>
+          )}
+          {value.imageProvider === "local" && localFamily === "flux3" && (
+            <p role="note" style={{ ...rowStyle, fontSize: 12 }}>
+              FLUX 3 Image Klein uses the distilled checkpoint, Qwen3-VL 4B encoder,
+              Qwen3.5 9B prompt upsampler and Flux 2 VAE. Requires ComfyUI 0.41 or newer.
+              Supports native instruction edits and up to 10 images total, including the edit image.
+              Reference strength and edit denoise sliders do not apply. Turn off two-pass
+              High resolution, legacy character regions and style LoRAs. BFL license terms apply.
             </p>
           )}
 
@@ -2831,7 +2842,7 @@ export function SettingsPanel({
                 <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
                   Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
                   condition local renders (add photos per character in Characters). Works on{" "}
-                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2 and Qwen Image 2.1 need no adapter</strong> — they read
+                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2, FLUX 3 and Qwen Image 2.1 need no adapter</strong> — they read
                   reference photos natively. Flux.1, Z-Image, original Qwen-Image and HiDream can&rsquo;t
                   use them here by either route.{" "}
                   <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
@@ -3079,7 +3090,7 @@ export function SettingsPanel({
                 Renders at the model's native size (a single coherent subject), then upscales the
                 latent ~2× toward 2048px and refines it in a second pass — a larger, more detailed
                 image without the duplicated subjects you get from generating large from scratch.
-                Works with every local model; roughly doubles render time. You can also just ask in
+                Not supported by FLUX 3 or Qwen Image 2.1; roughly doubles render time on supported models. You can also just ask in
                 chat (&ldquo;make it high-res&rdquo;).
               </span>
             </label>
