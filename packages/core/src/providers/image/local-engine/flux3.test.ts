@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ComfyUIBackend, buildWorkflow, referencePhotoSupports, SPLIT_FILE_HEURISTICS } from "./comfyui-backend.js";
+import { ComfyUIBackend, buildWorkflow, flux2EncoderPatterns, referencePhotoSupports, SPLIT_FILE_HEURISTICS } from "./comfyui-backend.js";
 import { catalogEntryForModel, detectCheckpointFamily } from "../../catalog.js";
 import { samplerFor, isNaturalLanguage } from "../sd-prompt.js";
 import type { Transport } from "../../transport/transport.js";
@@ -15,6 +15,13 @@ type Node = { class_type: string; inputs: Record<string, unknown> };
 function graph(extra = {}) { return buildWorkflow({ ...params, ...extra }) as Record<string, Node>; }
 
 describe("FLUX 3 Image Klein native recipe", () => {
+  it("keeps installed Flux 2 Klein 4B on its own encoder when the new VL encoders are present", () => {
+    const patterns = flux2EncoderPatterns("flux-2-klein-4b-fp8.safetensors");
+    expect(patterns.some(re => re.test("qwen_3_4b.safetensors"))).toBe(true);
+    for (const wrong of ["qwen_3_8b_fp8mixed.safetensors", "qwen3vl_4b_int8_convrot.safetensors", "mistral_3_small_flux2_fp8.safetensors"]) {
+      expect(patterns.some(re => re.test(wrong))).toBe(false);
+    }
+  });
   it("fails closed before submission on an offline/old engine, and retries the probe", async () => {
     const calls: string[] = [];
     const transport = { send: async ({ url }: { url: string }) => {

@@ -1561,6 +1561,15 @@ export function SettingsPanel({
               Turn off two-pass High resolution, character regions and style LoRAs.
             </p>
           )}
+          {value.imageProvider === "local" && localFamily === "flux3" && (
+            <p role="note" style={{ ...rowStyle, fontSize: 12 }}>
+              FLUX 3 Image Klein uses the distilled checkpoint, Qwen3-VL 4B encoder,
+              Qwen3.5 9B prompt upsampler and Flux 2 VAE. Requires ComfyUI 0.41 or newer.
+              Supports native instruction edits and up to 10 images total, including the edit image.
+              Reference strength and edit denoise sliders do not apply. Turn off two-pass
+              High resolution, legacy character regions and style LoRAs. BFL license terms apply.
+            </p>
+          )}
 
           <div style={rowStyle}>
             <span>Pages per image</span>
@@ -2833,7 +2842,7 @@ export function SettingsPanel({
                 <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
                   Installs the IP-Adapter nodes and their models so a character&rsquo;s uploaded photos actually
                   condition local renders (add photos per character in Characters). Works on{" "}
-                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2 and Qwen Image 2.1 need no adapter</strong> — they read
+                  <strong>SD 1.5 and SDXL checkpoints</strong>. <strong>Flux.2, FLUX 3 and Qwen Image 2.1 need no adapter</strong> — they read
                   reference photos natively. Flux.1, Z-Image, original Qwen-Image and HiDream can&rsquo;t
                   use them here by either route.{" "}
                   <strong>Restart the engine afterwards</strong>: ComfyUI loads nodes at startup.
@@ -3081,7 +3090,7 @@ export function SettingsPanel({
                 Renders at the model's native size (a single coherent subject), then upscales the
                 latent ~2× toward 2048px and refines it in a second pass — a larger, more detailed
                 image without the duplicated subjects you get from generating large from scratch.
-                Works with every local model; roughly doubles render time. You can also just ask in
+                Not supported by FLUX 3 or Qwen Image 2.1; roughly doubles render time on supported models. You can also just ask in
                 chat (&ldquo;make it high-res&rdquo;).
               </span>
             </label>

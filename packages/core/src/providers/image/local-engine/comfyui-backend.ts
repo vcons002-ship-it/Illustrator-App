@@ -904,8 +904,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const wantedVae = entry?.files?.find((f) => f.folder === "vae")?.filename;
     const h = SPLIT_FILE_HEURISTICS[family]!;
     const clipType = entry?.clipType ?? h.type;
-    // Flux.2 has TWO encoder families that aren't interchangeable: dev uses Mistral-Small,
-    // Klein uses Qwen-3-8B (a mismatch → "shapes cannot be multiplied"). Order the patterns
+    // Flux.2 encoders aren't interchangeable: dev uses Mistral-Small,
+    // Klein 4B uses Qwen-3-4B, Klein 9B uses Qwen-3-8B. Order the patterns
     // by the diffusion model's name so the right one is auto-picked when both are installed.
     const encoderPatterns = family === "flux2" ? flux2EncoderPatterns(model) : [h.clip];
     // A MANUAL OVERRIDE IS NOT A HINT. When the reader has picked an exact file in Settings, it is
@@ -1112,9 +1112,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const clipInfo = await this.nodeInfo("CLIPLoader");
       const typeSchema = clipInfo?.input?.required?.type;
       const types: unknown = Array.isArray(typeSchema) ? typeSchema[0] : undefined;
-      if (!Array.isArray(types) || !types.includes("flux3") || !(await this.nodeInfo("TextGenerate")) || !(await this.nodeInfo("ReferenceMultiLatent"))) {
-        this.forgetNodeInfo("CLIPLoader", "TextGenerate", "ReferenceMultiLatent");
-        throw new Error("FLUX 3 Image Klein needs current ComfyUI with CLIPLoader type flux3, TextGenerate and ReferenceMultiLatent. If ComfyUI is offline, start/reconnect it first; a failed probe does not prove nodes are missing.");
+      const requiredNodes = ["TextGenerate", "ReferenceMultiLatent", "BatchImagesNode", "EmptyFlux2LatentImage"];
+      if (!Array.isArray(types) || !types.includes("flux3") || (await Promise.all(requiredNodes.map(name => this.nodeInfo(name)))).some(info => !info)) {
+        this.forgetNodeInfo("CLIPLoader", ...requiredNodes);
+        throw new Error("FLUX 3 Image Klein needs current ComfyUI with CLIPLoader type flux3, TextGenerate, ReferenceMultiLatent, BatchImagesNode and EmptyFlux2LatentImage. If ComfyUI is offline, start/reconnect it first; a failed probe does not prove nodes are missing.");
       }
     }
     if (family === "qwenimage21") {
@@ -1377,7 +1378,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const capped =
         used > 0 && used < supplied
           ? referenceLatents
-            ? `this model takes at most ${nativeReferenceLimit} references${family === "qwenimage21" && input.initImage ? " alongside the edit image" : ""}`
+            ? `this model takes at most ${nativeReferenceLimit} references${(family === "qwenimage21" || family === "flux3") && input.initImage ? " alongside the edit image" : ""}`
             : `IP-Adapter uses at most ${IPADAPTER_MAX_REFS}`
           : refsSkipped;
       return {
@@ -1400,7 +1401,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
               references: {
                 supplied,
                 used,
-                ...(used > 0 ? { how: family === "qwenimage21" ? ("native" as const) : referenceLatents ? ("reference-latent" as const) : ("ipadapter" as const) } : {}),
+                ...(used > 0 ? { how: family === "qwenimage21" || family === "flux3" ? ("native" as const) : referenceLatents ? ("reference-latent" as const) : ("ipadapter" as const) } : {}),
                 ...(capped ? { why: capped } : {}),
               },
             }
@@ -2533,7 +2534,10 @@ export function flux2EncoderPatterns(model: string): RegExp[] {
   const qwen8b = /qwen.?3.?8b/i;
   const qwen4b = /qwen.?3.?4b/i;
   const mistral = /mistral/i;
-  // Klein ALWAYS pairs with Qwen-3 8B — even a Klein distill whose name carries a "4b" size tag.
+  // Official Klein 4B requires Qwen-3 4B (7680-wide conditioning). Loading the
+  // 8B encoder yields 12288-wide conditioning and crashes the first denoising step.
+  if (/klein/.test(m) && /(?:^|[^0-9])4b(?:[^0-9]|$)/.test(m)) return [qwen4b];
+  // Unspecified/9B Klein retains the 8B choice; never fall back to the 4B encoder.
   if (/klein/.test(m)) return [qwen8b, mistral];
   // A non-Klein 4B Flux.2 variant → the Qwen-3 4B encoder. Guard against 14b/24b/94b (a STANDALONE "4b").
   if (/(?:^|[^0-9])4b(?:[^0-9]|$)/.test(m)) return [qwen4b, mistral, qwen8b];

@@ -1,11 +1,11 @@
 # FLUX 3 Image Klein (experimental integration)
 
-Prepared against the official BFL model card and ComfyUI distilled image-edit/t2i
-templates, 2026-10-16. **Not locally generation-validated yet:** gated access was
-approved in the user's browser, but Chrome blocked the authenticated CDN download
-with ERR_BLOCKED_BY_CLIENT. The user has been asked to complete that download;
-no browser protection was disabled and no access credential was extracted.
-Do not interpret graph unit tests as successful inference or deployment.
+Implemented against the official BFL model card and ComfyUI distilled image-edit/t2i
+templates, 2026-10-16. Real inference validated on an RTX 5090 with ComfyUI 0.41.0:
+768-square text-to-image, single-image instruction edit, and two-reference composition
+all passed through `ComfyUIBackend.generate`, with visual inspection of each output.
+The three jobs took about 141 seconds total, including captioning/loading/offloading.
+This is backend/runtime evidence, not a claim that every chat/book UI was manually exercised.
 
 Model: https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy
 Templates: https://github.com/Comfy-Org/workflow_templates/tree/main/templates
@@ -23,7 +23,8 @@ After access is approved, place these official files under the existing model ro
 - `text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors`
 - `vae/flux2-vae.safetensors` (reuse if already present)
 
-The existing September ComfyUI checkout predates FLUX 3. Back up its revision,
+ComfyUI versions before native FLUX 3 support need updating (validated: 0.41.0).
+Back up the revision,
 requirements and custom nodes before updating; do not replace the Qwen/Flux 2
 models. Check CLIPLoader type `flux3`, TextGenerate, ReferenceMultiLatent,
 BatchImagesNode and EmptyFlux2LatentImage in the running engine's object_info.
@@ -39,6 +40,25 @@ Legacy two-pass hires, style LoRAs and character-region masks fail explicitly fo
 this preset. Native bounding-box UI and base/fine-tuning workflows are not added
 by this initial integration. BFL's boxes guide layout, not hard-mask preservation.
 
-Before merging/deploying this feature, run real text-to-image, single-image edit,
-multi-reference composition, Soul portrait and marked-search-reference tests.
-Verify pre-existing Flux 2 and Qwen recipes still work after any ComfyUI upgrade.
+Local verification:
+
+- The three downloaded model/encoder SHA-256 hashes matched official BFL metadata.
+- Existing `flux2-vae.safetensors` matched the Comfy-Org Flux 2 VAE hash and worked
+  for all three new jobs; no replacement VAE was necessary.
+- Existing Qwen Image 2.1 reference generation passed at 512 square / 25 steps.
+- Existing Flux 2 Klein 4B reference generation passed at 512 square / 4 steps after
+  correcting its pre-existing encoder-selection bug (4B requires Qwen-3 4B, not 8B).
+- Shared chat/Soul/book/reference resolution and graph routing have automated coverage;
+  the live smoke test exercises the resolved reference-byte input, not an internet image search.
+
+Reproduce explicitly against an idle local engine (these use the GPU and create scratch images):
+
+```powershell
+$env:VR_FLUX3_LIVE = '1'
+$env:VR_FLUX3_OUTPUT = 'C:\\path\\to\\scratch-output'
+pnpm exec vitest run packages/core/src/providers/image/local-engine/flux3.live.test.ts
+```
+
+For existing-engine regression jobs, unset `VR_FLUX3_LIVE`, set `VR_IMAGE_REGRESSION=1`,
+and use the same output directory (the regression jobs read `01-teapot.png`). These
+tests are skipped in the normal suite and never download models or change settings.

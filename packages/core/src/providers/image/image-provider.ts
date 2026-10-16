@@ -108,13 +108,13 @@ export interface ImageGenerationInput {
    * The name is historical: this began as ComfyUI IP-Adapter conditioning, but the natively
    * multimodal cloud models take reference photos directly and three providers now read it:
    *
-   *   - ComfyUI (local) — native Flux.2 / Qwen Image 2.1 references, or SD IP-Adapter.
-   *     Qwen reference upload failures fail the request rather than silently losing identity.
+   *   - ComfyUI (local) — native Flux.2 / FLUX 3 / Qwen Image 2.1 references, or SD IP-Adapter.
+   *     FLUX 3 / Qwen 2.1 upload failures fail the request rather than silently losing identity.
    *   - Gemini native image — each ref rides as an inline image part.
    *   - OpenAI native (gpt-image-1) — each ref is a file on /images/edits.
    *
    * Ignored by Automatic1111, Flux, DALL·E and the in-browser ONNX provider. `weight` is honoured
-   * by ComfyUI; the cloud providers have no weight parameter and treat every ref equally.
+   * by SD IP-Adapter; native reference models have no weight parameter and treat refs equally.
    */
   ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
   /**
@@ -132,7 +132,7 @@ export interface ImageGenerationInput {
   initImage?: { bytes: ArrayBuffer; mimeType: string };
   /**
    * img2img strength 0..1 — how much the init image may change. Lower stays closer
-   * to the photo, higher reinvents more. Qwen Image 2.1 uses native instruction editing
+   * to the photo, higher reinvents more. Qwen Image 2.1 and FLUX 3 use native instruction editing
    * at full denoise instead; this slider is not used by that model. Otherwise, with `initImage`, the
    * backend defaults to ~0.65 when unset.
    */
