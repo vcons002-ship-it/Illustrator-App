@@ -703,35 +703,11 @@ async fn launch_detached_checked(app: &AppHandle, exe: &Path, root: &Path) -> Re
     let child = launch_detached(exe, root, &ready_name)
         .map_err(|e| format!("couldn't start the replacement app: {e}"))?;
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let mut child = child;
-        let deadline = std::time::Instant::now() + Duration::from_secs(40);
-        loop {
-            if std::fs::read_to_string(&ready_path).ok().as_deref() == Some(&child.id().to_string()) {
-                let _ = std::fs::remove_file(&ready_path);
-                return None;
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => return Some(format!("exited with {status}")),
-                Err(_) => { let _ = child.kill(); return Some("could not verify the successor process".into()); }
-                Ok(None) => {}
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_file(&ready_path);
-                return Some("did not confirm saved-profile and phone-link readiness within 40 seconds".into());
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        desktop_session::wait_for_successor(child, &ready_path, Duration::from_secs(40)).map(|_| ())
     })
     .await
     .map_err(|_| "Replacement startup check failed".to_string())?;
-    match outcome {
-        Some(status) => Err(format!(
-            "the replacement app closed during startup ({status})"
-        )),
-        None => Ok(()),
-    }
+    outcome.map_err(|reason| format!("the replacement app did not complete startup ({reason})"))
 }
 
 /// Fully relaunch the app (Settings → Restart app) through the SAME detached, checked handoff used

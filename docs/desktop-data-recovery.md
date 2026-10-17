@@ -63,6 +63,8 @@ inside an otherwise matching profile; continue verifying actual chats after upda
 An opted-in phone link restores from native metadata first. Legacy Local Storage
 is used only for the first migration. An explicit Stop persists the disabled state;
 internal restart/update handoffs release the socket without disabling the link.
+The retiring renderer pauses its bridge reconnect loop and settings autosaves
+during that handoff, resuming them only if the replacement fails and rolls back.
 Only Change link rotates the credential. Concurrent startup requests are serialized
 and an already-running matching relay is reused instead of restarted.
 

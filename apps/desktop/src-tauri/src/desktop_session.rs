@@ -42,6 +42,32 @@ pub fn check_profile(session: &mut Session, profile: &str) -> Result<(), String>
     Ok(())
 }
 
+pub fn wait_for_successor(mut child: std::process::Child, ready_path: &Path, timeout: std::time::Duration) -> Result<std::process::Child, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Err(format!("exited with {status}")),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("could not verify the successor process".into());
+            }
+            Ok(None) => {}
+        }
+        if std::fs::read_to_string(ready_path).ok().as_deref() == Some(&child.id().to_string()) {
+            let _ = std::fs::remove_file(ready_path);
+            return Ok(child);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(ready_path);
+            return Err("did not confirm saved-profile and phone-link readiness before the startup deadline".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +90,34 @@ mod tests {
         assert_eq!(read(&path).unwrap().profile_id.unwrap(), "original-profile-123");
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture, invoked only by the lifecycle tests"]
+    fn successor_fixture() {
+        let Ok(path) = std::env::var("VR_TEST_READY_FILE") else { return; };
+        let mode = std::env::var("VR_TEST_READY_MODE").unwrap();
+        if mode == "exit" { return; }
+        let value = if mode == "ready" { std::process::id().to_string() } else { "wrong-pid".into() };
+        std::fs::write(path, value).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn successor_requires_its_own_ack_and_unverified_children_are_stopped() {
+        for mode in ["ready", "wrong", "exit"] {
+            let path = std::env::temp_dir().join(format!("vr-successor-test-{}-{mode}.ready", std::process::id()));
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "desktop_session::tests::successor_fixture"])
+                .env("VR_TEST_READY_FILE", &path).env("VR_TEST_READY_MODE", mode)
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+            let result = wait_for_successor(child, &path, std::time::Duration::from_secs(2));
+            if mode == "ready" {
+                let mut child = result.unwrap();
+                assert!(!path.exists());
+                child.kill().unwrap(); child.wait().unwrap();
+            } else { assert!(result.is_err()); }
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
