@@ -22,7 +22,7 @@ unconfirmed; no evidence established that the updater deleted the data.
 
 ## Safeguards
 
-In-app updates first export the active window's stores and non-secret settings to
+In-app updates first export the active window's stores and settings to
 a timestamped `visual-reader-pre-update-*.json`. A failed export stops the update.
 `update.bat` requires the app closed and snapshots IndexedDB plus Local Storage to
 `~/VisualReader/backups/before-update-*` before pulling code. Neither path resets,
@@ -43,3 +43,49 @@ explicitly, not inferred from the temporary script's location.
 
 Do not delete AppData, reset browser storage, use `--dev` to test recovery, weaken
 Windows security, or copy a live LevelDB over another live LevelDB.
+
+## Desktop session and phone-link lifecycle
+
+The native app now keeps `desktop-session.json` in its per-user app-local-data
+folder, outside `EBWebView`. It stores a renderer profile identifier and the
+existing phone-link opt-in, token and port. Explicit developer mode uses a separate
+`desktop-session-dev.json` so it cannot adopt the packaged app's pairing state or
+collide with its profile guard. **It contains a pairing credential:
+keep it private.** It is not served by the relay or included in shareable exports.
+Closed-profile backups include it and WebView's `Local State` alongside IndexedDB
+and Local Storage. No automatic migration of chat databases is attempted.
+
+On first launch, the installed desktop establishes a profile identifier. On later
+launches, a gate checks it before mounting App or enabling its autosaves. A mismatch
+stops startup with recovery guidance; it does not overwrite the expected identity.
+Establish the first baseline through the user's actual Explorer shortcut, not a
+different launch context. This guard detects a changed identity, not missing rows
+inside an otherwise matching profile; continue verifying actual chats after updates.
+
+An opted-in phone link restores from native metadata first. Legacy Local Storage
+is used only for the first migration. An explicit Stop persists the disabled state;
+internal restart/update handoffs release the socket without disabling the link.
+The retiring renderer pauses its bridge reconnect loop and settings autosaves
+during that handoff, resuming them only if the replacement fails and rolls back.
+Only Change link rotates the credential. Concurrent startup requests are serialized
+and an already-running matching relay is reused instead of restarted.
+
+In-app Restart and packaged Update now wait up to 40 seconds for an acknowledgement
+from the replacement UI after profile validation and an IndexedDB read. If the phone
+link was enabled, the acknowledgement additionally requires a real chat snapshot
+through the restored relay, not just a listening TCP port. A failed handoff terminates
+the unverified replacement and retains the original app and restores its relay.
+This is a local readiness check, not proof that Cloudflare Access, a tunnel, or a
+particular phone is reachable. Batch updates still build while closed; verify the
+actual shortcut and mobile connection after launching them.
+
+The phone labels a socket open as waiting for the desktop, and becomes Linked only
+after applying a conversation snapshot. Pairing rejection (WebSocket 1008) gives a
+clear instruction to reopen the current link instead of retrying forever. Network
+failures still reconnect, with backoff reset only after a verified snapshot.
+Older phone pages must refresh to load this behavior. Do not accept revoked tokens
+or disable authentication to conceal a pairing mismatch.
+
+If encrypted API-key material cannot be decrypted, normal settings autosaves retain
+the ciphertext rather than silently deleting it. This cannot recreate a missing
+device key; manual key re-entry or a matching private vault backup may still be needed.

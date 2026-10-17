@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { connectRemoteDesktop } from "./remote-connection.js";
 import { RenderRequestTracker, type RenderRequestOwner } from "./render-request-tracker.js";
 import {
   base64ToBytes,
@@ -6,11 +7,9 @@ import {
   decodeFrame,
   deserializeFromRemote,
   encodeFrame,
-  HELLO_RETRY_START_MS,
   isAppSyncMessage,
   isLocalOnlyMessage,
   isSnapshotAnswer,
-  nextHelloDelay,
   parseLinkToken,
   serializeForRemote,
   type RemoteMode,
@@ -923,6 +922,8 @@ export function useEngineWorker(
       const ws = new WebSocket(wsUrl);
       ws.onopen = () => {
         attempt = 0;
+        // Authenticate even if the initial snapshot is not available yet.
+        ws.send(encodeFrame(token, { type: "vrcmd:host" }));
         // (Re)push the desktop's full state so a phone already waiting on the relay re-populates
         // even though it won't re-send `vrcmd:hello` while its own socket stayed up.
         onOpen?.();
@@ -934,6 +935,7 @@ export function useEngineWorker(
         const payload = decodeFrame(e.data, token);
         if (!payload) return;
         const msg = deserializeFromRemote(payload, base64ToBytes);
+        if ((msg as { type?: string }).type === "vrcmd:host") return;
         if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
         else if (!isLocalOnlyMessage(msg)) workerRef.current?.postMessage(msg);
       };
@@ -1578,66 +1580,15 @@ export function useEngineWorker(
     // the phone re-attaches and re-syncs, no manual reload needed.
     const remote = remoteRef.current;
     if (remote) {
-      let stopped = false; // set on unmount — stop reconnecting then
-      let attempt = 0;
-      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-      // Re-ask for the desktop's snapshot until it actually answers. Reaching the relay is NOT the
-      // same as reaching the desktop: the desktop attaches to that relay over its own independent
-      // bridge socket, so a phone that opens first (or during a desktop restart / tunnel blip) sends
-      // its `vrcmd:hello` into a relay with nobody behind it — it's dropped, and the phone would sit
-      // on an empty chat until the reader happened to send something, which is what finally reached
-      // the by-then-attached desktop and made everything appear at once.
-      let helloTimer: ReturnType<typeof setTimeout> | undefined;
-      const stopHelloRetry = (): void => {
-        if (helloTimer) clearTimeout(helloTimer);
-        helloTimer = undefined;
-      };
-      const connect = (): void => {
-        const ws = new WebSocket(remote.wsUrl);
-        // Set once the desktop replies with ANY state frame — proof it's attached and heard us.
-        let answered = false;
-        ws.onopen = () => {
-          attempt = 0;
-          setStatus("Linked to a desktop");
-          // Re-ask for a full snapshot every (re)connect, so the phone re-syncs after a gap —
-          // BEFORE flushing commands queued during the gap (they act on the re-synced state).
-          ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
-          flushPhonePending(ws);
-          answered = false;
-          stopHelloRetry();
-          // Keep asking until the snapshot actually lands. It used to stop after fifteen tries — a
-          // desktop that took longer than thirty seconds to attach (a laptop waking, a slow start)
-          // left the phone on an empty chat permanently, with nothing saying so. Backs off to a
-          // one-minute heartbeat instead of giving up: a phone whose desktop is asleep costs one
-          // frame a minute, and the moment the desktop appears the conversation does too.
-          let waited = 0;
-          const askAgain = (): void => {
-            if (answered || stopped || ws.readyState !== WebSocket.OPEN) {
-              stopHelloRetry();
-              return;
-            }
-            ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
-            waited = nextHelloDelay(waited);
-            helloTimer = setTimeout(askAgain, waited);
-          };
-          helloTimer = setTimeout(askAgain, HELLO_RETRY_START_MS);
-        };
-        ws.onclose = () => {
-          if (phoneWsRef.current === ws) phoneWsRef.current = undefined;
-          stopHelloRetry();
-          if (stopped) return;
-          const delay = Math.min(1000 * 2 ** attempt, 10_000); // 1s, 2s, 4s, 8s, 10s, 10s…
-          attempt++;
-          setStatus("Reconnecting to the desktop…");
-          reconnectTimer = setTimeout(connect, delay);
-        };
-        ws.onerror = () => {
-          /* an onclose follows and schedules the retry */
-        };
-        ws.onmessage = (e) => {
-          if (typeof e.data !== "string") return;
-          const payload = decodeFrame(e.data, remote.token);
-          if (!payload) return;
+      return connectRemoteDesktop({
+        createSocket: () => new WebSocket(remote.wsUrl),
+        hello: encodeFrame(remote.token, { type: "vrcmd:hello" }),
+        onSocket: (ws) => { phoneWsRef.current = ws; },
+        onStatus: setStatus,
+        onReady: flushPhonePending,
+        onFrame: (data) => {
+          const payload = decodeFrame(data, remote.token);
+          if (!payload) return false;
           const msg = deserializeFromRemote(payload, base64ToBytes);
           // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
           // engine message streamed from the desktop's worker.
@@ -1646,22 +1597,12 @@ export function useEngineWorker(
             // the desktop pushes on its own initiative too — a live-turn tick or a library change
             // arriving first proved it was talking, not that it had heard the hello, and the phone
             // stopped asking with the chat it was waiting for never having been sent.
-            if (isSnapshotAnswer((msg as AppSyncMessage).type)) {
-              answered = true;
-              stopHelloRetry();
-            }
             appSyncRef.current?.(msg as AppSyncMessage);
+            return isSnapshotAnswer((msg as AppSyncMessage).type);
           } else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
-        };
-        phoneWsRef.current = ws;
-      };
-      connect();
-      return () => {
-        stopped = true;
-        stopHelloRetry();
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        phoneWsRef.current?.close();
-      };
+          return false;
+        },
+      });
     }
 
     let worker: Worker;

@@ -2,7 +2,7 @@
 use futures_util::{SinkExt, StreamExt};
 use std::{sync::Arc, time::Duration};
 use tokio::{net::TcpStream, sync::{broadcast, Notify}, time::{interval_at, Instant}};
-use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
+use tokio_tungstenite::tungstenite::{protocol::{WebSocketConfig, CloseFrame, frame::coding::CloseCode}, Message};
 
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -77,6 +77,9 @@ async fn serve_peer_with_period(
                             .unwrap_or(false);
                         if !valid {
                             tokio::time::sleep(Duration::from_millis(500)).await;
+                            let _ = write.send(Message::Close(Some(CloseFrame {
+                                code: CloseCode::Policy, reason: "Pairing expired".into(),
+                            }))).await;
                             return Err("invalid pairing token".into());
                         }
                         authorized = true;
@@ -166,6 +169,8 @@ mod tests {
         broadcast.send((2, "private frame".into())).unwrap();
         assert!(tokio::time::timeout(Duration::from_millis(40), client.next()).await.is_err());
         client.send(Message::Text(r#"{"token":"wrong"}"#.into())).await.unwrap();
+        let close = client.next().await.unwrap().unwrap();
+        assert!(matches!(close, Message::Close(Some(frame)) if frame.code == CloseCode::Policy));
         let outcome = tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
         assert_eq!(outcome.unwrap_err(), "invalid pairing token");
     }

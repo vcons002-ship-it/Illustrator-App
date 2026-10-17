@@ -446,6 +446,9 @@ import {
   startRemoteServer,
   stopRemoteServer,
   remoteServerStatus,
+  restoreRemoteServer,
+  desktopSessionReady,
+  onDesktopHandoff,
   openBrowserWindow,
   type RemoteServerStatus,
   saveExportFile,
@@ -2497,10 +2500,11 @@ export function App() {
         try {
           resolved = { ...stored.settings, keys: await decryptSecrets(stored.encrypted) };
         } catch {
-          /* key vault unavailable / changed — fall back to no keys */
+          settingsPersistence.preserveEncryptedSecrets(stored.encrypted);
         }
         if (!cancelled) setSettings(resolved);
       }
+      if (cancelled) return;
       hydrated.current = true;
       void saveSettings(resolved, settingsPersistence); // re-persist (migrates any legacy plaintext keys)
     })();
@@ -4628,16 +4632,44 @@ export function App() {
       if (s.running) {
         setRemoteLink(s);
         if (s.token) bridgeToRelay(s, s.token);
+        await libraryStore.listBooks();
+        await desktopSessionReady();
         return;
       }
-      if (remoteWasEnabled()) {
+      const restored = await restoreRemoteServer();
+      if (restored) {
+        setRemoteLink(restored);
+        if (restored.running && restored.token) bridgeToRelay(restored, restored.token);
+      } else if (remoteWasEnabled()) {
         const token = persistedRemoteToken();
         const status = await startRemoteServer(token);
         setRemoteLink(status);
         if (status.running) bridgeToRelay(status, token);
       }
+      await libraryStore.listBooks();
+      await desktopSessionReady();
+    }).catch((error: unknown) => {
+      setRemoteLink({ running: false, error: `Desktop startup did not complete: ${String(error)}` });
     });
   }, [bridgeToRelay]);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onDesktopHandoff((paused) => {
+      if (paused) {
+        settingsPersistence.suspend();
+        stopHostBridge(); // The retiring desktop must not reattach to its successor's relay.
+      } else {
+        settingsPersistence.resume();
+        void remoteServerStatus().then((s) => {
+          setRemoteLink(s);
+          if (s.running && s.token) bridgeToRelay(s, s.token);
+        });
+      }
+    })?.then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [bridgeToRelay, settingsPersistence, stopHostBridge]);
   // Open the panel WITHOUT restarting a live server: reuse the running one (same URL/token) and
   // only start a server when nothing is listening yet — with the PERSISTED token, so the link is
   // the same address the phone saved before (stable across sessions until "Change link").
@@ -4649,7 +4681,7 @@ export function App() {
       if (existing.token) bridgeToRelay(existing, existing.token);
       return;
     }
-    const token = persistedRemoteToken();
+    const token = (await restoreRemoteServer())?.token ?? persistedRemoteToken();
     const status = await startRemoteServer(token);
     setRemoteEnabled(status.running);
     setRemoteLink(status);
