@@ -3655,6 +3655,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
             type: "chatToolResult",
             requestId: msg.requestId,
             call: e.call,
+            ...(e.result.dateMath ? { dateMath: e.result.dateMath } : {}),
             ...(e.result.hits ? { hits: e.result.hits } : {}),
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
@@ -6489,6 +6490,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       const needs = (live ? doneWhenToNeeds(live.doneWhen) : undefined) ?? plan?.steps.find((s) => s.status !== "done")?.needs;
       if (!needs || !isToolAvailable(needs, currentToolsets)) return undefined;
       if (needs === "search_web") return buildToolCallFormat(["search_web", "search_news"]);
+      // A calculator rejection must be able to recover to the date tool in this round.
+      if (needs === "calculate") return buildToolCallFormat(["calculate", "date_math"]);
       return buildToolCallFormat(needs === "write_file" ? ["write_file", "edit_file", "read_file"] : [needs]);
     };
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
@@ -6647,6 +6650,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.removed ? { removed: e.result.removed } : {}),
             ...(e.result.calc ? { calc: e.result.calc } : {}),
+            ...(e.result.dateMath ? { dateMath: e.result.dateMath } : {}),
             ...(e.result.wolfram ? { wolfram: e.result.wolfram } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.openedImage ? { openedImage: e.result.openedImage } : {}),

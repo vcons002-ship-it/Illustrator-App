@@ -1,4 +1,5 @@
 import type { MathJsInstance } from "mathjs";
+import { rejectCalendarExpression } from "./date-math.js";
 
 /**
  * Grounded math for the chat's `calculate` tool, upgraded from plain arithmetic to a
@@ -38,6 +39,7 @@ async function mathReady(): Promise<MathJsInstance> {
  * OR when mathjs can't be loaded (so the caller can fall back to plain arithmetic).
  */
 export async function evaluateMath(expression: string): Promise<string> {
+  rejectCalendarExpression(expression);
   const expr = expression.trim();
   if (!expr) throw new Error("empty expression");
   if (expr.length > MAX_MATH_EXPRESSION_CHARS) throw new Error("expression too long");

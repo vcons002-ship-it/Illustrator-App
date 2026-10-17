@@ -66,7 +66,7 @@ describe("reading the dates a model actually writes", () => {
     expect(parseDateToken("2026-02-31", NOW)).toBeUndefined();
     expect(parseDateToken("February 30, 2026", NOW)).toBeUndefined();
     expect(parseDateToken("not a date", NOW)).toBeUndefined();
-    expect(parseDateToken("", NOW)).toBe(Date.UTC(2026, 5, 15)); // empty = today
+    expect(parseDateToken("", NOW)).toBeUndefined(); // blank is not an explicit request for today
   });
 
   it("says what shape to use when it can't read one", () => {
