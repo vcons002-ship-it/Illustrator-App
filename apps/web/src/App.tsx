@@ -4926,7 +4926,9 @@ export function App() {
           else {
             setChatActivity("");
             // Inline search results: links for web hits, a hotlinked figure for images.
-            if (e.hits?.length) {
+            if (e.dateMath) {
+              appendChat({ role: "tool", text: e.dateMath.ok ? `📅 ${e.dateMath.text}` : `⚠ Date calculation failed: ${e.dateMath.error}` });
+            } else if (e.hits?.length) {
               appendChat({
                 role: "tool",
                 text: `Web results for “${"query" in e.call ? e.call.query : ""}”:`,
@@ -8393,7 +8395,7 @@ export function App() {
                 ? { error: e.referenceAdopted.error ?? "the picture couldn't be adopted as a reference" }
                 : e.artifact
                   ? { artifact: e.artifact }
-                  : {},
+                  : e.dateMath ? { dateMath: e.dateMath } : {},
           });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
@@ -8407,6 +8409,8 @@ export function App() {
             ...(e.hits ? { hits: e.hits } : {}),
             ...(e.imageHits ? { imageHits: e.imageHits } : {}),
             ...(e.books ? { books: e.books } : {}),
+            ...(e.dateMath ? { dateMath: e.dateMath } : {}),
+            ...(e.calc ? { calc: e.calc } : {}),
             ...(e.error ? { error: e.error } : {}),
           });
           if (line) turnToolRecordRef.current.push(line);
@@ -8507,6 +8511,8 @@ export function App() {
           appendBuddy({ role: "tool", text: `📈 ${formatQuote(e.quote, "yahoo")}` });
         } else if (e.indicators) {
           appendBuddy({ role: "tool", text: `📊 ${formatIndicators(e.indicators, "yahoo")}` });
+        } else if (e.dateMath) {
+          appendBuddy({ role: "tool", text: e.dateMath.ok ? `📅 ${e.dateMath.text}` : `⚠ Date calculation failed: ${e.dateMath.error}`, ...asTurns({ dateMath: e.dateMath }) });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
         } else if (e.wolfram) {

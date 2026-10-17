@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import { DATE_MATH_GUIDANCE, parseDateMathInput, type DateMathInput, type DateMathResult } from "./date-math.js";
 import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookPassage } from "./book-passage-search.js";
@@ -18,6 +19,7 @@ import { parsePortraitScene, PORTRAIT_SCENE_GUIDANCE, PORTRAIT_REFERENCE_GUIDANC
  */
 
 export type ToolCall =
+  | ({ tool: "date_math" } & DateMathInput)
   | {
       tool: "generate_image";
       prompt: string;
@@ -146,6 +148,7 @@ export const CHAT_TOOLS_SYSTEM =
   "scene, a specific quote, a detail from another chapter), call search_book to pull it — don't say " +
   "you can't see it, and don't guess.\n" +
   "TOOLS — you can use these by replying with ONLY one JSON object (no prose around it):\n" +
+  DATE_MATH_GUIDANCE + "\n" +
   '- {"tool":"lookup_bible","query":"…"} — full detail for a name/term in the bible INDEX above ' +
   "(a character's appearance + outfits, a location's description, a glossary definition, a dataset's values).\n" +
   '- {"tool":"search_book","query":"…"} — find passages elsewhere in the book by keyword (characters, ' +
@@ -224,6 +227,10 @@ export function parseToolCall(text: string): ToolCall | undefined {
   // Accept the {"name":X,"arguments":{…}} shape too, not just the app's {"tool":X, …flatArgs}.
   const obj = normalizeToolShape(parsed);
   const tool = obj.tool;
+  if (tool === "date_math") {
+    const input = parseDateMathInput(obj);
+    return input ? { tool, ...input } : undefined;
+  }
   if (tool === "read_url") {
     const url = strArg(obj.url, MAX_URL_CHARS);
     return url && /^https?:\/\//i.test(url) ? { tool, url } : undefined;
@@ -346,6 +353,7 @@ function parseAnalyzeData(obj: Record<string, unknown>): ToolCall | undefined {
 
 /** Tool outcome data fed back to the model (image bytes stay OUT of the transcript). */
 export interface ToolResultPayload {
+  dateMath?: DateMathResult;
   hits?: WebSearchHit[];
   imageHits?: ImageSearchHit[];
   /** Passages found by search_book. */
@@ -376,6 +384,10 @@ export interface ToolResultPayload {
 
 /** Render a tool's outcome as the user-role turn that continues the conversation. */
 export function formatToolResult(call: ToolCall, result: ToolResultPayload): string {
+  if (call.tool === "date_math") {
+    const d = result.dateMath;
+    return d?.ok ? `[date_math — ${d.text}]` : `[date_math failed: ${d?.error ?? result.error ?? "did not run"}. Correct the arguments and retry; do not guess.]`;
+  }
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Answer from what you know instead.`;
   }

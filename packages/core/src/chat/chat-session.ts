@@ -1,4 +1,5 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
+import { dateMath } from "./date-math.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { AnalyzeResult, AnalyzeSpec } from "../data/analyze.js";
 import type { BookPassage } from "./book-passage-search.js";
@@ -566,6 +567,8 @@ function cutMiddle(text: string, budget: number): string {
 }
 
 export async function runChatTurn(opts: {
+  /** One clock for all relative dates within the turn. */
+  now?: Date;
   llm: ChatCapable;
   system: string;
   /** Stable leading portion of `system` to cache (see ChatOptions.cachePrefix). */
@@ -587,7 +590,9 @@ export async function runChatTurn(opts: {
   /** Thinking level for local reasoning models (passed straight to the provider's chat). */
   reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Promise<ChatTurnOutcome> {
-  const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
+  const now = opts.now ?? new Date();
+  const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const messages: ChatTurn[] = [{ role: "system", content: `${opts.system}\nCurrent local calendar date: ${localDate}. Resolve today/tomorrow with date_math.` }, ...opts.history];
   const transcript: ChatTurn[] = [];
   const toolResults: ChatTurnOutcome["toolResults"] = [];
   let lastTruncated = false; // did the last reply get CUT OFF at the budget? (→ auto-continue)
@@ -699,7 +704,7 @@ export async function runChatTurn(opts: {
       // open spreadsheet, which lives in the main thread's book state.
       return { text: "", transcript, pendingTool: call, toolResults };
     }
-    const result = await runChatTool(call, opts.tools);
+    const result = await runChatTool(call, opts.tools, now);
     toolResults.push({ call, result });
     opts.onEvent?.({ kind: "toolResult", round, call, result });
     const feedback = formatToolResult(call, result);
@@ -713,8 +718,10 @@ export async function runChatTurn(opts: {
 export async function runChatTool(
   call: Exclude<ToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "export_book" | "export_data" | "set_cell" | "add_formula_column" }>,
   tools: ChatToolDeps,
+  now: Date = new Date(),
 ): Promise<ToolResultPayload> {
   try {
+    if (call.tool === "date_math") return { dateMath: dateMath(call, now) };
     if (call.tool === "analyze_data") {
       if (!tools.analyzeData) return { error: "no spreadsheet/CSV data is loaded to analyze" };
       const { chart: _chart, tool: _tool, ...spec } = call;

@@ -496,6 +496,8 @@ const AUTO_RETRY_SAFE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export async function runBuddyTurn(opts: {
+  /** Freeze relative dates for this turn; injectable for regression tests. */
+  now?: Date;
   llm: ChatCapable;
   system: string;
   /** Stable leading portion of `system` to cache (see ChatOptions.cachePrefix). */
@@ -624,6 +626,7 @@ export async function runBuddyTurn(opts: {
    */
   liveControl?: boolean;
 }): Promise<BuddyTurnOutcome> {
+  const now = opts.now ?? new Date();
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
   const toolResults: BuddyTurnOutcome["toolResults"] = [];
@@ -1644,12 +1647,12 @@ export async function runBuddyTurn(opts: {
       // Name the specific action in the status line ("Searching the web for …") so the reader sees
       // exactly what's happening while the (muted) tool runs — clarity the phone especially needs.
       opts.onEvent?.({ kind: "activity", text: describeBuddyToolActivity(call) });
-      let result = await runBuddyTool(call, opts.deps);
+      let result = await runBuddyTool(call, opts.deps, now);
       // One automatic retry for a transient (network/timeout/rate-limit) failure before the
       // error is shown to the model — turns a flaky blip into a silent recovery. Read-only
       // tools only (AUTO_RETRY_SAFE_TOOLS): re-running a write here could duplicate its effect.
       if (result.error && isRetryableError(result.error) && AUTO_RETRY_SAFE_TOOLS.has(call.tool)) {
-        result = await runBuddyTool(call, opts.deps);
+        result = await runBuddyTool(call, opts.deps, now);
       }
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
@@ -1819,6 +1822,7 @@ export async function runBuddyTool(
   // reader's desktop (it runs a PowerShell command), so it can no more run in here than run_command can.
   call: Exclude<BuddyToolCall, { tool: "load_toolset" | "extract_from_document" | "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "control_ui" | "plan_task" | "prep_order" | "tv_chart" | "browser_eval" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
+  now: Date = new Date(),
 ): Promise<BuddyToolResultPayload> {
   try {
     switch (call.tool) {
@@ -2235,7 +2239,7 @@ export async function runBuddyTool(
         // Computed in-process: pure arithmetic with no I/O, so it needs no dep and can't be
         // unavailable — which matters, because the whole point is that it is always there when a
         // date has to become a number.
-        return { dateMath: dateMath(call, new Date()) };
+        return { dateMath: dateMath(call, now) };
       case "update_scheduled_task":
         if (!deps.updateScheduledTask) return { error: "scheduled tasks aren't available right now" };
         return { scheduledUpdated: await deps.updateScheduledTask(call) };

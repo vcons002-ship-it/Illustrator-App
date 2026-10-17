@@ -9,6 +9,8 @@
  * message the chat feeds back to the model.
  */
 
+import { rejectCalendarExpression } from "./date-math.js";
+
 const MAX_EXPRESSION_CHARS = 300;
 
 const CONSTANTS: Record<string, number> = { pi: Math.PI, e: Math.E, tau: Math.PI * 2 };
@@ -38,6 +40,7 @@ const FUNCTIONS: Record<string, { arity: 1 | 2; fn: (a: number, b?: number) => n
 
 /** Evaluate an arithmetic expression; throws Error with a readable message. */
 export function evaluateExpression(expression: string): number {
+  rejectCalendarExpression(expression);
   const src = expression.trim();
   if (!src) throw new Error("the expression is empty");
   if (src.length > MAX_EXPRESSION_CHARS) throw new Error("the expression is too long");

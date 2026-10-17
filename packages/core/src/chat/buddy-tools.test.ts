@@ -2540,6 +2540,8 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
                 p.items?.properties
                 ? [Object.fromEntries(Object.keys(p.items.properties).map((k) => [k, "x"]))]
                 : ["x"]
+              : p.type === "integer" || p.type === "number"
+                ? 1
               : p.type === "boolean"
                 ? true
                 : key === "url" || key === "ref"
@@ -3370,8 +3372,8 @@ describe("date_math — the sum the model was doing in its head", () => {
       date: "today",
       days: 1,
     });
-    // An unknown op falls back to the common one rather than dropping the call.
-    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "nonsense", from: "2026-07-28" }))).toMatchObject({ op: "diff" });
+    // An unknown operation must not silently become a different calculation.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "nonsense", from: "2026-07-28" }))).toBeUndefined();
     // "how many days since…" with no starting date is not a question.
     expect(parseBuddyToolCall(JSON.stringify({ tool: "date_math", op: "diff" }))).toBeUndefined();
   });

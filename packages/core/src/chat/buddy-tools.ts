@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import { DATE_MATH_GUIDANCE, parseDateMathInput, type DateMathInput, type DateMathResult } from "./date-math.js";
 import { generationRateNote, type GenerationRate } from "./generation-rate.js";
 import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
@@ -512,7 +513,7 @@ export type BuddyToolCall =
   /** Calendar arithmetic — days between two dates, moving a date, which weekday one falls on. The
    * date the prompt carries is prose; this is how it becomes a number without the model doing the
    * carrying itself. */
-  | { tool: "date_math"; op: "diff" | "add" | "weekday"; from?: string; to?: string; date?: string; days?: number }
+  | ({ tool: "date_math" } & DateMathInput)
   | { tool: "list_scheduled" }
   /** Read back what the assistant itself did unattended, and when (see action-history.ts). */
   | { tool: "recent_actions"; kind?: string; limit?: number }
@@ -1859,7 +1860,7 @@ export function buildBuddySystemPrompt(raw: {
     "answer (or one clarifying question) is better:\n" +
     "• Pass CLEAN tool arguments: the real query terms, not the reader's whole sentence (drop filler like " +
     "\"can you\"/\"please\"/\"my\"/\"the\"). Only a /slash command is taken literally.\n" +
-    "• Chatting / reasoning / writing prose → NO tool. Any real math → calculate (never do it in your head).\n" +
+    "• Chatting / reasoning / writing prose → NO tool. Numeric math → calculate; calendar dates/day counts → date_math.\n" +
     "• A fact you're unsure of → search_web, then read (source:\"url\") the best hit." +
     (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
     "\n" +
@@ -2020,16 +2021,13 @@ export function buildBuddySystemPrompt(raw: {
         `request needs an ability you don't see in this list. One of: ${TOOLSET_IDS.join(", ")}. Do this ` +
         `BEFORE saying you can't do something — the ability probably exists, you just don't have its ` +
         `instructions in front of you yet.\n`) +
-    '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
-    "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
-    "linear algebra (det, inv); CALCULUS + algebra (derivative('x^2','x'), " +
-    "simplify('2x+3x')); and statistics (mean/median/std/variance of a list). Use it for ANY non-trivial " +
-    "computation instead of working it out in your head — it never guesses.\n" +
+    '- {"tool":"calculate","expression":"…"} — grounded NUMERIC math, not dates: functions ' +
+    "(sqrt/sin/log/gcd), ^, !, pi; units (\"5 km to miles\"); matrices (det/inv); " +
+    "calculus/algebra (derivative('x^2','x'), simplify('2x+3x')); statistics (mean/median/std/variance). " +
+    "Use it instead of mental arithmetic.\n" +
     // Its calendar counterpart, and always-on for the same reason: dates come up everywhere, and a
     // deferred one is a set the model must think to load before it knows it has a sum to do.
-    '- {"tool":"date_math","op":"diff","from":"2026-07-28"} — calendar arithmetic on YYYY-MM-DD or today/' +
-    'tomorrow/yesterday: "diff" counts days from→to (to=today), "add" moves a date ("date","days"), "weekday" ' +
-    "names it.\n" +
+    DATE_MATH_GUIDANCE + "\n" +
     // Gutenberg search — deferred until its toolset is loaded (see toolsets.ts).
     (opts.canBooks
       ? '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
@@ -3811,7 +3809,15 @@ export function ollamaToolSchemas(opts: {
       ["source"],
     ),
     toolFn("open_image", "Show an existing image FILE inline in the chat (a screenshot, photo, render).", { path: strParam("Path to the image file.") }, ["path"]),
-    toolFn("calculate", "Do exact arithmetic/math (never compute in your head).", { expression: strParam("The expression, e.g. 12*(3+4).") }, ["expression"]),
+    toolFn("calculate", "Do exact numeric arithmetic/math. For dates or day counts use date_math, NOT ISO-date subtraction.", { expression: strParam("A numeric expression, e.g. 12*(3+4); not dates.") }, ["expression"]),
+    toolFn("date_math", DATE_MATH_GUIDANCE, {
+      op: { type: "string", enum: ["diff", "add", "weekday", "day_number"] },
+      from: strParam("Anchor/start date; required for diff and day_number."),
+      to: strParam("Target date; defaults to today. YYYY-MM-DD or today/tomorrow/yesterday."),
+      date: strParam("Base date for add/weekday; defaults to today."),
+      days: { type: "integer", description: "Required for add; signed whole-day offset." },
+      startDay: { type: "integer", description: "Required for day_number; number assigned to from (e.g. 1)." },
+    }, ["op"]),
     toolFn(
       "set_plan",
       "Lay out a working checklist for a task that needs 2+ steps. Call this FIRST, before doing the steps.",
@@ -4760,22 +4766,8 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     };
   }
   if (tool === "date_math") {
-    const op = obj.op === "add" || obj.op === "weekday" ? obj.op : "diff";
-    const days = typeof obj.days === "number" && Number.isFinite(obj.days) ? Math.round(obj.days) : undefined;
-    const from = strArg(obj.from ?? obj.start, MAX_NAME_CHARS);
-    const to = strArg(obj.to ?? obj.end, MAX_NAME_CHARS);
-    const date = strArg(obj.date ?? obj.on, MAX_NAME_CHARS);
-    // `diff` without a starting date is not a question. The other two default to today, which is
-    // what "what day is it" and "what's tomorrow" mean.
-    if (op === "diff" && !from) return undefined;
-    return {
-      tool,
-      op,
-      ...(from ? { from } : {}),
-      ...(to ? { to } : {}),
-      ...(date ? { date } : {}),
-      ...(days !== undefined ? { days } : {}),
-    };
+    const input = parseDateMathInput(obj);
+    return input ? { tool, ...input } : undefined;
   }
   if (tool === "list_scheduled") return { tool };
   if (tool === "recent_actions") {
@@ -5528,7 +5520,7 @@ export interface BuddyToolResultPayload {
   /** use_image_reference outcome — the host downloaded and registered it (or said why it couldn't). */
   referenceAdopted?: { ok: boolean; title?: string; error?: string; base64?: string; mimeType?: string };
   /** date_math: the answer, already worded. */
-  dateMath?: { ok: boolean; error?: string; days?: number; date?: string; weekday?: string; text?: string };
+  dateMath?: DateMathResult;
   /** update_scheduled_task: what became of the change. */
   scheduledUpdated?: { found: boolean; title?: string; stepCount?: number };
   /** Fetched page text from read_url (title + readable text). */
@@ -6235,7 +6227,7 @@ function formatBuddyToolResultBody(
   if (call.tool === "date_math") {
     const d = result.dateMath;
     if (!d) return "[date_math did not run]";
-    if (!d.ok) return `[date_math: ${d.error ?? "couldn't work that out"}]`;
+    if (!d.ok) return `[date_math failed: ${d.error ?? "couldn't work that out"}. Correct the arguments and retry date_math; do not guess or use calculate for dates.]`;
     // The worded answer, not the raw number: the model asked because it could not do this in its
     // head, so handing back "8" invites it to re-derive what 8 was of.
     return `[date_math — ${d.text}]`;
