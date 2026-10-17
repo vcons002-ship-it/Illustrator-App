@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
 import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN, smallButtonStyle } from "./design/recipes.js";
-import { DEFAULT_SCHWAB_CALLBACK, schwabCallbackIssue } from "@visual-reader/core";
+import { DEFAULT_SCHWAB_CALLBACK, resolveSearchBackends, schwabCallbackIssue } from "@visual-reader/core";
 import { loadNaturalVoice, naturalVoiceReady } from "./natural-voice.js";
 import {
   IMAGE_PROVIDERS,
@@ -201,6 +201,8 @@ export interface ReaderSettings {
    * `groundFacts` grounds Gemini's technical analysis in Google Search (same Gemini key).
    */
   searchEngineId?: string;
+  webSearchProvider?: "auto" | "brave" | "tavily" | "google" | "keyless";
+  imageSearchProvider?: "auto" | "brave" | "google" | "keyless";
   groundFacts?: boolean;
   /**
    * Reading-companion chat overrides — the chat can run on a DIFFERENT provider than
@@ -775,6 +777,7 @@ export function SettingsPanel({
   const [subTest, setSubTest] = useState<{ state: "idle" | "testing" | "ok" | "err"; msg?: string }>({ state: "idle" });
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
   const setKey = (id: string, key: string) => set({ keys: { ...value.keys, [id]: key } });
+  const searchBackends = resolveSearchBackends(value);
 
   // Per-model text-encoder/VAE memory. `selectLocalModel` switches the model AND restores the combo
   // last used with it (or "" = auto). `setComponent` updates the current pick AND remembers it for
@@ -1998,25 +2001,74 @@ export function SettingsPanel({
 
           <Group
             q={query}
+            order={43}
+            title="🌐 Internet search — web, news & images"
+            keywords="internet search brave tavily current news stock market research image photos freshness sources keys"
+          >
+            <p style={{ fontSize: 12, opacity: 0.8 }}>
+              Recommended: Brave Search for web, news, and web-wide images. Tavily is an alternative for
+              web/news; image search is selected separately. These work with local text models too.
+              A search subscription/API key is separate from your LLM subscription. Queries go to the selected search service.
+            </p>
+            <p style={{ fontSize: 11, opacity: 0.8 }}>
+              A research task may make several API requests. Tavily uses basic search (one credit/request).
+              Check current free allowances and set spending limits in your provider dashboard before adding a key:
+              {" "}<a href="https://brave.com/search/api/" target="_blank" rel="noreferrer">Brave Search pricing</a>
+              {" · "}<a href="https://www.tavily.com/pricing" target="_blank" rel="noreferrer">Tavily pricing</a>.
+              Search powered by the selected provider; Brave results use the Brave Search API.
+            </p>
+            <label style={rowStyle}><span>Web search provider</span>
+              <select className={cx.input} value={value.webSearchProvider ?? "auto"}
+                onChange={(e) => set({ webSearchProvider: e.target.value as NonNullable<ReaderSettings["webSearchProvider"]> })}>
+                <option value="auto">Automatic (Brave → Tavily → legacy Google → keyless)</option>
+                <option value="brave">Brave Search</option><option value="tavily">Tavily</option>
+                <option value="google">Google Custom Search (legacy)</option><option value="keyless">Keyless (DuckDuckGo / Wikipedia background)</option>
+              </select>
+            </label>
+            <label style={rowStyle}><span>Image search provider</span>
+              <select className={cx.input} value={value.imageSearchProvider ?? "auto"}
+                onChange={(e) => set({ imageSearchProvider: e.target.value as NonNullable<ReaderSettings["imageSearchProvider"]> })}>
+                <option value="auto">Automatic (Brave → legacy Google → keyless)</option>
+                <option value="brave">Brave Images (web-wide)</option><option value="google">Google Images (legacy Custom Search)</option>
+                <option value="keyless">DuckDuckGo Images / Wikimedia Commons</option>
+              </select>
+            </label>
+            <label style={rowStyle}><span>Brave Search API key</span>
+              <input className={cx.input} type="password" autoComplete="off" value={value.keys.brave ?? ""}
+                onChange={(e) => setKey("brave", e.target.value.trim())} placeholder="Brave Search subscription token" />
+            </label>
+            <label style={rowStyle}><span>Tavily API key</span>
+              <input className={cx.input} type="password" autoComplete="off" value={value.keys.tavily ?? ""}
+                onChange={(e) => setKey("tavily", e.target.value.trim())} placeholder="tvly-…" />
+            </label>
+            <p style={{ fontSize: 12 }}>
+              Selected: web — {searchBackends.web}; news — {searchBackends.news ?? "not configured (add Brave or Tavily key)"}; images — {searchBackends.images}.
+              {searchBackends.web === "brave" && !value.keys.brave ? " Brave key is missing." : ""}
+              {searchBackends.web === "tavily" && !value.keys.tavily ? " Tavily key is missing." : ""}
+              {searchBackends.images === "brave" && !value.keys.brave ? " Image search needs the Brave key." : ""}
+            </p>
+            <p style={{ fontSize: 11, opacity: 0.75 }}>
+              News defaults to the past week; the assistant can request day/week/month/year and restrict source domains.
+              News failures never fall back to Wikipedia. Keyless Wikipedia results are labeled BACKGROUND, not current news.
+              Image-search results retain original-image links and source pages for the existing reference-image controls;
+              finding an image does not grant a license to reuse it. Product access and quota depend on your API account.
+            </p>
+          </Group>
+          <Group
+            q={query}
             order={44}
             title="🔬 Scientific sources (technical books)"
             keywords="google custom search programmable engine cx key grounding figures wikimedia wikipedia citations sources real diagrams"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
-              For books imported as <em>technical</em>: retrieve REAL figures/diagrams (correct
-              labels and data) before generating one, and ground the analysis in Google Search.
-              Image retrieval needs a <b>Custom Search API key</b> (Google Cloud console →
-              enable “Custom Search API” → credentials) and a <b>Programmable Search Engine
-              id</b> (programmablesearchengine.google.com → create an engine → enable “Image
-              search” + “Search the entire web” → copy its ID). Free tier: 100 searches/day.
-              Already using a Gemini key? It can double as the search key — enable “Custom
-              Search API” on that key’s Google Cloud project and leave the key field blank.
-              The engine ID (cx) is still required either way.
+              Technical books can retrieve real figures/diagrams and ground analysis using the Internet search
+              providers above. The fields below preserve existing Google Custom Search integrations only:
+              Google has closed the JSON API to new customers and says existing users must transition by
+              January 1, 2027. Prefer Brave for a new setup. Existing Google credentials require both an
+              API-enabled Custom Search key (or eligible Gemini project key) and engine ID (cx).
             </p>
             <p style={{ opacity: 0.75, fontSize: 11, margin: "0 0 8px" }}>
-              {(value.keys.search || value.keys.gemini) && value.searchEngineId
-                ? "Active backend: Google Custom Search (whole-web figures + grounding)."
-                : "Active backend: free Wikipedia/Wikimedia search — keyless and automatic. Add a Custom Search key + engine ID for whole-web results."}
+              Resolved search backends: web — {searchBackends.web}; images — {searchBackends.images}.
             </p>
             <label style={rowStyle}>
               <span>Custom Search API key</span>

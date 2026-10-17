@@ -96,6 +96,7 @@ export const CREATIVE_IDLE_TOOLS: ReadonlySet<string> = new Set([
    */
   "load_toolset",
   "search_web",
+  "search_news",
   "search_books",
   "search_images",
   "read_url",

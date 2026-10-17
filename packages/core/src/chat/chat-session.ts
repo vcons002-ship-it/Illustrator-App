@@ -1,5 +1,5 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
-import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
+import type { ImageSearchHit, WebSearchHit, WebSearchOptions } from "../providers/image/image-search.js";
 import type { AnalyzeResult, AnalyzeSpec } from "../data/analyze.js";
 import type { BookPassage } from "./book-passage-search.js";
 import {
@@ -27,7 +27,8 @@ const HEARTBEAT_MS = 10_000;
  */
 
 export interface ChatToolDeps {
-  searchWeb?: (query: string) => Promise<WebSearchHit[]>;
+  searchWeb?: (query: string, options?: WebSearchOptions) => Promise<WebSearchHit[]>;
+  searchNews?: (query: string, options?: WebSearchOptions) => Promise<WebSearchHit[]>;
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
   /** Fetch a URL's readable text so the model can read/learn from a page. */
   readUrl?: (url: string) => Promise<{ title?: string; text: string }>;
@@ -748,7 +749,11 @@ export async function runChatTool(
     }
     if (call.tool === "search_web") {
       if (!tools.searchWeb) return { error: "web search isn't available right now" };
-      return { hits: await tools.searchWeb(call.query) };
+      return { hits: await tools.searchWeb(call.query, { ...(call.freshness ? { freshness: call.freshness } : {}), ...(call.domains ? { domains: call.domains } : {}) }) };
+    }
+    if (call.tool === "search_news") {
+      if (!tools.searchNews) return { error: "Configure Brave or Tavily in Settings → Internet search for current news. No background sources were substituted." };
+      return { hits: await tools.searchNews(call.query, { freshness: call.freshness ?? "week", ...(call.domains ? { domains: call.domains } : {}) }) };
     }
     if (call.tool === "search_book") {
       if (!tools.searchBook) return { error: "book search isn't available right now" };

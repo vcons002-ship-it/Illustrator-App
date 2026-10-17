@@ -5,6 +5,8 @@ import {
   DirectTransport,
   GoogleImageSearch,
   KeylessSearch,
+  ResearchSearch,
+  resolveSearchBackends,
   LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
@@ -94,13 +96,12 @@ export function buildProviders(
   tier: TierConfig;
   diagnostics: ProvidersDiagnostics;
   /**
-   * Real-figure retrieval for technical books — ALWAYS present: Google Custom Search
-   * when credentials are set, else the keyless composite (DuckDuckGo full-web where
-   * the transport is CORS-exempt, Wikipedia fallback, Wikimedia Commons figures).
+   * Shared search router: web/news and images resolve independently. Brave supplies all three,
+   * Tavily supplies text/news, and legacy Google/keyless remain available. News never uses Wiki.
    */
   imageSearch: FigureSearch;
   /** Which backend `imageSearch` resolved to, for the Settings status line. */
-  searchBackend: "google" | "keyless";
+  searchBackend: "brave" | "tavily" | "google" | "keyless";
   /**
    * Provider-agnostic grounding source for technical books: present when grounding is
    * on AND the reader isn't Gemini (which grounds in-call). Lets a local/Claude/OpenAI
@@ -134,13 +135,39 @@ export function buildProviders(
           ...(transport ? { transport } : {}),
         })
       : undefined;
-  // No Google credentials → the keyless composite: DuckDuckGo full-web search where
-  // the transport dodges CORS (extension proxy / desktop shell), Wikipedia as the
-  // always-works fallback, Commons for figures — grounding works with zero setup.
+  // Search services use the desktop/extension's CORS-exempt transport when available. Keyless
+  // degradation is labeled background; official API failures do not silently change providers.
   const searchTransport =
     transport ?? (opts.corsFetch ? new DirectTransport(opts.corsFetch) : undefined);
-  const imageSearch: FigureSearch =
-    google ?? new KeylessSearch(searchTransport ? { transport: searchTransport } : {});
+  const keyless = new KeylessSearch(searchTransport ? { transport: searchTransport } : {});
+  const resolved = resolveSearchBackends(settings);
+  const brave = new ResearchSearch({ provider: "brave", apiKey: settings.keys.brave ?? "", ...(searchTransport ? { transport: searchTransport } : {}) });
+  const tavily = new ResearchSearch({ provider: "tavily", apiKey: settings.keys.tavily ?? "", ...(searchTransport ? { transport: searchTransport } : {}) });
+  const missingGoogle: FigureSearch = {
+    id: "google-image-search",
+    searchWeb: async () => { throw new Error("Google search needs a legacy Custom Search API key and engine ID. Choose Brave or Tavily for a new setup."); },
+    search: async () => { throw new Error("Google image search needs a legacy Custom Search API key and engine ID."); },
+    retrieve: async () => { throw new Error("Google figure retrieval needs a legacy Custom Search API key and engine ID."); },
+  };
+  const backends = { brave, tavily, google: google ?? missingGoogle, keyless };
+  const textBackend = backends[resolved.web];
+  const imagesBackend = backends[resolved.images];
+  const newsBackend = resolved.news ? backends[resolved.news] : undefined;
+  const imageSearch: FigureSearch = {
+    id: textBackend.id,
+    searchWeb: async (query, count, options) => {
+      if (resolved.web === "google" && (options?.freshness || options?.domains?.length)) {
+        throw new Error("Filtered current research requires Brave or Tavily. Select one in Settings → Internet search.");
+      }
+      return textBackend.searchWeb(query, count, options);
+    },
+    searchNews: async (query, count, options) => {
+      if (!newsBackend) throw new Error("Current news search needs a Brave Search or Tavily API key in Settings → Internet search. No Wikipedia sources were substituted.");
+      return newsBackend.searchNews(query, count, options);
+    },
+    search: (query, count) => imagesBackend.search(query, count),
+    retrieve: (query) => imagesBackend.retrieve(query),
+  };
   // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
   // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
   const webSearch =
@@ -149,7 +176,7 @@ export function buildProviders(
     llm: llm.provider,
     image: image.provider,
     imageSearch,
-    searchBackend: google ? "google" : "keyless",
+    searchBackend: resolved.web,
     ...(webSearch ? { webSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {

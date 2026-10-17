@@ -11,7 +11,7 @@ async function freshVault(): Promise<typeof import("./key-vault.js")> {
   return import("./key-vault.js");
 }
 
-const SECRETS = { openai: "sk-123", flux: "bfl-456" };
+const SECRETS = { openai: "sk-123", flux: "bfl-456", brave: "synthetic-brave", tavily: "synthetic-tavily" };
 
 /** Count the persisted device keys in the vault store (proves no orphaned/clobbered keys). */
 function countKeys(): Promise<number> {

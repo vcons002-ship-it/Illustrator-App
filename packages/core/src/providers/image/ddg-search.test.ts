@@ -91,6 +91,8 @@ describe("KeylessSearch", () => {
     });
     const first = await search.searchWeb("news");
     expect(first[0]!.title).toBe("CNN");
+    expect(first[0]).toMatchObject({ provider: "wikipedia", sourceType: "background" });
+    expect(first[0]?.warning).toMatch(/NOT current news/);
     expect(state.ddgUnavailable).toBe(true);
     await search.searchWeb("more news");
     // DDG was tried exactly once; the session remembers the block.

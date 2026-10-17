@@ -70,6 +70,13 @@ describe("needsToDoneWhen", () => {
 });
 
 describe("inferDoneWhen", () => {
+  it("requires news evidence for current news, not an empty or background-only response", () => {
+    const newsStep = step({ doneWhen: { kind: "tool_ok", tool: "search_news" } });
+    const call = { tool: "search_news", query: "ACME" } as const;
+    expect(evaluateStep(newsStep, ev([{ call, result: { hits: [] } }])).done).toBe(false);
+    expect(evaluateStep(newsStep, ev([{ call, result: { hits: [{ link: "https://en.wikipedia.org/wiki/ACME", sourceType: "background" }] } }])).done).toBe(false);
+    expect(evaluateStep(newsStep, ev([{ call, result: { hits: [{ link: "https://example.com/news", sourceType: "news" }] } }])).done).toBe(true);
+  });
   it("guesses a contract from the instruction text", () => {
     expect(inferDoneWhen("Generate an image of a red castle")).toEqual({ kind: "image" });
     expect(inferDoneWhen("Save a summary to notes.md")).toEqual({ kind: "file" });

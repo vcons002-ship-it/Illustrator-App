@@ -57,6 +57,29 @@ export interface WebSearchHit {
   link: string;
   title?: string;
   snippet?: string;
+  provider?: string;
+  sourceType?: "web" | "news" | "background";
+  publisher?: string;
+  publishedAt?: string;
+  /** Provider-estimated dates may reflect an update/discovery, not original publication. */
+  dateNote?: string;
+  retrievedAt?: string;
+  warning?: string;
+}
+
+export interface WebSearchOptions {
+  freshness?: "day" | "week" | "month" | "year";
+  /** Restrict results to these hostnames (and their subdomains), e.g. sec.gov. */
+  domains?: string[];
+}
+
+/** Visible provenance for both book chat and the main/phone chat, not just hidden model feedback. */
+export function searchResultSummary(query: string, hits: readonly WebSearchHit[], news = false): string {
+  const warnings = [...new Set(hits.flatMap((h) => h.warning ? [h.warning] : []))];
+  const providers = [...new Set(hits.flatMap((h) => h.provider ? [h.provider] : []))];
+  return `${news ? "News" : "Web"} results for “${query}”${providers.length ? ` (${providers.join(", ")})` : ""}:` +
+    (warnings.length ? `\n⚠ ${warnings.join(" ")}` : "") +
+    (hits.some((h) => h.publishedAt) ? "\nDates below are provider-reported publication/update dates; verify on the original article." : "");
 }
 
 /** A retrieved figure ready for the reader: bytes when fetchable, else a hotlink URL. */
@@ -78,7 +101,8 @@ export interface RetrievedImage {
 export interface FigureSearch {
   /** Stable backend id ("google-image-search" / "wiki-search"), for diagnostics. */
   readonly id: string;
-  searchWeb(query: string, count?: number): Promise<WebSearchHit[]>;
+  searchWeb(query: string, count?: number, options?: WebSearchOptions): Promise<WebSearchHit[]>;
+  searchNews?(query: string, count?: number, options?: WebSearchOptions): Promise<WebSearchHit[]>;
   search(query: string, count?: number): Promise<ImageSearchHit[]>;
   retrieve(query: string): Promise<RetrievedImage | undefined>;
 }
