@@ -746,6 +746,7 @@ async fn restart_app(app: AppHandle) -> Result<(), String> {
         .or_else(|| exe.parent().map(Path::to_path_buf))
         .ok_or_else(|| "couldn't determine a working folder for the replacement app".to_string())?;
     let relay = remote_server_status(app.state::<RemoteServerState>());
+    let _ = app.emit("desktop://handoff", true);
     stop_remote_server(app.state::<RemoteServerState>());
 
     if let Err(e) = launch_detached_checked(&app, &exe, &root).await {
@@ -759,6 +760,7 @@ async fn restart_app(app: AppHandle) -> Result<(), String> {
                 .await;
             }
         }
+        let _ = app.emit("desktop://handoff", false);
         return Err(format!("Couldn't restart: {e}"));
     }
 
@@ -823,6 +825,7 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
             // debug. (The relay also retries its bind, so this is belt AND braces; if we end up
             // restoring the old binary below, the reader can reopen the link from Settings.)
             let previous_relay = remote_server_status(app.state::<RemoteServerState>());
+            let _ = app.emit("desktop://handoff", true);
             stop_remote_server(app.state::<RemoteServerState>());
             // DON'T exit into nothing. Spawning only proves the process was CREATED; wait until the
             // successor gets through startup, using the same checked handoff as ordinary Restart.
@@ -837,6 +840,7 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
                             let _ = start_remote_server(app.clone(), StartRemoteRequest { token, port: previous_relay.port }, app.state::<RemoteServerState>()).await;
                         }
                     }
+                    let _ = app.emit("desktop://handoff", false);
                     Err(format!(
                         "Rebuilt, but {e}. The previous version has been put back and is still running. \
                          Run desktop-prod.bat to see what it printed."

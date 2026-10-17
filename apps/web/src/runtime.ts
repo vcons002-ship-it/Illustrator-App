@@ -1040,6 +1040,10 @@ export async function desktopSessionReady(): Promise<void> {
   return invoke("desktop_session_ready");
 }
 
+export function onDesktopHandoff(handler: (paused: boolean) => void): Promise<UnlistenFn> | undefined {
+  return tauri()?.event?.listen<boolean>("desktop://handoff", (event) => handler(event.payload));
+}
+
 /** null means an older install has not yet migrated its renderer-owned pairing state. */
 export async function restoreRemoteServer(): Promise<RemoteServerStatus | null> {
   return invoke("restore_remote_server");

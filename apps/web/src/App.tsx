@@ -448,6 +448,7 @@ import {
   remoteServerStatus,
   restoreRemoteServer,
   desktopSessionReady,
+  onDesktopHandoff,
   openBrowserWindow,
   type RemoteServerStatus,
   saveExportFile,
@@ -4651,6 +4652,24 @@ export function App() {
       setRemoteLink({ running: false, error: `Desktop startup did not complete: ${String(error)}` });
     });
   }, [bridgeToRelay]);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onDesktopHandoff((paused) => {
+      if (paused) {
+        settingsPersistence.suspend();
+        stopHostBridge(); // The retiring desktop must not reattach to its successor's relay.
+      } else {
+        settingsPersistence.resume();
+        void remoteServerStatus().then((s) => {
+          setRemoteLink(s);
+          if (s.running && s.token) bridgeToRelay(s, s.token);
+        });
+      }
+    })?.then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [bridgeToRelay, settingsPersistence, stopHostBridge]);
   // Open the panel WITHOUT restarting a live server: reuse the running one (same URL/token) and
   // only start a server when nothing is listening yet — with the PERSISTED token, so the link is
   // the same address the phone saved before (stable across sessions until "Change link").

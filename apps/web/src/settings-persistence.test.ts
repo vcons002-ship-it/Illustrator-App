@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { createSettingsPersistence } from "./settings-persistence.js";
 
 describe("backup settings survive reload autosave", () => {
+  it("quiesces pending settings writes during handoff and resumes on rollback", async () => {
+    let held = "original";
+    const persistence = createSettingsPersistence({ setItem: (_key, value) => { held = value; } });
+    let finish!: (value: string) => void;
+    const inFlight = persistence.save(() => new Promise(resolve => { finish = resolve; }));
+    persistence.suspend();
+    finish("retiring-window settings");
+    await inFlight;
+    await persistence.save(async () => "pagehide settings");
+    expect(held).toBe("original");
+    persistence.resume();
+    await persistence.save(async () => "rolled-back session settings");
+    expect(held).toBe("rolled-back session settings");
+  });
   it("retains inaccessible encrypted keys across unrelated settings saves", async () => {
     let held = "";
     const persistence = createSettingsPersistence({ setItem: (_key, value) => { held = value; } });
