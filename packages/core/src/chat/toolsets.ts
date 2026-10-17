@@ -74,6 +74,7 @@ export const ALWAYS_ON_TOOLS = [
   "complete_step",
   "generate_image",
   "search_web",
+  "search_news",
   "search_images",
   "calculate",
   // Calendar arithmetic, always-on for the same reason `calculate` is: dates come up everywhere,

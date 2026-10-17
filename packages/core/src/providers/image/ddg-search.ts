@@ -6,6 +6,7 @@ import type {
   ImageSearchHit,
   RetrievedImage,
   WebSearchHit,
+  WebSearchOptions,
 } from "./image-search.js";
 
 /**
@@ -305,11 +306,14 @@ export class KeylessSearch implements FigureSearch {
     this.state = opts.state ?? sharedState;
   }
 
-  async searchWeb(query: string, count = 5): Promise<WebSearchHit[]> {
+  async searchWeb(query: string, count = 5, options: WebSearchOptions = {}): Promise<WebSearchHit[]> {
+    if (options.freshness || options.domains?.length) {
+      throw new Error("Freshness-filtered or domain-restricted research requires Brave or Tavily in Settings → Internet search. Wikipedia cannot satisfy this request.");
+    }
     if (!this.state.ddgUnavailable) {
       try {
         const hits = await this.ddg.searchWeb(query, count);
-        if (hits.length > 0) return hits;
+        if (hits.length > 0) return hits.map((hit) => ({ ...hit, provider: "duckduckgo", sourceType: "web", retrievedAt: new Date().toISOString() }));
         // Parsed to nothing (markup drift / bot wall): fall through this call,
         // but keep trying DDG — a niche query can legitimately have no results.
       } catch (err) {
@@ -324,7 +328,10 @@ export class KeylessSearch implements FigureSearch {
         }
       }
     }
-    return this.wiki.searchWeb(query, count);
+    const warning = "Full-web search is unavailable or returned no usable results. These are Wikipedia BACKGROUND sources, NOT current news. Configure Brave or Tavily in Settings → Internet search for reliable current research.";
+    const hits = await this.wiki.searchWeb(query, count);
+    if (!hits.length) throw new Error(warning);
+    return hits.map((hit) => ({ ...hit, provider: "wikipedia", sourceType: "background", warning, retrievedAt: new Date().toISOString() }));
   }
 
   /**

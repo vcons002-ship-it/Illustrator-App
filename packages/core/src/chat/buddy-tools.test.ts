@@ -2539,7 +2539,7 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
               ? // An array of OBJECTS (e.g. edit_file.edits) → one object with each sub-prop filled.
                 p.items?.properties
                 ? [Object.fromEntries(Object.keys(p.items.properties).map((k) => [k, "x"]))]
-                : ["x"]
+                : [key === "domains" ? "example.com" : "x"]
               : p.type === "boolean"
                 ? true
                 : key === "url" || key === "ref"
