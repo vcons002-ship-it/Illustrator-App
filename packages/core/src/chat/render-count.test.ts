@@ -269,7 +269,7 @@ describe("the checklist tick reaches the turn", () => {
 describe("the reply grammar is read from the live step", () => {
   // Built rather than written as a literal: the body spans lines, and a newline inside a regex
   // literal is a syntax error rather than a match on one.
-  const RESOLVER = new RegExp("const stepFormat = \\(\\)[\\s\\S]*?\\n {4}\\};");
+  const RESOLVER = new RegExp("const stepFormat = \\(currentToolsets: readonly string\\[\\]\\)[\\s\\S]*?\\n {4}\\};");
   const worker = readFileSync(
     join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "engine.worker.ts"),
     "utf8",
@@ -277,7 +277,7 @@ describe("the reply grammar is read from the live step", () => {
 
   it("is handed over as a resolver, not a fixed object", () => {
     expect(worker, "the grammar is snapshotted before the turn again").toMatch(/toolFormat: stepFormat,/);
-    expect(worker).toMatch(/const stepFormat = \(\): Record<string, unknown> \| undefined =>/);
+    expect(worker).toMatch(/const stepFormat = \(currentToolsets: readonly string\[\]\): Record<string, unknown> \| undefined =>/);
   });
 
   it("reads the workflow the tick advances, not the turn-start plan", () => {
@@ -292,7 +292,7 @@ describe("the reply grammar is read from the live step", () => {
     // forbidden by that grammar. A step like that has to be left unconstrained.
     const fn = RESOLVER.exec(worker)?.[0] ?? "";
     expect(fn, "a deferred tool can still be forced, with no way to load it").toMatch(
-      /isToolAvailable\(needs, loadedToolsets\)/,
+      /isToolAvailable\(needs, currentToolsets\)/,
     );
   });
 });

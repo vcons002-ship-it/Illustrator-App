@@ -3750,6 +3750,8 @@ export function ollamaToolSchemas(opts: {
   canSearchFiles?: boolean;
   canRunCommands?: boolean;
   canWolfram?: boolean;
+  /** The host can create, read and revise workspace documents. Still deferred until loaded. */
+  canDocuments?: boolean;
   /** The reader HAS the markets tools (whether or not they're loaded yet). A native-tool-calling
    * model sees only this list, and search_web's description invited it for "current facts" — which a
    * price is. The carve-out has to live in the description, or the two channels disagree. */
@@ -3828,6 +3830,31 @@ export function ollamaToolSchemas(opts: {
     ),
     toolFn("forget", "Remove durable notes containing this text.", { match: strParam("Text identifying the note(s) to forget.") }, ["match"]),
   ];
+  if (opts.canDocuments) {
+    t.push(
+      toolFn("create_document",
+        "Create a NEW saved document and show its downloadable file card. Supply the whole body as Markdown. One call per new document; to revise the active document use edit_document instead.",
+        {
+          title: strParam("Document title."),
+          content: strParam("The actual complete document body, as Markdown; not a promise or outline of future work."),
+          format: { type: "string", description: "First download format offered; defaults to pdf.", enum: ["pdf", "docx", "md", "html"] },
+        }, ["title", "content"]),
+      toolFn("edit_document",
+        "Revise the ACTIVE document in place without replacing its full text. Use exact unique search/replace edits, or setLines to update labelled list entries.",
+        {
+          edits: { type: "array", items: { type: "object", properties: {
+            search: strParam("Exact unique text to replace, copied from the document."),
+            replace: strParam("Replacement text; empty deletes the match."),
+          }, required: ["search", "replace"] } },
+          setLines: { type: "array", items: { type: "object", properties: {
+            match: strParam("Label identifying exactly one list entry."),
+            line: strParam("Full replacement line."),
+          }, required: ["match", "line"] } },
+        }, []),
+      toolFn("read_document", "Read the active document's real stored text, or one section by heading.",
+        { section: strParam("Optional section heading; omit to read the document.") }, []),
+    );
+  }
   if (opts.canSearchFiles) {
     t.push(toolFn("find_files", "Search the reader's OWN COMPUTER for a file by name.", { query: strParam("Distinctive filename words (+ a type like md/pdf).") }, ["query"]));
     // `from`/`to` are the whole reason a large file is workable: one read returns a window and says
@@ -3965,7 +3992,7 @@ export function ollamaToolSchemas(opts: {
  * turn unconstrained — a safe fallback). PURE. */
 export function buildToolCallFormat(toolNames: string[]): Record<string, unknown> | undefined {
   const byName = new Map(
-    ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => [s.function.name, s.function] as const),
+    ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true, canDocuments: true }).map((s) => [s.function.name, s.function] as const),
   );
   const variants = toolNames
     .map((name) => byName.get(name))

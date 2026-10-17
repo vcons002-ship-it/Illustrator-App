@@ -569,8 +569,9 @@ export async function runBuddyTurn(opts: {
     | undefined;
   /** Native tool schemas (Ollama `tools`) for a tool-capable local model — passed to the provider so
    * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
-   * universal fallback. Build with `ollamaToolSchemas`. */
-  tools?: ToolSchema[];
+   * universal fallback. Build with `ollamaToolSchemas`. A factory receives the CURRENT loaded sets
+   * every round, so load_toolset makes its native tools available within this turn, not the next. */
+  tools?: ToolSchema[] | ((loadedToolsets: readonly string[]) => ToolSchema[]);
   /** GRAMMAR-CONSTRAIN this turn's reply to a valid tool call (Ollama `format`) — set ONLY when a tool
    * call is required (an app-managed step whose contract demands a specific tool). Forces a stubborn
    * small model to emit the call instead of narrating. Build with `buildToolCallFormat`. Ignored by
@@ -586,7 +587,7 @@ export async function runBuddyTurn(opts: {
    * escape into a tool call, and the same call attempted over and over — which is the one shape the
    * grammar still permitted.
    */
-  toolFormat?: Record<string, unknown> | (() => Record<string, unknown> | undefined);
+  toolFormat?: Record<string, unknown> | ((loadedToolsets: readonly string[]) => Record<string, unknown> | undefined);
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -734,6 +735,7 @@ export async function runBuddyTurn(opts: {
   /** Whether on-demand loading is in play at all. Absent `loadedToolsets` means the host hasn't opted
    * in, and every tool stays callable — the legacy behaviour, and what sub-agents and tests rely on. */
   const deferring = opts.loadedToolsets !== undefined;
+  let documentPromiseRetried = false;
 
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
@@ -867,11 +869,14 @@ export async function runBuddyTurn(opts: {
         : {}),
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
-      ...(opts.tools?.length ? { tools: opts.tools } : {}),
+      ...(((): { tools?: ToolSchema[] } => {
+        const tools = typeof opts.tools === "function" ? opts.tools(loadedToolsets) : opts.tools;
+        return tools?.length ? { tools } : {};
+      })()),
       // Force a parseable tool call this turn when the step's contract requires one (provider gates it
       // to the Ollama path; it suppresses `tools` there since the two can't both apply).
       ...(((): { toolFormat?: Record<string, unknown> } => {
-        const f = typeof opts.toolFormat === "function" ? opts.toolFormat() : opts.toolFormat;
+        const f = typeof opts.toolFormat === "function" ? opts.toolFormat(loadedToolsets) : opts.toolFormat;
         return f ? { toolFormat: f } : {};
       })()),
       onComplete: (m) => {
@@ -974,6 +979,25 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       let clean = stripToolCallJson(reply).trim();
+      // A short future-tense promise is not a saved document. Only intervene when document tools
+      // are loaded and no write has been attempted; reading, actual prose, failed saves and ordinary
+      // chat keep their existing paths. One private retry, never an unbounded "let me write it" loop.
+      const noDocumentWrite = !toolResults.some(({ call }) => call.tool === "create_document" || call.tool === "edit_document");
+      const documentPromise = loadedToolsets.includes("documents") && clean.length < 1_200 &&
+        /(?:^|[.!?\n]\s*)(?:let me|i['’]ll|i will|i['’]m going to)\s+(?:now\s+)?(?:(?:write|create|save|prepare|draft)\b[^.!?\n]{0,160}\b(?:document|pdf|word file)\b|load\b[^.!?\n]{0,80}\bdocuments\b[^.!?\n]{0,80}\b(?:write|create|save)\b)/i.test(clean);
+      if (noDocumentWrite && (documentPromise || documentPromiseRetried)) {
+        if (!documentPromiseRetried && round < effectiveMax) {
+          documentPromiseRetried = true;
+          messages.push({ role: "assistant", content: reply });
+          messages.push({ role: "user", content:
+            "[No document-writing tool has run. If you intend to create the document, call create_document " +
+            "with its actual content now (or edit_document for an existing document). Do not repeat a promise. " +
+            "If you cannot do it, explain the concrete blocker instead. Do not claim a file was saved without a successful tool result.]" });
+          opts.onEvent?.({ kind: "activity", text: "Following up on the document-writing request…" });
+          continue;
+        }
+        clean = "No document was created or edited: the assistant repeated its intention to write without calling a document-writing tool. Please retry the request.";
+      }
       // An empty reply means this round's reasoning is the only thing it produced. Hold the biggest
       // one aside before anything below overwrites it (see `severedThinking`).
       if (!clean && roundThinking.trim().length > severedThinking.length) severedThinking = roundThinking;
@@ -1468,9 +1492,9 @@ export async function runBuddyTurn(opts: {
       if (call.tool === "load_toolset" || (deferring && !isToolAvailable(call.tool, loadedToolsets))) {
         const id = call.tool === "load_toolset" ? call.name : toolsetForTool(call.tool)?.id;
         const already = id ? loadedToolsets.includes(id) : false;
-        if (id && !already) loadedToolsets = [...loadedToolsets, id];
         const doc = id && opts.toolsetDoc ? opts.toolsetDoc(id) : "";
         const known = id ? TOOLSET_IDS.includes(id) : false;
+        if (id && known && doc && !already) loadedToolsets = [...loadedToolsets, id];
         const result: BuddyToolResultPayload = doc
           ? {
               toolsetLoaded: {

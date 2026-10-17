@@ -2517,8 +2517,18 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
       const full = ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => s.function.name);
       expect(full).toEqual(expect.arrayContaining(["find_files", "read_file", "write_file", "run_command", "wolfram"]));
     });
+    it("offers all three native document tools only when enabled AND loaded", () => {
+      const names = (canDocuments: boolean, loadedToolsets: string[]) =>
+        ollamaToolSchemas({ canDocuments, loadedToolsets }).map((s) => s.function.name);
+      for (const tool of ["create_document", "edit_document", "read_document"]) {
+        expect(names(true, [])).not.toContain(tool);
+        expect(names(false, ["documents"])).not.toContain(tool);
+        expect(names(true, ["documents"])).toContain(tool);
+        expect(buildToolCallFormat([tool])).toBeDefined();
+      }
+    });
     it("every schema's name round-trips through parseToolObject (names/args match the parser)", () => {
-      for (const s of ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true })) {
+      for (const s of ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true, canDocuments: true })) {
         // Fill EVERY property with a valid sample value (enum→first, url→a real URL, array→["x"], …) and
         // confirm the parser accepts the round-tripped call — catching any name/arg drift from the parser.
         const args: Record<string, unknown> = {};
