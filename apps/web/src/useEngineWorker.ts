@@ -501,6 +501,7 @@ export type BuddyStreamEvent =
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
+      dateMath?: BuddyToolResultPayload["dateMath"];
       wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
       /** /quote and /ta results — the slash path has no LLM to narrate them. */
@@ -576,6 +577,7 @@ export type ChatStreamEvent =
   | {
       kind: "toolResult";
       call: ToolCall;
+      dateMath?: BuddyToolResultPayload["dateMath"];
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       /** search_book passages (slash commands render these in the panel). */
@@ -1238,6 +1240,7 @@ export function useEngineWorker(
           chatRequests.current.get(msg.requestId)?.onEvent({
             kind: "toolResult",
             call: msg.call,
+            ...(msg.dateMath ? { dateMath: msg.dateMath } : {}),
             ...(msg.hits ? { hits: msg.hits } : {}),
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
             ...(msg.passages ? { passages: msg.passages } : {}),
@@ -1299,6 +1302,7 @@ export function useEngineWorker(
             ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.removed ? { removed: msg.removed } : {}),
             ...(msg.calc ? { calc: msg.calc } : {}),
+            ...(msg.dateMath ? { dateMath: msg.dateMath } : {}),
             ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.quote ? { quote: msg.quote } : {}),

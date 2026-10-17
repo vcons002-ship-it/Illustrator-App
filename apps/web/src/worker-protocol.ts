@@ -444,6 +444,7 @@ export type WorkerToMain =
       type: "chatToolResult";
       requestId: number;
       call: ToolCall;
+      dateMath?: BuddyToolResultPayload["dateMath"];
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       image?: { bytes: ArrayBuffer; mimeType: string };
@@ -487,6 +488,7 @@ export type WorkerToMain =
       type: "buddyToolResult";
       requestId: number;
       call: BuddyToolCall;
+      dateMath?: BuddyToolResultPayload["dateMath"];
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
       imageHits?: ImageSearchHit[];

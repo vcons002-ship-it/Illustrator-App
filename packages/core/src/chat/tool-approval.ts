@@ -103,6 +103,7 @@ export const CREATIVE_IDLE_TOOLS: ReadonlySet<string> = new Set([
   "read",
   "random_books",
   "calculate",
+  "date_math",
   "wolfram",
   "create_document",
   "edit_document",

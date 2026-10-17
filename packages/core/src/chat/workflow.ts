@@ -251,11 +251,20 @@ export function isWebSearchStep(instruction: string): boolean {
   return true;
 }
 
-/** Heuristic fallback when a step declares no `needs`: read the instruction and guess the contract.
- * Conservative — a step we can't classify becomes a `text` (non-empty) check, which any real reply
- * satisfies, rather than something that could wrongly block. */
+/** A date-calculation deliverable, not ordinary numeric rates/conversions measured in days. */
+export function isCalendarMathStep(instruction: string): boolean {
+  // Only a calculation deliverable. Reading a dated file or creating a Calendar event
+  // must keep its own contract; the date calculation does not prove those actions happened.
+  const t = instruction.toLowerCase();
+  return /\b(calculate|compute|count|determine|work out|figure out|how many days|what day|which weekday)\b/.test(t) &&
+    /\b(dates?|day number|weekday|today|tomorrow|yesterday|days? (?:since|between|until|from|after|before))\b|\d{4}-\d{1,2}-\d{1,2}/.test(t) &&
+    !/\b(create|write|save|read|send|schedule|update|find|lookup|average|hours?|minutes?|seconds?)\b|\bper day\b/.test(t);
+}
+
+/** Conservative fallback: an unclassified step requires text instead of an invented tool. */
 export function inferDoneWhen(instruction: string): DoneWhen {
   const t = instruction.toLowerCase();
+  if (isCalendarMathStep(instruction)) return { kind: "tool_ok", tool: "date_math" };
   // Decided FIRST — an adoption step reads as a render to every test below it. See the function.
   if (isReferenceAdoptionStep(instruction)) return { kind: "tool_ok", tool: "use_image_reference" };
   // LOOKING FOR A PICTURE IS NOT MAKING ONE, and like the adoption test this has to be settled
@@ -401,7 +410,9 @@ export function compileWorkflow(plan: BuddyPlan, ctx: CompileContext = {}): Work
   // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
   const resolved = planned.map((s) => {
     const produces = s.produces?.map((p) => p.trim()).filter(Boolean);
-    const declared: DoneWhen | undefined = produces?.length ? { kind: "files", paths: produces } : needsToDoneWhen(s.needs);
+    // Repair persisted calculator contracts too, not just newly generated plans.
+    const needs = s.needs?.trim().toLowerCase() === "calculate" && isCalendarMathStep(s.text) ? "date_math" : s.needs;
+    const declared: DoneWhen | undefined = produces?.length ? { kind: "files", paths: produces } : needsToDoneWhen(needs);
     return { s, declared, doneWhen: declared ?? inferDoneWhen(s.text) };
   });
   /**
@@ -716,6 +727,7 @@ export function slimStepEvidence(
     call,
     result: {
       ...(result.error ? { error: result.error } : {}),
+      ...(result.dateMath ? { dateMath: result.dateMath } : {}),
       ...(result.image ? { image: { ok: result.image.ok } } : {}),
       ...(result.video ? { video: { ok: result.video.ok } } : {}),
       ...(result.writeFile ? { writeFile: { path: result.writeFile.path, ok: result.writeFile.ok } } : {}),
@@ -762,6 +774,7 @@ function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
       accept.includes(r.call.tool) &&
       !r.result.error &&
       (r.call.tool !== "search_news" || !!r.result.hits?.some((h) => h.sourceType !== "background")) &&
+      (r.call.tool !== "date_math" || r.result.dateMath?.ok === true) &&
       r.result.video?.ok !== false &&
       r.result.writeFile?.ok !== false &&
       r.result.image?.ok !== false,
