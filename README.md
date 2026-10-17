@@ -202,12 +202,13 @@ apps/
   opens the **photo-transform** (img2img) panel instead — restyle a photo through your
   image model (cloud Gemini/OpenAI native, or local ComfyUI), without forcing the
   global art style onto it.
-- **Keyless search & discovery:** with no Google Custom Search credentials, search
-  resolves to a layered keyless stack — Wikipedia (grounding) + Wikimedia Commons
-  (figures) always; **DuckDuckGo full-web** where a CORS-exempt transport exists
-  (extension background worker, the desktop shell's `http_fetch` command), with
-  automatic per-session fallback to Wikipedia; **Project Gutenberg** (Gutendex) for
-  whole-book discovery in the chat buddy.
+- **Web, news & image search:** **Brave Search** supplies web, current news and web-wide
+  images; **Tavily** is an alternative for text/news. Settings selects text and image
+  providers independently. News has freshness/domain filters and source/date metadata;
+  failed news searches never substitute Wikipedia. Keyless DuckDuckGo remains best-effort,
+  with any Wikipedia fallback visibly labeled as background. Existing Google Custom Search
+  credentials remain supported as a legacy option; Project Gutenberg finds whole books.
+  See [Internet search setup](SETUP.md#internet-search--web-current-news-and-images).
 - **Mature mode (opt-in, adults only):** a Settings toggle that relaxes the
   adjustable provider safety knobs (Gemini `safetySettings`, Flux `safety_tolerance`)
   and threads faithful-depiction instructions through extraction, prompt-writing,

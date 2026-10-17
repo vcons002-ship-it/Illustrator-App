@@ -24,6 +24,7 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  searchResultSummary,
   planHasPendingStep,
   planIdentity,
   renderStepNumber,
@@ -765,9 +766,8 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
       ? ""
       : " (Keyless image search is DuckDuckGo, with Wikimedia Commons underneath. If results look like" +
         " an archive — diagrams and old photographs, nothing recent — the web feed has dropped out for" +
-        " this session and Commons is answering alone. For Google's own index you need BOTH a" +
-        " Programmable Search key and an engine ID (the `cx`) in Settings; the key alone does nothing," +
-        " and Google is retiring whole-web custom search, so an engine covers up to 50 domains you pick.)")
+        " this session and Commons is answering alone. Add a Brave Search API key in Settings → Internet search" +
+        " for a web-wide image index. Existing Google integrations need both a Custom Search key and engine ID.)")
   );
 }
 
@@ -3674,7 +3674,7 @@ export function App() {
   // dedicated one, or the Gemini key as fallback) and a Programmable Search engine
   // id; otherwise figure search is keyless Wikimedia Commons (encyclopedic).
   const hasSearchKey = Boolean(
-    (settings.keys?.search || settings.keys?.gemini) && settings.searchEngineId,
+    settings.keys?.brave || ((settings.keys?.search || settings.keys?.gemini) && settings.searchEngineId),
   );
   // Multi-panel views (a drawn comic PAGE, or the per-image panel grid) are
   // detail-dense — give them a much wider image column so panels aren't shrunk.
@@ -4909,7 +4909,7 @@ export function App() {
           else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
             setChatActivity(
-              e.call.tool === "search_web"
+              e.call.tool === "search_web" || e.call.tool === "search_news"
                 ? `Searching the web for “${e.call.query}”…`
                 : e.call.tool === "read_url"
                   ? `Reading ${e.call.url}…`
@@ -4929,8 +4929,8 @@ export function App() {
             if (e.hits?.length) {
               appendChat({
                 role: "tool",
-                text: `Web results for “${"query" in e.call ? e.call.query : ""}”:`,
-                links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+                text: searchResultSummary("query" in e.call ? e.call.query : "", e.hits, e.call.tool === "search_news"),
+                links: e.hits.map((h) => ({ url: h.link, title: [h.title ?? h.link, h.publisher, h.publishedAt].filter(Boolean).join(" — ") })),
               });
             } else if (e.imageHits?.length) {
               // Show EVERY hit as a thumbnail gallery (click to enlarge), not just the
@@ -4991,7 +4991,7 @@ export function App() {
               // Make a failed/empty figure search VISIBLE — otherwise it looks like
               // nothing happened (Commons is encyclopedic; misses are common).
               appendChat({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
-            } else if (e.call.tool === "search_web" && !e.hits?.length) {
+            } else if ((e.call.tool === "search_web" || e.call.tool === "search_news") && !e.hits?.length) {
               appendChat({ role: "tool", text: `🔍 No web results for “${e.call.query}”.` });
             }
           }
@@ -8190,7 +8190,7 @@ export function App() {
           isDesktopRuntimeTool(c) || c.tool === "browser_eval" ? describeToolProposal(c)
           : c.tool === "search_books" ? `Searching Project Gutenberg for “${c.query}”…`
           : c.tool === "random_books" ? "Pulling some classics off the shelf…"
-          : c.tool === "search_web" ? `Searching for “${c.query}”…`
+          : c.tool === "search_web" || c.tool === "search_news" ? `Searching ${c.tool === "search_news" ? "news" : "the web"} for “${c.query}”…`
           : c.tool === "read_url" ? `Reading ${c.url}…`
           : c.tool === "search_images" ? `Looking for images of “${c.query}”…`
           : c.tool === "calculate" ? "Calculating…"
@@ -8464,8 +8464,8 @@ export function App() {
         } else if (e.hits?.length) {
           appendBuddy({
             role: "tool",
-            text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
-            links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+            text: searchResultSummary("query" in e.call ? e.call.query : "", e.hits, e.call.tool === "search_news"),
+            links: e.hits.map((h) => ({ url: h.link, title: [h.title ?? h.link, h.publisher, h.publishedAt].filter(Boolean).join(" — ") })),
             ...asTurns({ hits: e.hits }),
           });
         } else if (e.books?.length) {
@@ -8536,7 +8536,7 @@ export function App() {
           });
         } else if (
           typed.startsWith("/") &&
-          (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web")
+          (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web" || e.call.tool === "search_news")
         ) {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }

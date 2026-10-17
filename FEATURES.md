@@ -84,9 +84,9 @@ Import a book as **technical** and the app illustrates concepts and data instead
 - **Tracks structures, systems & data** — recurring apparatus get consistent visuals; key
   definitions, quantities, and findings become a glossary. *(text model)*
 - **Real figures first** — fetches an authoritative existing diagram before generating one.
-  *(no setup via free Wikimedia Commons; whole-web figures need a Google Custom Search key)*
+  *(keyless Commons/DuckDuckGo; Brave web-wide images or existing Google Custom Search credentials)*
 - **Sourced facts** — grounds the analysis in a web search and cites the sources.
-  *(no setup via Wikipedia; whole-web needs a Custom Search key, or the Gemini reader's built-in grounding)*
+  *(Brave/Tavily web search, keyless background sources, or the Gemini reader's built-in grounding)*
 - **Computed charts & statistics** — when a chapter states real numbers, the app draws a true
   bar/line/scatter chart (exact values, never an AI's guess) with min/max/mean/median + trend,
   **anchored next to the paragraph it comes from** (it scrolls with that text, so there's no doubt
@@ -193,8 +193,10 @@ your GPU; the managed engine + downloads are Windows-only — on macOS/Linux con
 - **Original article layout** — when you open a web article, a **📄 Original layout ↔ Clean text**
   toggle keeps its headings, images, and lists (safely sanitized — no scripts), with the app's
   illustrations still anchored to the right paragraphs. Defaults to clean reader text. *(no setup)*
-- **Keyless web search** — Wikipedia/Commons out of the box; **full-web DuckDuckGo** through the
-  desktop app or extension; a **Google Custom Search key** upgrades to whole-web everywhere. *(no setup; key optional)*
+- **Web, news & image search** — Brave web/news/images and Tavily web/news, with independent image
+  selection. Current news has date windows and domain restrictions; results retain provider and
+  date metadata. Missing keys/quota/network failures are explicit, never a Wikipedia news substitute.
+  Keyless DuckDuckGo/Commons remain available; Wikipedia fallback is visibly background-only.
 
 ### 🗣 Voice
 

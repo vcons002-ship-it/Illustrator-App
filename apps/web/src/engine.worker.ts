@@ -3442,7 +3442,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
               : c,
           );
     const tools: ChatToolDeps = {
-      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchWeb: (q, options) => imageSearch.searchWeb(q, 5, options),
+      searchNews: (q, options) => imageSearch.searchNews?.(q, 5, options) ?? Promise.reject(new Error("News search is not configured.")),
       searchImages: (q) => imageSearch.search(q),
       searchBook: (q) => searchBookPassages(searchableChapters, q),
       readUrl: readUrlText(ac.signal),
@@ -3622,7 +3623,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       contextChars: budgets.input,
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       tools: {
-        searchWeb: (q) => imageSearch.searchWeb(q),
+        searchWeb: (q, options) => imageSearch.searchWeb(q, 5, options),
+        searchNews: (q, options) => imageSearch.searchNews?.(q, 5, options) ?? Promise.reject(new Error("News search is not configured.")),
         searchImages: (q) => imageSearch.search(q),
         searchBook: (q) => searchBookPassages(searchableChapters, q),
         readUrl: readUrlText(ac.signal),
@@ -3924,7 +3926,8 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     };
     const research: BuddyDeps = {
       ...fileResearchDeps(msg.allowFiles),
-      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchWeb: (q, options) => imageSearch.searchWeb(q, 5, options),
+      searchNews: (q, options) => imageSearch.searchNews?.(q, 5, options) ?? Promise.reject(new Error("News search is not configured.")),
       readUrl: readUrlText(ac.signal),
       ...(googleConnected
         ? {
@@ -4840,7 +4843,8 @@ async function handleCodingAgents(msg: Extract<MainToWorker, { type: "runCodingA
     const deps: BuddyDeps = {
       ...codingAgentStubDeps(),
       ...fileResearchDeps(true), // readFile (find_files/run_command/write_file go via runHostTool)
-      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchWeb: (q, options) => imageSearch.searchWeb(q, 5, options),
+      searchNews: (q, options) => imageSearch.searchNews?.(q, 5, options) ?? Promise.reject(new Error("News search is not configured.")),
       readUrl: readUrlText(ac.signal),
     };
     const total = msg.agents.length;
@@ -5041,7 +5045,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // App-managed-steps mode: the host runs the checklist + ticks steps from evidence, so the worker
       // refuses a stray complete_step (set_plan still COMPILES the plan; the host owns advancement).
       ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
-      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchWeb: (q, options) => imageSearch.searchWeb(q, 5, options),
+      searchNews: (q, options) => imageSearch.searchNews?.(q, 5, options) ?? Promise.reject(new Error("News search is not configured.")),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
       // ADOPT a searched picture: `retrieve` is the existing bytes → thumbnail → hotlink ladder,
@@ -6483,6 +6488,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       const live = wf ? activeStep(wf) : undefined;
       const needs = (live ? doneWhenToNeeds(live.doneWhen) : undefined) ?? plan?.steps.find((s) => s.status !== "done")?.needs;
       if (!needs || !isToolAvailable(needs, currentToolsets)) return undefined;
+      if (needs === "search_web") return buildToolCallFormat(["search_web", "search_news"]);
       return buildToolCallFormat(needs === "write_file" ? ["write_file", "edit_file", "read_file"] : [needs]);
     };
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({

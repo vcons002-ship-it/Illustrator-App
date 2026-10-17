@@ -1,7 +1,7 @@
 import { rememberRouteFor } from "./souls.js";
 import { dateMath } from "./date-math.js";
 import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
-import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
+import type { ImageSearchHit, WebSearchHit, WebSearchOptions } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
@@ -145,7 +145,8 @@ export function isStallConfirmation(text: string): boolean {
 const HEARTBEAT_MS = 10_000;
 
 export interface BuddyDeps {
-  searchWeb?: (query: string) => Promise<WebSearchHit[]>;
+  searchWeb?: (query: string, options?: WebSearchOptions) => Promise<WebSearchHit[]>;
+  searchNews?: (query: string, options?: WebSearchOptions) => Promise<WebSearchHit[]>;
   searchBooks?: (query: string) => Promise<BookSearchHit[]>;
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
   /** Fetch a URL's readable text so the model can read/learn from a page. */
@@ -464,6 +465,7 @@ function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool:
  */
 const AUTO_RETRY_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "search_web",
+  "search_news",
   "read_url",
   "search_books",
   "search_images",
@@ -1824,7 +1826,10 @@ export async function runBuddyTool(
     switch (call.tool) {
       case "search_web":
         if (!deps.searchWeb) return { error: "web search isn't available right now" };
-        return { hits: await deps.searchWeb(call.query) };
+        return { hits: await deps.searchWeb(call.query, { ...(call.freshness ? { freshness: call.freshness } : {}), ...(call.domains ? { domains: call.domains } : {}) }) };
+      case "search_news":
+        if (!deps.searchNews) return { error: "Current news search needs a Brave Search or Tavily API key in Settings → Internet search. No Wikipedia sources were substituted." };
+        return { hits: await deps.searchNews(call.query, { freshness: call.freshness ?? "week", ...(call.domains ? { domains: call.domains } : {}) }) };
       case "read_url":
         if (!deps.readUrl) return { error: "reading web pages isn't available right now" };
         return { page: await deps.readUrl(call.url) };

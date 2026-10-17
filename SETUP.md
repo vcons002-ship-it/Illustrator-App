@@ -730,21 +730,45 @@ engine (which have no external filter at all). Toggling it rebuilds the
 providers; if a book's analysis was already done with filtering, use
 **↻ Redo → Story analysis** to re-extract.
 
+### Internet search — web, current news and images
+
+Open **Settings → Internet search — web, news & images**. These tools work with local
+LLMs as well as cloud models; the search API account is separate from the LLM account.
+
+- **Brave Search (recommended):** add a Search API subscription token to the masked
+  **Brave Search API key** field. It supports web, dedicated news, and web-wide image
+  search. Enable the relevant products in your provider account; access/quota varies by plan.
+  See <https://api-dashboard.search.brave.com/documentation>.
+- **Tavily:** add a Tavily API key for web/news; select an image provider separately.
+  See <https://docs.tavily.com/documentation/api-reference/endpoint/search>.
+- **Automatic:** text prefers Brave → Tavily → existing Google → keyless; images prefer
+  Brave → existing Google → keyless. Explicit choices are retained even if a key is missing,
+  so a missing credential is reported rather than silently switching services.
+- **No key:** DuckDuckGo web/image search remains best-effort. If text search degrades to
+  Wikipedia, both the model and reader see a **BACKGROUND / not current news** warning.
+  News searches require Brave or Tavily and never substitute Wikipedia on failure.
+
+`search_news` defaults to the past week; `freshness` accepts `day`, `week`, `month`, or
+`year`. Both web/news support `domains`, e.g. `["sec.gov"]` or the company's investor-relations
+hostname. Read original articles/filings and check their publication/event dates: provider
+dates can reflect updates or discovery. Quotes and price indicators remain separate market
+tools, not search snippets. A missing key, quota failure, or blocked connection is disclosed.
+
+Image search preserves original-image URLs, thumbnails and source-page attribution for
+the existing mark/use-as-reference workflows. Search availability does not grant image reuse
+rights. Keys use the app's existing encrypted credential storage; never paste them into chat.
+Linked phones use the desktop's configured tools. Standalone browser operation still depends
+on the service allowing browser CORS; the desktop/extension routes search through its proxy.
+
 ### Scientific sources (technical books — optional)
 
 For a book imported as **technical**, the app can pull in **real figures** and **sourced
 facts** instead of (or before) generating. Both are optional and live under **Settings →
-Scientific sources**. They use Google's Programmable Search Engine, which needs **two**
-credentials (separate from your Gemini key):
-
-1. **Search engine ID (`cx`)** — create a free engine at
-   <https://programmablesearchengine.google.com> → enable **Image search** and **Search the
-   entire web** → copy its **Search engine ID**.
-2. **Custom Search API key** — in the Google Cloud console
-   (<https://console.cloud.google.com>): pick/create a project → **APIs & Services → Library**
-   → enable **Custom Search API** → **Credentials → Create credentials → API key**.
-
-Free tier: ~100 searches/day. Then:
+Scientific sources**. They use the web/image providers selected above. Existing Google
+Custom Search integrations are retained with a key and engine ID (`cx`), but are not the
+recommended new setup: Google's JSON API is closed to new customers and existing customers
+must transition by January 1, 2027. See
+<https://developers.google.com/custom-search/v1/overview>.
 
 - **Real figures** — each technical illustration first searches for an existing diagram of
   the concept; if found it's shown (with source attribution) and cached, otherwise the app

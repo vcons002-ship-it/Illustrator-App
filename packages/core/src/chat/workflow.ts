@@ -297,7 +297,7 @@ export function inferDoneWhen(instruction: string): DoneWhen {
   if (/^(?:re-?)?read\b(?:[^.,;]|\.\S)*$/.test(t) && /\.[a-z0-9]{1,5}\b|\b(file|source|contents?|document|page|script)\b/.test(t))
     return { kind: "tool_ok", tool: "read" };
   if (/\b(run|execute|exec)\b[^.]*\b(command|script|test|build|it)\b/.test(t)) return { kind: "command_ok" };
-  if (isWebSearchStep(t)) return { kind: "tool_ok", tool: "search_web" };
+  if (isWebSearchStep(t)) return { kind: "tool_ok", tool: /\b(news|headlines|catalysts|latest|today)\b/.test(t) ? "search_news" : "search_web" };
   // "ask me / ask the reader / your favorite / what's your …" → wait for the reader.
   if (/\bask (me|the reader|them|you)\b/.test(t) || /\byour (favorite|favourite|name|preference)\b/.test(t))
     return { kind: "user_reply" };
@@ -756,11 +756,12 @@ const READ_FAMILY: readonly BuddyToolName[] = [
 ];
 
 function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
-  const accept: readonly BuddyToolName[] = name === "read" ? READ_FAMILY : [name];
+  const accept: readonly BuddyToolName[] = name === "read" ? READ_FAMILY : name === "search_web" ? ["search_web", "search_news"] : [name];
   return evidence.toolResults.some(
     (r) =>
       accept.includes(r.call.tool) &&
       !r.result.error &&
+      (r.call.tool !== "search_news" || !!r.result.hits?.some((h) => h.sourceType !== "background")) &&
       r.result.video?.ok !== false &&
       r.result.writeFile?.ok !== false &&
       r.result.image?.ok !== false,

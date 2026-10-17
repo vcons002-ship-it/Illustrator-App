@@ -27,6 +27,7 @@ export * from "./image/lora-detect.js";
 export * from "./image/image-search.js";
 export * from "./image/free-search.js";
 export * from "./image/ddg-search.js";
+export * from "./research-search.js";
 export * from "./book-search.js";
 export * from "./page-text.js";
 export * from "./article-html.js";
