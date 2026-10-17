@@ -10,7 +10,7 @@ import {
   type BuddyTurnEvent,
   type BuddyTurnOutcome,
 } from "./buddy-session.js";
-import { LIVE_REPEAT_LIMIT, MAX_BUDDY_TOOL_ROUNDS, planHasPendingStep, type BuddyOpenedInfo, type BuddyPlan } from "./buddy-tools.js";
+import { LIVE_REPEAT_LIMIT, MAX_BUDDY_TOOL_ROUNDS, ollamaToolSchemas, planHasPendingStep, type BuddyOpenedInfo, type BuddyPlan } from "./buddy-tools.js";
 import { activeStep, adoptPlanProgress, compileWorkflow, finishedByToolResult, stepTickedDirective } from "./workflow.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
@@ -87,6 +87,109 @@ describe("runBuddyTurn — a huge tool result doesn't cost the assistant its ins
 
 describe("runBuddyTurn — tools loaded on demand", () => {
   const docFor = (id: string) => `TOOLSET "${id}" — loaded.\n- {"tool":"run_command","command":"…"}`;
+
+  it("refreshes native schemas and step grammar after loading documents in the SAME turn", async () => {
+    const seen: string[][] = [];
+    const formats: unknown[] = [];
+    let created = 0;
+    const initial: string[] = [];
+    const llm: ChatCapable = {
+      async chat(_messages, options) {
+        const names = options?.tools?.map((t) => t.function.name) ?? [];
+        seen.push(names);
+        formats.push(options?.toolFormat);
+        if (seen.length === 1) return '{"tool":"load_toolset","name":"documents"}';
+        if (seen.length === 2 && names.includes("create_document")) {
+          return '{"tool":"create_document","title":"Regression","content":"# Actual document"}';
+        }
+        return "Done.";
+      },
+    };
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [{ role: "user", content: "Write a document." }],
+      loadedToolsets: initial, toolsetDoc: () => "Use create_document to save Markdown.",
+      tools: (loaded) => ollamaToolSchemas({ canDocuments: true, loadedToolsets: loaded }),
+      toolFormat: (loaded) => loaded.includes("documents") ? { type: "object" } : undefined,
+      deps: { ...baseDeps, createDocument: async (call) => {
+        created++;
+        return { ok: true, id: "test", title: call.title, words: 3 };
+      } },
+    });
+    expect(seen[0]).not.toContain("create_document");
+    expect(seen[1]).toContain("create_document");
+    expect(formats[0]).toBeUndefined();
+    expect(formats[1]).toEqual({ type: "object" });
+    expect(created).toBe(1);
+    expect(outcome.toolResults.some((t) => t.result.document?.ok)).toBe(true);
+    expect(initial).toEqual([]);
+  });
+
+  it("does not mark an unavailable toolset loaded", async () => {
+    const outcome = await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"load_toolset","name":"documents"}', "Unavailable."]),
+      system: "sys", history: [], loadedToolsets: [], toolsetDoc: () => "", deps: baseDeps,
+    });
+    expect(outcome.loadedToolsets).toEqual([]);
+  });
+
+  it("retries a document-writing promise once, then runs the actual save", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"load_toolset","name":"documents"}', "Let me write the document.",
+      '{"tool":"create_document","title":"Saved","content":"# Actual writing"}', "Saved the document.",
+    ]);
+    let saves = 0;
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [], loadedToolsets: [], toolsetDoc: () => "Document tools",
+      deps: { ...baseDeps, createDocument: async (call) => {
+        saves++;
+        return { ok: true, id: "saved", title: call.title, words: 3 };
+      } },
+    });
+    expect(saves).toBe(1);
+    expect(llm.calls).toHaveLength(4);
+    expect(outcome.text).toBe("Saved the document.");
+    expect(outcome.transcript.some((m) => m.content.includes("No document-writing tool"))).toBe(false);
+  });
+
+  it("bounds repeated promises and reports that no document was created", async () => {
+    const llm = scriptedLlm(["Let me load the documents toolset and write it."]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [], loadedToolsets: ["documents"], deps: baseDeps,
+    });
+    expect(llm.calls).toHaveLength(2);
+    expect(outcome.text).toMatch(/No document was created/);
+    expect(outcome.toolResults).toEqual([]);
+  });
+
+  it("does not accept an unsupported saved claim after the recovery", async () => {
+    const llm = scriptedLlm(["I'll write the document.", "Saved it!"]);
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [], loadedToolsets: ["documents"], deps: baseDeps });
+    expect(llm.calls).toHaveLength(2);
+    expect(outcome.text).toMatch(/No document was created/);
+  });
+
+  it("preserves a real save failure without retrying or claiming success", async () => {
+    const llm = scriptedLlm(['{"tool":"create_document","title":"Report","content":"Text"}', "Save failed: disk full."]);
+    const outcome = await runBuddyTurn({
+      llm, system: "sys", history: [], loadedToolsets: ["documents"],
+      deps: { ...baseDeps, createDocument: async () => ({ ok: false, id: "x", title: "Report", words: 1, error: "disk full" }) },
+    });
+    expect(llm.calls).toHaveLength(2);
+    expect(outcome.text).toContain("disk full");
+    expect(outcome.toolResults[0]?.result.document?.ok).toBe(false);
+  });
+
+  it.each([
+    "Let me read the document.",
+    "Let me load the documents toolset to read it.",
+    "Here is the document:\n# Report\nActual writing, not a future promise.",
+    "You can write the document yourself.",
+  ])("does not retry ordinary prose or document reading: %s", async (reply) => {
+    const llm = scriptedLlm([reply]);
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [], loadedToolsets: ["documents"], deps: baseDeps });
+    expect(llm.calls).toHaveLength(1);
+    expect(outcome.text).toBe(reply);
+  });
 
   it("loads a set when the model asks, and the tools then work", async () => {
     const llm = scriptedLlm([

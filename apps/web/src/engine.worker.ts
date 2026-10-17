@@ -6064,6 +6064,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const promptOpts = {
         persona: msg.persona,
         library: msg.library,
+        canDocuments: true,
         // The assistant's own identity ("soul"): its NAME is woven into the persona's first line and
         // its WHO-YOU-ARE block sits at the TOP of the prompt (with the reader's WHO-YOU-ARE), so it
         // actually answers to its name + stays in character — not buried under the tool catalog.
@@ -6475,13 +6476,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
      * grammar. A step like that is left unconstrained instead, which is the weaker guarantee and the
      * only one that can actually be satisfied.
      */
-    const stepFormat = (): Record<string, unknown> | undefined => {
+    const stepFormat = (currentToolsets: readonly string[]): Record<string, unknown> | undefined => {
       if (!msg.appManagedSteps || llm.id !== "local-server") return undefined;
       // The live workflow first — it is the copy the tick advances. `plan` only backstops the round
       // before the tick has run (and the legacy path, where there is no workflow in here at all).
       const live = wf ? activeStep(wf) : undefined;
       const needs = (live ? doneWhenToNeeds(live.doneWhen) : undefined) ?? plan?.steps.find((s) => s.status !== "done")?.needs;
-      if (!needs || !isToolAvailable(needs, loadedToolsets)) return undefined;
+      if (!needs || !isToolAvailable(needs, currentToolsets)) return undefined;
       return buildToolCallFormat(needs === "write_file" ? ["write_file", "edit_file", "read_file"] : [needs]);
     };
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
@@ -6542,14 +6543,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ? {
             // Gated by the SAME loaded set as the prompt. These ride alongside it, so leaving them
             // ungated would hand back most of what deferring the prompt text just saved.
-            tools: ollamaToolSchemas({
+            tools: (currentToolsets: readonly string[]) => ollamaToolSchemas({
+              canDocuments: true,
               canSearchFiles: corsProxyAvailable,
               canRunCommands: corsProxyAvailable && !!settings?.allowCommands,
               canWolfram: !!settings?.keys?.wolfram,
               // RAW availability, not the gated flag: the carve-out matters most before `markets`
               // is loaded, which is exactly when the gated flag is false.
               canMarkets: !!(settings?.allowMarkets || schwabConnected || (corsProxyAvailable && settings?.allowTradingViewBridge)),
-              loadedToolsets,
+              loadedToolsets: currentToolsets,
             }),
           }
         : {}),
