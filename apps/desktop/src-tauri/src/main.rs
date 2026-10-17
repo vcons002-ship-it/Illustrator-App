@@ -33,6 +33,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod coding_receipt;
 mod coding_context;
 mod remote_relay;
+mod workspace_upload;
 
 // Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
 // loader pops up for a broken executable — without this, probing a corrupt/incomplete binary (a
@@ -2058,6 +2059,20 @@ async fn write_workspace_file(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Save original upload bytes, optionally with a separate extracted-text sidecar. Never overwrites.
+#[tauri::command]
+async fn save_workspace_upload(app: AppHandle, dir: String, filename: String, body_base64: String, extracted_text: Option<String>) -> Result<workspace_upload::UploadSaved, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let base = resolve_approved_cwd(&app, Some(dir))?.ok_or("An explicit upload workspace is required.")?;
+        if body_base64.len() > workspace_upload::MAX_UPLOAD_BYTES.div_ceil(3) * 4 {
+            return Err("Original file exceeds the 100 MiB upload limit.".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(body_base64).map_err(|_| "Invalid upload byte encoding.")?;
+        workspace_upload::save(&base, &filename, &bytes, extracted_text.as_deref())
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// The result of reading a workspace-relative file: whether it exists and (if so) its bytes.
@@ -4163,6 +4178,7 @@ fn main() {
             open_path,
             write_workspace_file,
             read_workspace_file,
+            save_workspace_upload,
             search_files,
             read_file,
             run_command,

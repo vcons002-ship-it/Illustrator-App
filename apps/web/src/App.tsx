@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChatProject } from "./project-workspaces.js";
 import { ProjectRequestClient, ProjectCommandHost, type ProjectOperation } from "./project-management.js";
+import { prepareChatUpload, originalUpload, extractedUploadText, faithfulUploadFitsRelay, type OriginalUpload, type UploadTarget } from "./upload-attachments.js";
 import {
   BUNDLED_LLM,
   DirectTransport,
@@ -420,6 +421,8 @@ import {
   runCommand,
   runFfmpeg,
   writeWorkspaceFileBytes,
+  saveWorkspaceUpload,
+  type WorkspaceUploadSaved,
   whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
@@ -733,7 +736,6 @@ const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?|#|$)/i;
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 /** Per-attachment text cap for a chat-attached document — generous (a long report) but bounded
  * so several attachments can't blow the chat's context budget. */
-const ATTACH_DOC_MAX_CHARS = 30_000;
 /** Below this, a half-written block is quicker to re-type than to go and read, and saving it would
  * only litter the chat's folder. */
 const RESCUE_MIN_CHARS = 400;
@@ -854,6 +856,8 @@ export function App() {
       full?: string;
       /** What it is called on the reader's disk — see ChatSendAttachment.fileName. */
       fileName?: string;
+      original?: OriginalUpload;
+      analysisError?: string;
       image?: { bytes: ArrayBuffer; mimeType: string };
     }[]
   >([]);
@@ -3233,6 +3237,7 @@ export function App() {
     phoneUpdatePending,
     runHostToolForRemoteRef,
     projectResultRef,
+    uploadSavedRef,
     hostToolPending,
     fileFetchPending,
     fileChunkBufs,
@@ -3579,19 +3584,97 @@ export function App() {
     },
     [assessImage],
   );
+  const uploadPendingRef = useRef(new Map<string, { resolve: (r: WorkspaceUploadSaved) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>());
+  useEffect(() => {
+    uploadSavedRef.current = message => {
+      const pending = uploadPendingRef.current.get(message.requestId);
+      if (!pending) return;
+      uploadPendingRef.current.delete(message.requestId);
+      clearTimeout(pending.timer);
+      if (message.result) pending.resolve(message.result);
+      else pending.reject(new Error(message.error || "The desktop could not save the original file."));
+    };
+    return () => {
+      for (const pending of uploadPendingRef.current.values()) { clearTimeout(pending.timer); pending.reject(new Error("The upload connection was closed.")); }
+      uploadPendingRef.current.clear();
+    };
+  }, [uploadSavedRef]);
+  const captureUploadTarget = useCallback(async (): Promise<UploadTarget> => {
+    const chatId = activeBuddyIdRef.current;
+    const before = buddySessionsRef.current.find(s => s.id === chatId);
+    const projectRoot = chatProjectsRef.current.find(p => p.id === before?.projectId)?.workspaceDir;
+    const scope = JSON.stringify([chatId, before?.projectId, before?.workingDir, projectRoot]);
+    const cwd = isRemoteClient ? workspaceDirNow() : isDesktop ? await workspaceForWrite() : undefined;
+    const after = buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current);
+    const afterRoot = chatProjectsRef.current.find(p => p.id === after?.projectId)?.workspaceDir;
+    if (JSON.stringify([activeBuddyIdRef.current, after?.projectId, after?.workingDir, afterRoot]) !== scope)
+      throw new Error("The selected chat/project changed while preparing the upload. Retry in the intended workspace.");
+    if (isDesktop && !cwd) throw new Error("The selected upload workspace could not be resolved.");
+    return { chatId, projectId: before?.projectId ?? null, ...(cwd ? { cwd } : {}) };
+  }, [isRemoteClient, workspaceDirNow, workspaceForWrite]);
+  const uploadTargetIsCurrent = useCallback((target: UploadTarget): boolean => {
+    const selected = buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current);
+    return activeBuddyIdRef.current === target.chatId && (selected?.projectId ?? null) === target.projectId &&
+      (!target.cwd || sameWorkspacePath(workspaceDirNow() ?? "", target.cwd));
+  }, [workspaceDirNow]);
+  const saveOriginalInWorkspace = useCallback(async (original: OriginalUpload, extractedText: string | undefined, target: UploadTarget): Promise<WorkspaceUploadSaved> => {
+    if (activeBuddyIdRef.current !== target.chatId) throw new Error("Chat changed; original upload was not sent to another workspace.");
+    const selected = buddySessionsRef.current.find(s => s.id === target.chatId);
+    if ((selected?.projectId ?? null) !== target.projectId || (target.cwd && !sameWorkspacePath(workspaceDirNow() ?? "", target.cwd)))
+      throw new Error("Project/workspace changed; original upload was not saved elsewhere.");
+    let result: WorkspaceUploadSaved;
+    if (isRemoteClient) {
+      const requestId = crypto.randomUUID();
+      const command: Extract<CmdToDesktop, { type: "vrcmd:saveUpload" }> = { type: "vrcmd:saveUpload", requestId, ...target, original, ...(extractedText !== undefined ? { extractedText } : {}) };
+      if (!faithfulUploadFitsRelay(command)) throw new Error("The original file is too large for one phone-link transfer. Upload it on the desktop; no original bytes were dropped.");
+      result = await new Promise<WorkspaceUploadSaved>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (uploadPendingRef.current.delete(requestId)) reject(new Error("The desktop did not confirm the original file save. Check the link before retrying; it may have been saved."));
+        }, 60_000);
+        uploadPendingRef.current.set(requestId, { resolve, reject, timer });
+        sendAppSync(command);
+      });
+    } else {
+      if (!isDesktop || !target.cwd) throw new Error("Saving originals needs the desktop app or a linked desktop.");
+      result = await saveWorkspaceUpload(original.name, original.bytes, target.cwd, extractedText);
+    }
+    if (uploadTargetIsCurrent(target)) {
+      recordCreatedFile(result.path, 0, false);
+      if (result.extractedPath) recordCreatedFile(result.extractedPath, extractedText?.split("\n").length ?? 0, false);
+      void refreshWorkspaceReadme();
+    }
+    return result;
+  }, [isRemoteClient, sendAppSync, recordCreatedFile, refreshWorkspaceReadme, workspaceDirNow, uploadTargetIsCurrent]);
+
   /** The code-book workspace saver, held in a ref: `onUpload` is defined far above where the saver
    * can be (it needs `codeFileName`), and naming it directly in the dep array is a TDZ. */
-  const saveCodeToWorkspaceRef = useRef<(b: BookSource, source: string) => void>(() => {});
+  const saveCodeToWorkspaceRef = useRef<(b: BookSource, source: string, opts?: { onlyIfMissing?: boolean }) => void>(() => {});
   const onUpload = useCallback(
     async (file: File, handler: FileHandler = "auto") => {
       try {
-        const imported = await importBookFile(file, handler);
+        const target = await captureUploadTarget();
+        const original = await originalUpload(file);
+        let imported: Awaited<ReturnType<typeof importBookFile>>;
+        try { imported = await importBookFile(file, handler); }
+        catch (error) {
+          if (isDesktop || isRemoteClient) {
+            const saved = await saveOriginalInWorkspace(original, undefined, target);
+            setLocalError(`Original saved as ${saved.path}, but it could not be opened: ${error instanceof Error ? error.message : String(error)}`);
+            return;
+          }
+          throw error;
+        }
+        if (isDesktop || isRemoteClient) {
+          const saved = await saveOriginalInWorkspace(original, extractedUploadText(imported), target);
+          if (!uploadTargetIsCurrent(target)) { setLocalError(`Original saved in the previous workspace as ${saved.absolutePath}.`); return; }
+          appendBuddy({ role: "tool", text: `📎 Original saved: ${saved.path} (${saved.bytes} bytes, unchanged)${saved.renamed ? " — filename adjusted to avoid a collision or invalid characters" : ""}${saved.extractedPath ? `\nExtracted text copy: ${saved.extractedPath}` : ""}${saved.extractedError ? `\n⚠ ${saved.extractedError}` : ""}`, attachments: [{ name: saved.path.split("/").pop()!, mime: original.mimeType, kind: "found", path: saved.absolutePath }], turns: [] });
+        }
         if (imported.kind === "book") {
           openBook(imported.book);
           // An uploaded SOURCE file goes straight to the workspace under its own name, so the thing
           // the reader just handed over is a thing the assistant can read_file. Handing back a page
           // it wrote and having it see nothing is the failure this closes.
-          if (imported.book.contentMode === "code") saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "");
+          if (imported.book.contentMode === "code") saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "", { onlyIfMissing: true });
         } else if (imported.kind === "image") {
           // A picture isn't a book — open it in the photo-transform (img2img) panel.
           setPhotoInitial({ name: imported.name, bytes: imported.bytes, mimeType: imported.mimeType });
@@ -3605,19 +3688,6 @@ export function App() {
           // "the active document" in every conversation, which is the shape that leaked a Creative
           // run's essay into the reader's own chat.
           setActiveDocument({ title: docTitle, content: imported.text }, activeBuddyIdRef.current);
-          if (isDesktop) {
-            const slug = docTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "document";
-            // Reader-supplied files keep their own folder: knowing which files you dropped in and
-            // which the assistant wrote is worth more here than sorting both by extension.
-            const wsPath = `uploads/${slug}.md`;
-            try {
-              await writeWorkspaceFile(wsPath, imported.text, await workspaceForWrite());
-              recordCreatedFile(wsPath, imported.text.split("\n").length, false);
-              void refreshWorkspaceReadme();
-            } catch {
-              /* workspace write best-effort (no desktop bridge / disk error) */
-            }
-          }
           // A Markdown / created document opens straight as a formatted "document" view (no
           // illustration window, no fiction/technical modal) — the buddy's docs land here.
           if (!imported.data && !imported.dataSheets && /\.(md|markdown|txt)$/i.test(file.name)) {
@@ -3642,7 +3712,7 @@ export function App() {
         setLocalError(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openBook, setActiveDocument, recordCreatedFile, workspaceForWrite, refreshWorkspaceReadme],
+    [openBook, setActiveDocument, captureUploadTarget, saveOriginalInWorkspace, uploadTargetIsCurrent, isRemoteClient],
   );
 
   // Map the active paragraph back to its page and steer the predictive buffer.
@@ -6891,6 +6961,7 @@ export function App() {
         // assistant edits the file on disk while the code window is closed, so re-opening the book
         // later would push that stale copy back over the newer source. Opening only has to guarantee
         // the file EXISTS; keeping it current is the draft-change save's job, and edit_file's.
+        if (opts?.onlyIfMissing && isRemoteClient) return; // originals are saved; never overwrite a remote working copy while opening a book
         if (opts?.onlyIfMissing && isDesktop && !isRemoteClient) {
           const held = await readWorkspaceFile(path, workspaceDirNow()).catch(() => undefined);
           if (held?.exists && held.text.trim()) {
@@ -6907,7 +6978,7 @@ export function App() {
     },
     [codeFileName, isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme, workspaceDirNow],
   );
-  saveCodeToWorkspaceRef.current = (b, source) => void saveCodeToWorkspace(b, source);
+  saveCodeToWorkspaceRef.current = (b, source, opts) => void saveCodeToWorkspace(b, source, opts);
 
   /**
    * A FILE THE REPLY WAS STILL WRITING WHEN IT RAN OUT OF ROOM.
@@ -6984,10 +7055,8 @@ export function App() {
    * in exactly one place: a prompt that had already been sent. The next turn had no file to read, no
    * ledger entry to point at one, and nothing to do but ask the reader to paste it again.
    *
-   * Everything else the assistant handles already lands on disk — a code book, a created document, a
-   * written file. An upload is the same kind of thing arriving through a different door, so it takes
-   * the same route: `workspacePathFor` sorts it by kind, `recordCreatedFile` puts it in the ledger
-   * (the pointer that survives history trimming), and the README picks it up.
+   * Originals now live in uploads/ and enter the ledger. Extracted/normalized text is a separate
+   * .extracted.txt sidecar, never a byte-for-byte replacement for a PDF, spreadsheet or source file.
    *
    * NEVER writes a SHORT copy over a good file. The model's share of an attachment is bounded, and
    * saving that bounded copy would silently truncate the reader's own file on disk. `full` carries
@@ -6995,25 +7064,12 @@ export function App() {
    * the cap and is therefore whole.
    */
   const saveAttachmentToWorkspace = useCallback(
-    async (att: { name: string; fileName?: string; text?: string; full?: string }): Promise<string | undefined> => {
-      if (!isDesktop && !isRemoteClient) return undefined;
-      const body = att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined);
-      if (!body?.trim()) return undefined;
-      // The name it had on the reader's disk wins. A document import names the chip after the parsed
-      // TITLE — "Flow3" for an HTML page — and saving under that gives a file with no extension,
-      // which Windows has no association for and the reader cannot open by double-clicking either.
-      const path = workspacePathFor(att.fileName ?? att.name);
-      try {
-        await execHostTool({ tool: "write_file", path, content: body });
-        recordCreatedFile(path, body.split("\n").length, false);
-        void refreshWorkspaceReadme();
-        return path;
-      } catch {
-        // Best-effort: a file we couldn't save must not stop the turn that was asking about it.
-        return undefined;
-      }
+    async (att: ChatSendAttachment, target: UploadTarget): Promise<WorkspaceUploadSaved> => {
+      if (!att.original) throw new Error("Original file bytes are unavailable. Reattach it in the updated app; extracted text is not the original.");
+      const extracted = att.kind === "doc" ? att.full ?? att.text : undefined;
+      return saveOriginalInWorkspace(att.original, extracted, target);
     },
-    [isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme],
+    [saveOriginalInWorkspace],
   );
 
   // Load the editor when a (different) code book opens; clear it otherwise. Gated on the book id so
@@ -9097,34 +9153,8 @@ export function App() {
     const looksImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
     setBuddyAttachments((a) => [...a, { id, name: file.name, kind: looksImage ? "image" : "doc", status: "reading" }]);
     try {
-      const imported = await importBookFile(file);
-      setBuddyAttachments((a) =>
-        a.map((x) => {
-          if (x.id !== id) return x;
-          if (imported.kind === "image") {
-            return { id, name: file.name, kind: "image", status: "ready", image: { bytes: imported.bytes, mimeType: imported.mimeType } };
-          }
-          const raw =
-            imported.kind === "book"
-              ? imported.book.pages.flatMap((p) => p.paragraphs.map((par) => par.text)).join("\n")
-              : imported.text;
-          const text = (raw ?? "").trim();
-          const name = imported.kind === "book" ? imported.book.title : imported.title || file.name;
-          if (!text) return { id, name, kind: "doc", status: "error", error: "No readable text in this file." };
-          const bounded = text.slice(0, ATTACH_DOC_MAX_CHARS);
-          return {
-            id,
-            name,
-            kind: "doc",
-            status: "ready",
-            text: bounded,
-            ...(text.length > bounded.length ? { full: text } : {}),
-            // `name` is the parsed TITLE for a document import, which loses the extension; the disk
-            // copy keeps what the reader uploaded.
-            ...(file.name && file.name !== name ? { fileName: file.name } : {}),
-          };
-        }),
-      );
+      const prepared = await prepareChatUpload(file);
+      setBuddyAttachments(a => a.map(x => x.id === id ? { id, ...prepared, status: "ready", ...(prepared.analysisError ? { error: prepared.analysisError } : {}) } : x));
     } catch (e) {
       setBuddyAttachments((a) =>
         a.map((x) => (x.id === id ? { ...x, status: "error", error: e instanceof Error ? e.message : String(e) } : x)),
@@ -9150,6 +9180,9 @@ export function App() {
       }
       const userText = text.trim() || "Please look at the attached file(s) and help me with them.";
       const parts: string[] = [];
+      let uploadTarget: UploadTarget;
+      try { uploadTarget = await captureUploadTarget(); }
+      catch (error) { appendBuddy({ role: "tool", text: `⚠ Upload workspace could not be prepared: ${error instanceof Error ? error.message : String(error)}`, turns: [] }); return; }
       // ADD the attached pictures to what this chat already draws from — don't replace it.
       //
       // This was a straight assignment, so a paperclip wiped every reference adopted before it: find
@@ -9167,10 +9200,23 @@ export function App() {
       );
       publishImageRefsRef.current();
       for (const att of atts) {
+        if (!uploadTargetIsCurrent(uploadTarget)) return; // do not mix one upload batch across chats/projects
+        let saved: WorkspaceUploadSaved | undefined;
+        try { saved = await saveAttachmentToWorkspace(att, uploadTarget); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          appendBuddy({ role: "tool", text: `⚠ Original NOT saved: ${att.original?.name ?? att.fileName ?? att.name}. ${message}`, turns: [] });
+          parts.push(`[Original file save FAILED for ${JSON.stringify(att.name)}: ${message}. Do not claim the original exists in the workspace.]`);
+        }
+        if (!uploadTargetIsCurrent(uploadTarget)) return;
+        const saveNote = saved
+          ? `Original saved as ${saved.path} (${saved.bytes} bytes, unchanged)${saved.renamed ? "; filename adjusted to avoid a collision or invalid characters" : ""}.${saved.extractedPath ? ` Extracted text: ${saved.extractedPath}.` : ""}`
+          : "Original was NOT saved to the workspace.";
+        if (saved?.extractedError) appendBuddy({ role: "tool", text: `⚠ Original saved at ${saved.path}, but the extracted-text copy was not saved: ${saved.extractedError}`, turns: [] });
         if (att.kind === "image" && att.image) {
           // Show the picture the reader attached, inline in the chat (display-only — the full
           // content is folded into `combined` for this turn, so it carries no model turn of its own).
-          appendBuddy({ role: "user", text: `🖼 ${att.name}`, image: { bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, turns: [] });
+          appendBuddy({ role: "user", text: `🖼 ${att.name}\n${saveNote}`, image: { bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, ...(saved ? { attachments: [{ name: saved.path.split("/").pop()!, mime: att.original?.mimeType ?? "application/octet-stream", kind: "found" as const, path: saved.absolutePath }] } : {}), turns: [] });
           const r = await assessImage({ bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, userText);
           // The description answers "what is this?". It must NOT become the prompt for a new image —
           // the picture itself is going to the image model as a reference, so a prompt that re-types
@@ -9184,28 +9230,28 @@ export function App() {
             " picture.";
           parts.push(
             r.text
-              ? `[Attached image "${att.name}" — what it shows]\n${r.text}\n[${alsoAReference.trim()}]`
-              : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}.${alsoAReference}]`,
+              ? `[Attached image "${att.name}" — ${saveNote} What it shows]\n${r.text}\n[${alsoAReference.trim()}]`
+              : `[Attached image "${att.name}" — ${saveNote} Couldn't read it: ${r.error ?? "no vision-capable model is set"}.${alsoAReference}]`,
           );
-        } else if (att.kind === "doc" && att.text) {
+        } else if (att.kind === "doc") {
           // Saved BEFORE the turn runs, so the path in the prompt below is one the model can already
           // read — and so a turn that is stopped part-way still leaves the file behind.
-          const saved = await saveAttachmentToWorkspace(att);
-          appendBuddy({ role: "user", text: saved ? `📎 ${att.name} → ${saved}` : `📎 ${att.name}`, turns: [] });
+          appendBuddy({ role: "user", text: `📎 ${att.original?.name ?? att.fileName ?? att.name}\n${saveNote}${att.analysisError ? `\n⚠ ${att.analysisError}` : ""}`, ...(saved ? { attachments: [{ name: saved.path.split("/").pop()!, mime: att.original?.mimeType ?? "application/octet-stream", kind: "found" as const, path: saved.absolutePath }] } : {}), turns: [] });
           parts.push(
             saved
-              ? `[Attached file "${att.name}" — SAVED IN THE WORKSPACE as ${saved}. It is on disk: to see it again ` +
-                `later in this conversation, read_file "${saved}" rather than asking the reader to paste it, and ` +
-                `edit_file/write_file the same path when you change it.]\n${att.text}`
-              : `[Attached file "${att.name}"]\n${att.text}`,
+              ? `[Attached file "${att.name}" — ${saveNote} The original is a byte-for-byte file, not necessarily UTF-8 text. ` +
+                `Read ${JSON.stringify(saved.extractedPath ?? saved.path)} when appropriate; use a format-aware tool for binary originals. ` +
+                `Do not overwrite the uploaded original unless asked.]\n${att.text ?? att.analysisError ?? "No readable text extracted."}`
+              : `[Attached file "${att.name}" — original not saved]\n${att.text ?? att.analysisError ?? "No readable text extracted."}`,
           );
         }
       }
       const combined = parts.length ? `${parts.join("\n\n")}\n\n${userText}` : userText;
+      if (!uploadTargetIsCurrent(uploadTarget)) return;
       // The attachment bubbles are already shown above; pass the typed question as its own bubble.
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, userText);
     },
-    [assessImage, onBuddySendText, buddyMessages, saveAttachmentToWorkspace],
+    [assessImage, onBuddySendText, buddyMessages, saveAttachmentToWorkspace, captureUploadTarget, uploadTargetIsCurrent],
   );
   // Panel "send": gather the ready attachments. On a linked PHONE the turn runs on the DESKTOP (it
   // has the models + the working folder) — relay the message AND its (already-extracted) attachments,
@@ -9215,17 +9261,22 @@ export function App() {
       const ready = buddyAttachments.filter((x) => x.status === "ready");
       const atts: ChatSendAttachment[] = ready.map((a) =>
         a.kind === "image" && a.image
-          ? { name: a.name, kind: "image", image: { bytes: a.image.bytes.slice(0), mimeType: a.image.mimeType } }
+          ? { name: a.name, kind: "image", image: { bytes: a.image.bytes.slice(0), mimeType: a.image.mimeType }, ...(a.original ? { original: a.original } : {}) }
           : {
               name: a.name,
               kind: "doc",
               ...(a.text ? { text: a.text } : {}),
               ...(a.full ? { full: a.full } : {}),
               ...(a.fileName ? { fileName: a.fileName } : {}),
+              ...(a.original ? { original: a.original } : {}),
+              ...(a.analysisError ? { analysisError: a.analysisError } : {}),
             },
       );
-      if (atts.length) setBuddyAttachments([]); // consumed the ready chips (a still-reading one stays)
+      const consumeReady = () => setBuddyAttachments(current => current.filter(a => !ready.some(r => r.id === a.id)));
       if (isRemoteClient) {
+        let relayTarget: UploadTarget;
+        try { relayTarget = await captureUploadTarget(); }
+        catch (error) { buddyNoteRef.current(`⚠ Original upload was not sent: ${error instanceof Error ? error.message : String(error)}`); return; }
         // Shrink image attachments before they ride the relay — a full-res phone photo overruns the
         // tunnel frame ceiling and the send silently vanishes (H4).
         //
@@ -9240,31 +9291,28 @@ export function App() {
             a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image, limitPx) } : a,
           ),
         );
-        const frame = (list: ChatSendAttachment[]) => ({ type: "vrcmd:chatSend" as const, text, ...(list.length ? { attachments: list } : {}) });
-        if (!fitsOneRelayFrame(frame(relayAtts))) {
+        const frame = (list: ChatSendAttachment[]) => ({ type: "vrcmd:chatSend" as const, text, ...relayTarget, ...(list.length ? { attachments: list } : {}) });
+        if (!faithfulUploadFitsRelay(frame(relayAtts))) {
           // One more, harder pass before giving up — a long document attached alongside the photos
           // can be what tipped it, and dropping resolution is cheaper than dropping the send.
           relayAtts = await Promise.all(
             relayAtts.map(async (a) => (a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image, 512) } : a)),
           );
         }
-        if (!fitsOneRelayFrame(frame(relayAtts))) {
-          // Last thing to go before the send itself: the workspace copy's tail. The model still gets
-          // its bounded `text`, and a document saved short beats a document not sent at all.
-          relayAtts = relayAtts.map(({ full: _full, ...a }) => a);
-        }
-        if (!fitsOneRelayFrame(frame(relayAtts))) {
+        if (!faithfulUploadFitsRelay(frame(relayAtts))) {
           buddyNoteRef.current(
-            `⚠ That's too much to send from here in one go (${atts.length} attachment${atts.length === 1 ? "" : "s"}). Send fewer at once, or attach them on the desktop.`,
+            `⚠ These original files exceed the phone-link transfer limit (${atts.length} attachment${atts.length === 1 ? "" : "s"}). Attach fewer/smaller files, or upload them on the desktop. Your attachments are still here; no original bytes or extracted-text tail were dropped.`,
           );
           return;
         }
-        if (text.trim() || relayAtts.length) sendAppSync(frame(relayAtts));
+        if (!uploadTargetIsCurrent(relayTarget)) { buddyNoteRef.current("⚠ Chat/project changed before the upload was sent. Reattach in the intended workspace."); return; }
+        if (text.trim() || relayAtts.length) { sendAppSync(frame(relayAtts)); consumeReady(); }
         return;
       }
+      consumeReady();
       await runBuddyTurnWithAttachments(text, atts);
     },
-    [isRemoteClient, sendAppSync, buddyAttachments, runBuddyTurnWithAttachments],
+    [isRemoteClient, sendAppSync, buddyAttachments, runBuddyTurnWithAttachments, captureUploadTarget, uploadTargetIsCurrent],
   );
   // Persona is part of the chat the desktop owns: on a linked phone, relay the change so the desktop
   // applies it (and the mirror reflects it); on the desktop, set it locally.
@@ -10391,7 +10439,13 @@ export function App() {
   // the result to the phone. Kept in a ref (chatCommandRef) so the early-registered relay reaches it.
   const runChatCommand = useCallback(
     (c: CmdToDesktop) => {
-      if (projectMutationRef.current && c.type !== "vrcmd:project") { buddyNoteRef.current("Wait for the project change to finish before starting another chat action."); return; }
+      if (projectMutationRef.current && c.type !== "vrcmd:project") {
+        const error = "Wait for the project change to finish before starting another chat action.";
+        // A phone file save waits for an acknowledgement; don't leave it hanging on a project lock.
+        if (c.type === "vrcmd:saveUpload") sendAppSync({ type: "vrsync:uploadSaved", requestId: c.requestId, error });
+        buddyNoteRef.current(error);
+        return;
+      }
       switch (c.type) {
         case "vrcmd:project":
           void projectCommandHost.current.handle(c, {
@@ -10403,7 +10457,27 @@ export function App() {
             assign: (chatId, projectId) => onAssignChatProject(projectId, chatId),
           }).then(result => sendAppSync({ type: "vrsync:projectResult", ...result }));
           break;
+        case "vrcmd:saveUpload":
+          void (async () => {
+            try {
+              if (c.chatId !== activeBuddyIdRef.current) throw new Error("The desktop is showing a different chat. Switch/reconnect before uploading.");
+              const target = await captureUploadTarget();
+              if (c.projectId !== target.projectId) throw new Error("The selected phone and desktop projects differ; original was not saved elsewhere.");
+              if (c.cwd && (!target.cwd || !sameWorkspacePath(c.cwd, target.cwd))) throw new Error("The selected phone and desktop workspaces differ; original was not saved elsewhere.");
+              const result = await saveOriginalInWorkspace(c.original, c.extractedText, target);
+              sendAppSync({ type: "vrsync:uploadSaved", requestId: c.requestId, result });
+            } catch (error) {
+              sendAppSync({ type: "vrsync:uploadSaved", requestId: c.requestId, error: error instanceof Error ? error.message : String(error) });
+            }
+          })();
+          break;
         case "vrcmd:chatSend":
+          if ((c.chatId && c.chatId !== activeBuddyIdRef.current) ||
+              (c.projectId !== undefined && c.projectId !== (buddySessionsRef.current.find(s => s.id === activeBuddyIdRef.current)?.projectId ?? null)) ||
+              (c.cwd && !sameWorkspacePath(c.cwd, workspaceDirNow() ?? ""))) {
+            buddyNoteRef.current("⚠ The upload targeted a different chat than the desktop currently has open. Switch/reconnect and reattach the original files; they were not saved to another workspace.");
+            break;
+          }
           void runBuddyTurnWithAttachments(c.text, c.attachments ?? []);
           break;
         case "vrcmd:storyStart": {
@@ -10490,6 +10564,9 @@ export function App() {
       buddyPendingTool,
       agentApprovals.length,
       isRemoteClient,
+      captureUploadTarget,
+      saveOriginalInWorkspace,
+      workspaceDirNow,
       onSwitchBuddySession,
       onNewBuddySession,
       onDeleteBuddySession,

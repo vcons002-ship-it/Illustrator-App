@@ -786,27 +786,29 @@ describe("the per-chat workspace layout", () => {
    */
   it("saves an attached file into the chat's workspace and tells the model where", () => {
     expect(APP_RAW).toContain("const saveAttachmentToWorkspace = useCallback");
-    expect(APP_RAW).toContain("const saved = await saveAttachmentToWorkspace(att);");
+    expect(APP_RAW).toContain("saved = await saveAttachmentToWorkspace(att, uploadTarget);");
     // Sorted by kind and put in the LEDGER — the pointer that survives history being trimmed.
     const at = APP_RAW.indexOf("const saveAttachmentToWorkspace = useCallback");
-    const body = APP_RAW.slice(at, APP_RAW.indexOf("[isRemoteClient, execHostTool, recordCreatedFile, refreshWorkspaceReadme],", at));
+    const body = APP_RAW.slice(at, APP_RAW.indexOf("[saveOriginalInWorkspace],", at));
     // Saved under the name it had on the reader's DISK. A document import names the chip after the
     // parsed title — "Flow3" for an HTML page — and a file with no extension is one Windows has no
     // association for: `start Flow3` opened nothing and a double-click did not work either.
-    expect(body).toContain("const path = workspacePathFor(att.fileName ?? att.name);");
-    expect(body).toContain("recordCreatedFile(path, body.split");
+    expect(body).toContain("saveOriginalInWorkspace(att.original, extracted, target)");
+    expect(APP_RAW).toContain("recordCreatedFile(result.path, 0, false)");
     // A BOUNDED copy must never be written over the reader's own file.
-    expect(body).toContain("att.full ?? (att.text && att.text.length < ATTACH_DOC_MAX_CHARS ? att.text : undefined)");
+    expect(body).toContain("att.full ?? att.text");
+    expect(body).toContain("if (!att.original) throw new Error");
     // And the model is told the path rather than left to guess it.
-    expect(APP_RAW).toContain("SAVED IN THE WORKSPACE as ${saved}");
+    expect(APP_RAW).toContain("Original saved as ${saved.path}");
   });
 
   it("carries the whole file to the desktop, not just the model's bounded share", () => {
     const SYNC = readFileSync(join(__dirname, "remote-sync.ts"), "utf8");
     expect(SYNC).toContain("full?: string;");
-    expect(APP_RAW).toContain("...(text.length > bounded.length ? { full: text } : {})");
-    // Shed before the send itself is refused — a document saved short beats one never sent.
-    expect(APP_RAW).toContain("relayAtts = relayAtts.map(({ full: _full, ...a }) => a);");
+    const UPLOADS = readFileSync(join(__dirname, "upload-attachments.ts"), "utf8");
+    expect(UPLOADS).toContain("...(text.length > bounded.length ? { full: text } : {})");
+    expect(APP_RAW).toContain("faithfulUploadFitsRelay(frame(relayAtts))");
+    expect(APP_RAW).not.toContain("relayAtts = relayAtts.map(({ full: _full, ...a }) => a);");
   });
 
   /**
@@ -1227,7 +1229,7 @@ describe("everything created lands in the workspace", () => {
     // The reader's own paste, through the paste modal.
     expect(APP_RAW).toContain('if (created.contentMode === "code") void saveCodeToWorkspace(created, text, { onlyIfMissing: true });');
     // An uploaded source file.
-    expect(APP_RAW).toContain('saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "");');
+    expect(APP_RAW).toContain('saveCodeToWorkspaceRef.current(imported.book, imported.book.code ?? "", { onlyIfMissing: true });');
   });
 
   it("never lets OPENING a book overwrite a newer file on disk", () => {

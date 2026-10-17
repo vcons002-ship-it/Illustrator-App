@@ -149,7 +149,7 @@ export interface ChatBuddyPanelProps {
   /** Open the host's "Story as you go" setup modal (workflow + cast + characters). When omitted, the
    * ✍️ Story button falls back to a one-line opening prompt. */
   onStartStory?: () => void;
-  /** Attach a file (document or image) to the next message — read into the chat as context. */
+  /** Attach any file; preserve its original bytes in the workspace and analyze supported content. */
   onAttachFile?: (file: File) => void;
   /** Pending attachments, shown as removable chips above the composer. */
   attachments?: ChatAttachmentChip[];
@@ -1300,7 +1300,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 {a.name}
               </span>
               <span style={{ opacity: 0.7 }}>
-                {a.status === "reading" ? "…" : a.status === "error" ? "⚠" : ""}
+                {a.status === "reading" ? "…" : a.status === "error" || a.error ? "⚠" : ""}
               </span>
               {props.onRemoveAttachment && (
                 <button className={cx.btn}
@@ -1323,14 +1323,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".pdf,.docx,.xlsx,.csv,.tsv,.txt,.md,.markdown,.rtf,.json,.html,.htm,.epub,.png,.jpg,.jpeg,.webp,.gif"
               style={{ display: "none" }}
               onChange={pickFile}
             />
             <button className={cx.btn}
               style={smallButtonStyle}
               onClick={() => fileInputRef.current?.click()}
-              title="Attach a file (PDF, Word, Excel, CSV, text, or image) for me to read"
+              title="Attach any file — save the unchanged original in the workspace; read text or analyze images when supported"
               aria-label="Attach a file"
             >
               📎
