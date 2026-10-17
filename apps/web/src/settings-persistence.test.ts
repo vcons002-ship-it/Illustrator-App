@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { createSettingsPersistence } from "./settings-persistence.js";
 
 describe("backup settings survive reload autosave", () => {
+  it("retains inaccessible encrypted keys across unrelated settings saves", async () => {
+    let held = "";
+    const persistence = createSettingsPersistence({ setItem: (_key, value) => { held = value; } });
+    const encrypted = { iv: [1], ciphertext: [2] };
+    persistence.preserveEncryptedSecrets(encrypted);
+    await persistence.save(async () => JSON.stringify({ textProvider: "local" }));
+    expect(JSON.parse(held)).toEqual({ textProvider: "local", keysEnc: encrypted });
+    await persistence.save(async () => JSON.stringify({ keysEnc: { iv: [3], ciphertext: [4] } }));
+    await persistence.save(async () => JSON.stringify({ textProvider: "local" }));
+    expect(JSON.parse(held).keysEnc).toBeUndefined();
+  });
   const restored = JSON.stringify({ textProvider: "local", localContextTokens: 50000, keysEnc: { iv: [1], ciphertext: [2] } });
   it("blocks old pending and pagehide saves after a restore, including encryption already in flight", async () => {
     let held = "old";

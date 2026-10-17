@@ -1032,6 +1032,19 @@ export interface RemoteServerStatus {
   error?: string;
 }
 
+export async function checkDesktopSession(profileId: string): Promise<void> {
+  return invoke("check_desktop_session", { profileId });
+}
+
+export async function desktopSessionReady(): Promise<void> {
+  return invoke("desktop_session_ready");
+}
+
+/** null means an older install has not yet migrated its renderer-owned pairing state. */
+export async function restoreRemoteServer(): Promise<RemoteServerStatus | null> {
+  return invoke("restore_remote_server");
+}
+
 /**
  * Start the desktop LAN relay so a phone on the same Wi-Fi can drive the assistant.
  * Best-effort: needs a desktop build that includes the `remote_server` command (rebuild the
@@ -1049,11 +1062,7 @@ export async function startRemoteServer(token: string, port?: number): Promise<R
 
 export async function stopRemoteServer(): Promise<void> {
   if (!isDesktop) return;
-  try {
-    await invoke("stop_remote_server");
-  } catch {
-    /* already stopped or not present */
-  }
+  await invoke("disable_remote_server");
 }
 
 /**

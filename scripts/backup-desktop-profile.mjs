@@ -27,6 +27,14 @@ export function backupDesktopProfile({ localAppData, userProfile, now = new Date
     const source = join(profile, 'Default', name);
     if (existsSync(source)) cpSync(source, join(destination, 'Default', name), { recursive: true, errorOnExist: true, force: false });
   }
+  // These are private recovery snapshots, not shareable JSON exports. Include lifecycle metadata
+  // and WebView encryption/profile metadata so the pairing and key vault can be recovered together.
+  for (const [source, name] of [
+    [join(profile, 'Local State'), 'Local State'],
+    [join(profile, '..', 'desktop-session.json'), 'desktop-session.json'],
+  ]) {
+    if (existsSync(source)) cpSync(source, join(destination, name), { errorOnExist: true, force: false });
+  }
   visit(destination);
   writeFileSync(join(destination, 'manifest.json'), JSON.stringify({ profile, at: now.toISOString(), files,
     warning: 'This snapshot belongs to the execution context that ran the updater. Verify the actual desktop shortcut after updating. Never delete the live profile to repair a blank launch.' }, null, 2), { flag: 'wx' });

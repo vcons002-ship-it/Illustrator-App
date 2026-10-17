@@ -33,6 +33,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod coding_receipt;
 mod coding_context;
 mod remote_relay;
+mod desktop_session;
 mod workspace_upload;
 
 // Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
@@ -672,9 +673,10 @@ fn sweep_superseded_binaries() {
 /// one's group, and null stdio leaves it holding no handle of ours. The working directory is the
 /// REPO ROOT, not `target/release`, because that's where `desktop-prod.bat` starts it from — the
 /// relaunch should reproduce the launch that's known to work, not a subtly different one.
-fn launch_detached(exe: &Path, root: &Path) -> std::io::Result<std::process::Child> {
+fn launch_detached(exe: &Path, root: &Path, ready_name: &str) -> std::io::Result<std::process::Child> {
     let mut cmd = Command::new(exe);
     cmd.current_dir(root)
+        .env("VR_SUCCESSOR_READY", ready_name)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -694,21 +696,36 @@ fn launch_detached(exe: &Path, root: &Path) -> std::io::Result<std::process::Chi
 /// implementations is what let Restart regress to `app.restart()`: that path spawned differently and
 /// raced the outgoing phone relay for its port, while Update explicitly detached and verified the
 /// successor. This helper does not stop services or exit the current app; callers own rollback.
-async fn launch_detached_checked(exe: &Path, root: &Path) -> Result<(), String> {
-    let child = launch_detached(exe, root)
+async fn launch_detached_checked(app: &AppHandle, exe: &Path, root: &Path) -> Result<(), String> {
+    let ready_name = format!("successor-{}-{}.ready", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "Clock unavailable")?.as_nanos());
+    let ready_path = session_path(app)?.with_file_name(&ready_name);
+    let child = launch_detached(exe, root, &ready_name)
         .map_err(|e| format!("couldn't start the replacement app: {e}"))?;
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let mut child = child;
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        // Ok(None) = still running. An error means we can't tell, which is not evidence of failure —
-        // treat "unknown" as alive rather than tearing down a good relaunch.
-        match child.try_wait() {
-            Ok(Some(status)) => Some(status.to_string()),
-            _ => None,
+        let deadline = std::time::Instant::now() + Duration::from_secs(40);
+        loop {
+            if std::fs::read_to_string(&ready_path).ok().as_deref() == Some(&child.id().to_string()) {
+                let _ = std::fs::remove_file(&ready_path);
+                return None;
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => return Some(format!("exited with {status}")),
+                Err(_) => { let _ = child.kill(); return Some("could not verify the successor process".into()); }
+                Ok(None) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&ready_path);
+                return Some("did not confirm saved-profile and phone-link readiness within 40 seconds".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
     })
     .await
-    .unwrap_or(None);
+    .map_err(|_| "Replacement startup check failed".to_string())?;
     match outcome {
         Some(status) => Err(format!(
             "the replacement app closed during startup ({status})"
@@ -731,7 +748,7 @@ async fn restart_app(app: AppHandle) -> Result<(), String> {
     let relay = remote_server_status(app.state::<RemoteServerState>());
     stop_remote_server(app.state::<RemoteServerState>());
 
-    if let Err(e) = launch_detached_checked(&exe, &root).await {
+    if let Err(e) = launch_detached_checked(&app, &exe, &root).await {
         if relay.running {
             if let (Some(token), port) = (relay.token, relay.port) {
                 let _ = start_remote_server(
@@ -793,7 +810,7 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
         move || cargo_tauri_build(&dir)
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .unwrap_or_else(|e| Err(format!("Desktop build worker failed: {e}")));
 
     match build {
         Ok(tail) if exe.is_file() => {
@@ -805,15 +822,21 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
             // app restarted fine and the phone got a host error, which is a miserable thing to
             // debug. (The relay also retries its bind, so this is belt AND braces; if we end up
             // restoring the old binary below, the reader can reopen the link from Settings.)
+            let previous_relay = remote_server_status(app.state::<RemoteServerState>());
             stop_remote_server(app.state::<RemoteServerState>());
             // DON'T exit into nothing. Spawning only proves the process was CREATED; wait until the
             // successor gets through startup, using the same checked handoff as ordinary Restart.
-            match launch_detached_checked(&exe, &root).await {
+            match launch_detached_checked(&app, &exe, &root).await {
                 Err(e) => {
                     // Put the working binary back and stay up to say so — an app still running to
                     // deliver the bad news beats one that's simply gone.
                     let _ = std::fs::remove_file(&exe);
                     let _ = std::fs::rename(&aside, &exe);
+                    if previous_relay.running {
+                        if let Some(token) = previous_relay.token {
+                            let _ = start_remote_server(app.clone(), StartRemoteRequest { token, port: previous_relay.port }, app.state::<RemoteServerState>()).await;
+                        }
+                    }
                     Err(format!(
                         "Rebuilt, but {e}. The previous version has been put back and is still running. \
                          Run desktop-prod.bat to see what it printed."
@@ -1426,6 +1449,7 @@ fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
 #[derive(Default)]
 struct RemoteServerState {
     inner: Mutex<Option<RemoteHandle>>,
+    start_lock: tokio::sync::Mutex<()>,
 }
 struct RemoteHandle {
     stop: std::sync::Arc<tokio::sync::Notify>,
@@ -1460,14 +1484,84 @@ fn local_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
+fn session_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_local_data_dir().map(|dir| dir.join("desktop-session.json"))
+        .map_err(|_| "Could not locate this user's desktop session folder".into())
+}
+
+#[tauri::command]
+fn check_desktop_session(app: AppHandle, profile_id: String) -> Result<(), String> {
+    desktop_session::update(&session_path(&app)?, |s| desktop_session::check_profile(s, &profile_id))
+}
+
+#[tauri::command]
+async fn desktop_session_ready(app: AppHandle) -> Result<(), String> {
+    let Ok(name) = std::env::var("VR_SUCCESSOR_READY") else { return Ok(()); };
+    if !name.starts_with("successor-") || !name.ends_with(".ready") || name.contains(['/', '\\']) {
+        return Err("Invalid successor readiness filename".into());
+    }
+    let relay = remote_server_status(app.state::<RemoteServerState>());
+    if desktop_session::read(&session_path(&app)?)?.phone.is_some_and(|p| p.enabled) {
+        let token = relay.token.ok_or("Phone relay did not restore")?;
+        let port = relay.port.ok_or("Phone relay port missing")?;
+        use futures_util::{SinkExt, StreamExt};
+        // A listening socket alone isn't readiness: require the bridge's actual chat snapshot.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/")).await.map_err(|_| "Could not connect to restored relay")?;
+            let hello = serde_json::json!({"token": token, "payload": {"type": "vrcmd:hello"}}).to_string();
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => { socket.send(tokio_tungstenite::tungstenite::Message::Text(hello.clone())).await.map_err(|_| "Restored relay rejected hello")?; }
+                    msg = socket.next() => {
+                        let msg = msg.ok_or("Restored relay disconnected")?.map_err(|_| "Restored relay read failed")?;
+                        if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if frame["token"].as_str() == Some(&token) && frame["payload"]["type"] == "vrsync:chat" {
+                                    let _ = socket.close(None).await;
+                                    return Ok::<(), &str>(());
+                                }
+                            }
+                        } else { socket.flush().await.map_err(|_| "Restored relay keepalive failed")?; }
+                    }
+                }
+            }
+        }).await.map_err(|_| "Restored desktop did not answer phone sync")??;
+    }
+    std::fs::write(session_path(&app)?.with_file_name(name), std::process::id().to_string())
+        .map_err(|_| "Could not acknowledge successor readiness".into())
+}
+
+#[tauri::command]
+async fn restore_remote_server(app: AppHandle) -> Result<Option<RemoteServerStatus>, String> {
+    let Some(phone) = desktop_session::read(&session_path(&app)?)?.phone else { return Ok(None); };
+    if !phone.enabled { return Ok(Some(RemoteServerStatus { running: false, url: None, token: Some(phone.token), port: Some(phone.port), error: None })); }
+    let status = start_remote_server(app.clone(), StartRemoteRequest { token: phone.token, port: Some(phone.port) }, app.state::<RemoteServerState>()).await?;
+    Ok(Some(status))
+}
+
+#[tauri::command]
+async fn disable_remote_server(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<RemoteServerState>();
+    let _start_guard = state.start_lock.lock().await;
+    desktop_session::update(&session_path(&app)?, |s| { if let Some(phone) = &mut s.phone { phone.enabled = false; } Ok(()) })?;
+    stop_remote_server(app.state::<RemoteServerState>());
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_remote_server(
     app: AppHandle,
     request: StartRemoteRequest,
     state: State<'_, RemoteServerState>,
 ) -> Result<RemoteServerStatus, String> {
+    let _start_guard = state.start_lock.lock().await;
     let port = request.port.unwrap_or(8787);
     let token = request.token;
+    let existing = remote_server_status(app.state::<RemoteServerState>());
+    if existing.running && existing.port == Some(port) && existing.token.as_deref() == Some(&token) {
+        return Ok(existing);
+    }
     let host = local_ip();
     let url = format!("http://{host}:{port}/#vrlink={token}");
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1496,6 +1590,12 @@ async fn start_remote_server(
             })
         }
     };
+    // A successful opt-in is durable outside WebView Local Storage. Internal restart handoffs
+    // stop sockets without clearing this flag; only the explicit Stop command disables it.
+    desktop_session::update(&session_path(&app)?, |s| {
+        s.phone = Some(desktop_session::Phone { enabled: true, token: token.clone(), port });
+        Ok(())
+    })?;
     if let Ok(mut guard) = state.inner.lock() {
         *guard = Some(RemoteHandle {
             stop: stop.clone(),
@@ -4207,6 +4307,10 @@ fn main() {
             start_remote_server,
             stop_remote_server,
             remote_server_status,
+            restore_remote_server,
+            disable_remote_server,
+            check_desktop_session,
+            desktop_session_ready,
             open_browser_window,
             mcp_stdio_exchange
         ])
