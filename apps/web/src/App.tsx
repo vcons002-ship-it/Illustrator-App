@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChatProject } from "./project-workspaces.js";
+import { createSettingsPersistence, type SettingsPersistence } from "./settings-persistence.js";
 import { ProjectRequestClient, ProjectCommandHost, type ProjectOperation } from "./project-management.js";
 import { prepareChatUpload, originalUpload, extractedUploadText, faithfulUploadFitsRelay, type OriginalUpload, type UploadTarget } from "./upload-attachments.js";
 import {
@@ -780,6 +781,7 @@ function countDonePlanSteps(plan: BuddyPlan | undefined): number {
 
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
+  const settingsPersistence = useMemo(() => createSettingsPersistence({ setItem: (key, value) => localStorage.setItem(key, value) }), []);
   const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
   // Always-current settings, so engine resolution can read the latest URL/source/backend without
   // re-creating its callbacks on every keystroke (which would refire the resolve effect).
@@ -2500,12 +2502,12 @@ export function App() {
         if (!cancelled) setSettings(resolved);
       }
       hydrated.current = true;
-      void saveSettings(resolved); // re-persist (migrates any legacy plaintext keys)
+      void saveSettings(resolved, settingsPersistence); // re-persist (migrates any legacy plaintext keys)
     })();
     return () => {
       cancelled = true;
     };
-  }, [stored]);
+  }, [stored, settingsPersistence]);
 
   // Debounced: saveSettings runs AES key-encryption + a full JSON.stringify + localStorage write —
   // per-keystroke (e.g. while typing an API key) that's needless crypto churn. Trailing 400ms write,
@@ -2514,18 +2516,18 @@ export function App() {
   useEffect(() => {
     if (!hydrated.current) return;
     clearTimeout(settingsSaveTimer.current);
-    settingsSaveTimer.current = setTimeout(() => void saveSettings(settings), 400);
+    settingsSaveTimer.current = setTimeout(() => void saveSettings(settings, settingsPersistence), 400);
     return () => clearTimeout(settingsSaveTimer.current);
-  }, [settings]);
+  }, [settings, settingsPersistence]);
   useEffect(() => {
     const flush = (): void => {
       if (!hydrated.current) return;
       clearTimeout(settingsSaveTimer.current);
-      void saveSettings(settingsRef.current);
+      void saveSettings(settingsRef.current, settingsPersistence);
     };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
-  }, []);
+  }, [settingsPersistence]);
 
   // IndexedDB writes must fail loud enough to notice: quota exhaustion (or a private-mode block)
   // means books/chats silently stop persisting — surface it ONCE per session as a status warning
@@ -4017,18 +4019,17 @@ export function App() {
         const parsed = JSON.parse(await file.text()) as StoreBackup & { settings?: string };
         await libraryStore.importData(parsed);
         if (typeof parsed.settings === "string") {
-          try {
-            localStorage.setItem("vr-settings", parsed.settings);
-          } catch {
-            /* storage blocked */
-          }
+          clearTimeout(settingsSaveTimer.current);
+          // Prevent pagehide or a crypto write already in flight from replacing the
+          // imported settings with this page's pre-restore state before reload.
+          settingsPersistence.restore(parsed.settings);
         }
         return { ok: true };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
-    [libraryStore],
+    [libraryStore, settingsPersistence],
   );
 
   // Download a grounded analysis-result table (a pivot/aggregate the chat computed)
@@ -14035,20 +14036,21 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
   };
 }
 
-async function saveSettings(s: ReaderSettings): Promise<void> {
+async function saveSettings(s: ReaderSettings, persistence: SettingsPersistence): Promise<void> {
   try {
-    // Drop the transient engine URL + active backend + detected VRAM and the plaintext keys; persist
-    // the keys only as an encrypted blob (never in plaintext).
-    const { keys, engineBaseUrl: _url, engineBackend: _backend, gpuVramMb: _vram, ...rest } = s;
-    void _url;
-    void _backend;
-    void _vram;
-    const persist: Record<string, unknown> = { ...rest };
-    delete persist.keysEnc;
-    if (keys && Object.keys(keys).length > 0) {
-      persist.keysEnc = await encryptSecrets(keys);
-    }
-    localStorage.setItem("vr-settings", JSON.stringify(persist));
+    await persistence.save(async () => {
+      // Drop transient engine fields and plaintext keys; persist only encrypted secrets.
+      const { keys, engineBaseUrl: _url, engineBackend: _backend, gpuVramMb: _vram, ...rest } = s;
+      void _url;
+      void _backend;
+      void _vram;
+      const persist: Record<string, unknown> = { ...rest };
+      delete persist.keysEnc;
+      if (keys && Object.keys(keys).length > 0) {
+        persist.keysEnc = await encryptSecrets(keys);
+      }
+      return JSON.stringify(persist);
+    });
   } catch {
     /* ignore quota / private-mode / crypto errors */
   }
