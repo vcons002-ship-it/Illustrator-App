@@ -48,7 +48,9 @@ Windows security, or copy a live LevelDB over another live LevelDB.
 
 The native app now keeps `desktop-session.json` in its per-user app-local-data
 folder, outside `EBWebView`. It stores a renderer profile identifier and the
-existing phone-link opt-in, token and port. **It contains a pairing credential:
+existing phone-link opt-in, token and port. Explicit developer mode uses a separate
+`desktop-session-dev.json` so it cannot adopt the packaged app's pairing state or
+collide with its profile guard. **It contains a pairing credential:
 keep it private.** It is not served by the relay or included in shareable exports.
 Closed-profile backups include it and WebView's `Local State` alongside IndexedDB
 and Local Storage. No automatic migration of chat databases is attempted.

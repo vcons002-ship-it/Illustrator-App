@@ -1465,7 +1465,10 @@ fn local_ip() -> String {
 }
 
 fn session_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_local_data_dir().map(|dir| dir.join("desktop-session.json"))
+    // Explicit dev mode has a different origin and must not adopt the installed app's pairing
+    // or be rejected against its profile identity.
+    let name = if is_packaged_build() { "desktop-session.json" } else { "desktop-session-dev.json" };
+    app.path().app_local_data_dir().map(|dir| dir.join(name))
         .map_err(|_| "Could not locate this user's desktop session folder".into())
 }
 
