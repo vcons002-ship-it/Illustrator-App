@@ -195,21 +195,26 @@ export interface ChatLive {
   plan?: BuddyPlan;
 }
 
-/** One attachment the phone carries to the desktop on a relayed send (already extracted on the
- * phone: an image's bytes for the desktop's vision model, or a document's pulled text). */
+/** Byte-preserving upload source and its captured destination; independent of analysis/previews. */
+export interface OriginalUpload { name: string; bytes: ArrayBuffer; mimeType: string }
+export interface UploadTarget { chatId: string; projectId: string | null; cwd?: string }
+/** One relayed attachment: original bytes plus a derived image preview or document text. */
 export interface ChatSendAttachment {
   name: string;
   kind: "image" | "doc";
   image?: { bytes: ArrayBuffer; mimeType: string };
-  /** What the MODEL is given: bounded by ATTACH_DOC_MAX_CHARS so one upload can't fill the window. */
+  /** Untouched original, separate from resized previews or normalized/extracted chat text. */
+  original?: OriginalUpload;
+  analysisError?: string;
+  /** What the MODEL is given: bounded by ATTACHMENT_TEXT_LIMIT so one upload can't fill the window. */
   text?: string;
   /**
-   * What goes to DISK — the whole file, present only when it is longer than `text`.
+   * Complete EXTRACTED TEXT for an optional sidecar, never a replacement for the original bytes.
    *
    * The two had been the same value, so a file large enough to be trimmed for the prompt would have
    * been saved trimmed too, and the copy in the workspace — the one the reader and the assistant go
-   * back to — would have been quietly missing its tail. Dropped first if the relay frame won't fit;
-   * losing the end of a very long document beats losing the send.
+   * back to — would have been quietly missing its tail. An oversized relay send is rejected without
+   * dropping original bytes or the extracted-text tail; the user can retry on the desktop.
    */
   full?: string;
   /**
@@ -289,6 +294,7 @@ export type SyncToPhone =
   // run_command, write_file, screenshot — run on the desktop, fed back to the phone's buddy turn.
   | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload }
   | ({ type: "vrsync:projectResult" } & import("./project-management.js").ProjectReply)
+  | { type: "vrsync:uploadSaved"; requestId: string; result?: import("./runtime.js").WorkspaceUploadSaved; error?: string }
   // The bytes of a file card the mirror stripped (vrcmd:fetchFile), sent back so the phone can show /
   // download / open a large or older generated image on demand. CHUNKED so any-size file syncs in
   // pieces instead of being dropped for exceeding one tunnel frame: `total` chunks, `seq` 0..total-1,
@@ -298,6 +304,7 @@ export type SyncToPhone =
 /** Phone → desktop commands. */
 export type CmdToDesktop =
   | ({ type: "vrcmd:project" } & import("./project-management.js").ProjectRequest)
+  | ({ type: "vrcmd:saveUpload"; requestId: string; original: OriginalUpload; extractedText?: string } & UploadTarget)
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
   | { type: "vrcmd:libraryDelete"; bookId: string } // phone deleted a library book → delete it on the desktop (it owns the library; a local-only delete is re-clobbered by vrsync:library)
@@ -340,7 +347,7 @@ export type CmdToDesktop =
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
-  | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[] } // phone typed a message (+ files) → run the turn on the desktop
+  | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[]; chatId?: string; projectId?: string | null; cwd?: string } // phone typed a message (+ files) → run the turn on the desktop
   | {
       type: "vrcmd:storyStart";
       command: string;
