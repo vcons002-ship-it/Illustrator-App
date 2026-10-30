@@ -42,6 +42,50 @@ pub fn check_profile(session: &mut Session, profile: &str) -> Result<(), String>
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryReceipt {
+    pub profile_id: String,
+    pub backup_path: String,
+}
+
+/// Explicit two-step recovery: save the inspected data and private lifecycle metadata before the
+/// renderer can reattach a browser marker. Never adopt a new native identity or rotate its token.
+pub fn save_recovery(session_path: &Path, exports: &Path, backup_json: &str) -> Result<RecoveryReceipt, String> {
+    use std::io::Write;
+    let _guard = WRITE_LOCK.lock().map_err(|_| "Session metadata lock failed")?;
+    let session = read(session_path)?;
+    let profile_id = session.profile_id.filter(|id| (16..=80).contains(&id.len()))
+        .ok_or("No existing desktop identity to recover; restore the correct native metadata backup")?;
+    let data: serde_json::Value = serde_json::from_str(backup_json).map_err(|_| "Invalid recovery export")?;
+    if data["app"] != "visual-reader" || !data["version"].is_number() {
+        return Err("Not a Visual Reader recovery export".into());
+    }
+    let names = ["chats", "books", "bibles", "memos", "chatblobs"];
+    if names.iter().any(|name| !data["stores"][name].is_array()) {
+        return Err("Recovery export is missing saved-data stores".into());
+    }
+    let has_messages = data["stores"]["chats"].as_array().unwrap().iter()
+        .any(|row| row["value"].as_array().is_some_and(|messages| !messages.is_empty()));
+    if !has_messages && ["books", "bibles"].iter().all(|name| data["stores"][name].as_array().unwrap().is_empty()) {
+        return Err("Empty profile cannot replace your saved-data profile; restore the correct backup".into());
+    }
+    std::fs::create_dir_all(exports).map_err(|_| "Could not create recovery export folder")?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "System clock is invalid")?.as_nanos();
+    let dir = exports.join(format!("profile-recovery-{stamp}-{}", std::process::id()));
+    std::fs::create_dir(&dir).map_err(|_| "Could not create a unique recovery snapshot")?;
+    for (name, bytes) in [
+        ("backup.json", backup_json.as_bytes().to_vec()),
+        ("desktop-session.json", std::fs::read(session_path).map_err(|_| "Could not snapshot desktop identity")?),
+    ] {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(name))
+            .map_err(|_| "Could not create private recovery backup")?;
+        file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|_| "Could not finish recovery backup")?;
+    }
+    Ok(RecoveryReceipt { profile_id, backup_path: dir.join("backup.json").to_string_lossy().into_owned() })
+}
+
 pub fn wait_for_successor(mut child: std::process::Child, ready_path: &Path, timeout: std::time::Duration) -> Result<std::process::Child, String> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -71,6 +115,63 @@ pub fn wait_for_successor(mut child: std::process::Child, ready_path: &Path, tim
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn recovery_fixture(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("vr-recovery-{}-{label}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("session.json");
+        update(&path, |s| {
+            s.profile_id = Some("native-existing-profile".into());
+            s.phone = Some(Phone { enabled: true, token: "fixture-credential".into(), port: 8787 });
+            Ok(())
+        }).unwrap();
+        (path, root.join("exports"))
+    }
+    fn recovery_data() -> String {
+        serde_json::json!({"app":"visual-reader","version":5,"stores":{
+            "chats":[{"key":"chat","value":[{"role":"assistant","text":"kept","at":1}]}],
+            "books":[],"bibles":[],"memos":[],"chatblobs":[]
+        }}).to_string()
+    }
+    #[test]
+    fn recovery_snapshots_data_and_metadata_without_replacing_identity_or_pairing() {
+        let (path, exports) = recovery_fixture("preserve");
+        let original = std::fs::read(&path).unwrap();
+        let data = recovery_data();
+        let first = save_recovery(&path, &exports, &data).unwrap();
+        let second = save_recovery(&path, &exports, &data).unwrap();
+        assert_ne!(first.backup_path, second.backup_path);
+        assert_eq!(first.profile_id, "native-existing-profile");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&first.backup_path).unwrap(), data);
+        assert_eq!(std::fs::read(Path::new(&first.backup_path).with_file_name("desktop-session.json")).unwrap(), original);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn recovery_rejects_empty_malformed_and_incomplete_exports() {
+        let (path, exports) = recovery_fixture("invalid");
+        for data in ["{}", "not json", r#"{"app":"visual-reader","version":5,"stores":{"chats":[],"books":[],"bibles":[],"memos":[],"chatblobs":[]}}"#,
+            r#"{"app":"visual-reader","version":5,"stores":{"chats":[{"key":"empty","value":[]}],"books":[],"bibles":[],"memos":[],"chatblobs":[]}}"#] {
+            assert!(save_recovery(&path, &exports, data).is_err());
+            assert!(!exports.exists());
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn recovery_returns_no_identity_if_the_backup_cannot_be_saved() {
+        let (path, exports) = recovery_fixture("write-failed");
+        std::fs::write(&exports, "not a directory").unwrap();
+        assert!(save_recovery(&path, &exports, &recovery_data()).is_err());
+        assert_eq!(read(&path).unwrap().profile_id.as_deref(), Some("native-existing-profile"));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn recovery_cannot_establish_an_unverified_new_native_identity() {
+        let (path, exports) = recovery_fixture("no-baseline");
+        update(&path, |s| { s.profile_id = None; Ok(()) }).unwrap();
+        assert!(save_recovery(&path, &exports, &recovery_data()).is_err());
+        assert!(!exports.exists());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
     #[test]
     fn mismatched_profile_cannot_replace_the_expected_identity() {
         let mut session = Session::default();
