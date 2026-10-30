@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { IndexedDbStore, type StoreBackup } from "@visual-reader/core";
-import { checkDesktopSession, isDesktop, saveProfileRecovery } from "./runtime.js";
+import { checkDesktopSession, isDesktop, saveExportFile, saveProfileRecovery } from "./runtime.js";
 import { attachBackedUpProfile, DESKTOP_PROFILE_MEMO, verifyDesktopProfile } from "./desktop-profile.js";
 import { dataBackupPayload } from "./data-backup.js";
+import { restoreProfileBackup } from "./desktop-profile-restore.js";
 
 /** Do not mount App (and its autosaves) inside an unexpected WebView data profile. */
 export function DesktopSessionGate({ children }: { children: ReactNode }) {
@@ -53,6 +54,18 @@ export function DesktopSessionGate({ children }: { children: ReactNode }) {
       location.reload(); // fresh startup must pass the same guard before App can mount
     } catch (error) { setRecoveryError(String(error)); setWorking(false); }
   };
+  const restore = async (file: File) => {
+    if (!snapshot || working) return;
+    setWorking(true); setRecoveryError("");
+    try {
+      await restoreProfileBackup({ raw: await file.text(), store: store!, storage: localStorage,
+        anchor, check: checkDesktopSession, origin: location.origin,
+        saveCurrent: (json) => saveExportFile(`visual-reader-before-startup-restore-${Date.now()}.json`, json, "application/json"),
+        saveIncoming: saveProfileRecovery,
+      });
+      location.reload();
+    } catch (error) { setRecoveryError(String(error)); setWorking(false); }
+  };
   if (state === "ready") return children;
   const counts = Object.fromEntries(Object.entries(snapshot?.stores ?? {}).map(([name, rows]) => [name, rows.length]));
   const populated = (counts.chats ?? 0) + (counts.books ?? 0) + (counts.bibles ?? 0) > 0;
@@ -75,6 +88,18 @@ export function DesktopSessionGate({ children }: { children: ReactNode }) {
           {working ? "Recovering saved profile…" : "Use this backed-up saved profile"}
         </button>
       </>}
+      <h2>Restore the correct saved-data export</h2>
+      <p>If this launch is empty or older, select your verified backup. The current records and the
+        selected export will be saved privately before a merge-only restore. No assistant jobs run
+        until the restored profile passes the normal startup check.</p>
+      <label>Verified Visual Reader backup (JSON){" "}
+        <input type="file" accept=".json,application/json" disabled={working} onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void restore(file);
+          event.target.value = "";
+        }} />
+      </label>
+      {working && <p>Saving backups and restoring saved data. Please keep this window open…</p>}
     </section>}
     {recoveryError && <p>{recoveryError}</p>}
   </main>;
