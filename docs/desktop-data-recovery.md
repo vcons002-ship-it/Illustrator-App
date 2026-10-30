@@ -85,6 +85,14 @@ offers a two-step recovery while App and its autosaves remain unmounted:
 If the inspected data is empty or unfamiliar, do not reattach it. Recover the correct
 data export instead. All recovery files are private; do not upload them to an issue/PR.
 
+The blocked screen also accepts a verified backup JSON directly, including when its
+own database is completely empty. It saves the current data/settings and the selected
+export before importing, validates the native identity, merges the selected stores,
+restores its settings, anchors the identity and reloads. App remains unmounted during
+this operation, so old scheduled jobs and autosaves cannot race the import. A failed
+backup/validation stops before import; an import error stays blocked with recovery
+copies retained. Verify the user's actual Explorer shortcut again after this restore.
+
 An opted-in phone link restores from native metadata first. Legacy Local Storage
 is used only for the first migration. An explicit Stop persists the disabled state;
 internal restart/update handoffs release the socket without disabling the link.
