@@ -62,6 +62,29 @@ Establish the first baseline through the user's actual Explorer shortcut, not a
 different launch context. This guard detects a changed identity, not missing rows
 inside an otherwise matching profile; continue verifying actual chats after updates.
 
+The renderer also anchors that identity in the chat database's `memos` store under
+`desktop-profile-id:v1`. On subsequent launches this anchor takes precedence over
+Local Storage. If Local Storage alone is cleared or its marker changes, the native
+check must accept the database anchor before repairing the local marker. A rejected
+database anchor or database read failure still blocks startup; it is never treated
+as a fresh profile or silently replaced by a matching Local Storage value.
+
+For a legacy profile already blocked before it received an anchor, the startup screen
+offers a two-step recovery while App and its autosaves remain unmounted:
+
+1. Inspect the saved-record counts, then **Save recovery backup**. Native code saves
+   the full data export and an unchanged private `desktop-session.json` to a new
+   `~/VisualReader/exports/profile-recovery-*` folder. It refuses empty/incomplete
+   exports or missing native identity and never overwrites an earlier snapshot.
+2. Inspect that backup for the expected chats and Soul records. Only if it is the
+   correct saved profile, choose **Use this backed-up saved profile**. This validates
+   the existing native identity and writes only the two renderer identity markers,
+   then reloads through the normal startup gate. It does not import/reset records,
+   change the native identity, rotate the phone token, or weaken a profile mismatch.
+
+If the inspected data is empty or unfamiliar, do not reattach it. Recover the correct
+data export instead. All recovery files are private; do not upload them to an issue/PR.
+
 An opted-in phone link restores from native metadata first. Legacy Local Storage
 is used only for the first migration. An explicit Stop persists the disabled state;
 internal restart/update handoffs release the socket without disabling the link.

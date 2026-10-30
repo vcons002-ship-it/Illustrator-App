@@ -1478,6 +1478,14 @@ fn check_desktop_session(app: AppHandle, profile_id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
+async fn save_profile_recovery(app: AppHandle, backup_json: String) -> Result<desktop_session::RecoveryReceipt, String> {
+    let session = session_path(&app)?;
+    let exports = exports_dir(&app);
+    tauri::async_runtime::spawn_blocking(move || desktop_session::save_recovery(&session, &exports, &backup_json))
+        .await.map_err(|_| "Profile recovery backup worker failed".to_string())?
+}
+
+#[tauri::command]
 async fn desktop_session_ready(app: AppHandle) -> Result<(), String> {
     let Ok(name) = std::env::var("VR_SUCCESSOR_READY") else { return Ok(()); };
     if !name.starts_with("successor-") || !name.ends_with(".ready") || name.contains(['/', '\\']) {
@@ -4293,6 +4301,7 @@ fn main() {
             restore_remote_server,
             disable_remote_server,
             check_desktop_session,
+            save_profile_recovery,
             desktop_session_ready,
             open_browser_window,
             mcp_stdio_exchange

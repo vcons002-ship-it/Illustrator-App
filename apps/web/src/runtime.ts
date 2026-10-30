@@ -1036,6 +1036,11 @@ export async function checkDesktopSession(profileId: string): Promise<void> {
   return invoke("check_desktop_session", { profileId });
 }
 
+/** Writes private recovery files first. Does not reset data or change native identity/pairing. */
+export async function saveProfileRecovery(backupJson: string): Promise<{ profileId: string; backupPath: string }> {
+  return invoke("save_profile_recovery", { backupJson });
+}
+
 export async function desktopSessionReady(): Promise<void> {
   return invoke("desktop_session_ready");
 }
