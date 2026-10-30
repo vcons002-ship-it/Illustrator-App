@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createWorkspaceHistoryGuard, restoreWorkspaceHistory } from "./workspace-history.js";
 import { createChatProject } from "./project-workspaces.js";
 import { createSettingsPersistence, type SettingsPersistence } from "./settings-persistence.js";
 import { ProjectRequestClient, ProjectCommandHost, type ProjectOperation } from "./project-management.js";
@@ -1788,6 +1789,7 @@ export function App() {
   // is ignored — a cancelled turn's late reply (or stray error) can't reappear.
   const chatTurnSeq = useRef(0);
   const buddyTurnSeq = useRef(0);
+  const workspaceHistoryGuard = useMemo(createWorkspaceHistoryGuard, []);
   const [allowSpoilers, setAllowSpoilers] = useState(false);
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
@@ -5327,7 +5329,7 @@ export function App() {
   useEffect(() => {
     // Incognito (remote privacy): the desktop runs the turn but never writes the conversation, so a
     // remote session leaves nothing on disk.
-    if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || buddyMessages.length === 0) return;
+    if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || workspaceHistoryGuard.blocked || buddyMessages.length === 0) return;
     const id = activeBuddyId;
     const t = setTimeout(() => {
       void (async () => {
@@ -5353,11 +5355,11 @@ export function App() {
             stored.push(m); // backend without a blob store: persist bytes inline (legacy behavior)
           }
         }
-        await libraryStore.putChatHistory?.(id, stored);
+        if (!workspaceHistoryGuard.blocked) await libraryStore.putChatHistory?.(id, stored);
       })();
     }, 500);
     return () => clearTimeout(t);
-  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
+  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote, workspaceHistoryGuard]);
 
   // ---- Creations gallery: gather / hydrate / delete ------------------------------------------
   // Walk every chat's history for assistant-generated media. The ACTIVE buddy session and the open
@@ -8095,6 +8097,10 @@ export function App() {
     /** Trusted Story-setup mapping, never serialized into the user/model-authored `/story` text. */
     storySoulCast?: { self: string; user: string },
   ): Promise<string | undefined> => {
+    if (workspaceHistoryGuard.blocked) {
+      pushToast("Saved conversation is not loaded yet. Reopen the scheduled workspace to retry if loading failed.", "error");
+      return;
+    }
     if (projectMutationRef.current) { appendBuddy({ role: "tool", text: "Wait for the project change to finish before starting a chat task.", turns: [] }); return; }
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     planCompiledThisTurn.current = false; // set again only if THIS turn calls set_plan
@@ -8917,6 +8923,10 @@ export function App() {
         sendAppSync({ type: "vrcmd:chatSend", text });
         return;
       }
+      if (workspaceHistoryGuard.blocked) {
+        pushToast("Saved conversation is not loaded yet. Reopen the scheduled workspace to retry if loading failed.", "error");
+        return;
+      }
       // A NEW MESSAGE ENDS THE PREVIOUS LIVE RUN — that is the reader's half of the contract for live
       // control ("only a new message or Stop interrupts"), and it is also what makes the run's budget
       // per-JOB rather than per-session: the counters below are what stop a live run that has lost
@@ -9051,7 +9061,7 @@ export function App() {
       }
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), text, text);
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey, isRemoteClient, sendAppSync],
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey, isRemoteClient, sendAppSync, workspaceHistoryGuard],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
   onBuddySendTextRef.current = onBuddySendText; // the gallery button (declared far above) sends through this
@@ -9582,6 +9592,7 @@ export function App() {
   const sweepScheduled = useCallback(
     (manual = false) => {
       if (isRemoteClient) return;
+      if (workspaceHistoryGuard.blocked) return;
       if (buddyBusyRef.current) return;
       if (buddyPendingToolRef.current) return; // an approval is on screen — don't switch out from under it
       // A STORY OWNS THE CHAT while it's open: what's in the dock is what the next beat is written
@@ -9626,6 +9637,7 @@ export function App() {
         }
         // Advance first (so a slow turn can't double-fire), then run it. `task` is the PRE-advance
         // copy, so the prompt quotes the PREVIOUS run as the "what's new since" window.
+        if (workspaceHistoryGuard.blocked) return;
         const advanced = advanceSchedule(task);
         await upsertScheduledTask(libraryStore, advanced).catch(() => {});
         refreshScheduled();
@@ -9702,6 +9714,7 @@ export function App() {
       appManagedActive,
       applyWorkflow,
       settings.incognitoRemote,
+      workspaceHistoryGuard,
     ],
   );
   const sweepScheduledRef = useRef(sweepScheduled);
@@ -9948,6 +9961,7 @@ export function App() {
       sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
       return;
     }
+    workspaceHistoryGuard.invalidate();
     buddyTurnSeq.current++;
     buddyCancel();
     setBuddyBusy(false);
@@ -9969,7 +9983,7 @@ export function App() {
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyId)).catch(() => {});
     void libraryStore.deleteMemo?.(ledgerMemoKey(activeBuddyId)).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger]);
+  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger, workspaceHistoryGuard]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
   /**
@@ -9998,6 +10012,7 @@ export function App() {
 
   // Reset the live conversation view when moving between sessions.
   const resetBuddyView = useCallback(() => {
+    workspaceHistoryGuard.invalidate();
     buddyTurnSeq.current++;
     buddyCancel();
     setBuddyBusy(false);
@@ -10011,6 +10026,7 @@ export function App() {
     // stay live during the load gap — the model then sees the old chat (e.g. "those 5 images are already
     // generated") and reports the new task as already done. Clear the ref synchronously too (the
     // render-time sync at the top of the component otherwise lags a tick behind this state update).
+    buddyMessagesRef.current = [];
     setBuddyMessages([]);
     setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
     buddyPlanRef.current = undefined;
@@ -10026,7 +10042,7 @@ export function App() {
     setBuddyUsage(undefined);
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
-  }, [buddyCancel]);
+  }, [buddyCancel, workspaceHistoryGuard]);
   const onSwitchBuddySession = useCallback(
     (id: string) => {
       if (projectMutationRef.current) return;
@@ -10344,16 +10360,60 @@ export function App() {
         setShowScheduled(false);
         return;
       }
-      const sessionId = await openScheduledWorkspace(taskId);
-      if (!sessionId || sessionId === activeBuddyIdRef.current) return;
       setShowScheduled(false);
-      // Clears the live view FIRST, so the outgoing session's messages can't be written into this one
-      // while its history loads — the same ordering openTaskInChat depends on.
-      resetBuddyView();
-      setActiveBuddyId(sessionId);
-      void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
+      const existing = scheduledRef.current.find((task) => task.id === taskId)?.sessionId;
+      if (existing === activeBuddyIdRef.current && !workspaceHistoryGuard.blocked &&
+          (buddyBusyRef.current || buddyMessagesRef.current.length > 0)) return true;
+      let ticket = workspaceHistoryGuard.begin();
+      let epoch = buddyTurnSeq.current;
+      try {
+        const sessionId = await openScheduledWorkspace(taskId);
+        if (!workspaceHistoryGuard.current(ticket)) return false;
+        if (!sessionId || buddyTurnSeq.current !== epoch) {
+          workspaceHistoryGuard.finish(ticket);
+          return false;
+        }
+        // Invalidate prior work, then hold all sends/saves until the target's persisted state is read.
+        resetBuddyView();
+        ticket = workspaceHistoryGuard.begin();
+        epoch = buddyTurnSeq.current;
+        buddyMessagesRef.current = [];
+        activeBuddyIdRef.current = sessionId;
+        setActiveBuddyId(sessionId);
+        setBuddyActivity("Loading saved conversation…");
+        void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
+        return await restoreWorkspaceHistory({
+          id: sessionId, ticket, guard: workspaceHistoryGuard,
+          readers: {
+            history: (id) => libraryStore.getChatHistory!(id),
+            plan: loadBuddyPlan,
+            workflow: loadBuddyWorkflow,
+            files: loadFileLedger,
+          },
+          isCurrent: () => buddyTurnSeq.current === epoch && activeBuddyIdRef.current === sessionId,
+          apply: (restored) => {
+            buddyPlanRef.current = restored.plan;
+            setBuddyPlan(restored.plan);
+            buddyWorkflowRef.current = restored.workflow;
+            setBuddyWorkflow(restored.workflow);
+            createdFilesRef.current = restored.files;
+            setFileLedger(restored.files);
+            buddyMessagesRef.current = restored.messages;
+            setBuddyMessages(restored.messages);
+            setBuddyActivity("");
+          },
+        });
+      } catch {
+        if (workspaceHistoryGuard.current(ticket)) {
+          // Keep the guard closed: sending from an empty fallback would overwrite the saved chat.
+          setBuddyActivity("Could not load saved conversation. Reopen this workspace to retry.");
+          pushToast("Could not load this workspace's saved history. Nothing was overwritten; reopen it to retry.", "error");
+        }
+        return false;
+      }
     },
-    [openScheduledWorkspace, resetBuddyView, libraryStore, isRemoteClient, sendAppSync],
+    [openScheduledWorkspace, resetBuddyView, libraryStore, isRemoteClient, sendAppSync, workspaceHistoryGuard,
+      loadBuddyPlan, loadBuddyWorkflow, loadFileLedger, setFileLedger, pushToast],
   );
   /**
    * Have the assistant write an old task's checklist — the retrofit for every action made before
@@ -10374,7 +10434,7 @@ export function App() {
       }
       const task = (await loadScheduledTasks(libraryStore)).find((t) => t.id === taskId);
       if (!task) return;
-      await onOpenScheduledWorkspace(taskId);
+      if (!await onOpenScheduledWorkspace(taskId)) return;
       onBuddySendTextRef.current(planStepsPrompt(task));
     },
     [libraryStore, isRemoteClient, sendAppSync, onOpenScheduledWorkspace],
