@@ -3,7 +3,7 @@ import type { VideoModelFiles, VideoFileOverrides } from "./image-provider.js";
 /**
  * Catalog of installable image-to-video models for the local ComfyUI engine. Ships two families:
  *  - Wan2.2 14B I2V — a two-expert high/low-noise pair + umt5 encoder + Wan 2.1 VAE (~5s clips, the default).
- *  - LTX-2.3 22B I2V — a single combined checkpoint + Gemma text encoder (longer/higher-fps clips).
+ *  - LTX-2.5 22B distilled — split transformer + Gemma-4 encoder + video/audio VAEs.
  * The download URLs live here too; this module is the single source of the FILENAMES the engine graph
  * references, shared by the host (which passes them to generateVideo) and the downloader.
  */
@@ -29,7 +29,7 @@ export interface VideoModelCatalogEntry {
  * Shared by the backend (when a render input leaves a field blank) and the Settings UI (placeholders). */
 export const VIDEO_RENDER_DEFAULTS = {
   "wan-i2v": { frames: 81, fps: 16, width: 640, height: 640, steps: 20, cfg: 3.5, shift: 8 },
-  "ltx2-i2v": { frames: 121, fps: 24, width: 768, height: 512, steps: 20, cfg: 1, shift: 0 },
+  "ltx2-i2v": { frames: 121, fps: 24, width: 768, height: 512, steps: 8, cfg: 1, shift: 0 },
 } as const satisfies Record<VideoModelFiles["kind"], { frames: number; fps: number; width: number; height: number; steps: number; cfg: number; shift: number }>;
 
 /** Comfy-Org's repackaged Wan 2.2 weights, laid out exactly as ComfyUI expects. */
@@ -55,32 +55,53 @@ export const WAN22_I2V_14B: VideoModelCatalogEntry = {
   ],
 };
 
-/** LTX-2.3 22B image-to-video (fp8) — longer (up to ~20s) and higher-fps clips. Single combined checkpoint
- * (model + VAE) loaded via CheckpointLoaderSimple, plus the separate Gemma text encoder. Fits a 32GB GPU
- * with model offloading. The checkpoint comes from Lightricks; the Gemma encoder from Comfy-Org's split. */
+const LTX25_BASE = "https://huggingface.co/Lightricks/LTX-2.5/resolve/main";
+
+/** Quantized LTX-2.5 for local ComfyUI. Gated weights require the reader's own HF access;
+ * model files are never substituted with an unofficial mirror on download failure. */
 export const LTX2_I2V_22B: VideoModelCatalogEntry = {
-  id: "ltx2.3-i2v-22b",
-  label: "LTX-2.3 (22B image-to-video, longer + faster)",
-  sizeGB: 31,
+  id: "ltx2.5-i2v-22b",
+  label: "LTX-2.5 (22B distilled, video + audio)",
+  sizeGB: 40,
   files: {
     kind: "ltx2-i2v",
-    checkpoint: "ltx-2.3-22b-dev-fp8.safetensors",
-    textEncoder: "gemma_3_12B_it_fp4_mixed.safetensors",
-    distilledLora: "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
-    upscaler: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    version: "2.5",
+    diffusionModel: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+    textEncoder: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+    vae: "ltx-2.5-video-vae-bf16.safetensors",
+    audioVae: "ltx-2.5-audio-vae-bf16.safetensors",
+    upscaler: "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
   },
   downloads: [
-    { filename: "ltx-2.3-22b-dev-fp8.safetensors", folder: "checkpoints", url: "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" },
-    { filename: "gemma_3_12B_it_fp4_mixed.safetensors", folder: "text_encoders", url: "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" },
-    { filename: "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors", folder: "loras", url: "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors" },
-    { filename: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors", folder: "latent_upscale_models", url: "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" },
+    { filename: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors", folder: "diffusion_models", url: `${LTX25_BASE}/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` },
+    { filename: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors", folder: "text_encoders", url: `${LTX25_BASE}/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` },
+    { filename: "ltx-2.5-video-vae-bf16.safetensors", folder: "vae", url: `${LTX25_BASE}/vae/ltx-2.5-video-vae-bf16.safetensors` },
+    { filename: "ltx-2.5-audio-vae-bf16.safetensors", folder: "vae", url: `${LTX25_BASE}/vae/ltx-2.5-audio-vae-bf16.safetensors` },
+    { filename: "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors", folder: "latent_upscale_models", url: `${LTX25_BASE}/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` },
   ],
 };
 
 export const VIDEO_MODELS: readonly VideoModelCatalogEntry[] = [WAN22_I2V_14B, LTX2_I2V_22B];
 
 export function videoModelById(id: string | undefined): VideoModelCatalogEntry | undefined {
-  return VIDEO_MODELS.find((m) => m.id === id);
+  // Old chat/tool requests and saved settings resolve to the replacement, not back to Wan.
+  return VIDEO_MODELS.find((m) => m.id === (id === "ltx2.3-i2v-22b" ? LTX2_I2V_22B.id : id));
+}
+
+/** Drop only known obsolete LTX components, preserving unrelated overrides/user LoRAs. */
+export function migrateLtx25VideoSelection(id?: string, overrides?: VideoFileOverrides):
+  { videoModel: string; videoFiles: VideoFileOverrides } | undefined {
+  if (id !== "ltx2.3-i2v-22b") return undefined;
+  const videoFiles = { ...overrides };
+  delete videoFiles.checkpoint;
+  delete videoFiles.distilledLora;
+  // LTX-2.3's VAE was inside its checkpoint; the flat `vae` override could only
+  // belong to a previous Wan selection, never the new split LTX video VAE.
+  delete videoFiles.vae;
+  if (videoFiles.textEncoder === "gemma_3_12B_it_fp4_mixed.safetensors") delete videoFiles.textEncoder;
+  if (videoFiles.upscaler === "ltx-2.3-spatial-upscaler-x2-1.1.safetensors") delete videoFiles.upscaler;
+  if (videoFiles.ltxLoras) videoFiles.ltxLoras = videoFiles.ltxLoras.filter((l) => !l.name.trim().startsWith("ltx_2.3_22b_distilled_1.1_lora_"));
+  return { videoModel: LTX2_I2V_22B.id, videoFiles };
 }
 
 /**
@@ -90,6 +111,7 @@ export function videoModelById(id: string | undefined): VideoModelCatalogEntry |
  * back to the default); an `lora` override turns the optional LoRA on. Branches on the model family. PURE.
  */
 export function resolveVideoModelFiles(id?: string, overrides?: VideoFileOverrides): VideoModelFiles {
+  overrides = migrateLtx25VideoSelection(id, overrides)?.videoFiles ?? overrides;
   const base = (videoModelById(id) ?? WAN22_I2V_14B).files;
   const o = (key: Exclude<keyof VideoFileOverrides, "ltxLoras">): string | undefined =>
     overrides?.[key]?.trim() || undefined;
@@ -98,6 +120,16 @@ export function resolveVideoModelFiles(id?: string, overrides?: VideoFileOverrid
     const loras = (overrides?.ltxLoras ?? base.loras)
       ?.map((l) => ({ name: l.name.trim(), ...(l.strength !== undefined ? { strength: l.strength } : {}) }))
       .filter((l) => l.name);
+    if (base.version === "2.5") return {
+      kind: "ltx2-i2v",
+      version: "2.5",
+      diffusionModel: o("diffusionModel") ?? base.diffusionModel,
+      textEncoder: o("textEncoder") ?? base.textEncoder,
+      vae: o("vae") ?? base.vae,
+      audioVae: o("audioVae") ?? base.audioVae,
+      upscaler: o("upscaler") ?? base.upscaler,
+      ...(loras && loras.length ? { loras } : {}),
+    };
     return {
       kind: "ltx2-i2v",
       checkpoint: o("checkpoint") ?? base.checkpoint,

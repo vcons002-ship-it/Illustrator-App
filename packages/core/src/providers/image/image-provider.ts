@@ -278,8 +278,9 @@ export interface VideoLora {
 /** Files an LTX-2 image-to-video graph needs: one combined checkpoint (model + VAE) plus the separate
  * Gemma text encoder. `loras` is an optional ordered stack, each chained onto the previous (motion/style
  * LoRAs, the distilled speed LoRA, etc.). */
-export interface Ltx2VideoFiles {
+export interface Ltx23VideoFiles {
   readonly kind: "ltx2-i2v";
+  readonly version?: "2.3";
   /** Combined LTX-2 checkpoint (loaded via CheckpointLoaderSimple — provides the model and VAE). */
   checkpoint: string;
   /** Gemma text encoder. */
@@ -291,6 +292,21 @@ export interface Ltx2VideoFiles {
   /** Optional ordered stack of EXTRA user LoRAs, each chained onto the distilled one. */
   loras?: VideoLora[];
 }
+
+/** LTX-2.5 ships separate transformer, projected Gemma-4 encoder and two VAEs.
+ * It is already distilled; never apply the old LTX-2.3 speed LoRA to it. */
+export interface Ltx25VideoFiles {
+  readonly kind: "ltx2-i2v";
+  readonly version: "2.5";
+  diffusionModel: string;
+  textEncoder: string;
+  vae: string;
+  audioVae: string;
+  upscaler: string;
+  loras?: VideoLora[];
+}
+
+export type Ltx2VideoFiles = Ltx23VideoFiles | Ltx25VideoFiles;
 
 /** The model files an image-to-video engine needs — the shape depends on the model family (`kind`).
  * Discriminate on `kind` before reading family-specific filenames. */
@@ -304,6 +320,10 @@ export interface VideoFileOverrides {
   textEncoder?: string;
   vae?: string;
   checkpoint?: string;
+  /** LTX-2.5 split transformer (not a combined checkpoint). */
+  diffusionModel?: string;
+  /** LTX-2.5 separate audio VAE. `vae` selects its video VAE. */
+  audioVae?: string;
   /** LTX-2 distilled speed LoRA. */
   distilledLora?: string;
   /** LTX-2 spatial upscaler. */

@@ -1,4 +1,4 @@
-import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS, comfyUrlForVideo } from "@visual-reader/core";
+import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS, comfyUrlForVideo, videoModelById } from "@visual-reader/core";
 import {
   LOCAL_BACKEND_LABEL,
   LOCAL_ENGINE_DEFAULT_URL,
@@ -310,7 +310,7 @@ export function buildModelMenu(
   // ComfyUI" — true, and no help at all in working out whether they have one.
   //
   // So say which server, by name, and when there isn't one say that instead of a reassuring note.
-  const activeVideo = s.videoModel ?? VIDEO_MODELS[0]?.id;
+  const activeVideo = videoModelById(s.videoModel)?.id ?? VIDEO_MODELS[0]?.id;
   const video: ModelMenuOption[] = VIDEO_MODELS.map((m) => ({
     id: `video:${m.id}`,
     label: m.label,

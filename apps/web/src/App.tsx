@@ -279,6 +279,7 @@ import {
   shouldAutoCompact,
   COMPACTION_BRIEF_MARKER,
   resolveVideoModelFiles,
+  migrateLtx25VideoSelection,
   VIDEO_RENDER_DEFAULTS,
   anchorClipPrompt,
   longVideoNegative,
@@ -14106,6 +14107,10 @@ function loadStoredSettings(): { settings: ReaderSettings; encrypted?: Encrypted
 function migrate(raw: Record<string, unknown>): ReaderSettings {
   if (typeof raw.textProvider === "string") {
     const migrated = { ...DEFAULT_SETTINGS, ...(raw as Partial<ReaderSettings>) };
+    // Replace the old combined-checkpoint LTX selection without touching chats,
+    // provider keys, image-model settings or the reader's video length/size choices.
+    const ltx25 = migrateLtx25VideoSelection(migrated.videoModel, migrated.videoFiles);
+    if (ltx25) Object.assign(migrated, ltx25);
     // Legacy `illustrationScope` (page|chapter) → pagesPerImage.
     if (migrated.pagesPerImage === undefined && typeof raw.illustrationScope === "string") {
       migrated.pagesPerImage = raw.illustrationScope === "chapter" ? "chapter" : 1;

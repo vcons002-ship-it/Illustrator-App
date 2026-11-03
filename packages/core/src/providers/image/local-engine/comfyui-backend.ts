@@ -9,6 +9,7 @@ import type {
   VideoModelFiles,
   WanVideoFiles,
   Ltx2VideoFiles,
+  Ltx25VideoFiles,
 } from "../image-provider.js";
 import { VIDEO_RENDER_DEFAULTS } from "../video-models.js";
 import {
@@ -144,8 +145,8 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   return graph;
 }
 
-/** LTX-2.3's distilled two-stage sigma schedules (from the official i2v template): a 9-step low-res pass
- * then a 4-step refine pass over the 2× upscaled latent. */
+/** Official LTX-2.3/2.5 distilled schedules: eight sampling steps, then three
+ * refinement steps over the optional 2× upscaled latent (arrays include the final zero). */
 const LTX_STAGE1_SIGMAS = "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0";
 const LTX_STAGE2_SIGMAS = "0.85, 0.7250, 0.4219, 0.0";
 
@@ -155,8 +156,8 @@ function ltxDim(n: number): number {
 }
 
 /**
- * The official ComfyUI LTX-2.3 image-to-video graph, VIDEO-ONLY (no audio branch, no prompt-enhancer LLM).
- * Mirrors Lightricks' native i2v template: a CheckpointLoaderSimple + separate Gemma text encoder + the
+ * Native LTX-2.5 split-loader AV workflow, with the explicit legacy 2.3 path retained.
+ * The legacy path uses a CheckpointLoaderSimple + separate Gemma text encoder + the
  * required distilled speed LoRA, then a two-stage distilled render — a half-resolution generation
  * (LTXVImgToVideoInplace → SamplerCustomAdvanced over a 9-step ManualSigmas), a 2× LTXVLatentUpsampler, and
  * a full-resolution refine (LTXVImgToVideoInplace → SamplerCustomAdvanced over a 4-step ManualSigmas, guided
@@ -165,6 +166,8 @@ function ltxDim(n: number): number {
  * 100s). NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
  */
 export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> {
+  const split = p.models.version === "2.5";
+  const videoVae: [string, number] = split ? ["249", 0] : ["200", 2];
   // High-res renders stage 1 at half size (the 2× upscaler brings it to target); single-stage renders at
   // the target size directly and skips the upscaler + refine pass.
   const genW = p.highRes ? ltxDim(p.width / 2) : ltxDim(p.width);
@@ -172,7 +175,7 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
   // The required distilled LoRA (node 202, strength 0.5 per the official graph) is the base; extra user
   // LoRAs (250+) chain onto it. The CFG guider(s) sample from the end of that chain. Blank names dropped.
   const userLoras = (p.models.loras ?? []).map((l) => ({ name: l.name.trim(), strength: l.strength ?? 1 })).filter((l) => l.name);
-  let modelRef: [string, number] = ["202", 0];
+  let modelRef: [string, number] = split ? ["200", 0] : ["202", 0];
   const loraNodes: Record<string, unknown> = {};
   userLoras.forEach((l, i) => {
     const id = String(250 + i);
@@ -183,21 +186,27 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
   // omits the image nodes and samples the empty/upscaled latent directly. Audio runs alongside the video in
   // a combined AV latent (LTXVConcatAVLatent → sample → LTXVSeparateAVLatent), exactly as the official graph.
   const i2v = !!p.startImage;
-  const audio = p.audio;
+  // LTX-2.5's reference recipe always samples a joint AV latent. The audio toggle
+  // controls the delivered soundtrack, not whether half of the model is omitted.
+  const audio = p.audio || split;
   const graph: Record<string, unknown> = {
-    "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
-    // LTX-2 uses a separate Gemma text encoder (it reads the checkpoint too, for the AV head).
-    "201": { class_type: "LTXAVTextEncoderLoader", inputs: { text_encoder: p.models.textEncoder, ckpt_name: p.models.checkpoint, device: "default" } },
-    // The distilled speed LoRA the 22B dev checkpoint relies on (extra user LoRAs chain after this).
-    "202": { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: p.models.distilledLora, strength_model: 0.5 } },
+    ...(p.models.version === "2.5" ? {
+      "200": { class_type: "UNETLoader", inputs: { unet_name: p.models.diffusionModel, weight_dtype: "default" } },
+      "201": { class_type: "CLIPLoader", inputs: { clip_name: p.models.textEncoder, type: "ltxv", device: "default" } },
+      "249": { class_type: "VAELoader", inputs: { vae_name: p.models.vae } },
+    } : {
+      "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
+      "201": { class_type: "LTXAVTextEncoderLoader", inputs: { text_encoder: p.models.textEncoder, ckpt_name: p.models.checkpoint, device: "default" } },
+      "202": { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: p.models.distilledLora, strength_model: 0.5 } },
+    }),
     "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["201", 0] } },
     "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["201", 0] } },
     "205": { class_type: "LTXVConditioning", inputs: { positive: ["203", 0], negative: ["204", 0], frame_rate: p.fps } },
     "209": { class_type: "EmptyLTXVLatentVideo", inputs: { width: genW, height: genH, length: p.frames, batch_size: 1 } },
     "211": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
-    "212": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+    "212": { class_type: "KSamplerSelect", inputs: { sampler_name: split ? "euler_ancestral" : "euler" } },
     "213": { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE1_SIGMAS } },
-    "214": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["205", 0], negative: ["205", 1], cfg: p.cfg } },
+    "214": { class_type: split ? "LTXVDualCFGGuider" : "CFGGuider", inputs: { model: modelRef, positive: ["205", 0], negative: ["205", 1], ...(split ? { video_cfg: 1, audio_cfg: 1 } : { cfg: p.cfg }) } },
   };
   if (i2v) {
     // Source-frame nodes (image-to-video only): load → scale → preprocess → inject. A PrimitiveBoolean drives
@@ -206,12 +215,14 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
     graph["207"] = { class_type: "ImageScale", inputs: { image: ["206", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" } };
     graph["208"] = { class_type: "LTXVPreprocess", inputs: { image: ["207", 0], img_compression: 18 } };
     graph["248"] = { class_type: "PrimitiveBoolean", inputs: { value: false } };
-    graph["210"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: ["248", 0], vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } };
+    graph["210"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: ["248", 0], vae: videoVae, image: ["208", 0], latent: ["209", 0] } };
   }
   const stage1Video: [string, number] = i2v ? ["210", 0] : ["209", 0];
   // Audio latent + combine with the video latent for the sampler.
   if (audio) {
-    graph["230"] = { class_type: "LTXVAudioVAELoader", inputs: { ckpt_name: p.models.checkpoint } };
+    graph["230"] = p.models.version === "2.5"
+      ? { class_type: "VAELoader", inputs: { vae_name: p.models.audioVae } }
+      : { class_type: "LTXVAudioVAELoader", inputs: { ckpt_name: p.models.checkpoint } };
     graph["231"] = { class_type: "LTXVEmptyLatentAudio", inputs: { frames_number: p.frames, frame_rate: p.fps, batch_size: 1, audio_vae: ["230", 0] } };
     graph["232"] = { class_type: "LTXVConcatAVLatent", inputs: { video_latent: stage1Video, audio_latent: ["231", 0] } };
   }
@@ -228,18 +239,18 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
   if (p.highRes) {
     // ── 2× spatial upscale of the stage-1 video latent, then a full-resolution refine pass ──
     graph["216"] = { class_type: "LatentUpscaleModelLoader", inputs: { model_name: p.models.upscaler } };
-    graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: s1Video, upscale_model: ["216", 0], vae: ["200", 2] } };
+    graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: s1Video, upscale_model: ["216", 0], vae: videoVae } };
     let stage2Video: [string, number] = ["217", 0];
     if (i2v) {
-      graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: ["248", 0], vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+      graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: ["248", 0], vae: videoVae, image: ["208", 0], latent: ["217", 0] } };
       stage2Video = ["218", 0];
     }
-    graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: s1Video } };
+    if (!split) graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: s1Video } };
     if (audio) graph["234"] = { class_type: "LTXVConcatAVLatent", inputs: { video_latent: stage2Video, audio_latent: s1Audio! } };
     graph["220"] = { class_type: "RandomNoise", inputs: { noise_seed: p.seed + 1 } };
-    graph["221"] = { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } };
+    graph["221"] = { class_type: "KSamplerSelect", inputs: { sampler_name: split ? "euler_ancestral" : "euler" } };
     graph["222"] = { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE2_SIGMAS } };
-    graph["223"] = { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["219", 0], negative: ["219", 1], cfg: p.cfg } };
+    graph["223"] = { class_type: split ? "LTXVDualCFGGuider" : "CFGGuider", inputs: { model: modelRef, positive: [split ? "205" : "219", 0], negative: [split ? "205" : "219", 1], ...(split ? { video_cfg: 1, audio_cfg: 1 } : { cfg: p.cfg }) } };
     graph["224"] = {
       class_type: "SamplerCustomAdvanced",
       inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: audio ? ["234", 0] : stage2Video },
@@ -253,8 +264,8 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
       finalAudio = null;
     }
   }
-  graph["225"] = { class_type: "VAEDecodeTiled", inputs: { samples: finalVideo, vae: ["200", 2], tile_size: 768, overlap: 64, temporal_size: 4096, temporal_overlap: 4 } };
-  if (audio) {
+  graph["225"] = { class_type: "VAEDecodeTiled", inputs: { samples: finalVideo, vae: videoVae, tile_size: split ? 512 : 768, overlap: 64, temporal_size: split ? 64 : 4096, temporal_overlap: split ? 16 : 4 } };
+  if (p.audio) {
     // Decode audio + mux into an mp4 (the official CreateVideo → SaveVideo tail).
     graph["236"] = { class_type: "LTXVAudioVAEDecode", inputs: { samples: finalAudio!, audio_vae: ["230", 0] } };
     graph["237"] = { class_type: "CreateVideo", inputs: { fps: p.fps, images: ["225", 0], audio: ["236", 0] } };
@@ -1426,6 +1437,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * match the user's ComfyUI install (NEEDS a real-box pass — can't be exercised in CI here).
    */
   async generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
+    if (models.kind === "ltx2-i2v" && models.version === "2.5") {
+      await this.ensureLtx25Files(models, input.highRes ?? true);
+    }
     // Image-to-video uploads the source frame; text-to-video (no image) starts from an empty latent.
     const startImage = input.image ? await this.uploadedReference(input.image.bytes, input.image.mimeType) : undefined;
     // First+last-frame conditioning is a Wan-graph feature (WanFirstLastFrameToVideo); the LTX-2
@@ -1485,6 +1499,29 @@ export class ComfyUIBackend implements LocalEngineBackend {
       // model between clips, forcing a full multi-minute reload for every clip; the orchestrator
       // keeps it resident and frees ONCE after the last clip (whose input leaves keepResident unset).
       if (input.keepResident !== true) await this.freeMemory();
+    }
+  }
+
+  private async ensureLtx25Files(models: Ltx25VideoFiles, highRes: boolean): Promise<void> {
+    const native = await this.transport.send({ url: `${this.baseUrl}/object_info/LTXVDualCFGGuider`, method: "GET" });
+    if (!native.ok || !(await native.json<Record<string, unknown>>()).LTXVDualCFGGuider) {
+      throw new Error("LTX-2.5 requires an updated ComfyUI with native LTXVDualCFGGuider support. Update the selected engine and reconnect; do not use the old LTX-2.3 checkpoint workflow.");
+    }
+    const checks = [
+      { node: "UNETLoader", key: "unet_name", folder: "diffusion_models", file: models.diffusionModel },
+      { node: "CLIPLoader", key: "clip_name", folder: "text_encoders", file: models.textEncoder },
+      { node: "VAELoader", key: "vae_name", folder: "vae", file: models.vae },
+      { node: "VAELoader", key: "vae_name", folder: "vae", file: models.audioVae },
+      ...(highRes ? [{ node: "LatentUpscaleModelLoader", key: "model_name", folder: "latent_upscale_models", file: models.upscaler }] : []),
+    ];
+    const available = new Map<string, Promise<string[]>>();
+    const missing = (await Promise.all(checks.map(async (check) => {
+      const key = `${check.node}/${check.key}`;
+      if (!available.has(key)) available.set(key, this.enumValues(check.node, check.key));
+      return (await available.get(key)!).includes(check.file) ? undefined : `models/${check.folder}/${check.file}`;
+    }))).filter((file): file is string => !!file);
+    if (missing.length) {
+      throw new Error(`LTX-2.5 files are not available on the selected ComfyUI engine: ${missing.join(", ")}. Download the split files from the gated Lightricks/LTX-2.5 repository after granting Hugging Face access, then reconnect. The LTX-2.3 files are not compatible substitutes.`);
     }
   }
 

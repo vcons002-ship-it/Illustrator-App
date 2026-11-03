@@ -43,6 +43,7 @@ import {
   type LocalTextServerId,
   type ProviderInfo,
   type VideoLora,
+  type VideoFileOverrides,
 } from "@visual-reader/core";
 import { cx } from "./design/classes.js";
 
@@ -317,7 +318,7 @@ export interface ReaderSettings {
   /** Per-file overrides for the image-to-video model — swap a component (a specific checkpoint / text
    * encoder / VAE / LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default.
    * A superset of every family's filenames; only the selected model's fields are shown/used. */
-  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; distilledLora?: string; upscaler?: string; loraHigh?: string; loraLow?: string; ltxLoras?: VideoLora[] };
+  videoFiles?: VideoFileOverrides;
   /** Image-to-video render-param overrides (the graph's size / length / sampler choices), kept PER MODEL
    * family — Wan and LTX-2 want different lengths/fps (Wan ~16fps/4n+1, LTX ~24fps/8n+1), so each `kind`
    * stores its own set and switching models doesn't clobber the other's frames/fps. Blank → catalog defaults. */
@@ -950,7 +951,7 @@ export function SettingsPanel({
             )}
             {value.imageProvider === "local" && isComfyBackend(value) ? (
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Video model (text / image)</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
                   <select className={cx.input} value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
                     {VIDEO_MODELS.map((m) => (
@@ -970,6 +971,13 @@ export function SettingsPanel({
                   just say “animate this / make it move” in chat. Download places the files into ComfyUI’s model folders.
                   Large download; runs on ComfyUI only.
                 </span>
+                {videoModelById(value.videoModel)?.files.kind === "ltx2-i2v" ? (
+                  <span style={{ display: "block", fontSize: 11, marginTop: 4 }}>
+                    LTX-2.5 requires access to the gated Lightricks/LTX-2.5 Hugging Face repository.
+                    Accept its license and download the exact split files below if automatic download is unavailable.
+                    The old LTX-2.3 checkpoint, Gemma-3 encoder and speed LoRA are not replacements for these files.
+                  </span>
+                ) : null}
                 {(() => {
                   // The exact files this model needs, so they can be searched for + downloaded by hand (place
                   // each into ComfyUI/models/<folder>/) if the auto-download is blocked or a file is broken.
@@ -999,6 +1007,7 @@ export function SettingsPanel({
                 {(() => {
                   const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
                   const kind = entry.files.kind;
+                  const ltx25 = entry.files.kind === "ltx2-i2v" && entry.files.version === "2.5";
                   const dflt = VIDEO_RENDER_DEFAULTS[kind];
                   // Placeholder filenames keyed by field (the union's per-family string filenames only —
                   // the LTX LoRA stack is an array and is edited separately below).
@@ -1098,10 +1107,13 @@ export function SettingsPanel({
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6, minWidth: 0 }}>
                         {kind === "ltx2-i2v" ? (
                           <>
-                            {fileRow("Checkpoint", "checkpoint", diffNames)}
+                            {ltx25 ? fileRow("Diffusion model (LTX-2.5)", "diffusionModel", installedDiffusionModels) : fileRow("Checkpoint", "checkpoint", diffNames)}
                             {fileRow("Text encoder (Gemma)", "textEncoder", installedLtxTextEncoders.length ? installedLtxTextEncoders : installedTextEncoders)}
-                            {fileRow("Distilled LoRA (required)", "distilledLora", installedLoras)}
-                            {fileRow("Upscaler (required)", "upscaler", installedUpscalers)}
+                            {ltx25 ? <>
+                              {fileRow("Video VAE (LTX-2.5)", "vae", installedVaes)}
+                              {fileRow("Audio VAE (LTX-2.5)", "audioVae", installedVaes)}
+                            </> : fileRow("Distilled LoRA (required)", "distilledLora", installedLoras)}
+                            {fileRow("Upscaler (high resolution only)", "upscaler", installedUpscalers)}
                           </>
                         ) : (
                           <>
@@ -1184,7 +1196,7 @@ export function SettingsPanel({
                             <input className={cx.input} type="checkbox" checked={audioOn} onChange={(e) => setAudio(e.target.checked)} />
                             <span>
                               Generate audio —{" "}
-                              <span style={{ opacity: 0.6 }}>LTX-2 makes a synced soundtrack (saved as mp4); off is silent video.</span>
+                              <span style={{ opacity: 0.6 }}>LTX makes a synced soundtrack (saved as mp4); off saves silent video. {ltx25 ? "LTX-2.5 still samples its joint audio/video latent." : ""}</span>
                             </span>
                           </label>
                         </>
@@ -1194,8 +1206,10 @@ export function SettingsPanel({
                         {numRow("FPS", "fps", dflt.fps)}
                         {numRow("Width", "width", dflt.width)}
                         {numRow("Height", "height", dflt.height)}
-                        {numRow("Steps", "steps", dflt.steps)}
-                        {numRow("CFG", "cfg", dflt.cfg)}
+                        {ltx25 ? <span style={{ fontSize: 11, opacity: 0.7 }}>Distilled schedule: 8 steps, CFG 1; high resolution adds a 3-step refinement.</span> : <>
+                          {numRow("Steps", "steps", dflt.steps)}
+                          {numRow("CFG", "cfg", dflt.cfg)}
+                        </>}
                         {kind === "wan-i2v" ? numRow("Shift", "shift", dflt.shift) : null}
                       </div>
                       <div style={{ marginTop: 6, fontSize: 11 }}>

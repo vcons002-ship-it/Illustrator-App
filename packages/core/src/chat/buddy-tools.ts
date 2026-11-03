@@ -2120,7 +2120,7 @@ export function buildBuddySystemPrompt(raw: {
         '"ref":"<path>"} → IMAGE-TO-VIDEO: animate that existing image. Here `prompt` describes the MOTION/camera (e.g. ' +
         '"slow push-in, leaves drifting"). Use when the reader says "animate / make it move / bring this to life".\n' +
         '  Leave "model" off to use the reader\'s chosen video model (recommended); only set it to switch family on ' +
-        'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.3-i2v-22b" (longer/faster). Optional ' +
+        'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.5-i2v-22b" (distilled LTX-2.5, synchronized audio/video). Optional ' +
         '"frames" sets length (more frames = longer).\n' +
         '  Optional "end":{"kind":"last"|"library"|"file","ref":"…"} — FIRST+LAST FRAME (Wan only): the clip starts at ' +
         "`source` and ARRIVES exactly at the end image (a controlled morph / camera move between two stills). Use when " +
