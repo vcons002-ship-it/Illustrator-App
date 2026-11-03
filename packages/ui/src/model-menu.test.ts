@@ -66,7 +66,7 @@ describe("buildModelMenu", () => {
   it("lists both video models and flags the selected one (default = first when unset)", () => {
     const video = groupsOf({ videoModel: "ltx2.3-i2v-22b" }).find((g) => g.key === "video")!;
     expect(video.options).toHaveLength(2);
-    expect(video.options.find((o) => o.id === "video:ltx2.3-i2v-22b")!.active).toBe(true);
+    expect(video.options.find((o) => o.id === "video:ltx2.5-i2v-22b")!.active).toBe(true);
     expect(video.options[0]!.patch).toEqual({ videoModel: "wan2.2-i2v-14b" });
     // Unset → the first catalog entry is active.
     const dflt = groupsOf({}).find((g) => g.key === "video")!;
