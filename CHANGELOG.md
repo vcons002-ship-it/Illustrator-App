@@ -3,6 +3,14 @@
 User-facing changes, newest first. (Started July 2026; earlier history lives in the
 "Done recently" list in [FEATURES.md](./FEATURES.md).)
 
+## November 2026
+
+- **ComfyUI reconnect recovers a stopped engine.** The desktop now checks server health instead
+  of treating a cached URL as proof it is running. An exited process is reaped before relaunch;
+  concurrent Connect requests cannot start duplicate engines, and a live but unresponsive process
+  is left intact with an explanatory error. Hidden engine starts write `~/VisualReader/comfyui-engine.log`;
+  Python startup failures report their exit status and the bounded log tail immediately.
+
 ## July 2026
 
 ### The assistant
