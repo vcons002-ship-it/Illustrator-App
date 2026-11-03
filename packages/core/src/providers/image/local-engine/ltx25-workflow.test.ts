@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLtx2I2VWorkflow, ComfyUIBackend } from "./comfyui-backend.js";
+import { buildLtx2I2VWorkflow, ComfyUIBackend, comfyExecutionError } from "./comfyui-backend.js";
 import { resolveVideoModelFiles } from "../video-models.js";
 import type { Ltx25VideoFiles } from "../image-provider.js";
 import type { Transport, TransportRequest, TransportResponse } from "../../transport/transport.js";
@@ -85,6 +85,30 @@ function response(body: unknown): TransportResponse {
 }
 
 describe("LTX-2.5 preflight", () => {
+  it("reports an engine interruption instead of an opaque execution failure", () => {
+    const status = { status_str: "error", completed: false, messages: [["execution_interrupted", { node_id: "224", node_type: "SamplerCustomAdvanced" }]] as [string, Record<string, unknown>][] };
+    expect(comfyExecutionError(status)).toMatch(/generation was interrupted/);
+  });
+
+  it("accepts the native V3 COMBO options list for the installed spatial upscaler", async () => {
+    const calls: TransportRequest[] = [];
+    const transport: Transport = { send: async (request) => {
+      calls.push(request);
+      const node = request.url.split("/").at(-1)!;
+      if (node === "LTXVDualCFGGuider") return response({ [node]: { input: {} } });
+      if (node === "UNETLoader") return response({ [node]: { input: { required: { unet_name: [[models.diffusionModel]] } } } });
+      if (node === "CLIPLoader") return response({ [node]: { input: { required: { clip_name: [[models.textEncoder]] } } } });
+      if (node === "VAELoader") return response({ [node]: { input: { required: { vae_name: [[models.vae, models.audioVae]] } } } });
+      if (node === "LatentUpscaleModelLoader") return response({ [node]: { input: { required: { model_name: ["COMBO", { options: [models.upscaler], multiselect: false }] } } } });
+      if (node === "prompt") throw new Error("evaluation submission reached");
+      return response({});
+    } };
+    await expect(new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport })
+      .generateVideo({ prompt: "move", highRes: true }, models))
+      .rejects.toThrow("evaluation submission reached");
+    expect(calls.some((call) => call.url.endsWith("/prompt"))).toBe(true);
+  });
+
   it("reports an old engine before uploading any image or submitting work", async () => {
     const calls: TransportRequest[] = [];
     const transport: Transport = { send: async (request) => { calls.push(request); return response({}); } };

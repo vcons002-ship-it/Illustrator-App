@@ -772,7 +772,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const data = await this.nodeInfo(node);
     const enumVal = data?.input?.required?.[key] ?? data?.input?.optional?.[key];
     if (!Array.isArray(enumVal)) return [];
-    // ComfyUI combo inputs are normally `[[...options], {meta}]`; tolerate a bare `[...options]` too.
+    // Legacy nodes use `[[...options], {meta}]`; native V3 nodes use
+    // `["COMBO", { options: [...options] }]`. Do not mistake the type tag for a filename.
+    if (enumVal[0] === "COMBO") {
+      const metadata = enumVal[1] as { options?: unknown } | undefined;
+      return Array.isArray(metadata?.options) ? metadata.options.filter((v): v is string => typeof v === "string") : [];
+    }
     if (Array.isArray(enumVal[0])) return (enumVal[0] as unknown[]).filter((v): v is string => typeof v === "string");
     if (typeof enumVal[0] === "string") return enumVal.filter((v): v is string => typeof v === "string");
     return [];
@@ -2446,6 +2451,9 @@ export function comfyExecutionError(
   modelFiles?: readonly string[],
 ): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
+  if (!errMsg && status?.messages?.some(([type]) => type === "execution_interrupted")) {
+    return "ComfyUI generation was interrupted before an output was saved. Retry when no other session is stopping work on this engine.";
+  }
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
   // ComfyUI's execution_error names the node that threw (node_type + node_id) — surface it so an opaque
   // Python error ("'NoneType' object has no attribute 'device'") points at the exact failing node.
