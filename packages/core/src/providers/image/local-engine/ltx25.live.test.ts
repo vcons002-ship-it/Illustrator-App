@@ -19,12 +19,22 @@ suite("local LTX-2.5 evaluation", () => {
     const models = resolveVideoModelFiles("ltx2.5-i2v-22b", {
       ...(process.env.LTX25_DIFFUSION_MODEL ? { diffusionModel: process.env.LTX25_DIFFUSION_MODEL } : {}),
     }) as Ltx25VideoFiles;
+    const boundedInteger = (name: string, fallback: number, min: number, max: number): number => {
+      const value = Number(process.env[name] ?? fallback);
+      if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+      return value;
+    };
+    const width = boundedInteger("LTX25_WIDTH", 512, 256, 1280);
+    const height = boundedInteger("LTX25_HEIGHT", 320, 256, 1024);
+    const frames = boundedInteger("LTX25_FRAMES", 25, 9, 49);
+    if (width % 64 || height % 64 || frames % 8 !== 1) throw new Error("Use 64-pixel dimensions and 8*n+1 frames");
+    const prompt = process.env.LTX25_PROMPT ?? "A small wooden toy fox turns its head slowly. Gentle wind and birdsong.";
     const transport = new DirectTransport();
     const objectInfo = await transport.send({ url: `${baseUrl}/object_info`, method: "GET" })
       .then((response) => response.json<Record<string, { input: { required?: Record<string, unknown>; optional?: Record<string, unknown> }; output: string[] }>>());
     const graph = buildLtx2I2VWorkflow({
-      models, prompt: "A small wooden toy fox turns its head slowly. Gentle wind and birdsong.", negative: "watermark, text, blurry",
-      startImage: "schema-only.png", width: 512, height: 320, frames: 25, fps: 24,
+      models, prompt, negative: "watermark, text, blurry",
+      startImage: "schema-only.png", width, height, frames, fps: 24,
       steps: 8, cfg: 1, seed: 25025, highRes: process.env.LTX25_HIGH_RES === "1", audio: process.env.LTX25_AUDIO !== "0",
     }) as Record<string, { class_type: string; inputs: Record<string, unknown> }>;
     for (const node of Object.values(graph)) {
@@ -47,8 +57,8 @@ suite("local LTX-2.5 evaluation", () => {
     const paths: string[] = [];
     const traced: Transport = { send: async (request) => { paths.push(new URL(request.url).pathname); return transport.send(request); } };
     const output = await new ComfyUIBackend({ baseUrl, transport: traced, clientId: "visual-reader-ltx25-evaluation" }).generateVideo({
-      prompt: "A small wooden toy fox turns its head slowly. Gentle wind and birdsong.",
-      width: 512, height: 320, frames: 25, fps: 24, seed: 25025,
+      prompt,
+      width, height, frames, fps: 24, seed: 25025,
       highRes: process.env.LTX25_HIGH_RES === "1", audio: process.env.LTX25_AUDIO !== "0",
       ...(reference ? { image: { bytes: new Uint8Array(await readFile(reference)).buffer, mimeType: "image/png" } } : {}),
     }, models);
@@ -60,7 +70,7 @@ suite("local LTX-2.5 evaluation", () => {
       const stem = `ltx25-${reference ? "i2v" : "t2v"}-${process.env.LTX25_HIGH_RES === "1" ? "hires" : "single"}-${Date.now()}`;
       const ext = output.mimeType === "video/mp4" ? "mp4" : "webp";
       await writeFile(join(directory, `${stem}.${ext}`), new Uint8Array(output.bytes));
-      await writeFile(join(directory, `${stem}.json`), JSON.stringify({ model: models, mimeType: output.mimeType, bytes: output.bytes.byteLength, paths }, null, 2));
+      await writeFile(join(directory, `${stem}.json`), JSON.stringify({ model: models, render: { prompt, width, height, frames, fps: 24, highRes: process.env.LTX25_HIGH_RES === "1", audio: process.env.LTX25_AUDIO !== "0" }, mimeType: output.mimeType, bytes: output.bytes.byteLength, paths }, null, 2));
     }
   }, 20 * 60_000);
 });

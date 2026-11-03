@@ -80,5 +80,11 @@ stage, and `LTX25_AUDIO=0` tests silent output. It refuses a non-loopback server
 a nonempty/unverifiable queue. Schema verification alone is not proof that model
 weights load or a video renders.
 
+For a larger quality check, set `LTX25_WIDTH`, `LTX25_HEIGHT`, `LTX25_FRAMES` and
+`LTX25_PROMPT`. The opt-in test bounds these to 1280x1024 and 49 frames, requires
+64-pixel dimensions and `8*n+1` frames, and keeps its 20-minute timeout. For
+example, 1024x640 with high resolution enabled exercises a 512x320 first stage
+and the 2x upscale/refine stage. A tiny smoke clip proves execution, not quality.
+
 Reference: [official ComfyUI LTX-2.5 guide](https://docs.comfy.org/tutorials/video/ltx/ltx-2-5)
 and [official model files](https://huggingface.co/Lightricks/LTX-2.5).
